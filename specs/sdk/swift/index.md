@@ -86,8 +86,8 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-`TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` require
-canonical unprefixed Base58 asset-definition IDs.
+`TransferRequest`, `MintRequest`, and `BurnRequest` require canonical unprefixed
+Base58 asset-definition IDs.
 
 ## SM2 Cryptography
 
@@ -657,14 +657,17 @@ For higher-level walkthroughs, see:
 - **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
 - **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
 - **Confidential assets:** derive the wallet key hierarchy locally through `deriveConfidentialKeyset`, build memo envelopes with
-  `ConfidentialEncryptedPayload`, submit shielded debits via `ShieldRequest` +
-  `submit(shield:keypair:)`, **unshield confidential balances via `ProofAttachment` +**
-  `UnshieldRequest` **and** `submit(unshield:keypair:)`, and inspect rollout windows with
+  `ConfidentialEncryptedPayload`, use the proof-bound Kagemusha public-to-confidential
+  top-up flow through `prepareKagemushaTopUpShield` and `submitKagemushaTopUp`,
+  redeem confidential balances through the typed Kagemusha V4 flow and
+  `submitKagemushaRedeem(_:)`, and inspect rollout windows with
   `getConfidentialAssetPolicy(assetDefinitionId:)`, which wraps
   `GET /v1/confidential/assets/{definition_id}/transitions` and exposes pending transition
   metadata (transition id, conversion window, derived window-open height). Use
   `getConfidentialGasSchedule()` when you need the active verification multipliers that
-  Torii reads from `confidential_gas` in `/v1/configuration`.
+  Torii reads from `confidential_gas` in `/v1/configuration`. The first-release Swift SDK
+  deliberately exposes no generic shield, shielded-transfer, or unshield request,
+  encoder, or submission helper.
 - **Runtime & capabilities:** `getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`,
   `getRuntimeAbiHash`, `listRuntimeUpgrades`, and the helper trio
   (`proposeRuntimeUpgrade`, `activateRuntimeUpgrade`, `cancelRuntimeUpgrade`) mirroring the

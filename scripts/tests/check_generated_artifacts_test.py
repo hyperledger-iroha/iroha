@@ -8,6 +8,11 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+    import tomli as tomllib
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_generated_artifacts.py"
@@ -84,6 +89,91 @@ def test_valid_manifest_and_repository_pass(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "1 outputs" in result.stdout
+
+
+def test_current_rust_contract_artifact_has_complete_unique_owner() -> None:
+    output = "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json"
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owners = [entry for entry in manifest["generated"] if output in entry["outputs"]]
+
+    assert len(owners) == 1
+    owner = owners[0]
+    assert owner["name"] == "javascript-current-rust-contract-artifact"
+    assert owner["kind"] == "file"
+    assert set(owner["generator_sources"]) == {
+        "scripts/regenerate_current_rust_contract_artifact.py",
+    }
+    assert {
+        ".cargo/config.toml",
+        "Cargo.toml",
+        "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.ko",
+        "javascript/iroha_js/src/blake2b.js",
+        "javascript/iroha_js/src/ivmArtifact.js",
+        "javascript/iroha_js/src/kotodamaCompiler/normalize.js",
+        "rust-toolchain.toml",
+        "crates/**",
+        "vendor/**",
+    } <= set(owner["inputs"])
+    for field, mode in (("generator", "--write"), ("check", "--check")):
+        command = owner[field]
+        assert mode in command
+        assert "--koto" in command
+        assert "--git" in command
+        assert "--cache-root" in command
+        assert "IROHA_KOTODAMA_CACHE_ROOT" in command
+        assert "IROHA_GIT" in command
+        assert "--ivm-rlib" not in command
+        assert "--rustc" not in command
+
+
+def test_kagemusha_peer_payment_fixture_has_complete_unique_replay_owner() -> None:
+    output = "crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex"
+    recipient = (
+        "crates/connect_norito_bridge/tests/fixtures/"
+        "offline_recipient_payment_request_v2.hex"
+    )
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owners = [entry for entry in manifest["generated"] if output in entry["outputs"]]
+
+    assert len(owners) == 1
+    owner = owners[0]
+    assert owner["name"] == "swift-kagemusha-peer-payment-v4-fixture"
+    assert owner["kind"] == "file"
+    assert set(owner["generator_sources"]) == {
+        "tools/kotlin-fixture-gen/Cargo.toml",
+        "tools/kotlin-fixture-gen/src/bin/swift_kagemusha_peer_payment_v4.rs",
+    }
+    assert {
+        recipient,
+        "crates/iroha_crypto/src/**/*.rs",
+        "crates/iroha_data_model/src/**/*.rs",
+        "crates/iroha_primitives/src/**/*.rs",
+        "crates/norito/src/**/*.rs",
+    } <= set(owner["inputs"])
+
+    generator = owner["generator"]
+    assert "--recipient-request-hex" in generator
+    assert recipient in generator
+    assert "--output" in generator
+    assert "IROHA_KAGEMUSHA_PEER_PAYMENT_V4_STAGE" in generator
+    assert output not in generator
+
+    check = owner["check"]
+    assert "--recipient-request-hex" in check
+    assert recipient in check
+    assert "--check" in check
+    assert output in check
+
+    for command in (generator, check):
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "--jobs 1" in command
+        assert "--lockfile-path Cargo.lock" in command
+        assert "--bin swift_kagemusha_peer_payment_v4" in command
 
 
 def test_single_star_input_does_not_cross_directory_boundary(tmp_path: Path) -> None:

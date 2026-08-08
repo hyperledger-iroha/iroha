@@ -2,16 +2,27 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 private const val ACTION = "FinalizeReferendum"
 
-/** Typed representation of a `FinalizeReferendum` instruction. */
+/** Typed representation of a `FinalizeReferendum` instruction for one exact proposal digest. */
 class FinalizeReferendumInstruction(
-    val referendumId: String,
+    referendumId: String,
     proposalIdHex: String,
 ) : InstructionTemplate {
 
-    val proposalIdHex: String = GovernanceInstructionUtils.requireHex(proposalIdHex, "proposalIdHex", 32)
+    val referendumId: String = GovernanceInstructionUtils.requireExactLowercaseHex(
+        referendumId,
+        "referendumId",
+        32,
+    )
+    val proposalIdHex: String = GovernanceInstructionUtils.requireExactLowercaseHex(
+        proposalIdHex,
+        "proposalIdHex",
+        32,
+    )
 
     init {
-        require(referendumId.isNotBlank()) { "referendumId must not be blank" }
+        require(this.referendumId == this.proposalIdHex) {
+            "referendumId must equal proposalIdHex"
+        }
     }
 
     override val kind: InstructionKind = InstructionKind.CUSTOM

@@ -80,8 +80,6 @@ mod model {
         Executor(executor::ExecutorEvent),
         /// Zero-knowledge proof verification event
         Proof(proof::ProofEvent),
-        /// Confidential asset lifecycle events
-        Confidential(super::confidential::ConfidentialEvent),
         /// Verifying key registry lifecycle events
         VerifyingKey(super::verifying_keys::VerifyingKeyEvent),
         /// Runtime upgrade lifecycle events
@@ -194,175 +192,6 @@ where
 
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(DataEvent);
-
-pub mod confidential {
-    //! Confidential asset events (shield, transfer, unshield).
-
-    use iroha_data_model_derive::model;
-
-    pub use self::model::*;
-    use super::*;
-
-    data_event! {
-        #[has_origin(origin = AssetDefinition)]
-        /// Event emitted for confidential ledger operations.
-        pub enum ConfidentialEvent {
-            #[has_origin(shielded => &shielded.asset_definition)]
-            /// A confidential asset was shielded.
-            Shielded(ConfidentialShielded),
-            #[has_origin(transferred => &transferred.asset_definition)]
-            /// Confidential notes were transferred.
-            Transferred(ConfidentialTransferred),
-            #[has_origin(unshielded => &unshielded.asset_definition)]
-            /// Confidential notes were unshielded into a public balance.
-            Unshielded(ConfidentialUnshielded),
-        }
-    }
-
-    #[model]
-    mod model {
-        use super::*;
-        /// Event payload produced by confidential shield operations.
-        #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-        )]
-        pub struct ConfidentialShielded {
-            /// Asset definition whose confidential ledger was updated.
-            pub asset_definition: AssetDefinitionId,
-            /// Account that initiated the shield.
-            pub account: AccountId,
-            /// Note commitment appended to the shielded ledger.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-            pub commitment: [u8; 32],
-            /// Merkle root before the shield (if any).
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub root_before: Option<[u8; 32]>,
-            /// Merkle root after the shield.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-            pub root_after: [u8; 32],
-            /// Transaction call hash that produced the shield.
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub call_hash: Option<[u8; 32]>,
-        }
-
-        /// Event payload produced by confidential transfer operations.
-        #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-        )]
-        pub struct ConfidentialTransferred {
-            /// Asset definition whose confidential ledger was updated.
-            pub asset_definition: AssetDefinitionId,
-            /// Nullifiers consumed by the transfer.
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::vec")
-            )]
-            pub nullifiers: Vec<[u8; 32]>,
-            /// Output commitments appended to the ledger (sorted deterministically).
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::vec")
-            )]
-            pub outputs: Vec<[u8; 32]>,
-            /// Merkle root before the transfer (if any).
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub root_before: Option<[u8; 32]>,
-            /// Merkle root after the transfer.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-            pub root_after: [u8; 32],
-            /// Blake2b-derived proof hash used for registry lookups.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-            pub proof_hash: [u8; 32],
-            /// Optional hash of the verification envelope (Norito payload).
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub envelope_hash: Option<[u8; 32]>,
-            /// Transaction call hash associated with the transfer.
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub call_hash: Option<[u8; 32]>,
-        }
-
-        /// Event payload produced by confidential unshield operations.
-        #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-        )]
-        pub struct ConfidentialUnshielded {
-            /// Asset definition whose confidential ledger supplied the notes.
-            pub asset_definition: AssetDefinitionId,
-            /// Account credited with the transparent amount.
-            pub account: AccountId,
-            /// Public amount credited as part of the unshield.
-            pub public_amount: iroha_primitives::numeric::Quantity,
-            /// Nullifiers consumed by the unshield operation.
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::vec")
-            )]
-            pub nullifiers: Vec<[u8; 32]>,
-            /// Optional root hint supplied by the transaction.
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub root_hint: Option<[u8; 32]>,
-            /// Blake2b-derived proof hash used for registry lookups.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-            pub proof_hash: [u8; 32],
-            /// Optional hash of the verification envelope (Norito payload).
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub envelope_hash: Option<[u8; 32]>,
-            /// Transaction call hash associated with the unshield.
-            #[cfg_attr(
-                feature = "json",
-                norito(with = "crate::json_helpers::fixed_bytes::option")
-            )]
-            pub call_hash: Option<[u8; 32]>,
-        }
-    }
-
-    /// Prelude exports for confidential events.
-    #[allow(unused_imports)]
-    pub mod prelude {
-        pub use super::{
-            ConfidentialEvent, ConfidentialEventSet, ConfidentialShielded, ConfidentialTransferred,
-            ConfidentialUnshielded,
-        };
-    }
-
-    impl ConfidentialEventSet {
-        /// Matches only shield events.
-        pub const fn only_shielded() -> Self {
-            Self::Shielded
-        }
-
-        /// Matches only transfer events.
-        pub const fn only_transferred() -> Self {
-            Self::Transferred
-        }
-
-        /// Matches only unshield events.
-        pub const fn only_unshielded() -> Self {
-            Self::Unshielded
-        }
-    }
-}
 
 mod asset {
     //! This module contains `AssetEvent`, `AssetDefinitionEvent` and its impls
@@ -2603,7 +2432,6 @@ mod event_routing_tests {
     use super::{
         DataEvent,
         asset::{AssetChanged, AssetDefinitionEvent, AssetEvent},
-        confidential::ConfidentialUnshielded,
         domain::{DomainEvent, ScopedAsset, ScopedAssetDefinition},
     };
     use crate::{
@@ -2708,33 +2536,6 @@ mod event_routing_tests {
         assert_eq!(decoded, event);
         assert!(decoded.domain().is_none());
     }
-
-    #[test]
-    fn confidential_unshield_event_preserves_quantity_above_u64() {
-        const SIGNATORY: &str =
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
-        let domain = DomainId::try_new("wonderland", "universal").expect("valid domain");
-        let event = ConfidentialUnshielded {
-            asset_definition: AssetDefinitionId::derive_from_components(
-                domain,
-                "rose".parse().expect("valid asset name"),
-            ),
-            account: AccountId::new(SIGNATORY.parse().expect("valid public key")),
-            public_amount: "18446744073709551616"
-                .parse()
-                .expect("quantity immediately above u64::MAX"),
-            nullifiers: vec![[0x11; 32]],
-            root_hint: None,
-            proof_hash: [0x22; 32],
-            envelope_hash: None,
-            call_hash: None,
-        };
-        let encoded = norito::to_bytes(&event).expect("encode unshield event");
-        let decoded: ConfidentialUnshielded =
-            norito::decode_from_bytes(&encoded).expect("decode unshield event");
-        assert_eq!(decoded, event);
-        assert_eq!(decoded.public_amount.to_string(), "18446744073709551616");
-    }
 }
 
 #[cfg(all(test, feature = "json"))]
@@ -2776,10 +2577,6 @@ pub mod prelude {
             AssetEventSet, AssetMetadataChanged, AssetTransferred,
         },
         bridge::{BridgeEvent, BridgeEventSet},
-        confidential::{
-            ConfidentialEvent, ConfidentialEventSet, ConfidentialShielded, ConfidentialTransferred,
-            ConfidentialUnshielded,
-        },
         config::{
             ConfigurationEvent, ConfigurationEventSet, ParameterChanged, SccpRegistryChanged,
             SccpRegistryOperation,

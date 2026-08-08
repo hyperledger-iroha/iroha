@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,16 @@ from sumeragi_v2_multilane_autonomous_terminal_contract import (
     validate_autonomous_terminal_recovery_contract,
 )
 from sumeragi_v2_multilane_cli import build_parser, report_validation
+from sumeragi_v2_multilane_reviewed_rust_source import (
+    REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE,
+    REVIEWED_RUST_INCLUDE_MANIFEST_SHA256,
+    REVIEWED_RUST_SOURCE_HELPER_RELATIVE,
+    _expanded_source_manifest_paths,
+    _read_reviewed_rust_source,
+    _REVIEWED_RUST_INCLUDE_MANIFESTS,
+    _reviewed_rust_source_cache,
+    _validate_reviewed_rust_include_manifest,
+)
 
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
@@ -573,27 +584,9 @@ FORBIDDEN_PRODUCTION_TOKENS = {
         "plan_lane_reservation_ownership",
     ): ("merge_ledger_all_entries",),
     (
-        "crates/iroha_core/src/sumeragi/v2_apply.rs",
-        "apply_lane_reservation_reconciliation_plan",
-    ): (
-        "queue.commit_lane_reservation_group(",
-        "commit_lane_reservation_group_with_authorization(",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_apply.rs",
-        "finalize_certified_merge_reservations",
-    ): (
-        "queue.commit_lane_reservation_group(&ordered_keys)",
-        "commit_lane_reservation_group_with_authorization(",
-    ),
-    (
         "crates/iroha_core/src/queue.rs",
-        "Queue::commit_lane_reservation",
-    ): (
-        "validator_count: 1",
-        "producer: 1",
-        "producer_selected_owner: 1",
-    ),
+        "finalize_conflicting_global_admission_locked",
+    ): ("removed_hashes.insert",),
 }
 NATIVE_PREPUBLICATION_MODULE = "SumeragiV2NativeApplicationEvidence"
 NATIVE_PARTICIPANT_APPLICATION_CLASSIFIER_BINDINGS = (
@@ -1618,56 +1611,11 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "resolve_queue_plan_pending_obligations_for_entrypoints",
         (
-            "self.world.smart_contract_state.transaction()",
-            "for entrypoint_hash in entrypoint_hashes",
-            "resolve_queue_plan_pending_obligation_in_storage",
-            "markers.apply()",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "resolve_required_queue_plan_pending_obligations",
-        (
-            "self.world.smart_contract_state.transaction()",
-            "for (entrypoint_hash, expected_binding_hash) in pending_obligations",
-            "decode_exact_queue_plan_pending_obligation_marker",
-            "obligation.binding_hash != expected_binding_hash",
-            "resolve_queue_plan_pending_obligation_in_storage",
-            "markers.apply()",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
-        "fn",
-        "contract_state_namespace_access",
-        (
-            "OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES",
-            "contract_state_key_matches_namespace",
-            "ContractStateNamespaceAccess::OpaqueSystem",
-            "READ_ONLY_SYSTEM_CONTRACT_STATE_PREFIXES",
-            "ContractStateNamespaceAccess::ReadOnlySystem",
-            "ContractStateNamespaceAccess::User",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
-        "fn",
-        "ensure_contract_state_read_allowed",
-        (
-            "contract_state_namespace_access",
-            "ContractStateNamespaceAccess::OpaqueSystem",
-            "ivm::VMError::PermissionDenied",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_HOST_RELATIVE,
-        "fn",
-        "ensure_contract_state_write_allowed",
-        (
-            "contract_state_namespace_access",
-            "ContractStateNamespaceAccess::User",
-            "ivm::VMError::PermissionDenied",
+            "install_lane_reservation_journal(",
+            "install_plan_journal(",
+            "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
+            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
         ),
     ),
 )
@@ -1756,121 +1704,11 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         "fn",
         "decode_exact_queue_plan_pending_route_member_marker",
         (
-            "if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {",
-            "norito::decode_from_bytes::<QueuePlanPendingRouteMemberV1>(payload)",
-            "Self::queue_plan_pending_route_member_marker_payload(&marker)?;",
-            "Self::queue_plan_pending_route_member_marker_key(",
-            "if canonical.as_slice() != payload || &expected_key != key {",
-            "Ok(marker)",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "require_queue_plan_pending_route_member_marker",
-        (
-            "Self::queue_plan_pending_route_member_from_obligation(obligation, route)?;",
-            "Self::queue_plan_pending_route_member_marker_key(route, expected.member_identity)?;",
-            "let payload = storage.get(&key).ok_or_else",
-            "Self::decode_exact_queue_plan_pending_route_member_marker(&key, payload)?;",
-            "if marker != expected {",
-            "Ok((key, marker))",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "queue_plan_pending_route_members_from_storage_with_limit",
-        (
-            "Self::queue_plan_pending_route_member_marker_prefix(route)?;",
-            "let mut members = Vec::new();",
-            "for (key, payload) in storage.range(start..) {",
-            "if !key.as_ref().starts_with(&prefix) {",
-            "break;",
-            "if members.len() == max_members {",
-            "Self::decode_exact_queue_plan_pending_route_member_marker(key, payload)?;",
-            "if marker.route != route {",
-            "let obligation_key = Self::queue_plan_pending_obligation_marker_key(",
-            "if storage.get(&obligation_key).is_none() {",
-            "members.push((key.clone(), marker));",
-            "Ok(members)",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "stage_queue_plan_pending_obligation_marker_in_storage",
-        (
-            "let obligation_payload = Self::queue_plan_pending_obligation_marker_payload(&obligation)?;",
-            "let mut route_updates = Vec::with_capacity(obligation.routes.len());",
-            "for route in &obligation.routes {",
-            "Self::queue_plan_pending_route_members_from_storage(storage, *route)?;",
-            "if members.len() == MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS {",
-            "Self::queue_plan_pending_route_member_from_obligation(&obligation, *route)?;",
-            "Self::queue_plan_pending_route_member_marker_key(*route, member.member_identity)?;",
-            "if let Some(payload) = storage.get(&member_key) {",
-            "Self::decode_exact_queue_plan_pending_route_member_marker(&member_key, payload)?;",
-            "Self::queue_plan_pending_route_member_marker_payload(&member)?;",
-            "route_updates.push((member_key, member_payload));",
-            "storage.insert_queue_plan_marker(obligation_key, obligation_payload);",
-            "for (member_key, member_payload) in route_updates {",
-            "storage.insert_queue_plan_marker(member_key, member_payload);",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "resolve_queue_plan_pending_obligation_in_storage",
-        (
-            "Self::decode_exact_queue_plan_pending_obligation_marker(",
-            "Self::decode_exact_queue_plan_admission_registry_marker(",
-            "let mut member_keys = Vec::with_capacity(obligation.routes.len());",
-            "for route in &obligation.routes {",
-            "Self::queue_plan_pending_route_members_from_storage(storage, *route)?;",
-            "Self::require_queue_plan_pending_route_member_marker(",
-            "member_keys.push(member_key);",
-            "storage.remove_queue_plan_marker(obligation_key);",
-            "for member_key in member_keys {",
-            "storage.remove_queue_plan_marker(member_key);",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "stage_queue_plan_admissions",
-        (
-            "self.state_ref.validate_merge_queue_plan_admissions(",
-            "State::queue_plan_pending_obligation_from_admission(&admission)?;",
-            ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;",
-            "let mut markers = self.world.smart_contract_state.transaction();",
-            "for (admission, obligation, committed, active) in admissions {",
-            "markers.insert_queue_plan_marker(key, payload);",
-            "State::stage_queue_plan_pending_obligation_in_storage(&mut markers, &admission)?;",
-            "markers.apply();",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "resolve_queue_plan_pending_obligations_for_entrypoints",
-        (
-            "let mut markers = self.world.smart_contract_state.transaction();",
-            "for entrypoint_hash in entrypoint_hashes {",
-            "State::resolve_queue_plan_pending_obligation_in_storage(",
-            "markers.apply();",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "resolve_required_queue_plan_pending_obligations",
-        (
-            "let mut markers = self.world.smart_contract_state.transaction();",
-            "for (entrypoint_hash, expected_binding_hash) in pending_obligations {",
-            "State::decode_exact_queue_plan_pending_obligation_marker(&key, payload)?;",
-            "if obligation.binding_hash != expected_binding_hash {",
-            "State::resolve_queue_plan_pending_obligation_in_storage(",
-            "markers.apply();",
+            "install_lane_reservation_journal(",
+            "install_plan_journal(",
+            "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
+            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
         ),
     ),
 )
@@ -2164,9 +2002,11 @@ def _validate_closure_mutation_ledger(
                 errors.append(f"{mutation_id}: duplicate source-check path {relative}")
             seen_paths.add(relative)
             path = root / relative
-            if not _regular_file(path, "release invariant source check", errors):
+            path, source = _read_reviewed_rust_source(
+                root, relative, "release invariant source check", errors
+            )
+            if source is None:
                 continue
-            source = path.read_text(encoding="utf-8")
             for token in tokens:
                 if token not in source:
                     errors.append(
@@ -2272,26 +2112,28 @@ def _validate_closure_mutation_ledger(
                     )
 
 
-def _extract_rust_binding_items(
-    source: str, kind: str, symbol: str
-) -> tuple[str, ...]:
-    """Extract exact free items or `Type::method` items from Rust source."""
+@lru_cache(maxsize=64)
+def _indexed_rust_binding_items(
+    source: str, kind: str
+) -> tuple[tuple[str, str], ...]:
+    """Index one reviewed source once for all bindings of the same item kind."""
 
-    if kind != "method":
-        declaration_re = re.compile(
-            RUST_DECLARATION_TEMPLATES[kind].format(symbol=re.escape(symbol))
+    declaration_re = re.compile(
+        RUST_DECLARATION_TEMPLATES[kind].format(
+            symbol=r"(?P<binding_name>[A-Za-z_][A-Za-z0-9_]*)"
         )
-        return tuple(
-            item
-            for declaration in declaration_re.finditer(source)
-            if (item := _extract_braced_item(source, declaration)) is not None
-        )
+    )
+    return tuple(
+        (declaration.group("binding_name"), item)
+        for declaration in declaration_re.finditer(source)
+        if (item := _extract_braced_item(source, declaration)) is not None
+    )
 
-    if symbol.count("::") != 1:
-        return ()
-    owner, method = symbol.split("::", 1)
-    if not owner or not method:
-        return ()
+
+@lru_cache(maxsize=64)
+def _rust_impl_items(source: str, owner: str) -> tuple[str, ...]:
+    """Extract every inherent or trait implementation for one exact owner."""
+
     # Bind both inherent methods (`impl Owner`) and trait methods
     # (`impl Trait for Owner`). The latter is required for capability-bearing
     # implementations such as `CheckedReplayAuthorizationDomain::clone`;
@@ -2302,19 +2144,37 @@ def _extract_rust_binding_items(
         rf"{re.escape(owner)}|[^{{\n]+[ \t]+for[ \t]+{re.escape(owner)}"
         rf")[ \t]*(?=\{{)"
     )
-    method_re = re.compile(
-        RUST_DECLARATION_TEMPLATES["fn"].format(symbol=re.escape(method))
+    return tuple(
+        item
+        for declaration in impl_re.finditer(source)
+        if (item := _extract_braced_item(source, declaration)) is not None
     )
-    items: list[str] = []
-    for impl_declaration in impl_re.finditer(source):
-        impl_item = _extract_braced_item(source, impl_declaration)
-        if impl_item is None:
-            continue
-        for method_declaration in method_re.finditer(impl_item):
-            item = _extract_braced_item(impl_item, method_declaration)
-            if item is not None:
-                items.append(item)
-    return tuple(items)
+
+
+@lru_cache(maxsize=256)
+def _extract_rust_binding_items(
+    source: str, kind: str, symbol: str
+) -> tuple[str, ...]:
+    """Extract exact free items or `Type::method` items from Rust source."""
+
+    if kind != "method":
+        return tuple(
+            item
+            for name, item in _indexed_rust_binding_items(source, kind)
+            if name == symbol
+        )
+
+    if symbol.count("::") != 1:
+        return ()
+    owner, method = symbol.split("::", 1)
+    if not owner or not method:
+        return ()
+    return tuple(
+        item
+        for impl_item in _rust_impl_items(source, owner)
+        for name, item in _indexed_rust_binding_items(impl_item, "fn")
+        if name == method
+    )
 
 
 def _validate_mutation_runner(
@@ -2793,6 +2653,7 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         relative_paths.add(Path(check["path"]))
 
     digest = hashlib.sha256()
+    relative_paths = _expanded_source_manifest_paths(relative_paths)
     for relative in sorted(relative_paths, key=lambda path: path.as_posix()):
         payload = (root / relative).read_bytes()
         encoded_path = relative.as_posix().encode("utf-8")
@@ -2969,10 +2830,11 @@ def _validate_model(
         if key in seen_bindings:
             errors.append(f"{module}: duplicate production binding {relative}!{symbol}")
         seen_bindings.add(key)
-        path = root / relative
-        if not _regular_file(path, "production binding source", errors):
+        path, source = _read_reviewed_rust_source(
+            root, relative, "production binding source", errors
+        )
+        if source is None:
             continue
-        source = path.read_text(encoding="utf-8")
         if kind == "method":
             items = _extract_rust_binding_items(source, kind, symbol)
             if len(items) != 1:
@@ -3261,10 +3123,11 @@ def _rust_binding_item(
 ) -> str | None:
     """Load one exact Rust item owned by a source-binding contract."""
 
-    path = root / relative
-    if not _regular_file(path, label, errors):
+    path, source = _read_reviewed_rust_source(
+        root, relative, label, errors
+    )
+    if source is None:
         return None
-    source = path.read_text(encoding="utf-8")
     if kind == "method":
         items = _extract_rust_binding_items(source, kind, symbol)
     else:
@@ -4882,10 +4745,11 @@ def _validate_inflight_layout_contract(
                 )
 
     for relative, tokens in INFLIGHT_LAYOUT_SOURCE_CHECKS:
-        path = root / relative
-        if not _regular_file(path, "in-flight whole-file source binding", errors):
+        path, source = _read_reviewed_rust_source(
+            root, relative, "in-flight whole-file source binding", errors
+        )
+        if source is None:
             continue
-        source = path.read_text(encoding="utf-8")
         for token in tokens:
             count = source.count(token)
             if count != 1:
@@ -4901,11 +4765,12 @@ def _validate_inflight_layout_contract(
     )
 
 
-def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
+def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     """Return structural/source-binding errors for the multilane model slice."""
 
     errors: list[str] = []
     root = root.resolve()
+    _validate_reviewed_rust_include_manifest(root, errors)
     formal_dir = root / FORMAL_RELATIVE
     bindings_path = formal_dir / BINDINGS_FILENAME
     if not _regular_file(bindings_path, "multilane source binding ledger", errors):
@@ -4978,6 +4843,13 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     )
     _validate_apalache_gate(root, errors)
     return tuple(errors)
+
+
+def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
+    """Validate with one immutable per-run reviewed-source expansion cache."""
+
+    with _reviewed_rust_source_cache():
+        return _validate(root)
 
 
 def _parser() -> argparse.ArgumentParser:

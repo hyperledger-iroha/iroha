@@ -411,7 +411,7 @@ impl<'a> StreamedHybridDigitDecomposerV1<'a> {
                     .ring_degree
                     .checked_mul(2)
                     .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-                if exponent == 0 || exponent >= twice_degree || exponent % 2 == 0 {
+                if exponent == 0 || exponent >= twice_degree || exponent.is_multiple_of(2) {
                     return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
                 }
                 inverse_odd_mod_power_of_two(exponent, twice_degree)?
@@ -532,7 +532,7 @@ impl<'a> StreamedHybridDigitDecomposerV1<'a> {
 }
 
 fn inverse_odd_mod_power_of_two(value: usize, modulus: usize) -> Result<usize, ZkAmsMkheErrorV1> {
-    if value == 0 || value % 2 == 0 || modulus < 2 || !modulus.is_power_of_two() {
+    if value == 0 || value.is_multiple_of(2) || modulus < 2 || !modulus.is_power_of_two() {
         return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
     }
     let value = u64::try_from(value).map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;

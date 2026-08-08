@@ -462,9 +462,9 @@ impl SignedBlock {
     ///
     /// # Errors
     ///
-    /// Returns an error when transaction results are absent, result counts do
-    /// not match the transaction Merkle leaves, or an outcome names an unknown
-    /// or duplicate transaction entrypoint.
+    /// Returns [`SetBatchTransferOutcomesError`] when transaction results are absent,
+    /// their count differs from the entrypoint count, or an outcome references an
+    /// entrypoint that is not present in this block.
     #[cfg(feature = "transparent_api")]
     pub fn set_batch_transfer_outcomes(
         &mut self,

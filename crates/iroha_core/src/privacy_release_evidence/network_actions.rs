@@ -211,6 +211,7 @@ fn orchard_statement_v1(
     Ok(OrchardHalo2ActionsStatementV1 {
         context,
         asset_definition_id,
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         pool_id,
         anchor: iroha_data_model::privacy::PrivacyRootV1::new(draft.anchor),
         anchor_epoch: 1,
@@ -338,9 +339,13 @@ pub fn build_privacy_release_orchard_network_action_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     let transaction = signed_payload_v1(payload, intent, private_key)?;
-    let bootstrap =
-        PrivacyOrchardPoolBootstrapV1::new(pool_id, asset_definition_id, reserve_account)
-            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
+        pool_id,
+        asset_definition_id,
+        iroha_data_model::asset::AssetBalanceScope::Global,
+        reserve_account,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     Ok(PrivacyReleaseOrchardNetworkActionV1 {
         transaction,
         bootstrap,

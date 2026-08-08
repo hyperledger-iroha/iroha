@@ -435,7 +435,7 @@ pub struct Musubi {
     /// Optional production-publication service and public request bindings.
     pub publication: MusubiPublication,
     #[config(nested)]
-    /// Optional authenticated SoraFS archive-fetch bindings.
+    /// Optional authenticated `SoraFS` archive-fetch bindings.
     pub fetch: MusubiFetch,
 }
 
@@ -445,7 +445,7 @@ pub struct Musubi {
 /// platform-owned files and are never embedded in this configuration value.
 #[derive(Clone, Default, ReadConfig)]
 pub struct MusubiFetch {
-    /// Stable, non-secret client label sent to SoraFS token issuers.
+    /// Stable, non-secret client label sent to `SoraFS` token issuers.
     pub client_id: Option<String>,
     /// Optional bounded request timeout in milliseconds.
     pub request_timeout_ms: Option<u64>,
@@ -469,9 +469,9 @@ impl fmt::Debug for MusubiFetch {
 #[derive(Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct MusubiFetchProviderGateway {
-    /// Lowercase hexadecimal public SoraFS provider identifier.
+    /// Lowercase hexadecimal public `SoraFS` provider identifier.
     pub provider_id: String,
-    /// Provider-specific SoraFS HTTPS origin.
+    /// Provider-specific `SoraFS` HTTPS origin.
     pub url: String,
     /// Platform-owned file containing the provider's Torii API token.
     pub api_token_file: String,
@@ -499,7 +499,7 @@ pub struct MusubiPublication {
     pub storage_coordinator_url: Option<String>,
     /// Public I105 account of the admitted seed-ingress broker.
     pub ingress_broker: Option<String>,
-    /// Lowercase hexadecimal public SoraFS seed-provider identifier.
+    /// Lowercase hexadecimal public `SoraFS` seed-provider identifier.
     pub seed_provider: Option<String>,
     /// Exact registry admission-policy revision expected by the publication.
     pub expected_policy_revision: Option<u64>,
@@ -531,7 +531,7 @@ impl fmt::Debug for MusubiPublication {
 #[derive(Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct MusubiPublicationProviderGateway {
-    /// Lowercase hexadecimal public SoraFS provider identifier.
+    /// Lowercase hexadecimal public `SoraFS` provider identifier.
     pub provider_id: String,
     /// Provider-specific authenticated readback HTTPS base URL.
     pub url: String,

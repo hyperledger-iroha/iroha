@@ -24,3 +24,23 @@ fn generated_config_digest_tracks_config_but_not_runtime_logs() {
         generated_config_blake2b_256(temp.path()).expect("digest changed config")
     );
 }
+
+#[test]
+fn status_snapshot_preserves_the_source_validator_index() {
+    let snapshot = status_snapshot_value(3, norito::json!({"height": 9_u64}));
+    let object = snapshot.as_object().expect("snapshot object");
+    assert_eq!(
+        object
+            .get("validator_index")
+            .and_then(norito::json::Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        object
+            .get("status")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|status| status.get("height"))
+            .and_then(norito::json::Value::as_u64),
+        Some(9)
+    );
+}

@@ -21,6 +21,14 @@ import {
   buildPacs009Message,
   inspectAccountId,
 } from "../src/index.js";
+import {
+  assertNonNegativeInteger,
+  assertProverReportResult,
+  countFailedProverReports,
+  hasProverReportEntries,
+  isNonEmptyString,
+  isPlainObject,
+} from "./integrationToriiProverReportAssertions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_URL = process.env.IROHA_TORII_INTEGRATION_URL ?? "";
@@ -4965,10 +4973,6 @@ function delay(ms) {
   });
 }
 
-function isNonEmptyString(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function normalizeIntegrationString(value) {
   if (typeof value !== "string") {
     return null;
@@ -5043,19 +5047,15 @@ function buildGovernancePlainBallotPayload(overrides) {
   if (!isPlainObject(overrides)) {
     return null;
   }
-  const referendumId = normalizeIntegrationString(
-    overrides.referendumId ?? overrides.referendum_id,
-  );
+  const referendumId = normalizeIntegrationString(overrides.referendumId);
   if (!referendumId) {
     return null;
   }
   const authority =
     normalizeIntegrationString(overrides.authority) ?? AUTHORITY_ACCOUNT_ID;
   const owner = normalizeIntegrationString(overrides.owner) ?? AUTHORITY_ACCOUNT_ID;
-  const chainId =
-    normalizeIntegrationString(overrides.chainId ?? overrides.chain_id) ?? CHAIN_ID;
-  const durationBlocksRaw =
-    overrides.durationBlocks ?? overrides.duration_blocks ?? overrides.duration ?? 10;
+  const chainId = normalizeIntegrationString(overrides.chainId) ?? CHAIN_ID;
+  const durationBlocksRaw = overrides.durationBlocks ?? 10;
   const durationBlocks =
     typeof durationBlocksRaw === "number"
       ? durationBlocksRaw
@@ -5075,11 +5075,11 @@ function buildGovernancePlainBallotPayload(overrides) {
     normalizeIntegrationString(overrides.direction ?? "Aye") ?? "Aye";
   return {
     authority,
-    chain_id: chainId,
-    referendum_id: referendumId,
+    chainId,
+    referendumId,
     owner,
     amount: amountText,
-    duration_blocks: durationBlocks,
+    durationBlocks,
     direction,
   };
 }
@@ -5296,10 +5296,6 @@ function shouldSkipZkProverEndpoints(error) {
 
 function isUnexpectedNotFoundError(error) {
   return error instanceof Error && /unexpected status 404/i.test(error.message ?? "");
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function assertExplorerAccountQrSnapshot(snapshot, label) {
@@ -5631,10 +5627,6 @@ function assertNumberLike(value, label) {
   throw new Error(`${label} must be numeric`);
 }
 
-function assertNonNegativeInteger(value, label) {
-  assert.ok(Number.isInteger(value) && value >= 0, `${label} must be a non-negative integer`);
-}
-
 function assertNonNegativeNumber(value, label) {
   assert.equal(typeof value, "number", `${label} must be a number`);
   assert.ok(Number.isFinite(value), `${label} must be finite`);
@@ -5653,6 +5645,12 @@ function assertEvidenceRecord(entry) {
     "evidence entry recorded_view must be non-negative",
   );
   assertNonNegativeInteger(entry.recorded_ms, "evidence entry recorded_ms must be non-negative");
+  if (entry.consensus_admitted_height !== null) {
+    assertNonNegativeInteger(
+      entry.consensus_admitted_height,
+      "evidence entry consensus_admitted_height must be null or non-negative",
+    );
+  }
   switch (entry.kind) {
     case "DoublePrepare":
     case "DoubleCommit":
@@ -5660,7 +5658,7 @@ function assertEvidenceRecord(entry) {
       assertNonNegativeInteger(entry.height, "double vote evidence height must be non-negative");
       assertNonNegativeInteger(entry.view, "double vote evidence view must be non-negative");
       assertNonNegativeInteger(entry.epoch, "double vote evidence epoch must be non-negative");
-      assert.equal(typeof entry.signer, "string", "double vote evidence signer must be a string");
+      assertNonNegativeInteger(entry.signer, "double vote evidence signer must be non-negative");
       assertHexString(entry.block_hash_1, "double vote evidence block_hash_1");
       assertHexString(entry.block_hash_2, "double vote evidence block_hash_2");
       break;
@@ -5683,106 +5681,47 @@ function assertEvidenceRecord(entry) {
     case "Censorship":
       assertHexString(entry.tx_hash, "censorship tx_hash");
       assertNonNegativeInteger(entry.receipt_count, "censorship receipt_count must be non-negative");
-      assertNonNegativeInteger(entry.min_height, "censorship min_height must be non-negative");
-      assertNonNegativeInteger(entry.max_height, "censorship max_height must be non-negative");
       assert.ok(Array.isArray(entry.signers), "censorship signers must be an array");
+      assert.equal(
+        entry.receipt_count,
+        entry.signers.length,
+        "censorship receipt_count must match signers",
+      );
       entry.signers.forEach((signer) => {
         assert.equal(typeof signer, "string", "censorship signer must be a string");
       });
-      break;
-    default:
-      if ("detail" in entry && entry.detail !== undefined && entry.detail !== null) {
-        assert.equal(typeof entry.detail, "string", "unknown evidence detail must be a string");
+      if (entry.receipt_count === 0) {
+        assert.ok(!("submitted_at_height_min" in entry));
+        assert.ok(!("submitted_at_height_max" in entry));
+      } else {
+        assertNonNegativeInteger(
+          entry.submitted_at_height_min,
+          "censorship submitted_at_height_min must be non-negative",
+        );
+        assertNonNegativeInteger(
+          entry.submitted_at_height_max,
+          "censorship submitted_at_height_max must be non-negative",
+        );
+        assert.ok(entry.submitted_at_height_min <= entry.submitted_at_height_max);
       }
+      assert.ok(!("min_height" in entry), "retired min_height alias must be absent");
+      assert.ok(!("max_height" in entry), "retired max_height alias must be absent");
       break;
-  }
-}
-
-function assertProverReportResult(result, label = "prover report response") {
-  assert.ok(result && typeof result === "object", `${label} must be an object`);
-  switch (result.kind) {
-    case "reports":
+    case "SumeragiV2Equivocation":
       assert.ok(
-        Array.isArray(result.reports),
-        `${label}.reports must be an array when kind is reports`,
+        ["proposal", "phase_vote", "timeout_vote"].includes(entry.class),
+        "v2 equivocation class must be canonical",
       );
-      result.reports.forEach((entry, index) =>
-        assertProverReportRecord(entry, `${label}.reports[${index}]`),
-      );
-      break;
-    case "ids":
-      assert.ok(Array.isArray(result.ids), `${label}.ids must be an array when kind is ids`);
-      result.ids.forEach((value, index) => {
-        assert.ok(
-          isNonEmptyString(value),
-          `${label}.ids[${index}] must be a non-empty string`,
-        );
-      });
-      break;
-    case "messages":
-      assert.ok(
-        Array.isArray(result.messages),
-        `${label}.messages must be an array when kind is messages`,
-      );
-      result.messages.forEach((entry, index) => {
-        assert.ok(isPlainObject(entry), `${label}.messages[${index}] must be an object`);
-        assert.ok(
-          isNonEmptyString(entry.id),
-          `${label}.messages[${index}].id must be a non-empty string`,
-        );
-        if (entry.error !== null) {
-          assert.equal(
-            typeof entry.error,
-            "string",
-            `${label}.messages[${index}].error must be null or a string`,
-          );
-        }
-      });
+      assertNonNegativeInteger(entry.height, "v2 equivocation height must be non-negative");
+      assertNonNegativeInteger(entry.view, "v2 equivocation view must be non-negative");
+      assertNonNegativeInteger(entry.epoch, "v2 equivocation epoch must be non-negative");
+      assertNonNegativeInteger(entry.signer, "v2 equivocation signer must be non-negative");
+      assert.match(entry.context_id, /^[0-9a-f]{64}$/u);
+      assert.match(entry.artifact_hash_1, /^[0-9a-f]{64}$/u);
+      assert.match(entry.artifact_hash_2, /^[0-9a-f]{64}$/u);
+      assert.notEqual(entry.artifact_hash_1, entry.artifact_hash_2);
       break;
     default:
-      throw new Error(`${label} has unknown kind: ${String(result.kind)}`);
+      assert.fail(`unexpected evidence kind: ${entry.kind}`);
   }
-}
-
-function assertProverReportRecord(entry, label) {
-  assert.ok(entry && typeof entry === "object", `${label} must be an object`);
-  assert.ok(isNonEmptyString(entry.id), `${label}.id must be a non-empty string`);
-  assert.equal(typeof entry.ok, "boolean", `${label}.ok must be a boolean`);
-  if (entry.error !== null) {
-    assert.equal(typeof entry.error, "string", `${label}.error must be null or a string`);
-  }
-  assert.ok(isNonEmptyString(entry.content_type), `${label}.content_type must be a string`);
-  assertNonNegativeInteger(entry.size, `${label}.size`);
-  assertNonNegativeInteger(entry.created_ms, `${label}.created_ms`);
-  assertNonNegativeInteger(entry.processed_ms, `${label}.processed_ms`);
-  assertNonNegativeInteger(entry.latency_ms, `${label}.latency_ms`);
-  if (entry.zk1_tags !== null) {
-    assert.ok(Array.isArray(entry.zk1_tags), `${label}.zk1_tags must be an array when present`);
-    entry.zk1_tags.forEach((tag, index) => {
-      assert.ok(
-        isNonEmptyString(tag),
-        `${label}.zk1_tags[${index}] must be a non-empty string`,
-      );
-    });
-  }
-}
-
-function hasProverReportEntries(result) {
-  switch (result.kind) {
-    case "reports":
-      return Array.isArray(result.reports) && result.reports.length > 0;
-    case "ids":
-      return Array.isArray(result.ids) && result.ids.length > 0;
-    case "messages":
-      return Array.isArray(result.messages) && result.messages.length > 0;
-    default:
-      return false;
-  }
-}
-
-function countFailedProverReports(result) {
-  if (result.kind !== "reports" || !Array.isArray(result.reports)) {
-    return 0;
-  }
-  return result.reports.filter((entry) => entry && entry.ok === false).length;
 }

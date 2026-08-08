@@ -44,6 +44,14 @@ fn checked_connect_key_fixture() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("generate checked connect fixture keypair")
 }
 
+fn checked_connect_transport_key_fixture() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_from_seed(
+        b"iroha:torii:connect-gating:soranet-transport:v1".to_vec(),
+        iroha_crypto::Algorithm::Ed25519,
+    )
+    .expect("generate dedicated connect SoraNet transport fixture keypair")
+}
+
 #[test]
 fn connect_config_fixture_uses_checked_key_generation() {
     let key_pair = checked_connect_key_fixture();
@@ -53,6 +61,13 @@ fn connect_config_fixture_uses_checked_key_generation() {
         .expect("fixture connect public key has a valid algorithm");
 
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+
+    let transport_key_pair = checked_connect_transport_key_fixture();
+    assert_eq!(
+        transport_key_pair.algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+    assert_ne!(transport_key_pair.public_key(), key_pair.public_key());
 }
 
 #[allow(clippy::too_many_lines)]
@@ -91,6 +106,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         common: A::Common {
             chain: ChainId::from("test-chain"),
             key_pair: checked_connect_key_fixture(),
+            soranet_transport_key_pair: checked_connect_transport_key_fixture(),
             peer: Peer::new(
                 socket_addr!(127.0.0.1:0),
                 checked_connect_key_fixture().public_key().clone(),
@@ -3021,36 +3037,4 @@ async fn connect_ws_rejects_query_token() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-#[cfg(feature = "ws_integration_tests")]
-#[tokio::test]
-async fn connect_ws_handshake_fails_when_disabled() {
-    use tokio::net::TcpListener;
-    // Build disabled config and Torii router
-    let cfg = minimal_actual_config(false);
-    let torii = build_torii(&cfg);
-    let app = torii.api_router_for_tests();
-    // Serve
-    let listener = match TcpListener::bind("127.0.0.1:0").await {
-        Ok(listener) => listener,
-        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            eprintln!("skipping connect_ws_handshake_fails_when_disabled: {err}");
-            return;
-        }
-        Err(err) => panic!("failed to bind test listener: {err}"),
-    };
-    let addr = listener.local_addr().unwrap();
-    spawn_test_server(listener, app);
-    // Attempt WS connect directly; expect failure
-    let url = format!(
-        "ws://{}/v1/connect/ws?sid={}&role=app",
-        addr, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    );
-    let err = tokio_tungstenite::connect_async(&url)
-        .await
-        .expect_err("ws handshake should fail when connect disabled");
-    let status = match err {
-        tokio_tungstenite::tungstenite::Error::Http(response) => response.status(),
-        other => panic!("unexpected WebSocket error: {other:?}"),
-    };
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-}
+include!("connect_gating_disabled_ws_test.rs");

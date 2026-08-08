@@ -21,6 +21,56 @@ fn canonical_prune_intent_artifact_bytes() -> Vec<u8> {
         .expect("encode canonical prune-intent fixture")
 }
 
+fn seed_large_commit_roster_for_prune(
+    kura: &Kura,
+    blocks: &[Arc<SignedBlock>],
+    target_height: u64,
+) -> CommitRosterJournalPruneProjectionV2 {
+    let peer = PeerId::new(
+        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+            .expect("generate large-roster BLS key")
+            .public_key()
+            .clone(),
+    );
+    {
+        let mut journal = kura.roster_log.write();
+        for (index, block) in blocks.iter().enumerate() {
+            let height = u64::try_from(index + 1).expect("large-roster height fits u64");
+            let (qc, checkpoint) =
+                archival_roster_row_fixture(height, block.hash(), vec![peer.clone()]);
+            assert!(journal.upsert(qc, checkpoint, None));
+        }
+        journal.persist().expect("persist large source roster");
+    }
+    kura.roster_log
+        .read()
+        .project_truncate_to_height(target_height)
+        .expect("project large retained roster")
+}
+
+fn commit_roster_file_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let journal = CommitRosterJournal::journal_path(root);
+    let mut files = Vec::new();
+    let current = journal.join("current");
+    if current.is_file() {
+        files.push((current.clone(), fs::read(&current).expect("read roster pointer")));
+    }
+    let generations = journal.join("generations");
+    if generations.is_dir() {
+        for entry in fs::read_dir(&generations).expect("read roster generations") {
+            let path = entry.expect("roster generation entry").path();
+            if path.is_file() {
+                files.push((
+                    path.clone(),
+                    fs::read(&path).expect("read roster generation"),
+                ));
+            }
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+}
+
 #[test]
 fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
     let temp_dir = TempDir::new().expect("prune accounting temp dir");
@@ -268,27 +318,7 @@ fn canonical_prune_capacity_includes_large_commit_roster_generation() {
     let (mut kura, _) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("large-roster Kura");
     let blocks = store_dummy_block_arcs(&kura, 48);
-    let peer = PeerId::new(
-        KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-            .expect("generate large-roster BLS key")
-            .public_key()
-            .clone(),
-    );
-    {
-        let mut journal = kura.roster_log.write();
-        for (index, block) in blocks.iter().enumerate() {
-            let height = u64::try_from(index + 1).expect("large-roster height fits u64");
-            let (qc, checkpoint) =
-                archival_roster_row_fixture(height, block.hash(), vec![peer.clone()]);
-            assert!(journal.upsert(qc, checkpoint, None));
-        }
-        journal.persist().expect("persist large source roster");
-    }
-    let roster_projection = kura
-        .roster_log
-        .read()
-        .project_truncate_to_height(24)
-        .expect("project large retained roster");
+    let roster_projection = seed_large_commit_roster_for_prune(&kura, &blocks, 24);
     assert!(roster_projection.required);
     assert!(roster_projection.retained_payload_bytes > 4 * 1024);
     let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
@@ -324,6 +354,67 @@ fn canonical_prune_capacity_includes_large_commit_roster_generation() {
         .expect("exact large-roster prune peak is admitted");
     assert_eq!(kura.blocks_count(), 24);
     assert!(!kura.roster_log.read().has_entries_above(24));
+    assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
+}
+
+#[test]
+fn startup_prune_capacity_reuses_large_roster_admission_exactly() {
+    let temp_dir = TempDir::new().expect("startup large-roster prune temp dir");
+    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (mut kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+        .expect("startup large-roster Kura");
+    let blocks = store_dummy_block_arcs(&kura, 48);
+    let roster_projection = seed_large_commit_roster_for_prune(&kura, &blocks, 24);
+    assert!(roster_projection.retained_payload_bytes > 4 * 1024);
+    let preview = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
+        version: 2,
+        source_height: 48,
+        source_tip_hash: Some(blocks[47].hash()),
+        target_height: 24,
+        target_tip_hash: Some(blocks[23].hash()),
+        retained_merge_entries: 0,
+        retained_merge_tip_hash: None,
+        sidecar_rewrite: KuraPruneSidecarRewriteProjectionV2::none(),
+        capacity: unsealed_prune_capacity_fixture(),
+    });
+    let exact = preview.capacity.admitted_peak_bytes;
+    Arc::get_mut(&mut kura)
+        .expect("startup large-roster Kura remains exclusive")
+        .max_disk_usage_bytes = exact;
+    kura.fail_prune_after_stage_for_tests(PRUNE_STAGE_INTENT);
+    let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = kura.prune_to_height(24);
+    }));
+    assert!(crash.is_err(), "intent boundary failpoint must stop the prune");
+    crate::sumeragi::status::clear_consensus_transition_poison_for_tests();
+    let durable_intent = Kura::read_prune_intent(temp_dir.path())
+        .expect("read startup large-roster intent")
+        .expect("startup large-roster intent is durable");
+    assert_eq!(durable_intent.capacity, preview.capacity);
+    let roster_before = commit_roster_file_snapshot(temp_dir.path());
+    let marker_path = kura.block_store.lock().commit_marker_path();
+    let marker_before = fs::read(&marker_path).expect("read pre-recovery block marker");
+    drop(kura);
+
+    config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact - 1);
+    assert!(matches!(
+        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Err(Error::StorageBudgetExceeded { limit, required, .. })
+            if limit == exact - 1 && required == exact
+    ));
+    assert_eq!(commit_roster_file_snapshot(temp_dir.path()), roster_before);
+    assert_eq!(
+        fs::read(&marker_path).expect("read marker after one-under rejection"),
+        marker_before,
+    );
+    assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
+
+    config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact);
+    let (recovered, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
+        .expect("exact startup capacity completes large-roster prune");
+    assert_eq!(block_count, 24);
+    assert_eq!(recovered.blocks_count(), 24);
+    assert!(!recovered.roster_log.read().has_entries_above(24));
     assert!(!Kura::prune_intent_path_for(temp_dir.path()).exists());
 }
 
@@ -477,6 +568,49 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
             .kura_total_disk_usage_bytes()
             .expect("scan total bytes after publication-crash recovery"),
     );
+}
+
+#[test]
+fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
+    let temp_dir = TempDir::new().expect("missing retained-carrier temp dir");
+    let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
+    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+        .expect("open missing retained-carrier fixture");
+    let sidecar_rewrite = {
+        let _guard = kura.sidecar_lock.lock();
+        kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
+            .expect("project missing retained-carrier sidecars")
+    };
+    let intent = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
+        version: 2,
+        source_height: 4,
+        source_tip_hash: Some(blocks[3].hash()),
+        target_height: 2,
+        target_tip_hash: Some(blocks[1].hash()),
+        retained_merge_entries: 1,
+        retained_merge_tip_hash: Some(merge_entries[0].canonical_hash()),
+        sidecar_rewrite,
+        capacity: unsealed_prune_capacity_fixture(),
+    });
+    kura.persist_prune_intent(&intent)
+        .expect("persist missing retained-carrier prune intent");
+    let retained_carrier = kura.merge_carrier_path(2);
+    fs::remove_file(&retained_carrier).expect("remove retained carrier fixture");
+    sync_dir(
+        retained_carrier
+            .parent()
+            .expect("retained carrier has parent directory"),
+    )
+    .expect("sync missing retained-carrier fixture");
+    drop(kura);
+
+    assert!(matches!(
+        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Err(Error::PruneIntentConflict(message))
+            if message.contains("cannot allocate missing retained merge carrier")
+    ));
+    assert!(!retained_carrier.exists());
+    assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
 }
 
 #[derive(Encode)]

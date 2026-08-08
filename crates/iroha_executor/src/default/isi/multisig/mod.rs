@@ -32,6 +32,8 @@ pub(super) fn visit_instruction<V: Execute + Visit + ?Sized>(
         MultisigInstructionBox::Approve(instruction) => instruction.visit_execute(executor),
         MultisigInstructionBox::Cancel(instruction) => instruction.visit_execute(executor),
         MultisigInstructionBox::InvalidateOutstanding(instruction) => {
+            let instruction_box = InstructionBox::from(instruction);
+            let instruction = &instruction_box;
             execute!(executor, instruction)
         }
     }

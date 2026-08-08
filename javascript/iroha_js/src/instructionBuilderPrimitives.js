@@ -1,8 +1,48 @@
 import { Buffer } from "buffer";
 import { createValidationError, ValidationErrorCode } from "./validationError.js";
+import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
 
 function fail(code, message, path) {
   throw createValidationError(code, message, path);
+}
+
+export function assertAllowedFields(source, allowed, name) {
+  for (const field of Reflect.ownKeys(source)) {
+    const label = typeof field === "symbol" ? field.toString() : field;
+    const descriptor = Object.getOwnPropertyDescriptor(source, field);
+    if (typeof field !== "string" || !allowed.has(field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${label} is not supported`,
+        `${name}.${label}`,
+      );
+    }
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${label} must be an enumerable data field`,
+        `${name}.${label}`,
+      );
+    }
+  }
+}
+
+export function assertExactFields(source, fields, name) {
+  const allowed = new Set(fields);
+  assertAllowedFields(source, allowed, name);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${field} is required`,
+        `${name}.${field}`,
+      );
+    }
+  }
 }
 
 function crc16(tag, body) {
@@ -95,6 +135,30 @@ export function assertExactNonBlankString(value, name) {
     );
   }
   return raw;
+}
+
+export function normalizeGovernanceSelectorV1(value, name) {
+  const exact = assertString(value, name);
+  if (!isCanonicalGovernanceSelectorV1(exact)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot`,
+      name,
+    );
+  }
+  return exact;
+}
+
+export function requireExactLowerHex32String(value, name) {
+  const exact = assertExactNonBlankString(value, name);
+  if (!/^[0-9a-f]{64}$/u.test(exact)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must contain exactly 64 lowercase hexadecimal characters`,
+      name,
+    );
+  }
+  return exact;
 }
 
 export function assertWellFormedUtf16(value, name) {

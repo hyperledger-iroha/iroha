@@ -226,7 +226,7 @@ impl ZkAmsMkheGovernedActiveRosterV1 {
     }
 
     /// Convert to the canonical wire roster without changing its consensus identity.
-    pub fn to_wire_roster(&self) -> Result<super::ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheErrorV1> {
+    pub fn to_wire_roster(self) -> Result<super::ZkAmsMkheGovernedRosterWireV1, ZkAmsMkheErrorV1> {
         self.validate()?;
         let parties = self.participants.map(|participant| participant.party);
         let wire =
@@ -348,12 +348,14 @@ fn assemble_governed_active_roster<R: MaskedRelaxedRandomSourceV1>(
     Ok(roster)
 }
 
+type ActiveRosterIdentityV1 = (Vec<ZkAmsMkhePartyIdV1>, [u8; 32], [u8; 32]);
+
 fn active_roster_identity(
     profile_digest: [u8; 32],
     epoch: u64,
     keys: &[[u8; 33]],
     require_release_profile: bool,
-) -> Result<(Vec<ZkAmsMkhePartyIdV1>, [u8; 32], [u8; 32]), ZkAmsMkheErrorV1> {
+) -> Result<ActiveRosterIdentityV1, ZkAmsMkheErrorV1> {
     if profile_digest == [0; 32]
         || epoch == 0
         || keys.len() != ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
@@ -906,6 +908,10 @@ impl ZkAmsMkheActiveRoundReceiptV1 {
 }
 
 /// Verify and collect exactly one contribution from every roster party in order.
+#[allow(
+    clippy::result_large_err,
+    reason = "the identifiable-abort protocol returns complete deterministic evidence by value"
+)]
 pub fn zk_ams_mkhe_collect_active_round_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -925,7 +931,7 @@ pub fn zk_ams_mkhe_collect_active_round_v1(
     }
     let mut seen = [false; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1];
     let mut digests = [[0_u8; 32]; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1];
-    for expected_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+    for (expected_index, digest) in digests.iter_mut().enumerate() {
         let expected = roster.participants[expected_index];
         let Some(contribution) = contributions.get(expected_index) else {
             return Err(identifiable_abort(
@@ -985,7 +991,7 @@ pub fn zk_ams_mkhe_collect_active_round_v1(
                 reason,
             ));
         }
-        digests[expected_index] = contribution
+        *digest = contribution
             .digest()
             .unwrap_or_else(|_| active_contribution_fallback_digest(contribution));
     }
@@ -1732,6 +1738,10 @@ fn validate_galois_source_coordinate(
 }
 
 /// Borrowed bounded witness for one automorphism-linked Galois-source digit.
+#[allow(
+    dead_code,
+    reason = "used by the private fail-closed collective Galois-key generator"
+)]
 #[derive(Clone, Copy)]
 pub(super) struct ZkAmsMkheActiveGaloisSourceWitnessV1<'a> {
     secret: &'a [i64],
@@ -1747,6 +1757,10 @@ impl core::fmt::Debug for ZkAmsMkheActiveGaloisSourceWitnessV1<'_> {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "used by the private fail-closed collective Galois-key generator"
+)]
 impl<'a> ZkAmsMkheActiveGaloisSourceWitnessV1<'a> {
     /// Validate exact release dimensions and every narrow coefficient bound.
     pub(super) fn new(
@@ -2322,6 +2336,10 @@ pub fn verify_zk_ams_mkhe_active_rkg_round_two_v1(
 }
 
 /// Prove and authenticate one exact automorphism-linked Galois-source digit.
+#[allow(
+    dead_code,
+    reason = "used by the private fail-closed collective Galois-key generator"
+)]
 pub(super) fn prove_zk_ams_mkhe_active_galois_source_v1<R: MaskedRelaxedRandomSourceV1>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -3740,7 +3758,7 @@ fn automorphism_signed(
         .len()
         .checked_mul(2)
         .ok_or(ZkAmsMkheErrorV1::InvalidProfile)?;
-    if exponent == 0 || exponent >= twice_degree || exponent % 2 == 0 {
+    if exponent == 0 || exponent >= twice_degree || exponent.is_multiple_of(2) {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut output = vec![0_i64; coefficients.len()];

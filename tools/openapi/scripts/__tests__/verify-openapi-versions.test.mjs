@@ -5,7 +5,11 @@ import {mkdtemp, mkdir, readFile, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 
-import {isIsoTimestamp, verifyOpenApiVersions} from '../verify-openapi-versions.mjs';
+import {
+  isIsoTimestamp,
+  parseArgs,
+  verifyOpenApiVersions,
+} from '../verify-openapi-versions.mjs';
 import {computeOpenApiBlake3Hex} from '../lib/openapi-manifest-v2.mjs';
 import {validateOpenApiGeneratorProvenance} from '../lib/openapi-provenance.mjs';
 import {attachOpenApiManifestSignature} from './helpers/openapi-signing.mjs';
@@ -26,6 +30,35 @@ function releaseSpec(marker) {
     2,
   );
 }
+
+test('verify CLI binds every canonical input to one explicit output directory', () => {
+  assert.deepEqual(
+    parseArgs([
+      '--allow-unsigned',
+      '--expected-generator-commit=' + 'ab'.repeat(20),
+      '--output-dir=staging/openapi',
+    ]),
+    {
+      allowUnsigned: true,
+      expectedGeneratorCommit: 'ab'.repeat(20),
+      outputDir: resolve('staging/openapi'),
+    },
+  );
+  assert.throws(() => parseArgs(['--output-dir=']), /unambiguous directory path/);
+  assert.throws(() => parseArgs(['--output-dir=../escape']), /unambiguous directory path/);
+  assert.throws(
+    () => parseArgs(['--output-dir=staging/openapi', '--output-dir=staging/other']),
+    /only once/,
+  );
+  assert.throws(
+    () => parseArgs(['--allow-unsigned', '--allow-unsigned']),
+    /only once/,
+  );
+  assert.throws(
+    () => parseArgs(['--output-root=staging/openapi']),
+    /unknown verify-openapi-versions option/,
+  );
+});
 
 test('OpenAPI provenance accepts explicit V2 dirty and clean state', () => {
   assert.deepEqual(
@@ -226,7 +259,7 @@ test('verifyOpenApiVersions requires explicit unsigned opt-in for dirty provenan
 
 test('verifyOpenApiVersions validates recorded metadata', async () => {
   const context = await setupFixture();
-  await verifyOpenApiVersions(context);
+  await verifyOpenApiVersions({outputDir: context.outputDir});
 });
 
 test('verifyOpenApiVersions binds mutable manifests to an explicit source pin', async () => {

@@ -1354,7 +1354,7 @@ archive; the model must expose ABA acceptance, loss, or sibling corruption.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
 
-### ML-LIFE-05 — bounded stage diagnostics and the twelve-peer stall
+### ML-LIFE-05 — bounded stage diagnostics and the 13-peer global stall
 
 **Implementation:** Implemented.
 **Closure:** Implemented.
@@ -1368,7 +1368,7 @@ Kura/WSV receipt, queue-finalization, and conflict stages. State derives the
 ordered bounded vector from replicated State plus Kura evidence and Torii
 publishes it only on diagnostics. Live production candidate synthesis and
 canonical carrier application now connect the former recovery-to-application
-gap. The twelve-peer rerun required to prove that correction empirically
+gap. The 13-peer global rerun (twelve lane validators) required to prove that correction empirically
 remains `G-12P`.
 
 **Closure condition.** Add bounded, deterministic, operator-safe counters or
@@ -1475,7 +1475,7 @@ core-jvm (`15`), and mirrored Java (`10`). JavaScript uses the dedicated
 `sumeragiDiagnosticsContract.test.js` entrypoint instead of a monolithic
 name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The suite-source manifest SHA-256 is
-`531b5d5f56c3863a4ea11ed40b6868aebb280b2563863c909b69b94f880dfc12`.
+`e20ef6e6d52907defb2b98c1c2b1e33aceb90054437e21ef2facab0c8df0ffca`.
 These source contracts do not close the still-unrun aggregate `G-SDK` gate.
 
 **Differential release invariant and negative control.**
@@ -1546,7 +1546,7 @@ The harness and source-bound release inventory both require that exact count.
 The synchronized fixture SHA-256 is
 `8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`
 and the current suite-source manifest SHA-256 is
-`4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`.
+`45044114a73b1d65400a075a7bb65fff22103f18287299e6350b162277f3b882`.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 59, Swift
 4, Kotlin 6, and Java 5 tests. Previously recorded direct grouped results
 predate this refreshed fixture and do not attest it; one complete archived
@@ -1771,11 +1771,14 @@ The mandatory four-peer lifecycle and rotating-validator Native tests are now
 non-ignored and source-bound into the release runner, but no fresh completion
 artifact is recorded here.
 
-### G-12P — twelve-peer multilane corridor
+### G-12P — twelve lane validators on a 13-peer global committee
 
 **Evidence:** Open.
 
-Run at least three independent four-validator dataspaces with grouped DvP and
+The stable gate identifier counts the twelve lane-validator assignments. Each
+run must use an exact 13-member revision-4 global committee, with the final
+global voter excluded from all three lane committees. Run at least three
+independent four-validator dataspaces with grouped DvP and
 autonomous work, rotating outage/restart, scale-out, drain, scale-in, and
 same-ID recreation. The corridor must also rotate deterministic Kura keepers,
 expire and refresh adverts within configured bounds, pin local keepers, and
@@ -1814,7 +1817,7 @@ count, and static release inventory are now synchronized. The grouped corpus
 contains exactly 55 negative controls and hashes to
 `8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`;
 the source-suite manifest hashes to
-`4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`.
+`45044114a73b1d65400a075a7bb65fff22103f18287299e6350b162277f3b882`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
 `59`, Swift `4`, Kotlin `6`, and Java `5` tests. The previously recorded direct
 subset results—OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56`—predate
@@ -1823,7 +1826,7 @@ status/diagnostics contract remains `44/44`. The exact no-skip diagnostics
 release inventories are Rust `14`, Python `114`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `15`, and Java `10`; their
 suite-source manifest SHA-256 is
-`531b5d5f56c3863a4ea11ed40b6868aebb280b2563863c909b69b94f880dfc12`.
+`e20ef6e6d52907defb2b98c1c2b1e33aceb90054437e21ef2facab0c8df0ffca`.
 No complete source-and-distribution aggregate harness replay was run for this
 evidence refresh. `G-SDK` therefore stays Open despite the resolved generation
 drift and static inventory consistency.
@@ -1840,7 +1843,7 @@ SDK parity suites, formal runners, `cargo build --workspace`, full
 `scripts/check_no_legacy_codec.sh`. The release record must contain commands,
 exit status, source revision, target directory, toolchain, and artifact hashes.
 `scripts/run_sumeragi_v2_release_gates.sh` must require the completed multilane
-focused, SDK, formal, four-peer, twelve-peer, and scaling gates and must fail on
+focused, SDK, formal, four-peer, 13-peer global, and scaling gates and must fail on
 a skipped required test.
 Only then may architecture/operator documentation, `status.md`, or
 `roadmap.md` describe a row or gate as closed.

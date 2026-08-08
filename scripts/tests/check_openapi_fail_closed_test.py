@@ -2,11 +2,21 @@
 
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 and older
+    import tomli as tomllib
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 XTASK = REPO_ROOT / "xtask" / "src" / "main.rs"
 TORII_OPENAPI = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
 OPENAPI_GATE = REPO_ROOT / "ci" / "check_openapi_spec.sh"
+GENERATED_FILES = REPO_ROOT / "generated-files.toml"
+OPENAPI_LOCK_PROVISIONER = (
+    REPO_ROOT / "tools" / "openapi" / "scripts" / "provision-openapi-cargo-lock.mjs"
+)
+OPENAPI_LOCK_PIN = REPO_ROOT / "release" / "openapi-cargo-lock-v1.txt"
 OPENAPI_SCRIPTS = (
     REPO_ROOT / "tools" / "openapi" / "scripts" / "sync-openapi.mjs",
     REPO_ROOT / "tools" / "openapi" / "scripts" / "verify-openapi-versions.mjs",
@@ -54,6 +64,68 @@ def test_openapi_version_and_signature_paths_reject_empty_specs() -> None:
     for path in OPENAPI_SCRIPTS:
         source = path.read_text(encoding="utf-8")
         assert "validateReleaseOpenApiDocumentBytes" in source, path
+
+
+def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> None:
+    registry = tomllib.loads(GENERATED_FILES.read_text(encoding="utf-8"))
+    owners = [
+        entry
+        for entry in registry["generated"]
+        if entry["name"] == "torii-openapi-release-bundle"
+    ]
+    assert len(owners) == 1
+    owner = owners[0]
+    assert owner["outputs"] == [
+        "artifacts/openapi/torii.json",
+        "artifacts/openapi/manifest.json",
+        "artifacts/openapi/versions/current/torii.json",
+        "artifacts/openapi/versions/current/manifest.json",
+        "artifacts/openapi/versions.json",
+    ]
+    assert "artifacts/openapi/allowed_signers.json" in owner["inputs"]
+    assert "artifacts/openapi/allowed_signers.json" not in owner["outputs"]
+    assert "openapi --output-root artifacts/openapi" in owner["generator"]
+    assert "--output-dir=artifacts/openapi" in owner["generator"]
+    assert "--reuse-canonical-spec" not in owner["generator"]
+    assert "--locked --offline --jobs 1 -Z unstable-options" in owner["generator"]
+    assert "--lockfile-path Cargo.lock" in owner["generator"]
+    assert owner["check"] == "bash ci/check_openapi_spec.sh"
+
+    sync_source = OPENAPI_SCRIPTS[0].read_text(encoding="utf-8")
+    assert "node:child_process" not in sync_source
+    assert "runCargo" not in sync_source
+    assert "readOpenApiStableFile(canonicalSpec" in sync_source
+
+
+def test_openapi_cargo_lock_pin_has_one_staging_only_owner() -> None:
+    registry = tomllib.loads(GENERATED_FILES.read_text(encoding="utf-8"))
+    owners = [
+        entry
+        for entry in registry["generated"]
+        if entry["name"] == "openapi-cargo-lock-pin"
+    ]
+    assert len(owners) == 1
+    owner = owners[0]
+    assert owner["outputs"] == ["release/openapi-cargo-lock-v1.txt"]
+    assert owner["inputs"] == ["release/openapi-generator-inputs-v1.txt"]
+    assert "provision-openapi-cargo-lock.mjs pin" in owner["generator"]
+    assert "--source=\"$PWD/Cargo.lock\"" in owner["generator"]
+    assert "IROHA_OPENAPI_CARGO_LOCK_PIN_STAGE" in owner["generator"]
+    assert "--check=\"$PWD/release/openapi-cargo-lock-v1.txt\"" in owner["check"]
+
+    xtask = XTASK.read_text(encoding="utf-8")
+    provisioner = OPENAPI_LOCK_PROVISIONER.read_text(encoding="utf-8")
+    pin_fields = dict(
+        line.split("=", 1)
+        for line in OPENAPI_LOCK_PIN.read_text(encoding="utf-8").splitlines()[1:]
+    )
+    pinned_size = pin_fields["bytes"]
+    pinned_digest = pin_fields["sha256_hex"]
+    for source in (xtask, provisioner):
+        assert pinned_size not in source.replace("_", "")
+        assert pinned_digest not in source
+    assert "outside the repository" in provisioner
+    assert "assertOpenApiCargoLockSnapshotStable" in provisioner
 
 
 def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently() -> None:

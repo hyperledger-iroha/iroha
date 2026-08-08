@@ -108,8 +108,11 @@ const NEXUS_LANE_INDEX: u32 = 0;
 const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
 const AUTOSCALE_LANE_INDEX: u32 = 3;
-const TOTAL_PEERS: usize = 12;
 const VALIDATORS_PER_LANE: usize = 4;
+const LANE_VALIDATOR_COUNT: usize = VALIDATORS_PER_LANE * 3;
+// The global permissioned committee is an exact revision-4 3f + 1 roster.
+// Its final member observes all three disjoint four-validator lane committees.
+const TOTAL_PEERS: usize = 13;
 const VALIDATOR_STAKE: u64 = 2_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const DS1_WORKLOAD_SEED_AMOUNT: u64 = 5_000;
@@ -647,7 +650,7 @@ fn npos_multilane_genesis_post_topology_transactions(
         .into(),
     ];
 
-    for (index, peer) in topology.iter().enumerate() {
+    for (index, peer) in topology.iter().take(LANE_VALIDATOR_COUNT).enumerate() {
         let lane_index = if index < VALIDATORS_PER_LANE {
             NEXUS_LANE_INDEX
         } else if index < VALIDATORS_PER_LANE * 2 {
@@ -4063,7 +4066,7 @@ fn submit_autoscale_load(clients: &[Client], cycle: usize, tx_count: usize) -> R
         match client.submit(
             Log::new(
                 Level::INFO,
-                format!("g12p-autoscale-cycle-{cycle}-load-{index}"),
+                format!("g13p-autoscale-cycle-{cycle}-load-{index}"),
             ),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ) {
@@ -4077,7 +4080,7 @@ fn submit_autoscale_load(clients: &[Client], cycle: usize, tx_count: usize) -> R
         "autoscale cycle {cycle} rejected all {tx_count} load transactions: {first_error:?}"
     );
     eprintln!(
-        "[g12p-autoscale] cycle={cycle} load accepted={accepted}/{tx_count} first_error={first_error:?}"
+        "[g13p-autoscale] cycle={cycle} load accepted={accepted}/{tx_count} first_error={first_error:?}"
     );
     Ok(())
 }
@@ -4159,7 +4162,7 @@ fn wait_for_autoscale_expansion(
                     .all(|log| log.scale_out_heights.contains(&marker.activation_height));
                 if endpoints_ready && transition_ready {
                     eprintln!(
-                        "[g12p-autoscale] cycle={cycle} expanded lane={} incarnation={} activation_height={}",
+                        "[g13p-autoscale] cycle={cycle} expanded lane={} incarnation={} activation_height={}",
                         AUTOSCALE_LANE_INDEX, marker.incarnation, marker.activation_height
                     );
                     return Ok(marker);
@@ -4324,7 +4327,7 @@ fn build_default_route_transaction_for_autoscale_lane(
             let transaction = client.build_transaction(
                 [Log::new(
                     Level::INFO,
-                    format!("g12p-autoscale-autonomous-{cycle}-{nonce}"),
+                    format!("g13p-autoscale-autonomous-{cycle}-{nonce}"),
                 )],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
@@ -4420,7 +4423,7 @@ fn wait_for_autoscale_autonomous_merge(
             if let Err(err) = client.submit(
                 Log::new(
                     Level::INFO,
-                    format!("g12p-autoscale-autonomous-{cycle}-heartbeat-{sequence}"),
+                    format!("g13p-autoscale-autonomous-{cycle}-heartbeat-{sequence}"),
                 ),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ) {
@@ -5107,7 +5110,7 @@ fn wait_for_autoscale_retirement(
                         })
                         .collect::<Result<Vec<_>>>()?;
                     eprintln!(
-                        "[g12p-autoscale] cycle={cycle} retired incarnation={} close={} carrier={} removal={retirement_height}",
+                        "[g13p-autoscale] cycle={cycle} retired incarnation={} close={} carrier={} removal={retirement_height}",
                         marker.incarnation,
                         expected.lane_drain_certificates[0]
                             .body
@@ -5139,7 +5142,7 @@ fn wait_for_autoscale_retirement(
             if let Err(err) = client.submit(
                 Log::new(
                     Level::INFO,
-                    format!("g12p-autoscale-cycle-{cycle}-drain-{heartbeat_sequence}"),
+                    format!("g13p-autoscale-cycle-{cycle}-drain-{heartbeat_sequence}"),
                 ),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             ) {
@@ -5321,7 +5324,7 @@ fn assert_stale_archived_marker_rejected(
     expected_active: &LaneIncarnationMarkerV3,
 ) -> Result<()> {
     let temp = tempfile::tempdir()?;
-    let cloned_store = temp.path().join("g12p-stale-incarnation");
+    let cloned_store = temp.path().join("g13p-stale-incarnation");
     let live_marker_path = active_autoscale_marker_path(peer);
     let live_marker_bytes = fs::read(&live_marker_path)?;
     copy_kura_tree_bounded(&peer.kura_store_dir(), &cloned_store)?;
@@ -5361,7 +5364,7 @@ fn assert_stale_archived_marker_rejected(
 }
 
 #[allow(clippy::too_many_lines)]
-fn prove_g12p_autoscale_lifecycle(
+fn prove_g13p_autoscale_lifecycle(
     network: &sandbox::SerializedNetwork,
     runtime: &Runtime,
     load_clients: &[Client],
@@ -5370,15 +5373,15 @@ fn prove_g12p_autoscale_lifecycle(
 ) -> Result<()> {
     ensure!(
         network.peers().len() == TOTAL_PEERS,
-        "G-12P lifecycle requires all {TOTAL_PEERS} peers"
+        "G-13P lifecycle requires all {TOTAL_PEERS} peers"
     );
     ensure!(
         !load_clients.is_empty()
             && expected_active_lane_storage_ids(false).len() == AUTOSCALE_BASE_LANE_COUNT
             && expected_active_lane_storage_ids(true).len() == AUTOSCALE_EXPANDED_LANE_COUNT,
-        "G-12P lifecycle requires non-empty load clients and an exact 3->4 lane profile"
+        "G-13P lifecycle requires non-empty load clients and an exact 3->4 lane profile"
     );
-    wait_for_autoscale_baseline(network, "G-12P autoscale baseline")?;
+    wait_for_autoscale_baseline(network, "G-13P autoscale baseline")?;
 
     let marker_a = wait_for_autoscale_expansion(network, load_clients, 1)?;
     let autonomous_a = execute_autoscale_autonomous_work(network, load_clients, &marker_a, 1)?;
@@ -5409,7 +5412,7 @@ fn prove_g12p_autoscale_lifecycle(
     let stale_probe_peer_index = seed.ordinal % TOTAL_PEERS;
     let stale_probe_peer = network.peers()[stale_probe_peer_index].clone();
     let stale_context =
-        format!("G-12P stale-incarnation admission probe on peer {stale_probe_peer_index}");
+        format!("G-13P stale-incarnation admission probe on peer {stale_probe_peer_index}");
     shutdown_rotated_validators(
         runtime,
         std::slice::from_ref(&stale_probe_peer),
@@ -5441,7 +5444,7 @@ fn prove_g12p_autoscale_lifecycle(
         network,
         load_clients,
         &marker_b,
-        "G-12P recreated lane readiness after stale-artifact rejection",
+        "G-13P recreated lane readiness after stale-artifact rejection",
     )?;
     let (drain_b, _, retirement_b_height) =
         wait_for_autoscale_retirement(runtime, network, load_clients, &marker_b, &autonomous_b, 2)?;
@@ -5484,11 +5487,11 @@ fn prove_g12p_autoscale_lifecycle(
     wait_for_entrypoints_committed_once_on_all_peers(
         network,
         &[autonomous_a.entrypoint_hash, autonomous_b.entrypoint_hash],
-        "G-12P autoscale A/B final exact-once convergence",
+        "G-13P autoscale A/B final exact-once convergence",
     )?;
-    wait_for_autoscale_baseline(network, "G-12P autoscale final 3-lane convergence")?;
+    wait_for_autoscale_baseline(network, "G-13P autoscale final 3-lane convergence")?;
     eprintln!(
-        "[g12p-autoscale] seed={} baseline=3 expansion=A work=A drain=A archive=A recreation=B stale_A=rejected work=B drain=B final=3 passed",
+        "[g13p-autoscale] seed={} baseline=3 expansion=A work=A drain=A archive=A recreation=B stale_A=rejected work=B drain=B final=3 passed",
         seed.value
     );
     Ok(())
@@ -5689,7 +5692,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
 }
 
 #[test]
-#[ignore = "two-hour rotating-validator 12-peer fault soak"]
+#[ignore = "two-hour rotating-validator 13-peer fault soak"]
 fn cross_dataspace_two_hour_fault_soak_preserves_multilane_application() -> Result<()> {
     let seed = corridor_seed_from_env()?;
     let duration = fault_soak_duration_from_env()?;
@@ -5707,7 +5710,7 @@ fn run_cross_dataspace_localnet_test_on_large_stack<F>(name: &'static str, test:
 where
     F: FnOnce() -> Result<()> + Send + 'static,
 {
-    // The 12-peer localnet startup exceeds default libtest stack budgets on some hosts.
+    // The 13-peer localnet startup exceeds default libtest stack budgets on some hosts.
     let handle = thread::Builder::new()
         .name(name.to_owned())
         .stack_size(CROSS_DATASPACE_LOCALNET_STACK_BYTES)
@@ -5730,7 +5733,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         seed.value, seed.ordinal
     );
     let (network, rt) = {
-        let _phase = phase_timings.phase("start 12-peer localnet");
+        let _phase = phase_timings.phase("start 13-peer localnet");
         let started =
             sandbox::start_network_blocking_or_skip(localnet_builder(&seed.value), context)?;
         let Some((network, rt)) = sandbox::enforce_network_start_requirement(started, context)?
@@ -5773,15 +5776,15 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
             .take(VALIDATORS_PER_LANE)
             .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
             .collect();
-        let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
+        let mut all_validators = Vec::with_capacity(LANE_VALIDATOR_COUNT);
         all_validators.extend(nexus_lane_validators.iter().cloned());
         all_validators.extend(ds1_lane_validators.iter().cloned());
         all_validators.extend(ds2_lane_validators.iter().cloned());
         let unique_validators: BTreeSet<_> = all_validators.into_iter().collect();
         ensure!(
-            unique_validators.len() == TOTAL_PEERS,
+            unique_validators.len() == LANE_VALIDATOR_COUNT,
             "validator groups must be disjoint and total {}",
-            TOTAL_PEERS
+            LANE_VALIDATOR_COUNT
         );
         let expected_nexus_validators: BTreeSet<_> =
             nexus_lane_validators.iter().cloned().collect();
@@ -5897,8 +5900,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl(
         .collect::<Vec<_>>();
     {
         let _phase =
-            phase_timings.phase("G-12P autoscale lifecycle: A retire, B recreate, stale-A reject");
-        prove_g12p_autoscale_lifecycle(
+            phase_timings.phase("G-13P autoscale lifecycle: A retire, B recreate, stale-A reject");
+        prove_g13p_autoscale_lifecycle(
             &network,
             &rt,
             &[
@@ -7443,9 +7446,10 @@ mod tests {
         AccountId, Algorithm, AutoscaleDrainCommitmentLog, AutoscaleDrainIntentLog,
         CORRIDOR_SEED_COUNT, CommittedTxOutcome, DS1_ID_U64, DS1_LANE_INDEX, DS1_MANIFEST_HASH,
         DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH, ExpectedLaneValidatorBinding,
-        FAULT_SOAK_DURATION_SECS, KeyPair, LaneDomainProgress, LanePayloadOwnershipProgress,
-        NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, OBSERVER_QUERY_TIMEOUT_CAP, PeerId,
-        RoutedJsonGetResponse, TOTAL_PEERS, VALIDATORS_PER_LANE, applied_lane_domain_progress,
+        FAULT_SOAK_DURATION_SECS, KeyPair, LANE_VALIDATOR_COUNT, LaneDomainProgress,
+        LanePayloadOwnershipProgress, NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX,
+        OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RegisterPublicLaneValidator, RoutedJsonGetResponse,
+        TOTAL_PEERS, VALIDATORS_PER_LANE, applied_lane_domain_progress,
         bounded_observer_request_timeout, committed_lane_block_has_expected_quorum,
         committed_tx_outcome_quorum, copy_kura_tree_with_limits, cross_dataspace_gas_account_id,
         durable_native_participant_evidence_is_after_baseline, durable_native_participant_row,
@@ -7495,7 +7499,7 @@ mod tests {
     };
 
     #[test]
-    fn g12p_autoscale_log_parser_requires_exact_producer_fields() {
+    fn g13p_autoscale_log_parser_requires_exact_producer_fields() {
         let log = format!(
             "INFO height=10 lane={lane} {scale_out}\n\
              INFO height=20 lane={lane} close_global_height=20 initial_merged_lane_height=7 {intent}\n\
@@ -7590,7 +7594,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         HeightContext {
-            chain_id: ChainId::from("g12p-historical-roster-test"),
+            chain_id: ChainId::from("g13p-historical-roster-test"),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 7,
@@ -7601,8 +7605,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid equal-vote fixture roster"),
             roster,
-            nexus_amx_context_hash: Hash::new(b"g12p historical roster"),
-            execution_policy_hash: Hash::new(b"g12p historical roster execution policy"),
+            nexus_amx_context_hash: Hash::new(b"g13p historical roster"),
+            execution_policy_hash: Hash::new(b"g13p historical roster execution policy"),
             da_layout: DataAvailabilityLayout {
                 encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 4,
@@ -7766,7 +7770,25 @@ mod tests {
         let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
 
         assert_eq!(transactions.len(), 1);
-        assert_eq!(transactions[0].len(), 12 + TOTAL_PEERS * 5);
+        assert_eq!(
+            transactions[0].len(),
+            12 + LANE_VALIDATOR_COUNT * 5 + VALIDATORS_PER_LANE
+        );
+        let lane_registrations = transactions[0]
+            .iter()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lane_registrations.len(), LANE_VALIDATOR_COUNT);
+        assert!(
+            lane_registrations
+                .iter()
+                .all(|register| register.peer_id != topology[LANE_VALIDATOR_COUNT]),
+            "the thirteenth global voter must not become a fifth lane validator"
+        );
         assert_eq!(
             expected_lane_binding_for_peer(0, &topology[0]).peer_id,
             topology[0].to_string()
@@ -9481,35 +9503,6 @@ mod tests {
             err.to_string()
                 .contains("fanout response should not expose a singular route dataspace")
         );
-    }
-
-    #[test]
-    fn routed_header_string_reads_present_headers_and_ignores_absent_ones() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-iroha-routed-by", HeaderValue::from_static("proxy"));
-        headers.insert(
-            "x-iroha-invalid",
-            HeaderValue::from_bytes(&[0xFF]).expect("binary header value"),
-        );
-
-        assert_eq!(
-            routed_header_string(&headers, "x-iroha-routed-by"),
-            Some("proxy".to_owned())
-        );
-        assert_eq!(
-            routed_header_string(&headers, "x-iroha-route-lane-id"),
-            None
-        );
-        assert_eq!(routed_header_string(&headers, "x-iroha-invalid"), None);
-    }
-
-    #[derive(Debug)]
-    struct DisplayOnlyTxError;
-
-    impl Display for DisplayOnlyTxError {
-        fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
-            formatter.write_str("route probe failed")
-        }
     }
 
     include!("cross_dataspace_localnet/error_render_test.rs");

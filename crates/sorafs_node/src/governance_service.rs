@@ -1,17 +1,17 @@
 //! Injectable SoraFS Governance DAG publisher and bounded public mirror service.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::{OsStr, OsString},
     fmt,
     fs::{self, OpenOptions},
     future::{Future, IntoFuture},
     io::{self, Read},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::Deref,
     path::{Component, Path, PathBuf},
-    process,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -35,24 +35,40 @@ pub use crate::governance::{
 };
 use crate::{
     GovernanceDagAuthenticationScope, GovernanceDagCanonicalRequestV1,
-    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticator,
-    GovernanceDagRuntimeProviderQualificationV1, GovernanceDagSealedCheckpointStore,
-    GovernanceDagSealedStateRecord, GovernanceDagSealedStateSlot,
+    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticationReplayStoreV1,
+    GovernanceDagRequestAuthenticator, GovernanceDagRequestIngressBindingV1,
+    GovernanceDagRequestIngressQualificationV1, GovernanceDagRuntimeProviderQualificationV1,
+    GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
+    GovernanceDagSealedStateSlot,
     governance::{
+        GOVERNANCE_DAG_LOGICAL_ROOT as RUNTIME_INDEX_LOGICAL_ROOT,
         GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1,
         GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1,
+        GOVERNANCE_DAG_SINK_FILESYSTEM as RUNTIME_INDEX_SOURCE, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES,
+        GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR, GOVERNANCE_RUNTIME_DAG_DIR,
+        GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1,
+        GOVERNANCE_RUNTIME_DAG_INDEX_BLOCK_FIELDS_V1 as RUNTIME_INDEX_BLOCK_FIELDS_V1,
+        GOVERNANCE_RUNTIME_DAG_INDEX_FIELDS_V1 as RUNTIME_INDEX_TOP_LEVEL_FIELDS_V1,
+        GOVERNANCE_RUNTIME_DAG_INDEX_SCHEMA as RUNTIME_INDEX_SCHEMA,
         GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1, GovernanceFilesystemRootGuard,
-        RuntimeDagProducerCheckpointV1, runtime_dag_producer_root_digest,
+        RuntimeDagCommittedSnapshotV1, RuntimeDagProducerCheckpointV1,
+        governance_source_pair_relative_paths, load_runtime_dag_committed_snapshot_v1,
+        runtime_dag_producer_root_digest, validate_governance_car_source_lengths,
         validate_runtime_dag_snapshot_authority_lineage,
+        verify_governance_dag_request_authentication_without_replay_v1,
     },
+    governance_dag_request_ingress_endpoint_binding_v1,
     governance_dag_sealed_state_payload_max_bytes_v1,
-    governance_rooted_fs::{ExpectedFile, FileBinding, FileSnapshot, RetainedFile},
+    governance_rooted_fs::{
+        FileBinding, FileSnapshot, RetainedFile, TwoSlotSnapshotV1, TwoSlotStoreConfigV1,
+        TwoSlotStoreV1,
+    },
 };
 use axum::{
     Router,
     body::Body,
     extract::{Path as AxumPath, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, Version, header},
     response::Response,
     routing::get,
 };
@@ -85,18 +101,20 @@ use tokio::{net::TcpListener, signal, sync::RwLock, time};
 use url::Url;
 
 const CONFIG_MAX_BYTES: u64 = 1024 * 1024;
-const MUTABLE_STATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
-const RUNTIME_INDEX_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum canonical bytes accepted for one mutable service-state artifact.
+///
+/// This is the Governance DAG service's semantic limit for checkpoint,
+/// publication-intent, and mirror state. It is intentionally narrower than
+/// [`crate::governance_dag_sealed_state_payload_max_bytes_v1`], whose 192 MiB
+/// checkpoint/publish-intent ceiling is a generic provider transport bound.
+/// A provider's ability to carry a larger record does not authorize this
+/// service to allocate or interpret it.
+pub const GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 const CHECKPOINT_VERSION_V1: u8 = 1;
 const PUBLISH_INTENT_VERSION_V1: u8 = 1;
 const REQUEST_AUTH_REPLAY_STATE_VERSION_V1: u8 = 1;
 const BLOCK_PREFIX_ARCHIVE_VERSION_V1: u8 = 1;
 const BLOCK_PREFIX_ARCHIVE_MAX_ENTRIES_V1: usize = 1024;
-// A one-entry archive must be able to carry every canonical V1 block plus its
-// exact published mapping, predecessor commitment, provider lineage, and
-// Norito framing. The transport allowance additionally covers the canonical
-// multipart wrapper. Both additions are checked below so the production
-// request contract cannot silently wrap on a narrow host.
 const BLOCK_PREFIX_ARCHIVE_CANONICAL_OVERHEAD_BYTES_V1: usize = 1024 * 1024;
 const BLOCK_PREFIX_ARCHIVE_MULTIPART_OVERHEAD_BYTES_V1: usize = 64 * 1024;
 const BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1: usize =
@@ -115,9 +133,23 @@ const BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1: usize =
     };
 const BLOCK_PREFIX_ARCHIVE_CANONICAL_URL_MAX_BYTES_V1: usize = 4096;
 const BLOCK_PREFIX_ARCHIVE_PAYLOAD_KIND_MAX_BYTES_V1: usize = 128;
-const RUNTIME_INDEX_SCHEMA: &str = "sorafs.governance_dag.runtime_signed_index.v1";
 const MIRROR_INDEX_SCHEMA: &str = "sorafs.governance_dag.mirror.v1";
-const MIRROR_INDEX_FILE: &str = "mirror-index.json";
+const MIRROR_INDEX_STORE_PAYLOAD_VERSION_V1: u8 = 1;
+const MIRROR_INDEX_STORE_NAME: &str = "mirror-index-v1";
+const MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES: usize = 65 * 1024 * 1024;
+/// Maximum number of source blocks retained by every version-1 governance mirror.
+///
+/// This is a protocol constant, not node policy: every qualified publisher must
+/// derive byte-identical mirror and checkpoint state for the same sealed intent.
+pub const GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1: usize = 65_536;
+/// Maximum canonical source-block bytes retained by every version-1 governance mirror.
+///
+/// This is a protocol constant, not node policy: every qualified publisher must
+/// derive byte-identical mirror and checkpoint state for the same sealed intent.
+pub const GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;
+const LEGACY_MIRROR_INDEX_FILE: &str = "mirror-index.json";
+const LEGACY_MIRROR_INDEX_SIDECAR_FILE: &str = "mirror-index.json.blake3";
+const LEGACY_MIRROR_RECOVERY_QUARANTINE_DIR: &str = ".governance-service-recovery-quarantine-v1";
 const SERVICE_LOCK_FILE: &str = ".service.lock";
 const MAX_DNS_ADDRESSES: usize = 8;
 const MAX_RESPONSE_HEADERS: usize = 64;
@@ -127,12 +159,31 @@ const MAX_PUBLIC_TOKEN_BYTES: usize = 512;
 const SOURCE_ENTRY_HARD_CAP: usize = 131_072;
 const SOURCE_TOTAL_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
 const IPFS_MULTIPART_BOUNDARY_PREFIX: &str = "iroha-sorafs-gdag-v1";
+const IPFS_MULTIPART_FILENAME_MAX_BYTES: usize = 160;
+const IPFS_MULTIPART_BOUNDARY_ATTEMPTS: u8 = 16;
+const IPFS_UNIXFS_CHUNK_BYTES: usize = 1024 * 1024;
+const IPFS_UNIXFS_MAX_FILE_LINKS: usize = 1024;
+const IPFS_RAW_CODEC: u64 = 0x55;
+const IPFS_DAG_PB_CODEC: u64 = 0x70;
+const IPFS_OBJECT_MAX_BYTES: u64 = GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64;
+const IPFS_UNIXFS_V1_ADD_QUERY: &[(&str, &str)] = &[
+    ("pin", "false"),
+    ("cid-version", "1"),
+    ("hash", "sha2-256"),
+    ("chunker", "size-1048576"),
+    ("trickle", "false"),
+    ("max-file-links", "1024"),
+    ("raw-leaves", "true"),
+    ("wrap-with-directory", "false"),
+    ("quieter", "true"),
+];
 // Norito temporarily copies nested length-delimited fields while decoding.
 // The governed block/head schemas stay below this amplification, while the
 // finite multiplier still rejects archives that attempt allocation bombs.
 const CANONICAL_DECODE_ALLOCATION_MULTIPLIER: usize = 16;
 const CANONICAL_DECODE_MAX_TOTAL_ELEMENTS: usize = 4_000_000;
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const STEADY_IPFS_AUDIT_MAX_ENTRIES_PER_POLL: usize = 64;
+const STEADY_IPFS_AUDIT_MAX_BYTES_PER_POLL: u64 = 16 * 1024 * 1024;
 
 #[cfg(unix)]
 unsafe extern "C" {
@@ -160,6 +211,9 @@ pub enum GovernanceDagServiceError {
     /// Compare-and-swap or public-head continuity failed.
     #[error("public head conflict: {0}")]
     Conflict(String),
+    /// The service has not completed, or has withdrawn, external readiness.
+    #[error("service unavailable: {0}")]
+    Unavailable(String),
     /// The bounded local status/query listener failed.
     #[error("service listener failed: {0}")]
     Listener(String),
@@ -190,7 +244,7 @@ impl fmt::Debug for GovernanceDagServiceRuntimeProviders {
 }
 
 impl GovernanceDagServiceRuntimeProviders {
-    /// Attach the rotation-aware Kubo/IPFS/IPNS authenticator.
+    /// Attach the rotation-aware Kubo/IPFS authenticator.
     #[must_use]
     pub fn with_ipfs_authenticator(
         mut self,
@@ -230,25 +284,22 @@ impl GovernanceDagServiceRuntimeProviders {
 pub struct GovernanceDagServiceRuntimeProviderBindingsV1 {
     ipfs_authenticator_handle: String,
     ipfs_authenticator_qualification: GovernanceDagRuntimeProviderQualificationV1,
-    ipfs_request_auth_public_key: [u8; 32],
+    ipfs_request_ingress_binding: GovernanceDagRequestIngressBindingV1,
     head_authenticator_handle: Option<String>,
     head_authenticator_qualification: Option<GovernanceDagRuntimeProviderQualificationV1>,
-    head_request_auth_public_key: Option<[u8; 32]>,
-    request_auth_max_body_bytes: u64,
-    request_auth_max_envelope_lifetime_secs: u64,
-    request_auth_max_future_skew_secs: u64,
+    head_request_ingress_binding: Option<GovernanceDagRequestIngressBindingV1>,
     checkpoint_store_handle: String,
     checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
 }
 
 impl GovernanceDagServiceRuntimeProviderBindingsV1 {
-    /// Stable handle for the Kubo/IPFS/IPNS authenticator.
+    /// Stable handle for the Kubo/IPFS authenticator.
     #[must_use]
     pub fn ipfs_authenticator_handle(&self) -> &str {
         &self.ipfs_authenticator_handle
     }
 
-    /// Exact configured Kubo/IPFS/IPNS authenticator qualification.
+    /// Exact configured Kubo/IPFS authenticator qualification.
     #[must_use]
     pub const fn ipfs_authenticator_qualification(
         &self,
@@ -256,13 +307,13 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
         self.ipfs_authenticator_qualification
     }
 
-    /// Configured raw Ed25519 key pin for IPFS request authentication.
+    /// Exact configured IPFS endpoint, key, request-size, and timing policy.
     #[must_use]
-    pub const fn ipfs_request_auth_public_key(&self) -> [u8; 32] {
-        self.ipfs_request_auth_public_key
+    pub const fn ipfs_request_ingress_binding(&self) -> GovernanceDagRequestIngressBindingV1 {
+        self.ipfs_request_ingress_binding
     }
 
-    /// Stable handle for signed-head authentication, when that mode is active.
+    /// Stable handle for signed-head compare-and-swap authentication, when active.
     #[must_use]
     pub fn head_authenticator_handle(&self) -> Option<&str> {
         self.head_authenticator_handle.as_deref()
@@ -276,28 +327,12 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
         self.head_authenticator_qualification
     }
 
-    /// Configured raw Ed25519 key pin for signed-head request authentication.
+    /// Exact configured signed-head endpoint, key, request-size, and timing policy, when active.
     #[must_use]
-    pub const fn head_request_auth_public_key(&self) -> Option<[u8; 32]> {
-        self.head_request_auth_public_key
-    }
-
-    /// Maximum request body accepted by either request authenticator.
-    #[must_use]
-    pub const fn request_auth_max_body_bytes(&self) -> u64 {
-        self.request_auth_max_body_bytes
-    }
-
-    /// Maximum accepted signed-envelope lifetime in seconds.
-    #[must_use]
-    pub const fn request_auth_max_envelope_lifetime_secs(&self) -> u64 {
-        self.request_auth_max_envelope_lifetime_secs
-    }
-
-    /// Maximum accepted future issuance skew in seconds.
-    #[must_use]
-    pub const fn request_auth_max_future_skew_secs(&self) -> u64 {
-        self.request_auth_max_future_skew_secs
+    pub const fn head_request_ingress_binding(
+        &self,
+    ) -> Option<GovernanceDagRequestIngressBindingV1> {
+        self.head_request_ingress_binding
     }
 
     /// Stable handle for the sealed monotonic checkpoint store.
@@ -367,11 +402,57 @@ pub enum GovernanceDagServiceLauncherError {
 #[derive(Clone)]
 struct OpaqueAuthenticator {
     handle: String,
-    qualification: GovernanceDagRuntimeProviderQualificationV1,
+    ingress_qualification: GovernanceDagRequestIngressQualificationV1,
     verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
     authentication_scope: GovernanceDagAuthenticationScope,
     provider: Arc<dyn GovernanceDagRequestAuthenticator>,
-    replay_store: OpaqueCheckpointStore,
+    recent_outbound_nonces: Arc<Mutex<OutboundRequestNonceWindowV1>>,
+}
+
+/// Bounded sender-side sanity window for a malfunctioning signer that reuses
+/// a still-live nonce. Receiver replay protection belongs exclusively to the
+/// shared sealed replay namespace proven by `ingress_qualification`.
+#[derive(Debug)]
+struct OutboundRequestNonceWindowV1 {
+    live: BTreeMap<[u8; 32], u64>,
+    order: VecDeque<[u8; 32]>,
+    capacity: usize,
+}
+
+impl OutboundRequestNonceWindowV1 {
+    fn new() -> Self {
+        Self {
+            live: BTreeMap::new(),
+            order: VecDeque::new(),
+            capacity: GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        nonce: [u8; 32],
+        expires_at_unix_secs: u64,
+        now_unix_secs: u64,
+    ) -> Result<(), GovernanceDagServiceError> {
+        self.live.retain(|_, expiry| *expiry > now_unix_secs);
+        self.order.retain(|entry| self.live.contains_key(entry));
+        if self.live.contains_key(&nonce) {
+            return Err(GovernanceDagServiceError::Network(
+                "Governance DAG authenticator reused a live outbound nonce".to_owned(),
+            ));
+        }
+        while self.live.len() >= self.capacity {
+            let oldest = self.order.pop_front().ok_or_else(|| {
+                GovernanceDagServiceError::Network(
+                    "Governance DAG outbound nonce window is internally inconsistent".to_owned(),
+                )
+            })?;
+            self.live.remove(&oldest);
+        }
+        self.live.insert(nonce, expires_at_unix_secs);
+        self.order.push_back(nonce);
+        Ok(())
+    }
 }
 
 impl fmt::Debug for OpaqueAuthenticator {
@@ -379,6 +460,10 @@ impl fmt::Debug for OpaqueAuthenticator {
         formatter
             .debug_struct("OpaqueAuthenticator")
             .field("handle", &self.handle)
+            .field(
+                "endpoint_binding",
+                &hex::encode(self.ingress_qualification.binding().endpoint_binding()),
+            )
             .field(
                 "public_key",
                 &hex::encode(self.verification_policy.public_key()),
@@ -400,61 +485,59 @@ impl fmt::Debug for OpaqueAuthenticator {
 impl OpaqueAuthenticator {
     fn try_new(
         expected_handle: &str,
-        expected_qualification: GovernanceDagRuntimeProviderQualificationV1,
-        verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
+        expected_provider_qualification: GovernanceDagRuntimeProviderQualificationV1,
+        expected_ingress_binding: GovernanceDagRequestIngressBindingV1,
         provider: Arc<dyn GovernanceDagRequestAuthenticator>,
         authentication_scope: GovernanceDagAuthenticationScope,
-        replay_store: OpaqueCheckpointStore,
         label: &'static str,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, label)?;
-        if !expected_qualification.is_valid() {
+        if !expected_provider_qualification.is_valid() {
             return Err(GovernanceDagServiceError::Config(format!(
                 "{label} configured policy qualification is invalid"
             )));
         }
-        let expected_public_key = verification_policy.public_key();
+        let verification_policy = validate_request_auth_policy(
+            expected_ingress_binding.public_key(),
+            expected_ingress_binding.max_envelope_lifetime_secs(),
+            expected_ingress_binding.max_future_skew_secs(),
+            label,
+        )?;
         let provider_handle = validate_runtime_handle(provider.handle(), label)?;
         if provider_handle != handle {
             return Err(GovernanceDagServiceError::Config(format!(
                 "{label} provider handle does not match configured handle"
             )));
         }
-        if provider.public_key() != expected_public_key {
-            return Err(GovernanceDagServiceError::Config(format!(
-                "{label} provider public key does not match configuration"
-            )));
-        }
-        let qualification = provider.qualification().map_err(|_| {
+        let ingress_qualification = provider.ingress_qualification().map_err(|_| {
             GovernanceDagServiceError::Config(format!(
                 "{label} provider is unavailable, stale, or unqualified"
             ))
         })?;
-        if !qualification.is_valid() || qualification != expected_qualification {
-            return Err(GovernanceDagServiceError::Config(format!(
-                "{label} provider qualification does not match configuration"
-            )));
-        }
-        let rechecked_qualification = provider.qualification().map_err(|_| {
-            GovernanceDagServiceError::Config(format!(
-                "{label} provider is unavailable, stale, or unqualified"
-            ))
-        })?;
-        if provider.handle() != handle
-            || provider.public_key() != expected_public_key
-            || rechecked_qualification != expected_qualification
+        if ingress_qualification.provider() != expected_provider_qualification
+            || ingress_qualification.binding() != expected_ingress_binding
         {
             return Err(GovernanceDagServiceError::Config(format!(
-                "{label} provider identity, public key, or policy changed during startup qualification"
+                "{label} provider qualification or ingress binding does not match configuration"
+            )));
+        }
+        let rechecked_qualification = provider.ingress_qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(format!(
+                "{label} provider is unavailable, stale, or unqualified"
+            ))
+        })?;
+        if provider.handle() != handle || rechecked_qualification != ingress_qualification {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} provider identity or ingress qualification changed during startup qualification"
             )));
         }
         Ok(Self {
             handle,
-            qualification: expected_qualification,
+            ingress_qualification,
             verification_policy,
             authentication_scope,
             provider,
-            replay_store,
+            recent_outbound_nonces: Arc::new(Mutex::new(OutboundRequestNonceWindowV1::new())),
         })
     }
 
@@ -462,6 +545,13 @@ impl OpaqueAuthenticator {
         &self,
         request: &GovernanceDagCanonicalRequestV1,
     ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagServiceError> {
+        let binding = self.ingress_qualification.binding();
+        if request.scope() != binding.scope() || request.body_length() > binding.max_body_bytes() {
+            return Err(GovernanceDagServiceError::Network(
+                "Governance DAG outbound request does not match the qualified ingress policy"
+                    .to_owned(),
+            ));
+        }
         self.assert_identity()?;
         let result = self.provider.authenticate(request);
         self.assert_identity()?;
@@ -475,17 +565,16 @@ impl OpaqueAuthenticator {
     }
 
     fn assert_identity(&self) -> Result<(), GovernanceDagServiceError> {
-        let qualification = self.provider.qualification().map_err(|_| {
+        let ingress_qualification = self.provider.ingress_qualification().map_err(|_| {
             GovernanceDagServiceError::Network(
                 "Governance DAG authenticator is unavailable, stale, or unqualified".to_owned(),
             )
         })?;
         if self.provider.handle() != self.handle
-            || self.provider.public_key() != self.verification_policy.public_key()
-            || qualification != self.qualification
+            || ingress_qualification != self.ingress_qualification
         {
             return Err(GovernanceDagServiceError::Network(
-                "Governance DAG authenticator identity, public key, or policy changed after injection"
+                "Governance DAG authenticator identity or ingress qualification changed after injection"
                     .to_owned(),
             ));
         }
@@ -498,23 +587,24 @@ impl OpaqueAuthenticator {
         envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
     ) -> Result<(), GovernanceDagServiceError> {
         let now = current_unix_timestamp_seconds();
-        let mut validation_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
-        verify_governance_dag_request_authentication_v1(
+        verify_governance_dag_request_authentication_without_replay_v1(
             request,
             envelope,
             self.authentication_scope,
             &self.verification_policy,
             now,
-            &mut validation_cache,
         )
         .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
-        consume_sealed_request_auth_nonce(
-            &self.replay_store,
-            request_auth_replay_slot(self.authentication_scope),
-            envelope.nonce(),
-            envelope.expires_at_unix_secs(),
-            now,
-        )
+        let mut recent_outbound_nonces = self.recent_outbound_nonces.lock().map_err(|_| {
+            GovernanceDagServiceError::Network(
+                "Governance DAG outbound nonce sanity window is unavailable".to_owned(),
+            )
+        })?;
+        recent_outbound_nonces.observe(envelope.nonce(), envelope.expires_at_unix_secs(), now)
+    }
+
+    const fn ingress_binding(&self) -> GovernanceDagRequestIngressBindingV1 {
+        self.ingress_qualification.binding()
     }
 }
 
@@ -619,6 +709,43 @@ impl OpaqueCheckpointStore {
             ));
         }
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct SealedRequestAuthReplayStore<'a> {
+    store: &'a OpaqueCheckpointStore,
+    scope: GovernanceDagAuthenticationScope,
+}
+
+impl GovernanceDagRequestAuthenticationReplayStoreV1 for SealedRequestAuthReplayStore<'_> {
+    fn consume_nonce(
+        &mut self,
+        nonce: [u8; 32],
+        expires_at_unix_secs: u64,
+        now_unix_secs: u64,
+    ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
+        match consume_sealed_request_auth_nonce(
+            self.store,
+            request_auth_replay_slot(self.scope),
+            nonce,
+            expires_at_unix_secs,
+            now_unix_secs,
+        ) {
+            Ok(()) => Ok(()),
+            Err(GovernanceDagServiceError::Network(message))
+                if message == GovernanceDagRequestAuthenticationErrorV1::Replay.to_string() =>
+            {
+                Err(GovernanceDagRequestAuthenticationErrorV1::Replay)
+            }
+            Err(GovernanceDagServiceError::Network(message))
+                if message
+                    == GovernanceDagRequestAuthenticationErrorV1::ReplayCacheFull.to_string() =>
+            {
+                Err(GovernanceDagRequestAuthenticationErrorV1::ReplayCacheFull)
+            }
+            Err(_) => Err(GovernanceDagRequestAuthenticationErrorV1::ReplayStoreUnavailable),
+        }
     }
 }
 
@@ -728,27 +855,83 @@ impl GovernanceDagSealedHttpRequestReceiverV1 {
         body: &[u8],
         now_unix_secs: u64,
     ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
-        // This one-call cache is only the signature verifier's scratch replay
-        // surface. The sealed store below is the sole cross-call authority.
-        let mut verification_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
-        let mut verifier = GovernanceDagHttpRequestReceiverV1::try_new(
+        let request_url = Url::parse(canonical_url).map_err(|_| {
+            GovernanceDagServiceError::Network(
+                GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest.to_string(),
+            )
+        })?;
+        let mut endpoint = request_url.clone();
+        endpoint.set_query(None);
+        if self.scope == GovernanceDagAuthenticationScope::Ipfs {
+            endpoint.set_path("/");
+        }
+        let endpoint_binding =
+            governance_dag_request_ingress_endpoint_binding_v1(self.scope, endpoint.as_str())
+                .map_err(|_| {
+                    GovernanceDagServiceError::Network(
+                        GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest.to_string(),
+                    )
+                })?;
+        let binding = GovernanceDagRequestIngressBindingV1::try_new(
             self.scope,
+            endpoint_binding,
+            self.verification_policy.public_key(),
             self.max_body_bytes,
-            &self.verification_policy,
-            &mut verification_cache,
+            self.verification_policy.max_envelope_lifetime_secs(),
+            self.verification_policy.max_future_skew_secs(),
         )
         .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
-        let (request, envelope) = verifier
-            .verify_http_request_with_envelope(method, canonical_url, headers, body, now_unix_secs)
+        let origin = request_url.origin().ascii_serialization();
+        let authority = origin
+            .split_once("://")
+            .map(|(_, value)| value)
+            .ok_or_else(|| {
+                GovernanceDagServiceError::Network(
+                    GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest.to_string(),
+                )
+            })?;
+        let target = match request_url.query() {
+            Some(query) => format!("{}?{query}", request_url.path()),
+            None => request_url.path().to_owned(),
+        };
+        let mut request = Request::builder()
+            .method(method)
+            .uri(target)
+            .version(Version::HTTP_11)
+            .header(header::HOST, authority)
+            .body(body.to_vec())
+            .map_err(|_| {
+                GovernanceDagServiceError::Network(
+                    GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest.to_string(),
+                )
+            })?;
+        for (name, value) in headers {
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                GovernanceDagServiceError::Network(
+                    GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader.to_string(),
+                )
+            })?;
+            let value = HeaderValue::from_bytes(value).map_err(|_| {
+                GovernanceDagServiceError::Network(
+                    GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader.to_string(),
+                )
+            })?;
+            request.headers_mut().append(name, value);
+        }
+        let mut replay_store = SealedRequestAuthReplayStore {
+            store: &self.replay_store,
+            scope: self.scope,
+        };
+        let mut verifier = GovernanceDagHttpRequestReceiverV1::try_new(
+            endpoint.as_str(),
+            binding,
+            &mut replay_store,
+        )
+        .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
+        let verified = verifier
+            .verify_http_request(request, now_unix_secs)
             .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
-        consume_sealed_request_auth_nonce(
-            &self.replay_store,
-            request_auth_replay_slot(self.scope),
-            envelope.nonce(),
-            envelope.expires_at_unix_secs(),
-            now_unix_secs,
-        )?;
-        Ok(request)
+        Ok(verified.descriptor().clone())
     }
 
     /// Endpoint scope bound to this receiver.
@@ -874,7 +1057,7 @@ struct SignedBlockPrefixArchiveV1 {
     target_checkpoint_generation: u64,
     target_head_block_cid: Vec<u8>,
     target_block_count: u64,
-    target_source_index_blake3: [u8; 32],
+    target_source_chain_blake3: [u8; 32],
     ipfs_authenticator_handle: String,
     ipfs_authenticator_revision: u64,
     ipfs_authenticator_policy_digest: [u8; 32],
@@ -887,15 +1070,56 @@ struct SignedBlockPrefixArchiveV1 {
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+struct MirrorIndexStorePayloadV1 {
+    version: u8,
+    checkpoint_generation: u64,
+    publish_intent_blake3: [u8; 32],
+    mirror_blake3: [u8; 32],
+    canonical_json: Vec<u8>,
+}
+
+impl MirrorIndexStorePayloadV1 {
+    fn empty() -> Self {
+        Self {
+            version: MIRROR_INDEX_STORE_PAYLOAD_VERSION_V1,
+            checkpoint_generation: 0,
+            publish_intent_blake3: [0; 32],
+            mirror_blake3: [0; 32],
+            canonical_json: Vec::new(),
+        }
+    }
+
+    fn committed(
+        checkpoint_generation: u64,
+        publish_intent_blake3: [u8; 32],
+        canonical_json: Vec<u8>,
+    ) -> Result<Self, GovernanceDagServiceError> {
+        let payload = Self {
+            version: MIRROR_INDEX_STORE_PAYLOAD_VERSION_V1,
+            checkpoint_generation,
+            publish_intent_blake3,
+            mirror_blake3: blake3_array(&canonical_json),
+            canonical_json,
+        };
+        validate_mirror_index_store_payload(&payload)?;
+        Ok(payload)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.checkpoint_generation == 0
+    }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct CheckpointBodyV1 {
     version: u8,
     generation: u64,
     head_block_cid: Vec<u8>,
     block_count: u64,
+    head_bytes: Vec<u8>,
     head_bytes_blake3: [u8; 32],
     head_ipfs_cid: String,
-    public_head_token: String,
-    source_index_blake3: [u8; 32],
+    source_chain_blake3: [u8; 32],
     mirror_blake3: [u8; 32],
     published_at_unix: u64,
     archive_head: BlockPrefixArchiveHeadV1,
@@ -922,7 +1146,7 @@ struct PublishIntentBodyV1 {
     target_block_count: u64,
     target_head_bytes: Vec<u8>,
     target_head_blake3: [u8; 32],
-    target_source_index_blake3: [u8; 32],
+    target_source_chain_blake3: [u8; 32],
     previous_public_head_blake3: Option<[u8; 32]>,
     created_at_unix: u64,
     archive_head: BlockPrefixArchiveHeadV1,
@@ -972,9 +1196,86 @@ struct SourceBlock {
 #[derive(Debug, Clone)]
 struct SourceSnapshot {
     index_blake3: [u8; 32],
+    chain_blake3: [u8; 32],
     head: GovernanceDagHeadV1,
     head_bytes: Vec<u8>,
     blocks: Vec<SourceBlock>,
+}
+
+#[derive(Debug, Clone)]
+struct SourcePrefix<'a> {
+    head: GovernanceDagHeadV1,
+    head_bytes: Vec<u8>,
+    blocks: &'a [SourceBlock],
+    chain_blake3: [u8; 32],
+}
+
+trait SourceChainView {
+    fn head(&self) -> &GovernanceDagHeadV1;
+    fn head_bytes(&self) -> &[u8];
+    fn blocks(&self) -> &[SourceBlock];
+    fn chain_blake3(&self) -> [u8; 32];
+}
+
+impl SourceChainView for SourceSnapshot {
+    fn head(&self) -> &GovernanceDagHeadV1 {
+        &self.head
+    }
+
+    fn head_bytes(&self) -> &[u8] {
+        &self.head_bytes
+    }
+
+    fn blocks(&self) -> &[SourceBlock] {
+        &self.blocks
+    }
+
+    fn chain_blake3(&self) -> [u8; 32] {
+        self.chain_blake3
+    }
+}
+
+impl SourceChainView for SourcePrefix<'_> {
+    fn head(&self) -> &GovernanceDagHeadV1 {
+        &self.head
+    }
+
+    fn head_bytes(&self) -> &[u8] {
+        &self.head_bytes
+    }
+
+    fn blocks(&self) -> &[SourceBlock] {
+        self.blocks
+    }
+
+    fn chain_blake3(&self) -> [u8; 32] {
+        self.chain_blake3
+    }
+}
+
+fn source_chain_blake3_v1(head_bytes: &[u8], blocks: &[SourceBlock]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.governance-dag.service-source-chain.v1\0");
+    hasher.update(
+        &u64::try_from(blocks.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for block in blocks {
+        hasher.update(
+            &u64::try_from(block.bytes.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        hasher.update(&block.bytes);
+    }
+    hasher.update(
+        &u64::try_from(head_bytes.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(head_bytes);
+    *hasher.finalize().as_bytes()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -992,13 +1293,12 @@ struct RuntimeConfig {
     poll_interval: Duration,
     max_response_bytes: u64,
     max_request_bytes: u64,
-    mirror_max_entries: usize,
-    mirror_max_bytes: u64,
-    max_head_age_secs: u64,
     max_future_skew_secs: u64,
     allow_head_bootstrap: bool,
     expected_producer_signer_handle: String,
     expected_producer_signer_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    expected_checkpoint_store_handle: String,
+    expected_checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
     expected_publisher_peer_id: Vec<u8>,
     expected_public_key: [u8; 32],
 }
@@ -1021,19 +1321,508 @@ impl RuntimeConfig {
     }
 }
 
+/// Public, non-secret identity binding for a Governance DAG mirror reader.
+///
+/// The descriptor intentionally excludes filesystem paths, provider objects,
+/// credentials, and private keys. Embedding nodes use it to reject a reader
+/// wired to a different producer root or provider policy before installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernanceDagMirrorReadBindingV1 {
+    source_root_digest: [u8; 32],
+    source_root_identity_digest: [u8; 32],
+    producer_signer_handle: String,
+    producer_signer_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    producer_publisher_peer_id: Vec<u8>,
+    producer_public_key: [u8; 32],
+    checkpoint_store_handle: String,
+    checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
+}
+
+impl GovernanceDagMirrorReadBindingV1 {
+    /// Return the producer's canonical, domain-separated root digest.
+    #[must_use]
+    pub const fn source_root_digest(&self) -> [u8; 32] {
+        self.source_root_digest
+    }
+
+    /// Return the path-free digest of the retained physical source root.
+    #[must_use]
+    pub const fn source_root_identity_digest(&self) -> [u8; 32] {
+        self.source_root_identity_digest
+    }
+
+    /// Return the stable handle of the expected producer signer.
+    #[must_use]
+    pub fn producer_signer_handle(&self) -> &str {
+        &self.producer_signer_handle
+    }
+
+    /// Return the exact expected producer-signer qualification.
+    #[must_use]
+    pub const fn producer_signer_qualification(
+        &self,
+    ) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.producer_signer_qualification
+    }
+
+    /// Return the expected producer publisher peer identifier.
+    #[must_use]
+    pub fn producer_publisher_peer_id(&self) -> &[u8] {
+        &self.producer_publisher_peer_id
+    }
+
+    /// Return the expected producer's canonical Ed25519 public key.
+    #[must_use]
+    pub const fn producer_public_key(&self) -> [u8; 32] {
+        self.producer_public_key
+    }
+
+    /// Return the stable handle of the sealed checkpoint store.
+    #[must_use]
+    pub fn checkpoint_store_handle(&self) -> &str {
+        &self.checkpoint_store_handle
+    }
+
+    /// Return the exact sealed-checkpoint-store qualification.
+    #[must_use]
+    pub const fn checkpoint_store_qualification(
+        &self,
+    ) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.checkpoint_store_qualification
+    }
+}
+
+/// Exact sealed-checkpoint identity authenticating one mirror snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernanceDagMirrorCheckpointIdentityV1 {
+    generation: u64,
+    revision: [u8; 32],
+}
+
+impl GovernanceDagMirrorCheckpointIdentityV1 {
+    /// Return the sealed monotonic checkpoint generation.
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Return the complete sealed-record revision digest.
+    #[must_use]
+    pub const fn revision(self) -> [u8; 32] {
+        self.revision
+    }
+}
+
+/// One canonical mirror snapshot authenticated by exact durable identities.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GovernanceDagMirrorSnapshotV1 {
+    canonical_bytes: Vec<u8>,
+    mirror: JsonValue,
+    checkpoint: CheckpointBodyV1,
+    mirror_store_generation: u64,
+    mirror_store_record_digest: [u8; 32],
+    checkpoint_identity: GovernanceDagMirrorCheckpointIdentityV1,
+}
+
+impl GovernanceDagMirrorSnapshotV1 {
+    /// Borrow the canonical mirror JSON bytes.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    fn mirror(&self) -> &JsonValue {
+        &self.mirror
+    }
+
+    fn checkpoint(&self) -> &CheckpointBodyV1 {
+        &self.checkpoint
+    }
+
+    /// Return the typed mirror store generation and complete record digest.
+    #[must_use]
+    pub const fn mirror_store_identity(&self) -> (u64, [u8; 32]) {
+        (
+            self.mirror_store_generation,
+            self.mirror_store_record_digest,
+        )
+    }
+
+    /// Return the sealed checkpoint identity that authenticates these bytes.
+    #[must_use]
+    pub const fn checkpoint_identity(&self) -> GovernanceDagMirrorCheckpointIdentityV1 {
+        self.checkpoint_identity
+    }
+}
+
+/// Cloneable, service-owned capability for coherent Governance DAG mirror reads.
+///
+/// Each read consults the typed two-slot mirror and sealed checkpoint store
+/// directly. It never trusts the listener's cached API state.
+#[derive(Clone)]
+pub struct GovernanceDagMirrorReadHandleV1 {
+    binding: GovernanceDagMirrorReadBindingV1,
+    source_root_guard: GovernanceFilesystemRootGuard,
+    state_root_guard: GovernanceFilesystemRootGuard,
+    mirror_store_config: TwoSlotStoreConfigV1,
+    checkpoint_store: OpaqueCheckpointStore,
+    readiness: Arc<GovernanceDagMirrorReadinessV1>,
+}
+
+#[derive(Debug)]
+struct GovernanceDagMirrorReadinessV1 {
+    epoch: AtomicU64,
+}
+
+impl GovernanceDagMirrorReadinessV1 {
+    fn new(bootstrap: bool) -> Self {
+        Self {
+            epoch: AtomicU64::new(u64::from(!bootstrap)),
+        }
+    }
+
+    fn transition_to_parity(&self, ready: bool) {
+        let desired_parity = u64::from(!ready);
+        let _ = self
+            .epoch
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                let increment = if current & 1 == desired_parity { 2 } else { 1 };
+                current.checked_add(increment)
+            });
+    }
+
+    fn mark_unready(&self) {
+        self.transition_to_parity(false);
+    }
+
+    fn mark_ready(&self) {
+        self.transition_to_parity(true);
+    }
+
+    fn begin_read(&self) -> Result<u64, GovernanceDagServiceError> {
+        let epoch = self.epoch.load(Ordering::Acquire);
+        if epoch != 0 && epoch & 1 == 1 {
+            return Err(GovernanceDagServiceError::Unavailable(
+                "Governance DAG mirror readiness is withdrawn".to_owned(),
+            ));
+        }
+        Ok(epoch)
+    }
+
+    fn finish_read(&self, expected: u64) -> Result<(), GovernanceDagServiceError> {
+        if self.epoch.load(Ordering::Acquire) != expected {
+            return Err(GovernanceDagServiceError::Unavailable(
+                "Governance DAG mirror readiness changed during the read".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for GovernanceDagMirrorReadHandleV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GovernanceDagMirrorReadHandleV1")
+            .field("binding", &self.binding)
+            .field("provider", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl GovernanceDagMirrorReadHandleV1 {
+    fn try_new(
+        config: &RuntimeConfig,
+        checkpoint_store: OpaqueCheckpointStore,
+        bootstrap: bool,
+    ) -> Result<Self, GovernanceDagServiceError> {
+        config.revalidate_source_root()?;
+        config.revalidate_state_root()?;
+        checkpoint_store.assert_identity()?;
+        let source_root_digest =
+            runtime_dag_producer_root_digest(&config.source_dir).map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot bind Governance DAG mirror reader to producer root: {error}"
+                ))
+            })?;
+        let source_root_identity_digest = config.source_root_guard.identity_digest().map_err(
+            |error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot bind Governance DAG mirror reader to physical producer root: {error}"
+                ))
+            },
+        )?;
+        let writer_state_identity = config.state_root_guard.identity_digest().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot bind Governance DAG mirror reader to service state root: {error}"
+            ))
+        })?;
+        let state_root_guard = GovernanceFilesystemRootGuard::capture_source(
+            config.state_root_guard.root(),
+        )
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot capture read-only Governance DAG mirror state root: {error}"
+            ))
+        })?;
+        if state_root_guard.identity_digest().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot bind read-only Governance DAG mirror state root: {error}"
+            ))
+        })? != writer_state_identity
+        {
+            return Err(GovernanceDagServiceError::Filesystem(
+                "Governance DAG mirror state root changed while deriving its read-only capability"
+                    .to_owned(),
+            ));
+        }
+        let mirror_store_config = mirror_index_store_config()?;
+        let initial_snapshot = state_root_guard
+            .rooted_directory()
+            .load_existing_two_slot_store_v1(mirror_store_config.clone())
+            .map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot open existing Governance DAG mirror through read-only handles: {error}"
+                ))
+            })?;
+        let _ = decode_mirror_index_store_payload(initial_snapshot.payload())?;
+        let binding = GovernanceDagMirrorReadBindingV1 {
+            source_root_digest,
+            source_root_identity_digest,
+            producer_signer_handle: config.expected_producer_signer_handle.clone(),
+            producer_signer_qualification: config.expected_producer_signer_qualification,
+            producer_publisher_peer_id: config.expected_publisher_peer_id.clone(),
+            producer_public_key: config.expected_public_key,
+            checkpoint_store_handle: checkpoint_store.handle.clone(),
+            checkpoint_store_qualification: checkpoint_store.qualification,
+        };
+        let handle = Self {
+            binding,
+            source_root_guard: config.source_root_guard.clone(),
+            state_root_guard,
+            mirror_store_config,
+            checkpoint_store,
+            readiness: Arc::new(GovernanceDagMirrorReadinessV1::new(bootstrap)),
+        };
+        handle.assert_bindings()?;
+        Ok(handle)
+    }
+
+    /// Return the immutable, non-secret installation binding.
+    #[must_use]
+    pub const fn binding(&self) -> &GovernanceDagMirrorReadBindingV1 {
+        &self.binding
+    }
+
+    /// Read one mirror generation coherent with an exact sealed checkpoint.
+    ///
+    /// Returns `Ok(None)` only for the authenticated bootstrap state where the
+    /// typed mirror is empty and both sealed checkpoint/intent slots remain
+    /// absent across the read.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when either retained root or the sealed provider changes,
+    /// a publication intent is active, the typed mirror disagrees with its
+    /// checkpoint, or the checkpoint changes during the read.
+    pub fn read(&self) -> Result<Option<GovernanceDagMirrorSnapshotV1>, GovernanceDagServiceError> {
+        let readiness_epoch = self.readiness.begin_read()?;
+        self.assert_bindings()?;
+        let (checkpoint_a, checkpoint_revision_a) = load_checkpoint(&self.checkpoint_store)?;
+        let intent_identity_a = load_publish_intent(&self.checkpoint_store)?;
+        if intent_identity_a.0.is_some() || intent_identity_a.1.is_some() {
+            return Err(GovernanceDagServiceError::State(
+                "Governance DAG mirror has an active sealed publish intent".to_owned(),
+            ));
+        }
+
+        let mirror_snapshot = self
+            .state_root_guard
+            .rooted_directory()
+            .load_existing_two_slot_store_v1(self.mirror_store_config.clone())
+            .map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot load existing Governance DAG mirror through read-only handles: {error}"
+                ))
+            })?;
+        let mirror_payload = decode_mirror_index_store_payload(mirror_snapshot.payload())?;
+
+        let (checkpoint_a, checkpoint_revision_a) = match (checkpoint_a, checkpoint_revision_a) {
+            (None, None) => {
+                if readiness_epoch != 0 {
+                    return Err(GovernanceDagServiceError::Unavailable(
+                        "ready Governance DAG mirror lost its sealed checkpoint".to_owned(),
+                    ));
+                }
+                if !mirror_payload.is_empty() {
+                    return Err(GovernanceDagServiceError::State(
+                        "Governance DAG mirror exists without a sealed checkpoint".to_owned(),
+                    ));
+                }
+                let (checkpoint_b, checkpoint_revision_b) =
+                    load_checkpoint(&self.checkpoint_store)?;
+                let intent_identity_b = load_publish_intent(&self.checkpoint_store)?;
+                if intent_identity_b != intent_identity_a {
+                    return Err(GovernanceDagServiceError::State(
+                        "Governance DAG mirror publish intent changed during bootstrap read"
+                            .to_owned(),
+                    ));
+                }
+                if checkpoint_b.is_some() || checkpoint_revision_b.is_some() {
+                    return Err(GovernanceDagServiceError::Conflict(
+                        "Governance DAG mirror checkpoint changed during bootstrap read".to_owned(),
+                    ));
+                }
+                self.assert_bindings()?;
+                self.readiness.finish_read(readiness_epoch)?;
+                return Ok(None);
+            }
+            (Some(checkpoint), Some(revision)) => {
+                if readiness_epoch == 0 {
+                    return Err(GovernanceDagServiceError::Unavailable(
+                        "Governance DAG mirror has not verified its checkpoint externally"
+                            .to_owned(),
+                    ));
+                }
+                (checkpoint, revision)
+            }
+            _ => {
+                return Err(GovernanceDagServiceError::State(
+                    "Governance DAG mirror checkpoint lacks an exact revision".to_owned(),
+                ));
+            }
+        };
+        let mirror = verify_mirror_payload_against_checkpoint(&mirror_payload, &checkpoint_a)?;
+
+        let (checkpoint_b, checkpoint_revision_b) = load_checkpoint(&self.checkpoint_store)?;
+        let intent_identity_b = load_publish_intent(&self.checkpoint_store)?;
+        if intent_identity_b != intent_identity_a {
+            return Err(GovernanceDagServiceError::Conflict(
+                "Governance DAG mirror publish intent changed during read".to_owned(),
+            ));
+        }
+        if checkpoint_b.as_ref() != Some(&checkpoint_a)
+            || checkpoint_revision_b != Some(checkpoint_revision_a)
+        {
+            return Err(GovernanceDagServiceError::Conflict(
+                "Governance DAG mirror checkpoint changed during read".to_owned(),
+            ));
+        }
+        self.assert_bindings()?;
+        self.readiness.finish_read(readiness_epoch)?;
+
+        Ok(Some(GovernanceDagMirrorSnapshotV1 {
+            canonical_bytes: mirror_payload.canonical_json,
+            mirror,
+            checkpoint: checkpoint_a.clone(),
+            mirror_store_generation: mirror_snapshot.generation(),
+            mirror_store_record_digest: mirror_snapshot.record_digest(),
+            checkpoint_identity: GovernanceDagMirrorCheckpointIdentityV1 {
+                generation: checkpoint_a.generation,
+                revision: checkpoint_revision_a,
+            },
+        }))
+    }
+
+    /// Revalidate the retained roots, provider binding, and existing typed
+    /// mirror store without requiring an initialized mirror checkpoint.
+    pub(crate) fn assert_install_ready(&self) -> Result<(), GovernanceDagServiceError> {
+        self.assert_bindings()?;
+        let mirror_snapshot = self
+            .state_root_guard
+            .rooted_directory()
+            .load_existing_two_slot_store_v1(self.mirror_store_config.clone())
+            .map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot revalidate the existing Governance DAG mirror store before installation: {error}"
+                ))
+            })?;
+        let _ = decode_mirror_index_store_payload(mirror_snapshot.payload())?;
+        self.assert_bindings()
+    }
+
+    fn mark_unready(&self) {
+        self.readiness.mark_unready();
+    }
+
+    fn mark_ready(&self) {
+        self.readiness.mark_ready();
+    }
+
+    fn assert_bindings(&self) -> Result<(), GovernanceDagServiceError> {
+        self.source_root_guard.revalidate().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "Governance DAG mirror source root identity changed: {error}"
+            ))
+        })?;
+        self.state_root_guard.revalidate().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "Governance DAG mirror state root identity changed: {error}"
+            ))
+        })?;
+        let source_root_digest = runtime_dag_producer_root_digest(self.source_root_guard.root())
+            .map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot revalidate Governance DAG mirror producer root: {error}"
+                ))
+            })?;
+        let source_root_identity_digest =
+            self.source_root_guard.identity_digest().map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot revalidate physical Governance DAG mirror producer root: {error}"
+                ))
+            })?;
+        if source_root_digest != self.binding.source_root_digest
+            || source_root_identity_digest != self.binding.source_root_identity_digest
+            || self.checkpoint_store.handle != self.binding.checkpoint_store_handle
+            || self.checkpoint_store.qualification != self.binding.checkpoint_store_qualification
+        {
+            return Err(GovernanceDagServiceError::State(
+                "Governance DAG mirror reader binding changed after construction".to_owned(),
+            ));
+        }
+        self.checkpoint_store.assert_identity()?;
+        self.source_root_guard.revalidate().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "Governance DAG mirror source root changed during binding validation: {error}"
+            ))
+        })?;
+        self.state_root_guard.revalidate().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "Governance DAG mirror state root changed during binding validation: {error}"
+            ))
+        })?;
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 struct PinnedEndpoint {
     url: Url,
     client: Client,
     authentication_scope: GovernanceDagAuthenticationScope,
     authenticator: OpaqueAuthenticator,
-    max_request_bytes: u64,
+    authenticated_wire_body_max_bytes: u64,
 }
 
 #[derive(Debug)]
 enum HeadMode {
     SignedHttp(Box<PinnedEndpoint>),
     Ipns { name: String, key_name: String },
+}
+
+struct AuthenticatedResponse {
+    response: reqwest::Response,
+    authenticator: OpaqueAuthenticator,
+    envelope: GovernanceDagRequestAuthenticationEnvelopeV1,
+    descriptor: GovernanceDagCanonicalRequestV1,
+}
+
+impl Deref for AuthenticatedResponse {
+    type Target = reqwest::Response;
+
+    fn deref(&self) -> &Self::Target {
+        &self.response
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1071,8 +1860,36 @@ struct ApiSnapshot {
 #[derive(Clone)]
 struct ApiState(Arc<RwLock<ApiSnapshot>>);
 
+#[derive(Clone)]
+struct ServiceApiState {
+    telemetry: ApiState,
+    mirror_reader: GovernanceDagMirrorReadHandleV1,
+}
+
+struct GovernanceDagServiceLivenessGuard {
+    readiness: Arc<GovernanceDagMirrorReadinessV1>,
+}
+
+impl GovernanceDagServiceLivenessGuard {
+    fn new(reader: &GovernanceDagMirrorReadHandleV1) -> Self {
+        Self {
+            readiness: Arc::clone(&reader.readiness),
+        }
+    }
+}
+
+impl Drop for GovernanceDagServiceLivenessGuard {
+    fn drop(&mut self) {
+        // Read capabilities can outlive the runner (for example after task
+        // cancellation). Withdraw the shared epoch synchronously so no clone
+        // can authenticate a cached generation after supervision ends.
+        self.readiness.mark_unready();
+    }
+}
+
 struct Service {
     config: RuntimeConfig,
+    mirror_store: TwoSlotStoreV1,
     checkpoint_store: OpaqueCheckpointStore,
     checkpoint_revision: Option<[u8; 32]>,
     checkpoint_generation_floor: u64,
@@ -1084,6 +1901,10 @@ struct Service {
     head_mode: HeadMode,
     api: ApiState,
     state_lock: RetainedFile,
+    mirror_reader: GovernanceDagMirrorReadHandleV1,
+    _liveness_guard: GovernanceDagServiceLivenessGuard,
+    steady_audit_generation: Option<u64>,
+    steady_audit_cursor: usize,
 }
 
 /// Run the supervised Governance DAG publisher using injected runtime providers.
@@ -1147,7 +1968,7 @@ pub fn validate_governance_dag_service_runtime_providers(
     providers: &GovernanceDagServiceRuntimeProviders,
 ) -> Result<(), GovernanceDagServiceError> {
     let bindings = runtime_provider_bindings(view)?;
-    let checkpoint_store = OpaqueCheckpointStore::try_new(
+    let _checkpoint_store = OpaqueCheckpointStore::try_new(
         bindings.checkpoint_store_handle(),
         bindings.checkpoint_store_qualification(),
         providers.checkpoint_store.clone().ok_or_else(|| {
@@ -1160,40 +1981,28 @@ pub fn validate_governance_dag_service_runtime_providers(
     OpaqueAuthenticator::try_new(
         bindings.ipfs_authenticator_handle(),
         bindings.ipfs_authenticator_qualification(),
-        validate_request_auth_policy(
-            bindings.ipfs_request_auth_public_key(),
-            bindings.request_auth_max_envelope_lifetime_secs(),
-            bindings.request_auth_max_future_skew_secs(),
-            "IPFS authenticator",
-        )?,
+        bindings.ipfs_request_ingress_binding(),
         providers.ipfs_authenticator.clone().ok_or_else(|| {
             GovernanceDagServiceError::Config(
                 "IPFS authentication is enabled but no runtime provider was injected".to_owned(),
             )
         })?,
         GovernanceDagAuthenticationScope::Ipfs,
-        checkpoint_store.clone(),
         "IPFS authenticator",
     )?;
     match (
         bindings.head_authenticator_handle(),
         bindings.head_authenticator_qualification(),
-        bindings.head_request_auth_public_key(),
+        bindings.head_request_ingress_binding(),
         providers.head_authenticator.clone(),
     ) {
-        (Some(handle), Some(qualification), Some(public_key), Some(provider)) => {
+        (Some(handle), Some(qualification), Some(ingress_binding), Some(provider)) => {
             OpaqueAuthenticator::try_new(
                 handle,
                 qualification,
-                validate_request_auth_policy(
-                    public_key,
-                    bindings.request_auth_max_envelope_lifetime_secs(),
-                    bindings.request_auth_max_future_skew_secs(),
-                    "signed-head authenticator",
-                )?,
+                ingress_binding,
                 provider,
                 GovernanceDagAuthenticationScope::SignedHead,
-                checkpoint_store.clone(),
                 "signed-head authenticator",
             )?;
         }
@@ -1254,8 +2063,13 @@ fn runtime_provider_bindings(
     let ipfs_request_auth_public_key = service.ipfs_request_auth_public_key.ok_or_else(|| {
         GovernanceDagServiceError::Config("IPFS request-auth public key is missing".to_owned())
     })?;
-    validate_request_auth_policy(
+    let ipfs_request_ingress_binding = configured_request_ingress_binding(
+        GovernanceDagAuthenticationScope::Ipfs,
+        service.ipfs_api_url.as_deref().ok_or_else(|| {
+            GovernanceDagServiceError::Config("IPFS API URL is missing".to_owned())
+        })?,
         ipfs_request_auth_public_key,
+        authenticated_ipfs_wire_body_max_bytes(service.max_request_bytes.0)?,
         service.request_auth_max_envelope_lifetime_secs,
         service.request_auth_max_future_skew_secs,
         "IPFS authenticator",
@@ -1271,20 +2085,22 @@ fn runtime_provider_bindings(
         service.checkpoint_store_policy_digest,
         "sealed checkpoint store",
     )?;
-    let (head_authenticator_handle, head_authenticator_qualification, head_request_auth_public_key) =
+    let (head_authenticator_handle, head_authenticator_qualification, head_request_ingress_binding) =
         match service.head_mode.as_str() {
             "signed_http" => {
+                if service.ipns_name.is_some() || service.ipns_key_name.is_some() {
+                    return Err(GovernanceDagServiceError::Config(
+                        "IPNS selectors must be absent in signed_http mode".to_owned(),
+                    ));
+                }
+                let signed_head_url = service.signed_head_url.as_deref().ok_or_else(|| {
+                    GovernanceDagServiceError::Config("signed head URL is missing".to_owned())
+                })?;
                 let public_key = service.head_request_auth_public_key.ok_or_else(|| {
                     GovernanceDagServiceError::Config(
                         "signed-head request-auth public key is missing".to_owned(),
                     )
                 })?;
-                validate_request_auth_policy(
-                    public_key,
-                    service.request_auth_max_envelope_lifetime_secs,
-                    service.request_auth_max_future_skew_secs,
-                    "signed-head authenticator",
-                )?;
                 (
                     Some(validate_runtime_handle(
                         service
@@ -1302,17 +2118,32 @@ fn runtime_provider_bindings(
                         service.head_authenticator_policy_digest,
                         "signed-head authenticator",
                     )?),
-                    Some(public_key),
+                    Some(configured_request_ingress_binding(
+                        GovernanceDagAuthenticationScope::SignedHead,
+                        signed_head_url,
+                        public_key,
+                        service.max_request_bytes.0,
+                        service.request_auth_max_envelope_lifetime_secs,
+                        service.request_auth_max_future_skew_secs,
+                        "signed-head authenticator",
+                    )?),
                 )
             }
             "ipns" => {
-                if service.head_authenticator_handle.is_some()
+                if service.signed_head_url.is_some()
+                    || service.head_authenticator_handle.is_some()
                     || service.head_authenticator_revision.is_some()
                     || service.head_authenticator_policy_digest.is_some()
                     || service.head_request_auth_public_key.is_some()
                 {
                     return Err(GovernanceDagServiceError::Config(
-                        "signed-head authenticator binding must be absent in IPNS mode".to_owned(),
+                        "signed-head URL and authenticator binding must be absent in IPNS mode"
+                            .to_owned(),
+                    ));
+                }
+                if service.ipns_name.is_none() || service.ipns_key_name.is_none() {
+                    return Err(GovernanceDagServiceError::Config(
+                        "IPNS name and key name are required in IPNS mode".to_owned(),
                     ));
                 }
                 (None, None, None)
@@ -1326,15 +2157,40 @@ fn runtime_provider_bindings(
     Ok(GovernanceDagServiceRuntimeProviderBindingsV1 {
         ipfs_authenticator_handle,
         ipfs_authenticator_qualification,
-        ipfs_request_auth_public_key,
+        ipfs_request_ingress_binding,
         head_authenticator_handle,
         head_authenticator_qualification,
-        head_request_auth_public_key,
-        request_auth_max_body_bytes: service.max_request_bytes.0,
-        request_auth_max_envelope_lifetime_secs: service.request_auth_max_envelope_lifetime_secs,
-        request_auth_max_future_skew_secs: service.request_auth_max_future_skew_secs,
+        head_request_ingress_binding,
         checkpoint_store_handle,
         checkpoint_store_qualification,
+    })
+}
+
+fn configured_request_ingress_binding(
+    scope: GovernanceDagAuthenticationScope,
+    endpoint: &str,
+    public_key: [u8; 32],
+    max_body_bytes: u64,
+    max_envelope_lifetime_secs: u64,
+    max_future_skew_secs: u64,
+    label: &str,
+) -> Result<GovernanceDagRequestIngressBindingV1, GovernanceDagServiceError> {
+    let endpoint_binding = governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
+        .map_err(|_| {
+            GovernanceDagServiceError::Config(format!(
+                "{label} endpoint is not a canonical request-ingress binding"
+            ))
+        })?;
+    GovernanceDagRequestIngressBindingV1::try_new(
+        scope,
+        endpoint_binding,
+        public_key,
+        max_body_bytes,
+        max_envelope_lifetime_secs,
+        max_future_skew_secs,
+    )
+    .map_err(|_| {
+        GovernanceDagServiceError::Config(format!("{label} request-ingress binding is invalid"))
     })
 }
 
@@ -1398,6 +2254,13 @@ pub struct GovernanceDagServiceRunner {
 }
 
 impl GovernanceDagServiceRunner {
+    /// Clone the service-owned coherent mirror read capability before the
+    /// runner is moved into [`Self::run`] or [`Self::run_until`].
+    #[must_use]
+    pub fn mirror_read_handle(&self) -> GovernanceDagMirrorReadHandleV1 {
+        self.service.mirror_reader.clone()
+    }
+
     /// Reconcile continuously until the listener exits or an operating-system
     /// shutdown signal is received.
     ///
@@ -1423,7 +2286,10 @@ impl GovernanceDagServiceRunner {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let router = service_router(self.service.api.clone());
+        let router = service_router(ServiceApiState {
+            telemetry: self.service.api.clone(),
+            mirror_reader: self.service.mirror_reader.clone(),
+        });
         let api = self.service.api.clone();
         api.0.write().await.live = true;
         let server = axum::serve(self.listener, router.into_make_service())
@@ -1645,19 +2511,23 @@ impl Service {
             service.ipfs_authenticator_policy_digest,
             "IPFS authenticator",
         )?;
+        let ipfs_request_ingress_binding = configured_request_ingress_binding(
+            GovernanceDagAuthenticationScope::Ipfs,
+            &ipfs_url,
+            service.ipfs_request_auth_public_key.ok_or_else(|| {
+                GovernanceDagServiceError::Config(
+                    "IPFS request-auth public key is missing".to_owned(),
+                )
+            })?,
+            authenticated_ipfs_wire_body_max_bytes(service.max_request_bytes.0)?,
+            service.request_auth_max_envelope_lifetime_secs,
+            service.request_auth_max_future_skew_secs,
+            "IPFS authenticator",
+        )?;
         let ipfs_authenticator = OpaqueAuthenticator::try_new(
             ipfs_authenticator_handle,
             ipfs_authenticator_qualification,
-            validate_request_auth_policy(
-                service.ipfs_request_auth_public_key.ok_or_else(|| {
-                    GovernanceDagServiceError::Config(
-                        "IPFS request-auth public key is missing".to_owned(),
-                    )
-                })?,
-                service.request_auth_max_envelope_lifetime_secs,
-                service.request_auth_max_future_skew_secs,
-                "IPFS authenticator",
-            )?,
+            ipfs_request_ingress_binding,
             ipfs_authenticator.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "IPFS authentication is enabled but no runtime provider was injected"
@@ -1665,7 +2535,6 @@ impl Service {
                 )
             })?,
             GovernanceDagAuthenticationScope::Ipfs,
-            checkpoint_store.clone(),
             "IPFS authenticator",
         )?;
         enum QualifiedHeadMode {
@@ -1680,6 +2549,11 @@ impl Service {
         }
         let qualified_head_mode = match service.head_mode.as_str() {
             "signed_http" => {
+                if service.ipns_name.is_some() || service.ipns_key_name.is_some() {
+                    return Err(GovernanceDagServiceError::Config(
+                        "IPNS selectors must be absent in signed_http mode".to_owned(),
+                    ));
+                }
                 let handle = service
                     .head_authenticator_handle
                     .as_deref()
@@ -1693,19 +2567,26 @@ impl Service {
                     service.head_authenticator_policy_digest,
                     "signed-head authenticator",
                 )?;
+                let url = service.signed_head_url.clone().ok_or_else(|| {
+                    GovernanceDagServiceError::Config("signed head URL is missing".to_owned())
+                })?;
+                let ingress_binding = configured_request_ingress_binding(
+                    GovernanceDagAuthenticationScope::SignedHead,
+                    &url,
+                    service.head_request_auth_public_key.ok_or_else(|| {
+                        GovernanceDagServiceError::Config(
+                            "signed-head request-auth public key is missing".to_owned(),
+                        )
+                    })?,
+                    service.max_request_bytes.0,
+                    service.request_auth_max_envelope_lifetime_secs,
+                    service.request_auth_max_future_skew_secs,
+                    "signed-head authenticator",
+                )?;
                 let authenticator = OpaqueAuthenticator::try_new(
                     handle,
                     qualification,
-                    validate_request_auth_policy(
-                        service.head_request_auth_public_key.ok_or_else(|| {
-                            GovernanceDagServiceError::Config(
-                                "signed-head request-auth public key is missing".to_owned(),
-                            )
-                        })?,
-                        service.request_auth_max_envelope_lifetime_secs,
-                        service.request_auth_max_future_skew_secs,
-                        "signed-head authenticator",
-                    )?,
+                    ingress_binding,
                     head_authenticator.ok_or_else(|| {
                         GovernanceDagServiceError::Config(
                             "signed-head authentication is enabled but no runtime provider was injected"
@@ -1713,23 +2594,21 @@ impl Service {
                         )
                     })?,
                     GovernanceDagAuthenticationScope::SignedHead,
-                    checkpoint_store.clone(),
                     "signed-head authenticator",
                 )?;
-                let url = service.signed_head_url.clone().ok_or_else(|| {
-                    GovernanceDagServiceError::Config("signed head URL is missing".to_owned())
-                })?;
                 QualifiedHeadMode::SignedHttp { url, authenticator }
             }
             "ipns" => {
-                if service.head_authenticator_handle.is_some()
+                if service.signed_head_url.is_some()
+                    || service.head_authenticator_handle.is_some()
                     || service.head_authenticator_revision.is_some()
                     || service.head_authenticator_policy_digest.is_some()
                     || service.head_request_auth_public_key.is_some()
                     || head_authenticator.is_some()
                 {
                     return Err(GovernanceDagServiceError::Config(
-                        "signed-head authenticator binding must be absent in IPNS mode".to_owned(),
+                        "signed-head URL, authenticator binding, and provider must be absent in IPNS mode"
+                            .to_owned(),
                     ));
                 }
                 QualifiedHeadMode::Ipns {
@@ -1783,18 +2662,23 @@ impl Service {
             poll_interval: service.poll_interval,
             max_response_bytes: service.max_response_bytes.0,
             max_request_bytes: service.max_request_bytes.0,
-            mirror_max_entries: service.mirror_max_entries,
-            mirror_max_bytes: service.mirror_max_bytes.0,
-            max_head_age_secs: service.max_head_age_secs,
             max_future_skew_secs: service.max_future_skew_secs,
             allow_head_bootstrap: service.allow_head_bootstrap,
             expected_producer_signer_handle,
             expected_producer_signer_qualification,
+            expected_checkpoint_store_handle: checkpoint_store.handle.clone(),
+            expected_checkpoint_store_qualification: checkpoint_store.qualification,
             expected_publisher_peer_id,
             expected_public_key,
         };
         let (checkpoint, checkpoint_revision) = load_checkpoint(&checkpoint_store)?;
         let (intent, intent_revision) = load_publish_intent(&checkpoint_store)?;
+        let mirror_store = open_mirror_index_store(&runtime_config)?;
+        let mirror_reader = GovernanceDagMirrorReadHandleV1::try_new(
+            &runtime_config,
+            checkpoint_store.clone(),
+            checkpoint.is_none() && intent.is_none(),
+        )?;
         let ipfs = build_pinned_endpoint(
             &ipfs_url,
             ipfs_authenticator,
@@ -1821,8 +2705,10 @@ impl Service {
             .map_or(0, |checkpoint| checkpoint.generation);
         let intent_generation_floor = intent.as_ref().map_or(0, |intent| intent.generation);
         let api = ApiState(Arc::new(RwLock::new(ApiSnapshot::default())));
+        let liveness_guard = GovernanceDagServiceLivenessGuard::new(&mirror_reader);
         Ok(Self {
             config: runtime_config,
+            mirror_store,
             checkpoint_store,
             checkpoint_revision,
             checkpoint_generation_floor,
@@ -1834,6 +2720,10 @@ impl Service {
             head_mode,
             api,
             state_lock,
+            mirror_reader,
+            _liveness_guard: liveness_guard,
+            steady_audit_generation: None,
+            steady_audit_cursor: 0,
         })
     }
 }
@@ -2083,6 +2973,7 @@ fn read_rooted_file(
     Ok(snapshot)
 }
 
+#[cfg(test)]
 fn verify_rooted_file_binding(
     root_guard: &GovernanceFilesystemRootGuard,
     binding: &FileBinding,
@@ -2191,92 +3082,6 @@ fn acquire_service_lock(
             "cannot acquire Governance DAG service lock: {err}"
         ))),
     }
-}
-
-fn write_rooted_atomic_secret(
-    state_root_guard: &GovernanceFilesystemRootGuard,
-    relative: &Path,
-    bytes: &[u8],
-) -> Result<(), GovernanceDagServiceError> {
-    if bytes.len() as u64 > MUTABLE_STATE_MAX_BYTES {
-        return Err(GovernanceDagServiceError::Filesystem(format!(
-            "durable state `{}` exceeds its byte bound",
-            state_root_guard.root().join(relative).display()
-        )));
-    }
-    state_root_guard.revalidate().map_err(|error| {
-        GovernanceDagServiceError::Filesystem(format!(
-            "state root changed before writing `{}`: {error}",
-            state_root_guard.root().join(relative).display()
-        ))
-    })?;
-    let (parent, name) = state_root_guard
-        .rooted_directory()
-        .resolve_parent(relative, false)
-        .map_err(|error| {
-            GovernanceDagServiceError::Filesystem(format!(
-                "cannot resolve durable state `{}`: {error}",
-                state_root_guard.root().join(relative).display()
-            ))
-        })?;
-    let target_name = name.to_str().ok_or_else(|| {
-        GovernanceDagServiceError::Filesystem(
-            "durable state target name must be canonical UTF-8".to_owned(),
-        )
-    })?;
-    parent
-        .remove_atomic_temps_for(target_name)
-        .map_err(|error| {
-            GovernanceDagServiceError::Filesystem(format!(
-                "cannot recover durable temporaries for `{}`: {error}",
-                state_root_guard.root().join(relative).display()
-            ))
-        })?;
-    let expected = parent
-        .private_file_binding(
-            &name,
-            rooted_byte_limit(MUTABLE_STATE_MAX_BYTES, "durable state")?,
-        )
-        .map_err(|error| {
-            GovernanceDagServiceError::Filesystem(format!(
-                "cannot inspect durable predecessor `{}`: {error}",
-                state_root_guard.root().join(relative).display()
-            ))
-        })?
-        .map_or(ExpectedFile::Missing, ExpectedFile::Identity);
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary_name = OsString::from(format!(".{target_name}.tmp-{}-{counter}", process::id()));
-    parent
-        .atomic_write(&name, &temporary_name, bytes, expected)
-        .map_err(|error| {
-            GovernanceDagServiceError::Filesystem(format!(
-                "cannot install rooted durable state `{}`: {error}",
-                state_root_guard.root().join(relative).display()
-            ))
-        })?;
-    let readback = parent
-        .read_private_file(
-            &name,
-            rooted_byte_limit(MUTABLE_STATE_MAX_BYTES, "durable state")?,
-        )
-        .map_err(|error| {
-            GovernanceDagServiceError::Filesystem(format!(
-                "cannot read back durable state `{}`: {error}",
-                state_root_guard.root().join(relative).display()
-            ))
-        })?;
-    if readback.bytes() != bytes {
-        return Err(GovernanceDagServiceError::Filesystem(format!(
-            "durable state `{}` readback diverged",
-            state_root_guard.root().join(relative).display()
-        )));
-    }
-    state_root_guard.revalidate().map_err(|error| {
-        GovernanceDagServiceError::Filesystem(format!(
-            "state root changed after writing `{}`: {error}",
-            state_root_guard.root().join(relative).display()
-        ))
-    })
 }
 
 #[cfg(unix)]
@@ -2648,7 +3453,287 @@ fn blake3_array(bytes: &[u8]) -> [u8; 32] {
 
 fn durable_decode_limits(max_bytes: u64) -> DecodeLimits {
     let max = usize::try_from(max_bytes).unwrap_or(usize::MAX);
-    DecodeLimits::new(150_000, max, 1_000_000, max.saturating_mul(2), 128)
+    DecodeLimits::new(
+        max,
+        max,
+        max.saturating_mul(2),
+        max.saturating_mul(CANONICAL_DECODE_ALLOCATION_MULTIPLIER),
+        128,
+    )
+}
+
+fn mirror_index_store_config() -> Result<TwoSlotStoreConfigV1, GovernanceDagServiceError> {
+    TwoSlotStoreConfigV1::try_new(
+        MIRROR_INDEX_STORE_NAME,
+        blake3_array(b"sorafs.governance-dag.service.mirror-index.store-domain.v1\0"),
+        blake3_array(b"sorafs.governance-dag.service.mirror-index.stable-store-id.v1\0"),
+        MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES,
+    )
+    .map_err(|error| {
+        GovernanceDagServiceError::State(format!(
+            "mirror two-slot store configuration is invalid: {error}"
+        ))
+    })
+}
+
+fn validate_mirror_index_store_payload(
+    payload: &MirrorIndexStorePayloadV1,
+) -> Result<(), GovernanceDagServiceError> {
+    if payload.version != MIRROR_INDEX_STORE_PAYLOAD_VERSION_V1 {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot payload version is unsupported".to_owned(),
+        ));
+    }
+    if payload.is_empty() {
+        if payload.publish_intent_blake3 != [0; 32]
+            || payload.mirror_blake3 != [0; 32]
+            || !payload.canonical_json.is_empty()
+        {
+            return Err(GovernanceDagServiceError::State(
+                "empty mirror two-slot payload contains committed fields".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
+    if payload.canonical_json.is_empty()
+        || payload.canonical_json.len() as u64 > GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1
+        || blake3_array(&payload.canonical_json) != payload.mirror_blake3
+    {
+        return Err(GovernanceDagServiceError::State(
+            "committed mirror two-slot payload violates its byte or digest binding".to_owned(),
+        ));
+    }
+    let mirror: JsonValue = json::from_slice(&payload.canonical_json).map_err(|error| {
+        GovernanceDagServiceError::State(format!(
+            "mirror two-slot JSON payload is invalid: {error}"
+        ))
+    })?;
+    let canonical = json::to_json_pretty(&mirror).map_err(|error| {
+        GovernanceDagServiceError::State(format!(
+            "mirror two-slot JSON canonicalization failed: {error}"
+        ))
+    })?;
+    if canonical.as_bytes() != payload.canonical_json
+        || mirror.get("schema").and_then(JsonValue::as_str) != Some(MIRROR_INDEX_SCHEMA)
+        || mirror.get("generation").and_then(JsonValue::as_u64)
+            != Some(payload.checkpoint_generation)
+    {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot JSON is noncanonical or disagrees with its typed metadata".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn encode_mirror_index_store_payload(
+    payload: &MirrorIndexStorePayloadV1,
+) -> Result<Vec<u8>, GovernanceDagServiceError> {
+    validate_mirror_index_store_payload(payload)?;
+    let encoded = norito::to_bytes(payload).map_err(|error| {
+        GovernanceDagServiceError::State(format!("mirror two-slot payload encode failed: {error}"))
+    })?;
+    if encoded.len() > MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot payload exceeds its fixed-store bound".to_owned(),
+        ));
+    }
+    Ok(encoded)
+}
+
+fn decode_mirror_index_store_payload(
+    encoded: &[u8],
+) -> Result<MirrorIndexStorePayloadV1, GovernanceDagServiceError> {
+    if encoded.len() > MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot payload exceeds its fixed-store bound".to_owned(),
+        ));
+    }
+    let allocation = MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES.saturating_mul(2);
+    let payload: MirrorIndexStorePayloadV1 = norito::decode_from_bytes_with_limits(
+        encoded,
+        DecodeLimits::new(
+            MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES,
+            MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES,
+            MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES,
+            allocation,
+            16,
+        ),
+    )
+    .map_err(|error| {
+        GovernanceDagServiceError::State(format!("mirror two-slot payload decode failed: {error}"))
+    })?;
+    if encode_mirror_index_store_payload(&payload)? != encoded {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot payload is not canonical Norito".to_owned(),
+        ));
+    }
+    Ok(payload)
+}
+
+fn load_mirror_index_store(
+    config: &RuntimeConfig,
+    store: &TwoSlotStoreV1,
+) -> Result<(TwoSlotSnapshotV1, MirrorIndexStorePayloadV1), GovernanceDagServiceError> {
+    load_mirror_index_store_from_root(&config.state_root_guard, store)
+}
+
+fn load_mirror_index_store_from_root(
+    state_root_guard: &GovernanceFilesystemRootGuard,
+    store: &TwoSlotStoreV1,
+) -> Result<(TwoSlotSnapshotV1, MirrorIndexStorePayloadV1), GovernanceDagServiceError> {
+    state_root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "Governance DAG mirror state root identity changed: {error}"
+        ))
+    })?;
+    let snapshot = store.load().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "cannot load rooted mirror two-slot store: {error}"
+        ))
+    })?;
+    let payload = decode_mirror_index_store_payload(snapshot.payload())?;
+    state_root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "Governance DAG mirror state root identity changed during read: {error}"
+        ))
+    })?;
+    Ok((snapshot, payload))
+}
+
+fn open_mirror_index_store(
+    config: &RuntimeConfig,
+) -> Result<TwoSlotStoreV1, GovernanceDagServiceError> {
+    reject_legacy_mirror_index_authority(config)?;
+    let initial = encode_mirror_index_store_payload(&MirrorIndexStorePayloadV1::empty())?;
+    let store_config = mirror_index_store_config()?;
+    config.revalidate_state_root()?;
+    let store = config
+        .state_root_guard
+        .rooted_directory()
+        .open_or_create_two_slot_store_v1(store_config, &initial)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot open rooted mirror two-slot store: {error}"
+            ))
+        })?;
+    let _ = load_mirror_index_store(config, &store)?;
+    Ok(store)
+}
+
+fn reject_legacy_mirror_index_authority(
+    config: &RuntimeConfig,
+) -> Result<(), GovernanceDagServiceError> {
+    config.revalidate_state_root()?;
+    for name in config
+        .state_root_guard
+        .rooted_directory()
+        .child_names_bounded(SOURCE_ENTRY_HARD_CAP)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot inventory the rooted mirror authority: {error}"
+            ))
+        })?
+    {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let claims_legacy_authority = [
+            LEGACY_MIRROR_INDEX_FILE,
+            LEGACY_MIRROR_INDEX_SIDECAR_FILE,
+            LEGACY_MIRROR_RECOVERY_QUARANTINE_DIR,
+        ]
+        .into_iter()
+        .any(|target| {
+            name == target
+                || name
+                    .strip_prefix(target)
+                    .or_else(|| {
+                        name.strip_prefix('.')
+                            .and_then(|name| name.strip_prefix(target))
+                    })
+                    .is_some_and(|suffix| {
+                        suffix.starts_with(".tmp-") || suffix.starts_with(".retained-v1-")
+                    })
+        });
+        if claims_legacy_authority {
+            return Err(GovernanceDagServiceError::State(format!(
+                "legacy mirror authority `{name}` is unsupported; archive or remove it offline before first-release initialization"
+            )));
+        }
+    }
+    config.revalidate_state_root()
+}
+
+fn mirror_json_value(
+    payload: &MirrorIndexStorePayloadV1,
+) -> Result<JsonValue, GovernanceDagServiceError> {
+    validate_mirror_index_store_payload(payload)?;
+    if payload.is_empty() {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot store has no committed index".to_owned(),
+        ));
+    }
+    json::from_slice(&payload.canonical_json).map_err(|error| {
+        GovernanceDagServiceError::State(format!(
+            "mirror two-slot JSON payload is invalid: {error}"
+        ))
+    })
+}
+
+fn verify_mirror_payload_against_checkpoint(
+    payload: &MirrorIndexStorePayloadV1,
+    checkpoint: &CheckpointBodyV1,
+) -> Result<JsonValue, GovernanceDagServiceError> {
+    let value = mirror_json_value(payload)?;
+    if payload.checkpoint_generation != checkpoint.generation
+        || payload.mirror_blake3 != checkpoint.mirror_blake3
+    {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot metadata does not match the authenticated checkpoint".to_owned(),
+        ));
+    }
+    let expected_head_cid = hex::encode(&checkpoint.head_block_cid);
+    if value.get("generation").and_then(JsonValue::as_u64) != Some(checkpoint.generation)
+        || value
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(JsonValue::as_str)
+            != Some(expected_head_cid.as_str())
+    {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot JSON metadata is inconsistent with the checkpoint".to_owned(),
+        ));
+    }
+    Ok(value)
+}
+
+fn verify_mirror_payload_against_intent(
+    payload: &MirrorIndexStorePayloadV1,
+    intent: &PublishIntentBodyV1,
+) -> Result<(), GovernanceDagServiceError> {
+    let value = mirror_json_value(payload)?;
+    let expected_head_cid = hex::encode(&intent.target_head_block_cid);
+    let intent_bytes = norito::to_bytes(intent).map_err(|error| {
+        GovernanceDagServiceError::State(format!(
+            "publish intent encode failed while verifying mirror ownership: {error}"
+        ))
+    })?;
+    if payload.publish_intent_blake3 != blake3_array(&intent_bytes)
+        || payload.checkpoint_generation != intent.generation
+        || value.get("generation").and_then(JsonValue::as_u64) != Some(intent.generation)
+        || value.get("block_count").and_then(JsonValue::as_u64) != Some(intent.target_block_count)
+        || value
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(JsonValue::as_str)
+            != Some(expected_head_cid.as_str())
+    {
+        return Err(GovernanceDagServiceError::State(
+            "in-progress mirror two-slot candidate is not bound to the sealed publish intent"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn request_auth_replay_decode_limits(max_bytes: usize) -> DecodeLimits {
@@ -2669,7 +3754,7 @@ fn load_checkpoint(
     };
     let body: CheckpointBodyV1 = norito::decode_from_bytes_with_limits(
         &record.payload,
-        durable_decode_limits(MUTABLE_STATE_MAX_BYTES),
+        durable_decode_limits(GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1),
     )
     .map_err(|err| GovernanceDagServiceError::State(format!("checkpoint decode failed: {err}")))?;
     if norito::to_bytes(&body).map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
@@ -2760,21 +3845,27 @@ fn validate_checkpoint_body(body: &CheckpointBodyV1) -> Result<(), GovernanceDag
         || body.generation == 0
         || body.block_count == 0
         || body.head_block_cid.len() != 32
+        || body.head_bytes.is_empty()
+        || body.head_bytes.len() as u64 > GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1
+        || blake3_array(&body.head_bytes) != body.head_bytes_blake3
+        || body.head_bytes_blake3 == [0; 32]
+        || body.source_chain_blake3 == [0; 32]
+        || body.mirror_blake3 == [0; 32]
         || !is_canonical_cid_v1(&body.head_ipfs_cid)
-        || body.public_head_token.is_empty()
-        || body.public_head_token.len() > MAX_PUBLIC_TOKEN_BYTES
+        || canonical_ipfs_file_cid(&body.head_bytes).as_deref() != Some(body.head_ipfs_cid.as_str())
         || body.mirror_blocks.is_empty()
+        || body.mirror_blocks.len() > GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1
     {
         return Err(GovernanceDagServiceError::State(
             "checkpoint fields violate first-release bounds".to_owned(),
         ));
     }
     validate_block_prefix_archive_head(&body.archive_head)?;
-    let mut previous = None;
+    let mut previous: Option<u64> = None;
     let mut seen = BTreeSet::new();
     for block in &body.mirror_blocks {
         validate_published_block(block)?;
-        if previous.is_some_and(|value: u64| value.checked_add(1) != Some(block.sequence))
+        if previous.is_some_and(|value| value.checked_add(1) != Some(block.sequence))
             || !seen.insert(block.governance_block_cid.clone())
         {
             return Err(GovernanceDagServiceError::State(
@@ -2986,6 +4077,7 @@ fn validate_signed_block_prefix_archive(
         || archive.target_checkpoint_generation == 0
         || archive.target_head_block_cid.len() != 32
         || archive.target_block_count == 0
+        || archive.target_source_chain_blake3 == [0; 32]
         || archive.blocks.is_empty()
         || archive.blocks.len() > BLOCK_PREFIX_ARCHIVE_MAX_ENTRIES_V1
         || archive.archived_block_count == 0
@@ -3108,7 +4200,7 @@ fn load_publish_intent(
     };
     let body: PublishIntentBodyV1 = norito::decode_from_bytes_with_limits(
         &record.payload,
-        durable_decode_limits(MUTABLE_STATE_MAX_BYTES),
+        durable_decode_limits(GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1),
     )
     .map_err(|err| {
         GovernanceDagServiceError::State(format!("publish intent decode failed: {err}"))
@@ -3168,9 +4260,7 @@ fn load_sealed_record(
     };
     if record.generation == 0
         || record.payload.is_empty()
-        || record.payload.len()
-            > governance_dag_sealed_state_payload_max_bytes_v1(slot)
-                .min(usize::try_from(MUTABLE_STATE_MAX_BYTES).unwrap_or(usize::MAX))
+        || record.payload.len() as u64 > GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1
         || !record.has_valid_revision(slot)
     {
         return Err(GovernanceDagServiceError::State(
@@ -3202,7 +4292,7 @@ fn load_producer_commit_guard(
     }
     let checkpoint: RuntimeDagProducerCheckpointV1 = norito::decode_from_bytes_with_limits(
         &record.payload,
-        durable_decode_limits(MUTABLE_STATE_MAX_BYTES),
+        durable_decode_limits(GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1),
     )
     .map_err(|err| {
         GovernanceDagServiceError::State(format!(
@@ -3309,7 +4399,28 @@ fn load_committed_source_snapshot(
 ) -> Result<SourceSnapshot, GovernanceDagServiceError> {
     config.revalidate_source_root()?;
     let first_guard = load_producer_commit_guard(config, store)?;
-    let source = load_source_snapshot(config)?;
+    let committed = load_runtime_dag_committed_snapshot_v1(&config.source_root_guard)
+        .map_err(|error| {
+            GovernanceDagServiceError::Source(format!(
+                "typed runtime DAG committed state is invalid: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Conflict(
+                "sealed local producer checkpoint has no typed head/index generation".to_owned(),
+            )
+        })?;
+    let checkpoint = &first_guard.checkpoint;
+    if checkpoint.block_count == 0
+        || checkpoint.head_bytes_digest != blake3_array(committed.head_bytes())
+        || checkpoint.index_bytes_digest != blake3_array(committed.index_bytes())
+    {
+        return Err(GovernanceDagServiceError::Conflict(
+            "typed runtime DAG byte generation does not match the sealed local producer checkpoint"
+                .to_owned(),
+        ));
+    }
+    let source = load_source_snapshot_from_committed(config, committed)?;
     config.revalidate_source_root()?;
     let second_guard = load_producer_commit_guard(config, store)?;
     if second_guard != first_guard {
@@ -3330,7 +4441,9 @@ fn save_sealed_record(
     payload: Vec<u8>,
     label: &'static str,
 ) -> Result<[u8; 32], GovernanceDagServiceError> {
-    if payload.is_empty() || payload.len() as u64 > MUTABLE_STATE_MAX_BYTES {
+    if payload.is_empty()
+        || payload.len() as u64 > GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1
+    {
         return Err(GovernanceDagServiceError::State(format!(
             "{label} exceeds the sealed-state byte bound"
         )));
@@ -3393,8 +4506,11 @@ fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceD
         || body.target_block_count == 0
         || body.target_head_block_cid.len() != 32
         || body.target_head_bytes.is_empty()
-        || body.target_head_bytes.len() as u64 > MUTABLE_STATE_MAX_BYTES
+        || body.target_head_bytes.len() as u64 > GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1
+        || body.target_head_blake3 == [0; 32]
+        || body.target_source_chain_blake3 == [0; 32]
         || body.blocks.is_empty()
+        || body.blocks.len() > SOURCE_ENTRY_HARD_CAP
     {
         return Err(GovernanceDagServiceError::State(
             "publish intent fields violate first-release bounds".to_owned(),
@@ -3406,7 +4522,7 @@ fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceD
             "publish intent archive is ahead of its target chain".to_owned(),
         ));
     }
-    let mut previous = None;
+    let mut previous: Option<u64> = None;
     let mut seen = BTreeSet::new();
     for block in &body.blocks {
         if block.governance_block_cid.len() != 32
@@ -3423,7 +4539,7 @@ fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceD
                 "publish intent block fields are invalid".to_owned(),
             ));
         }
-        if previous.is_some_and(|value| block.sequence != value + 1)
+        if previous.is_some_and(|value| value.checked_add(1) != Some(block.sequence))
             || !seen.insert(block.governance_block_cid.clone())
         {
             return Err(GovernanceDagServiceError::State(
@@ -3442,6 +4558,46 @@ fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceD
         ));
     }
     Ok(())
+}
+
+fn publish_intent_is_monotonic_refinement(
+    previous: &PublishIntentBodyV1,
+    next: &PublishIntentBodyV1,
+) -> bool {
+    if previous.generation != next.generation
+        || previous.version != next.version
+        || previous.target_head_block_cid != next.target_head_block_cid
+        || previous.target_block_count != next.target_block_count
+        || previous.target_head_bytes != next.target_head_bytes
+        || previous.target_head_blake3 != next.target_head_blake3
+        || previous.target_source_chain_blake3 != next.target_source_chain_blake3
+        || previous.previous_public_head_blake3 != next.previous_public_head_blake3
+        || previous.created_at_unix != next.created_at_unix
+        || previous.blocks.len() != next.blocks.len()
+        || previous
+            .head_ipfs_cid
+            .as_ref()
+            .is_some_and(|cid| next.head_ipfs_cid.as_ref() != Some(cid))
+    {
+        return false;
+    }
+    previous
+        .blocks
+        .iter()
+        .zip(&next.blocks)
+        .all(|(previous, next)| {
+            previous.sequence == next.sequence
+                && previous.governance_block_cid == next.governance_block_cid
+                && previous.governance_node_cid == next.governance_node_cid
+                && previous.payload_kind == next.payload_kind
+                && previous.timestamp == next.timestamp
+                && previous.encoded_blake3 == next.encoded_blake3
+                && previous.encoded_len == next.encoded_len
+                && previous
+                    .ipfs_cid
+                    .as_ref()
+                    .is_none_or(|cid| next.ipfs_cid.as_ref() == Some(cid))
+        })
 }
 
 fn resolve_index_relative_path(raw: &str) -> Result<PathBuf, GovernanceDagServiceError> {
@@ -3543,6 +4699,19 @@ fn required_json_u64(map: &JsonMap, field: &str) -> Result<u64, GovernanceDagSer
     map.get(field).and_then(JsonValue::as_u64).ok_or_else(|| {
         GovernanceDagServiceError::Source(format!("runtime index is missing `{field}`"))
     })
+}
+
+fn require_exact_runtime_index_fields(
+    map: &JsonMap,
+    expected: &[&str],
+    context: &str,
+) -> Result<(), GovernanceDagServiceError> {
+    if map.len() != expected.len() || !expected.iter().all(|field| map.contains_key(*field)) {
+        return Err(GovernanceDagServiceError::Source(format!(
+            "{context} fields do not match the first-release schema"
+        )));
+    }
+    Ok(())
 }
 
 fn optional_json_string(
@@ -3689,28 +4858,85 @@ fn validate_expected_signer(
     Ok(())
 }
 
+#[cfg(test)]
 fn load_source_snapshot(
     config: &RuntimeConfig,
 ) -> Result<SourceSnapshot, GovernanceDagServiceError> {
     config.revalidate_source_root()?;
-    let mut observed_bindings = Vec::<FileBinding>::new();
-    let index_path = Path::new("runtime-dag-index.json");
-    let index_bytes = read_verified_sidecar_file(
-        &config.source_root_guard,
-        index_path,
-        RUNTIME_INDEX_MAX_BYTES,
-        Some(&mut observed_bindings),
-    )?;
+    let committed = load_runtime_dag_committed_snapshot_v1(&config.source_root_guard)
+        .map_err(|error| {
+            GovernanceDagServiceError::Source(format!(
+                "typed runtime DAG committed state is invalid: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Source(
+                "typed runtime DAG committed state has no head/index generation".to_owned(),
+            )
+        })?;
+    load_source_snapshot_from_committed(config, committed)
+}
+
+fn load_source_snapshot_from_committed(
+    config: &RuntimeConfig,
+    committed: RuntimeDagCommittedSnapshotV1,
+) -> Result<SourceSnapshot, GovernanceDagServiceError> {
+    config.revalidate_source_root()?;
+    let index_bytes = committed.index_bytes().to_vec();
     let index_blake3 = blake3_array(&index_bytes);
     let index: JsonValue = json::from_slice(&index_bytes).map_err(|err| {
         GovernanceDagServiceError::Source(format!("runtime index JSON is invalid: {err}"))
     })?;
+    let canonical_index = json::to_json_pretty(&index).map_err(|error| {
+        GovernanceDagServiceError::Source(format!(
+            "runtime index JSON canonicalization failed: {error}"
+        ))
+    })?;
+    if canonical_index.as_bytes() != index_bytes {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime index JSON bytes are not canonical".to_owned(),
+        ));
+    }
     let map = index.as_object().ok_or_else(|| {
         GovernanceDagServiceError::Source("runtime index root is not an object".to_owned())
     })?;
+    require_exact_runtime_index_fields(map, RUNTIME_INDEX_TOP_LEVEL_FIELDS_V1, "runtime index")?;
     if map.get("schema").and_then(JsonValue::as_str) != Some(RUNTIME_INDEX_SCHEMA) {
         return Err(GovernanceDagServiceError::Source(
             "runtime index schema is unsupported".to_owned(),
+        ));
+    }
+    if map.contains_key("head_path") {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime index contains the obsolete loose-head authority field".to_owned(),
+        ));
+    }
+    if required_json_string(map, "source")? != RUNTIME_INDEX_SOURCE
+        || required_json_string(map, "root")? != RUNTIME_INDEX_LOGICAL_ROOT
+    {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime index source or logical root marker is invalid".to_owned(),
+        ));
+    }
+    if required_json_string(map, "signer_handle")? != config.expected_producer_signer_handle
+        || required_json_u64(map, "signer_revision")?
+            != config.expected_producer_signer_qualification.revision
+        || decode_fixed_hex::<32>(
+            &required_json_string(map, "signer_policy_digest_hex")?,
+            "runtime index signer policy digest",
+        )? != config.expected_producer_signer_qualification.policy_digest
+        || required_json_string(map, "checkpoint_store_handle")?
+            != config.expected_checkpoint_store_handle
+        || required_json_u64(map, "checkpoint_store_revision")?
+            != config.expected_checkpoint_store_qualification.revision
+        || decode_fixed_hex::<32>(
+            &required_json_string(map, "checkpoint_store_policy_digest_hex")?,
+            "runtime index checkpoint-store policy digest",
+        )? != config.expected_checkpoint_store_qualification.policy_digest
+    {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime index provider binding does not match the qualified source boundary"
+                .to_owned(),
         ));
     }
     let key_hex = required_json_string(map, "publisher_public_key_hex")?;
@@ -3734,6 +4960,13 @@ fn load_source_snapshot(
     if peer_id != config.expected_publisher_peer_id {
         return Err(GovernanceDagServiceError::Source(
             "runtime index publisher peer id does not match configuration".to_owned(),
+        ));
+    }
+    if required_json_string(map, "publisher_peer_id")?
+        != String::from_utf8_lossy(&config.expected_publisher_peer_id).as_ref()
+    {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime index publisher peer text does not match configuration".to_owned(),
         ));
     }
     let block_values = map
@@ -3764,6 +4997,7 @@ fn load_source_snapshot(
     let mut expected_by_digest = BTreeMap::<String, Vec<JsonValue>>::new();
     let mut expected_by_source_payload_digest = BTreeMap::<String, Vec<JsonValue>>::new();
     let mut expected_by_kind = BTreeMap::<String, Vec<JsonValue>>::new();
+    let mut expected_block_names = BTreeSet::<OsString>::new();
     let mut total_bytes = 0_u64;
     let mut previous_node_cid: Option<Vec<u8>> = None;
     for (position, value) in block_values.iter().enumerate() {
@@ -3775,6 +5009,11 @@ fn load_source_snapshot(
                 "runtime index block {position} is not an object"
             ))
         })?;
+        require_exact_runtime_index_fields(
+            entry,
+            RUNTIME_INDEX_BLOCK_FIELDS_V1,
+            "runtime index block",
+        )?;
         if required_json_u64(entry, "position")? != position_u64
             || required_json_u64(entry, "sequence")? != position_u64
         {
@@ -3821,6 +5060,11 @@ fn load_source_snapshot(
                 "block {position} sequence or timestamp is invalid"
             )));
         }
+        if required_json_u64(entry, "published_at_unix")? != block.timestamp {
+            return Err(GovernanceDagServiceError::Source(format!(
+                "runtime index block {position} publication timestamp is invalid"
+            )));
+        }
         if block.node.prev_cid != previous_node_cid {
             return Err(GovernanceDagServiceError::Source(format!(
                 "block {position} node parent link is invalid"
@@ -3845,6 +5089,25 @@ fn load_source_snapshot(
                 "runtime index block {position} path does not bind its sequence and CID"
             )));
         }
+        expected_block_names.insert(
+            path.file_name()
+                .ok_or_else(|| {
+                    GovernanceDagServiceError::Source(format!(
+                        "runtime index block {position} path has no file name"
+                    ))
+                })?
+                .to_os_string(),
+        );
+        expected_block_names.insert(
+            digest_sidecar_path(&path)
+                .file_name()
+                .ok_or_else(|| {
+                    GovernanceDagServiceError::Source(format!(
+                        "runtime index block {position} sidecar path has no file name"
+                    ))
+                })?
+                .to_os_string(),
+        );
         let expected_prev_block = optional_json_string(entry, "prev_block_cid_hex")?
             .map(|value| canonical_hex_vec(&value, 32, "previous block CID"))
             .transpose()?;
@@ -3899,8 +5162,8 @@ fn load_source_snapshot(
             .or_default()
             .push(JsonValue::from(position_u64));
 
-        let source_payload_path = required_json_string(entry, "encoded_path")?;
-        let source_payload_path = resolve_index_relative_path(&source_payload_path)?;
+        let source_payload_path_string = required_json_string(entry, "encoded_path")?;
+        let source_payload_path = resolve_index_relative_path(&source_payload_path_string)?;
         let source_payload_bytes = read_verified_sidecar_file(
             &config.source_root_guard,
             &source_payload_path,
@@ -3943,6 +5206,49 @@ fn load_source_snapshot(
                 "runtime index block {position} source payload does not match its signed governance node"
             )));
         }
+        let json_path_string = required_json_string(entry, "json_path")?;
+        let json_path = resolve_index_relative_path(&json_path_string)?;
+        let json_bytes = read_verified_sidecar_file(
+            &config.source_root_guard,
+            &json_path,
+            u64::try_from(GOVERNANCE_MUTABLE_INDEX_MAX_BYTES).map_err(|_| {
+                GovernanceDagServiceError::Source(
+                    "canonical Governance DAG JSON-source ceiling exceeds host limits".to_owned(),
+                )
+            })?,
+            None,
+        )?;
+        validate_governance_car_source_lengths(source_payload_bytes.len(), json_bytes.len())
+            .map_err(|error| GovernanceDagServiceError::Source(error.to_string()))?;
+        let json_len = u64::try_from(json_bytes.len()).map_err(|_| {
+            GovernanceDagServiceError::Source(format!(
+                "runtime index block {position} JSON source length exceeds u64"
+            ))
+        })?;
+        let json_digest = blake3_array(&json_bytes);
+        total_bytes = total_bytes.checked_add(json_len).ok_or_else(|| {
+            GovernanceDagServiceError::Source("source byte count overflow".to_owned())
+        })?;
+        if total_bytes > SOURCE_TOTAL_BYTES_HARD_CAP {
+            return Err(GovernanceDagServiceError::Source(format!(
+                "runtime DAG exceeds the {SOURCE_TOTAL_BYTES_HARD_CAP} byte hard cap"
+            )));
+        }
+        let expected_source_paths = governance_source_pair_relative_paths(
+            &kind,
+            source_payload_len,
+            &hex::encode(source_payload_digest),
+            json_len,
+            &hex::encode(json_digest),
+        )
+        .map_err(|error| GovernanceDagServiceError::Source(error.to_string()))?;
+        if source_payload_path_string != expected_source_paths.0
+            || json_path_string != expected_source_paths.1
+        {
+            return Err(GovernanceDagServiceError::Source(format!(
+                "runtime index block {position} source paths do not bind their immutable bytes"
+            )));
+        }
         expected_by_source_payload_digest
             .entry(hex::encode(source_payload_digest))
             .or_default()
@@ -3958,6 +5264,53 @@ fn load_source_snapshot(
             encoded_blake3: digest,
             payload_kind: kind,
         });
+    }
+
+    let runtime_root = config
+        .source_root_guard
+        .rooted_directory()
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_DIR))
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot open authenticated runtime DAG root: {error}"
+            ))
+        })?;
+    if runtime_root.child_names_bounded(2).map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "cannot inventory authenticated runtime DAG root: {error}"
+        ))
+    })? != vec![OsString::from(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR)]
+    {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime DAG immutable root inventory is noncanonical".to_owned(),
+        ));
+    }
+    let blocks_directory = runtime_root
+        .open_directory(OsStr::new(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR))
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot open authenticated runtime DAG blocks directory: {error}"
+            ))
+        })?;
+    let inventory_bound = GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1
+        .checked_mul(2)
+        .and_then(|bound| bound.checked_add(1))
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State("runtime DAG inventory bound overflowed".to_owned())
+        })?;
+    let actual_block_names = blocks_directory
+        .child_names_bounded(inventory_bound)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot inventory authenticated runtime DAG blocks: {error}"
+            ))
+        })?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if actual_block_names != expected_block_names {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime DAG block inventory contains an unindexed or missing artifact".to_owned(),
+        ));
     }
 
     let expected_by_digest = expected_by_digest
@@ -3982,58 +5335,53 @@ fn load_source_snapshot(
         ));
     }
 
-    let head_path_label = required_json_string(map, "head_path")?;
-    if head_path_label != "runtime-dag/head.to" {
-        return Err(GovernanceDagServiceError::Source(
-            "runtime index head_path is not canonical".to_owned(),
-        ));
-    }
-    let head_path = resolve_index_relative_path(&head_path_label)?;
-    let head_bytes = read_verified_sidecar_file(
-        &config.source_root_guard,
-        &head_path,
-        MUTABLE_STATE_MAX_BYTES,
-        None,
-    )?;
+    let head_bytes = committed.head_bytes().to_vec();
     let head: GovernanceDagHeadV1 = decode_canonical(&head_bytes, "governance DAG head")?;
     validate_source_head_chain(&head, &decoded_blocks)?;
     if head.generated_at > latest_allowed
         || blocks
             .last()
             .is_some_and(|block| head.generated_at < block.block.timestamp)
-        || now.saturating_sub(head.generated_at) > config.max_head_age_secs
     {
         return Err(GovernanceDagServiceError::Source(
-            "signed head is stale, future-dated, or predates its tip".to_owned(),
+            "signed head is future-dated or predates its tip".to_owned(),
         ));
     }
     if required_json_string(map, "head_block_cid_hex")? != hex::encode(&head.head_block_cid)
         || required_json_u64(map, "head_generated_at")? != head.generated_at
+        || required_json_u64(map, "generated_at")? != head.generated_at
     {
         return Err(GovernanceDagServiceError::Source(
             "runtime index head metadata does not match signed head bytes".to_owned(),
         ));
     }
-    let stable_index = read_verified_sidecar_file(
-        &config.source_root_guard,
-        index_path,
-        RUNTIME_INDEX_MAX_BYTES,
-        Some(&mut observed_bindings),
-    )?;
-    if stable_index != index_bytes {
+    let stable_committed = load_runtime_dag_committed_snapshot_v1(&config.source_root_guard)
+        .map_err(|error| {
+            GovernanceDagServiceError::Source(format!(
+                "typed runtime DAG committed state changed invalidly while reading: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Source(
+                "typed runtime DAG committed state disappeared while reading".to_owned(),
+            )
+        })?;
+    if stable_committed.store_identity() != committed.store_identity()
+        || stable_committed != committed
+    {
         return Err(GovernanceDagServiceError::Source(
-            "runtime index changed while the source snapshot was being read".to_owned(),
+            "typed runtime DAG head/index generation changed while the source snapshot was being read"
+                .to_owned(),
         ));
     }
+    let chain_blake3 = source_chain_blake3_v1(&head_bytes, &blocks);
     let source = SourceSnapshot {
         index_blake3,
+        chain_blake3,
         head,
         head_bytes,
         blocks,
     };
-    for binding in &observed_bindings {
-        verify_rooted_file_binding(&config.source_root_guard, binding)?;
-    }
     config.revalidate_source_root()?;
     Ok(source)
 }
@@ -4115,6 +5463,29 @@ async fn build_pinned_endpoint(
         };
         url.set_path(&normalized_path);
     }
+    let authenticated_wire_body_max_bytes = if ipfs_base {
+        authenticated_ipfs_wire_body_max_bytes(config.max_request_bytes.0)?
+    } else {
+        config.max_request_bytes.0
+    };
+    let endpoint_binding =
+        governance_dag_request_ingress_endpoint_binding_v1(authentication_scope, url.as_str())
+            .map_err(|_| {
+                GovernanceDagServiceError::Config(
+                    "endpoint URL does not match a canonical request-ingress binding".to_owned(),
+                )
+            })?;
+    let live_binding = authenticator.ingress_binding();
+    if live_binding.scope() != authentication_scope
+        || live_binding.endpoint_binding() != endpoint_binding
+        || live_binding.max_body_bytes() != authenticated_wire_body_max_bytes
+    {
+        return Err(GovernanceDagServiceError::Config(
+            "endpoint URL or request bound does not match the qualified ingress provider"
+                .to_owned(),
+        ));
+    }
+    authenticator.assert_identity()?;
 
     let allow_private_endpoint = if ipfs_base {
         config.allow_private_ipfs_endpoint
@@ -4147,7 +5518,7 @@ async fn build_pinned_endpoint(
         client,
         authentication_scope,
         authenticator,
-        max_request_bytes: config.max_request_bytes.0,
+        authenticated_wire_body_max_bytes,
     })
 }
 
@@ -4226,11 +5597,40 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
 }
 
 impl PinnedEndpoint {
+    fn validate_qualified_request_url(&self, url: &Url) -> Result<(), GovernanceDagServiceError> {
+        let same_origin = url.scheme() == self.url.scheme()
+            && url.host_str() == self.url.host_str()
+            && url.port_or_known_default() == self.url.port_or_known_default()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && !url.path().contains('%');
+        let qualified = match self.authentication_scope {
+            GovernanceDagAuthenticationScope::SignedHead => same_origin && url == &self.url,
+            GovernanceDagAuthenticationScope::Ipfs => {
+                let base_path = self.url.path();
+                let within_base = if base_path.ends_with('/') {
+                    url.path().starts_with(base_path)
+                } else {
+                    url.path() == base_path
+                };
+                same_origin && within_base
+            }
+        };
+        if !qualified {
+            return Err(GovernanceDagServiceError::Network(
+                "Governance DAG request URL is outside the qualified ingress endpoint".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     fn request(
         &self,
         method: Method,
         url: Url,
     ) -> Result<reqwest::RequestBuilder, GovernanceDagServiceError> {
+        self.validate_qualified_request_url(&url)?;
         Ok(self
             .client
             .request(method, url)
@@ -4241,24 +5641,7 @@ impl PinnedEndpoint {
         &self,
         request: RequestBuilder,
         failure: &'static str,
-    ) -> Result<reqwest::Response, GovernanceDagServiceError> {
-        self.execute_with_authentication(request, failure)
-            .await
-            .map(|(response, _envelope, _descriptor)| response)
-    }
-
-    async fn execute_with_authentication(
-        &self,
-        request: RequestBuilder,
-        failure: &'static str,
-    ) -> Result<
-        (
-            reqwest::Response,
-            GovernanceDagRequestAuthenticationEnvelopeV1,
-            GovernanceDagCanonicalRequestV1,
-        ),
-        GovernanceDagServiceError,
-    > {
+    ) -> Result<AuthenticatedResponse, GovernanceDagServiceError> {
         // Build exactly once after the caller has attached its final byte body
         // and conditional headers. The runtime adapter receives only the
         // bounded data-only descriptor and cannot mutate HTTP state.
@@ -4267,10 +5650,11 @@ impl PinnedEndpoint {
                 "Governance DAG outbound request could not be finalized".to_owned(),
             )
         })?;
+        self.validate_qualified_request_url(request.url())?;
         let descriptor = canonical_outbound_request_descriptor(
             &request,
             self.authentication_scope,
-            self.max_request_bytes,
+            self.authenticated_wire_body_max_bytes,
         )?;
         let envelope = self.authenticator.authenticate(&descriptor)?;
         attach_request_authentication_headers(&mut request, &envelope)?;
@@ -4279,9 +5663,13 @@ impl PinnedEndpoint {
         // flight. Discard the response unless the same qualified identity is
         // still active after execution.
         self.authenticator.assert_identity()?;
-        response
-            .map(|response| (response, envelope, descriptor))
-            .map_err(|_| GovernanceDagServiceError::Network(failure.to_owned()))
+        Ok(AuthenticatedResponse {
+            response: response
+                .map_err(|_| GovernanceDagServiceError::Network(failure.to_owned()))?,
+            authenticator: self.authenticator.clone(),
+            envelope,
+            descriptor,
+        })
     }
 
     fn ipfs_url(
@@ -4340,7 +5728,7 @@ impl PinnedEndpoint {
 fn canonical_outbound_request_descriptor(
     request: &reqwest::Request,
     scope: GovernanceDagAuthenticationScope,
-    max_request_bytes: u64,
+    authenticated_wire_body_max_bytes: u64,
 ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
     let body = match request.body() {
         None => &[][..],
@@ -4359,7 +5747,7 @@ fn canonical_outbound_request_descriptor(
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_bytes())),
         body,
-        max_request_bytes,
+        authenticated_wire_body_max_bytes,
     )
     .map_err(|error| {
         GovernanceDagServiceError::Network(format!(
@@ -4386,9 +5774,14 @@ fn attach_request_authentication_headers(
 }
 
 async fn read_bounded_response(
-    mut response: reqwest::Response,
+    response: AuthenticatedResponse,
     max_bytes: u64,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
+    let AuthenticatedResponse {
+        mut response,
+        authenticator,
+        ..
+    } = response;
     let headers = response.headers();
     if headers.len() > MAX_RESPONSE_HEADERS {
         return Err(GovernanceDagServiceError::Network(
@@ -4445,6 +5838,7 @@ async fn read_bounded_response(
             "remote response Content-Length does not match the body".to_owned(),
         ));
     }
+    authenticator.assert_identity()?;
     Ok(body)
 }
 
@@ -4462,7 +5856,11 @@ fn validate_ipfs_cid_for_bytes(
     bytes: &[u8],
 ) -> Result<String, GovernanceDagServiceError> {
     let cid = validate_ipfs_cid(value)?;
-    let expected = canonical_raw_sha256_cid(bytes);
+    let expected = canonical_ipfs_file_cid(bytes).ok_or_else(|| {
+        GovernanceDagServiceError::Network(
+            "local IPFS object cannot be represented by the fixed UnixFS profile".to_owned(),
+        )
+    })?;
     if cid != expected {
         return Err(GovernanceDagServiceError::Network(
             "IPFS API returned a CID that does not commit to the uploaded bytes".to_owned(),
@@ -4472,21 +5870,87 @@ fn validate_ipfs_cid_for_bytes(
 }
 
 fn canonical_raw_sha256_cid(bytes: &[u8]) -> String {
-    const CID_VERSION_V1: u8 = 0x01;
-    const RAW_CODEC: u8 = 0x55;
-    const SHA2_256_MULTIHASH: u8 = 0x12;
-    const SHA2_256_DIGEST_LENGTH: u8 = 32;
+    encode_base32_lower_no_pad(&canonical_sha256_cid_bytes(IPFS_RAW_CODEC, bytes))
+}
+
+fn canonical_ipfs_file_cid(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    if bytes.len() <= IPFS_UNIXFS_CHUNK_BYTES {
+        return Some(canonical_raw_sha256_cid(bytes));
+    }
+    let chunk_count = bytes.len().div_ceil(IPFS_UNIXFS_CHUNK_BYTES);
+    if chunk_count > IPFS_UNIXFS_MAX_FILE_LINKS {
+        return None;
+    }
+
+    // `unixfs-v1-2025` encodes a file larger than one fixed 1 MiB chunk as
+    // raw CIDv1 leaves beneath one canonical DAG-PB UnixFS File node. Iroha's
+    // canonical object ceiling is far below 1,024 chunks, so this profile has
+    // exactly one parent level for every admissible object.
+    let mut root = Vec::with_capacity(chunk_count.saturating_mul(52).saturating_add(64));
+    let mut block_sizes = Vec::with_capacity(chunk_count);
+    for chunk in bytes.chunks(IPFS_UNIXFS_CHUNK_BYTES) {
+        let chunk_len = u64::try_from(chunk.len()).ok()?;
+        let leaf_cid = canonical_sha256_cid_bytes(IPFS_RAW_CODEC, chunk);
+        let mut link = Vec::with_capacity(leaf_cid.len().saturating_add(10));
+        append_protobuf_bytes(&mut link, 1, &leaf_cid);
+        // Kubo's canonical DAG-PB encoder includes the empty link name.
+        append_protobuf_bytes(&mut link, 2, &[]);
+        // Raw-leaf cumulative DAG size is exactly the raw block length.
+        append_protobuf_varint(&mut link, 3, chunk_len);
+        append_protobuf_bytes(&mut root, 2, &link);
+        block_sizes.push(chunk_len);
+    }
+
+    let file_size = u64::try_from(bytes.len()).ok()?;
+    let mut unixfs = Vec::with_capacity(block_sizes.len().saturating_mul(5).saturating_add(16));
+    append_protobuf_varint(&mut unixfs, 1, 2); // UnixFS DataType::File
+    append_protobuf_varint(&mut unixfs, 3, file_size);
+    for block_size in block_sizes {
+        append_protobuf_varint(&mut unixfs, 4, block_size);
+    }
+    // Canonical DAG-PB orders Links before Data.
+    append_protobuf_bytes(&mut root, 1, &unixfs);
+    Some(encode_base32_lower_no_pad(&canonical_sha256_cid_bytes(
+        IPFS_DAG_PB_CODEC,
+        &root,
+    )))
+}
+
+fn canonical_sha256_cid_bytes(codec: u64, bytes: &[u8]) -> Vec<u8> {
+    const CID_VERSION_V1: u64 = 1;
+    const SHA2_256_MULTIHASH: u64 = 0x12;
+    const SHA2_256_DIGEST_LENGTH: u64 = 32;
 
     let digest = iroha_crypto::sha256(bytes);
     let mut cid = Vec::with_capacity(4 + digest.len());
-    cid.extend_from_slice(&[
-        CID_VERSION_V1,
-        RAW_CODEC,
-        SHA2_256_MULTIHASH,
-        SHA2_256_DIGEST_LENGTH,
-    ]);
+    append_uvarint(&mut cid, CID_VERSION_V1);
+    append_uvarint(&mut cid, codec);
+    append_uvarint(&mut cid, SHA2_256_MULTIHASH);
+    append_uvarint(&mut cid, SHA2_256_DIGEST_LENGTH);
     cid.extend_from_slice(&digest);
-    encode_base32_lower_no_pad(&cid)
+    cid
+}
+
+fn append_protobuf_bytes(encoded: &mut Vec<u8>, field: u64, bytes: &[u8]) {
+    append_uvarint(encoded, (field << 3) | 2);
+    append_uvarint(encoded, bytes.len() as u64);
+    encoded.extend_from_slice(bytes);
+}
+
+fn append_protobuf_varint(encoded: &mut Vec<u8>, field: u64, value: u64) {
+    append_uvarint(encoded, field << 3);
+    append_uvarint(encoded, value);
+}
+
+fn append_uvarint(encoded: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        encoded.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    encoded.push(value as u8);
 }
 
 fn encode_base32_lower_no_pad(bytes: &[u8]) -> String {
@@ -4563,9 +6027,10 @@ fn is_canonical_cid_v1(value: &str) -> bool {
     let Ok(digest_len) = usize::try_from(digest_len) else {
         return false;
     };
-    digest_offset
+    let structurally_complete = digest_offset
         .checked_add(digest_len)
-        .is_some_and(|end| end == bytes.len())
+        .is_some_and(|end| end == bytes.len());
+    structurally_complete && encode_base32_lower_no_pad(&bytes) == value
 }
 
 fn decode_base32_lower_no_pad(value: &str) -> Option<Vec<u8>> {
@@ -4641,18 +6106,19 @@ async fn ipfs_add_verified_with_publication(
             "local IPFS object violates the configured request bound".to_owned(),
         ));
     }
-    let url = endpoint.ipfs_url(
-        "api/v0/add",
-        &[
-            ("pin", "false"),
-            ("cid-version", "1"),
-            ("hash", "sha2-256"),
-            ("raw-leaves", "true"),
-            ("wrap-with-directory", "false"),
-            ("quieter", "true"),
-        ],
-    )?;
+    let expected_cid = canonical_ipfs_file_cid(bytes).ok_or_else(|| {
+        GovernanceDagServiceError::Network(
+            "local IPFS object exceeds the fixed UnixFS file-DAG profile".to_owned(),
+        )
+    })?;
+    let url = endpoint.ipfs_url("api/v0/add", IPFS_UNIXFS_V1_ADD_QUERY)?;
     let (boundary, body) = canonical_ipfs_multipart_body(name, bytes)?;
+    let authenticated_wire_max = authenticated_ipfs_wire_body_max_bytes(max_request_bytes)?;
+    if body.len() as u64 > authenticated_wire_max {
+        return Err(GovernanceDagServiceError::Network(
+            "IPFS multipart request exceeds the authenticated wire-body ceiling".to_owned(),
+        ));
+    }
     let request = endpoint
         .request(Method::POST, url)?
         .header(
@@ -4660,9 +6126,9 @@ async fn ipfs_add_verified_with_publication(
             format!("multipart/form-data; boundary={boundary}"),
         )
         .body(body);
-    let (response, envelope, descriptor) = endpoint
-        .execute_with_authentication(request, "IPFS add request failed")
-        .await?;
+    let response = endpoint.execute(request, "IPFS add request failed").await?;
+    let publication =
+        BlockPrefixArchivePublicationV1::from_envelope(&response.envelope, &response.descriptor)?;
     if !response.status().is_success() {
         let status = response.status();
         let _ = read_bounded_response(response, max_response_bytes).await;
@@ -4680,19 +6146,21 @@ async fn ipfs_add_verified_with_publication(
         .ok_or_else(|| {
             GovernanceDagServiceError::Network("IPFS add response has no Hash".to_owned())
         })?;
-    let cid = validate_ipfs_cid_for_bytes(cid, bytes)?;
+    let cid = validate_ipfs_cid(cid)?;
+    if cid != expected_cid {
+        return Err(GovernanceDagServiceError::Network(
+            "IPFS API returned a root outside the fixed UnixFS file-DAG profile".to_owned(),
+        ));
+    }
     ipfs_pin(endpoint, &cid, max_response_bytes).await?;
     ipfs_verify_pin(endpoint, &cid, max_response_bytes).await?;
-    let readback = ipfs_cat(endpoint, &cid, bytes.len() as u64, max_request_bytes).await?;
+    let readback = ipfs_cat(endpoint, &cid, bytes.len() as u64, max_response_bytes).await?;
     if readback != bytes {
         return Err(GovernanceDagServiceError::Network(
             "IPFS readback bytes do not match the published object".to_owned(),
         ));
     }
-    Ok((
-        cid,
-        BlockPrefixArchivePublicationV1::from_envelope(&envelope, &descriptor)?,
-    ))
+    Ok((cid, publication))
 }
 
 fn canonical_ipfs_multipart_body(
@@ -4700,7 +6168,7 @@ fn canonical_ipfs_multipart_body(
     bytes: &[u8],
 ) -> Result<(String, Vec<u8>), GovernanceDagServiceError> {
     if name.is_empty()
-        || name.len() > 160
+        || name.len() > IPFS_MULTIPART_FILENAME_MAX_BYTES
         || !name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
@@ -4711,7 +6179,7 @@ fn canonical_ipfs_multipart_body(
     }
     let digest = hex::encode(blake3_array(bytes));
     let digest_prefix = &digest[..32];
-    let boundary = (0_u8..=16)
+    let boundary = (0_u8..=IPFS_MULTIPART_BOUNDARY_ATTEMPTS)
         .map(|attempt| {
             if attempt == 0 {
                 format!("{IPFS_MULTIPART_BOUNDARY_PREFIX}-{digest_prefix}")
@@ -4736,20 +6204,80 @@ fn canonical_ipfs_multipart_body(
          Content-Type: application/vnd.ipld.raw\r\n\r\n"
     );
     let epilogue = format!("\r\n--{boundary}--\r\n");
-    let capacity = prelude
-        .len()
-        .checked_add(bytes.len())
-        .and_then(|length| length.checked_add(epilogue.len()))
-        .ok_or_else(|| {
-            GovernanceDagServiceError::Network(
-                "IPFS multipart body length exceeds host limits".to_owned(),
-            )
-        })?;
+    let overhead = ipfs_multipart_wire_overhead(boundary.len(), name.len()).ok_or_else(|| {
+        GovernanceDagServiceError::Network(
+            "IPFS multipart framing length exceeds host limits".to_owned(),
+        )
+    })?;
+    let capacity = bytes.len().checked_add(overhead).ok_or_else(|| {
+        GovernanceDagServiceError::Network(
+            "IPFS multipart body length exceeds host limits".to_owned(),
+        )
+    })?;
     let mut body = Vec::with_capacity(capacity);
     body.extend_from_slice(prelude.as_bytes());
     body.extend_from_slice(bytes);
     body.extend_from_slice(epilogue.as_bytes());
+    if body.len() != capacity {
+        return Err(GovernanceDagServiceError::Network(
+            "IPFS multipart framing is not canonical".to_owned(),
+        ));
+    }
     Ok((boundary, body))
+}
+
+fn ipfs_multipart_wire_overhead(boundary_len: usize, name_len: usize) -> Option<usize> {
+    const DISPOSITION_PREFIX: &[u8] = b"Content-Disposition: form-data; name=\"file\"; filename=\"";
+    const DISPOSITION_SUFFIX: &[u8] = b"\"\r\n";
+    const CONTENT_TYPE: &[u8] = b"Content-Type: application/vnd.ipld.raw\r\n\r\n";
+
+    // Prelude: `--BOUNDARY\r\n`, disposition, and content type.
+    // Epilogue: `\r\n--BOUNDARY--\r\n`.
+    2_usize
+        .checked_add(boundary_len)?
+        .checked_add(2)?
+        .checked_add(DISPOSITION_PREFIX.len())?
+        .checked_add(name_len)?
+        .checked_add(DISPOSITION_SUFFIX.len())?
+        .checked_add(CONTENT_TYPE.len())?
+        .checked_add(4)?
+        .checked_add(boundary_len)?
+        .checked_add(4)
+}
+
+/// Return the exact authenticated IPFS request-body ceiling for an object bound.
+///
+/// The ingress receiver authenticates the complete deterministic multipart
+/// body, so its bound includes the maximum V1 boundary and filename framing.
+///
+/// # Errors
+///
+/// Returns a configuration error when the framing calculation or final sum
+/// overflows the host-independent `u64` bound.
+pub fn authenticated_ipfs_wire_body_max_bytes(
+    object_max_bytes: u64,
+) -> Result<u64, GovernanceDagServiceError> {
+    let max_boundary_len = IPFS_MULTIPART_BOUNDARY_PREFIX
+        .len()
+        .checked_add(1 + 32 + 3)
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Config(
+                "IPFS multipart boundary ceiling exceeds host limits".to_owned(),
+            )
+        })?;
+    let overhead =
+        ipfs_multipart_wire_overhead(max_boundary_len, IPFS_MULTIPART_FILENAME_MAX_BYTES)
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| {
+                GovernanceDagServiceError::Config(
+                    "IPFS multipart framing ceiling exceeds host limits".to_owned(),
+                )
+            })?;
+    object_max_bytes.checked_add(overhead).ok_or_else(|| {
+        GovernanceDagServiceError::Config(
+            "IPFS authenticated request-body ceiling overflows u64".to_owned(),
+        )
+    })
 }
 
 fn block_prefix_archive_lengths_fit(
@@ -4799,22 +6327,12 @@ fn block_prefix_archive_add_descriptor(
     archive: &SignedBlockPrefixArchiveV1,
     archive_bytes: &[u8],
 ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
-    let url = endpoint.ipfs_url(
-        "api/v0/add",
-        &[
-            ("pin", "false"),
-            ("cid-version", "1"),
-            ("hash", "sha2-256"),
-            ("raw-leaves", "true"),
-            ("wrap-with-directory", "false"),
-            ("quieter", "true"),
-        ],
-    )?;
+    let url = endpoint.ipfs_url("api/v0/add", IPFS_UNIXFS_V1_ADD_QUERY)?;
     block_prefix_archive_add_descriptor_for_url(
         url.as_str(),
         archive,
         archive_bytes,
-        endpoint.max_request_bytes,
+        endpoint.authenticated_wire_body_max_bytes,
     )
 }
 
@@ -4855,10 +6373,6 @@ fn verify_block_prefix_archive_publication(
     archive_bytes: &[u8],
     head: &BlockPrefixArchiveHeadV1,
 ) -> Result<(), GovernanceDagServiceError> {
-    // Freshness and one-use replay are enforced when the add request executes.
-    // Durable replay verifies the original bounded interval and signature but
-    // deliberately does not require that historical attestation to remain
-    // unexpired.
     validate_block_prefix_archive_head(head)?;
     let publication = head.publication.as_ref().ok_or_else(|| {
         GovernanceDagServiceError::State(
@@ -4987,20 +6501,25 @@ async fn ipfs_verify_pin(
 async fn ipfs_cat(
     endpoint: &PinnedEndpoint,
     cid: &str,
-    expected_max: u64,
-    configured_max: u64,
+    expected_bytes: u64,
+    control_response_max: u64,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
+    if expected_bytes == 0 || expected_bytes > IPFS_OBJECT_MAX_BYTES {
+        return Err(GovernanceDagServiceError::Network(
+            "IPFS cat object length violates the canonical Governance DAG ceiling".to_owned(),
+        ));
+    }
     let url = endpoint.ipfs_url("api/v0/cat", &[("arg", cid)])?;
     let request = endpoint.request(Method::POST, url)?;
     let response = endpoint.execute(request, "IPFS cat request failed").await?;
     if !response.status().is_success() {
         let status = response.status();
-        let _ = read_bounded_response(response, configured_max).await;
+        let _ = read_bounded_response(response, control_response_max).await;
         return Err(GovernanceDagServiceError::Network(format!(
             "IPFS cat returned HTTP {status}"
         )));
     }
-    read_bounded_response(response, expected_max.min(configured_max)).await
+    read_bounded_response(response, expected_bytes).await
 }
 
 fn validate_remote_head(
@@ -5062,18 +6581,34 @@ async fn fetch_signed_http_head(
             "signed-head GET returned HTTP {status}"
         )));
     }
-    let etag = response
-        .headers()
-        .get(header::ETAG)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| value.starts_with('"') && value.ends_with('"'))
-        .filter(|value| value.len() <= MAX_PUBLIC_TOKEN_BYTES)
+    let mut etags = response.headers().get_all(header::ETAG).iter();
+    let first_etag = etags.next();
+    let has_duplicate_etag = etags.next().is_some();
+    let etag = first_etag
+        .filter(|_| !has_duplicate_etag)
+        .and_then(strong_http_entity_tag)
         .ok_or_else(|| {
-            GovernanceDagServiceError::Network("signed-head GET has no canonical ETag".to_owned())
-        })?
-        .to_owned();
+            GovernanceDagServiceError::Network(
+                "signed-head GET has no single canonical strong ETag".to_owned(),
+            )
+        })?;
     let bytes = read_bounded_response(response, max_response_bytes).await?;
     Ok(PublicHead::Present { bytes, token: etag })
+}
+
+fn strong_http_entity_tag(value: &HeaderValue) -> Option<String> {
+    let bytes = value.as_bytes();
+    if bytes.len() < 2
+        || bytes.len() > MAX_PUBLIC_TOKEN_BYTES
+        || bytes.first() != Some(&b'"')
+        || bytes.last() != Some(&b'"')
+        || !bytes[1..bytes.len() - 1]
+            .iter()
+            .all(|byte| *byte == 0x21 || (0x23..=0x7e).contains(byte))
+    {
+        return None;
+    }
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
 async fn put_signed_http_head(
@@ -5283,10 +6818,26 @@ impl Service {
                 "sealed checkpoint store rolled back below the process generation floor".to_owned(),
             ));
         }
-        let (intent, intent_revision) = load_publish_intent(&self.checkpoint_store)?;
-        if self.intent.is_some() && intent.is_none() {
+        if let (Some(previous), Some(next)) = (&self.checkpoint, &checkpoint)
+            && next.generation == previous.generation
+            && (next != previous || checkpoint_revision != self.checkpoint_revision)
+        {
             return Err(GovernanceDagServiceError::State(
-                "sealed checkpoint store removed the active publish intent".to_owned(),
+                "sealed checkpoint store equivocated within one generation".to_owned(),
+            ));
+        }
+        let (intent, intent_revision) = load_publish_intent(&self.checkpoint_store)?;
+        let removed_intent_was_completed = self.intent.as_ref().is_some_and(|previous_intent| {
+            checkpoint.as_ref().is_some_and(|checkpoint| {
+                checkpoint.generation == previous_intent.generation
+                    && checkpoint.head_block_cid == previous_intent.target_head_block_cid
+                    && checkpoint.head_bytes_blake3 == previous_intent.target_head_blake3
+                    && checkpoint.source_chain_blake3 == previous_intent.target_source_chain_blake3
+            })
+        });
+        if self.intent.is_some() && intent.is_none() && !removed_intent_was_completed {
+            return Err(GovernanceDagServiceError::State(
+                "sealed checkpoint store removed an uncompleted publish intent".to_owned(),
             ));
         }
         if intent
@@ -5295,6 +6846,14 @@ impl Service {
         {
             return Err(GovernanceDagServiceError::State(
                 "sealed publish-intent store replayed an older generation".to_owned(),
+            ));
+        }
+        if let (Some(previous), Some(next)) = (&self.intent, &intent)
+            && next.generation == previous.generation
+            && !publish_intent_is_monotonic_refinement(previous, next)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "sealed publish intent regressed or equivocated within one generation".to_owned(),
             ));
         }
         self.checkpoint_generation_floor = checkpoint
@@ -5319,8 +6878,7 @@ impl Service {
             || intent_revision != self.intent_revision
         {
             return Err(GovernanceDagServiceError::State(
-                "sealed checkpoint or publish intent changed during initial reconciliation"
-                    .to_owned(),
+                "sealed checkpoint or publish intent changed during reconciliation".to_owned(),
             ));
         }
         Ok(())
@@ -5329,7 +6887,8 @@ impl Service {
     async fn validate_initial_state(&mut self) -> Result<(), GovernanceDagServiceError> {
         self.refresh_durable_state()?;
         let source = load_committed_source_snapshot(&self.config, &self.checkpoint_store)?;
-        validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
+        let checkpoint_source =
+            validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
         if let Some(checkpoint) = &self.checkpoint {
             self.verify_block_prefix_archive_head(
                 &checkpoint.archive_head,
@@ -5340,12 +6899,11 @@ impl Service {
             .await?;
         }
         if let Some(intent) = &self.intent {
-            validate_intent_against_source(
+            let _ = validate_intent_against_source(
                 intent,
                 self.checkpoint.as_ref(),
                 self.checkpoint_revision,
                 &source,
-                &self.config,
             )?;
             if self
                 .checkpoint
@@ -5375,7 +6933,7 @@ impl Service {
         }
         self.assert_durable_state_unchanged()?;
 
-        match (&self.checkpoint, &self.intent) {
+        let require_ready_mirror = match (&self.checkpoint, &self.intent) {
             (Some(checkpoint), Some(intent))
                 if checkpoint.generation == intent.generation
                     && checkpoint.head_block_cid == intent.target_head_block_cid =>
@@ -5386,7 +6944,8 @@ impl Service {
                             .to_owned(),
                     ));
                 }
-                require_public_matches_checkpoint(&public, checkpoint)
+                require_public_matches_checkpoint(&public, checkpoint)?;
+                false
             }
             (checkpoint, Some(intent)) => {
                 if let Some(checkpoint) = checkpoint
@@ -5406,11 +6965,41 @@ impl Service {
                             .to_owned(),
                     ));
                 }
-                Ok(())
+                false
             }
-            (Some(checkpoint), None) => require_public_matches_checkpoint(&public, checkpoint),
-            (None, None) => Ok(()),
+            (Some(checkpoint), None) => {
+                require_public_matches_checkpoint(&public, checkpoint)?;
+                let checkpoint_source = checkpoint_source.as_ref().ok_or_else(|| {
+                    GovernanceDagServiceError::State(
+                        "validated checkpoint source prefix disappeared".to_owned(),
+                    )
+                })?;
+                let _ = verify_or_recover_mirror_index_store(
+                    &self.config,
+                    &self.mirror_store,
+                    checkpoint,
+                    checkpoint_source,
+                )?;
+                true
+            }
+            (None, None) => {
+                let (_, mirror) = load_mirror_index_store(&self.config, &self.mirror_store)?;
+                if !mirror.is_empty() {
+                    return Err(GovernanceDagServiceError::State(
+                        "Governance DAG mirror exists without a sealed checkpoint".to_owned(),
+                    ));
+                }
+                false
+            }
+        };
+        self.assert_durable_state_unchanged()?;
+        if require_ready_mirror {
+            // Startup proves the retained roots and exact derived/checkpoint
+            // coherence above, but does not expose readiness until the first
+            // full public-head and IPFS audit completes in reconciliation.
+            self.mirror_reader.assert_install_ready()?;
         }
+        Ok(())
     }
 
     async fn fetch_public_head(&self) -> Result<PublicHead, GovernanceDagServiceError> {
@@ -5533,10 +7122,10 @@ impl Service {
         Ok(())
     }
 
-    async fn archive_would_be_pruned_prefix(
+    async fn archive_would_be_pruned_prefix<S: SourceChainView + ?Sized>(
         &mut self,
         intent: &mut PublishIntentBodyV1,
-        source: &SourceSnapshot,
+        source: &S,
         retained_blocks: &[PublishedBlockV1],
     ) -> Result<BlockPrefixArchiveHeadV1, GovernanceDagServiceError> {
         let retained_start = retained_blocks
@@ -5575,7 +7164,7 @@ impl Service {
                         "block-prefix archive sequence exceeds host limits".to_owned(),
                     )
                 })?;
-                let source_block = source.blocks.get(position).ok_or_else(|| {
+                let source_block = source.blocks().get(position).ok_or_else(|| {
                     GovernanceDagServiceError::State(
                         "block-prefix archive source range is incomplete".to_owned(),
                     )
@@ -5630,13 +7219,19 @@ impl Service {
                     target_checkpoint_generation: intent.generation,
                     target_head_block_cid: intent.target_head_block_cid.clone(),
                     target_block_count: intent.target_block_count,
-                    target_source_index_blake3: intent.target_source_index_blake3,
+                    target_source_chain_blake3: intent.target_source_chain_blake3,
                     ipfs_authenticator_handle: self.ipfs.authenticator.handle.clone(),
-                    ipfs_authenticator_revision: self.ipfs.authenticator.qualification.revision,
+                    ipfs_authenticator_revision: self
+                        .ipfs
+                        .authenticator
+                        .ingress_qualification
+                        .provider()
+                        .revision,
                     ipfs_authenticator_policy_digest: self
                         .ipfs
                         .authenticator
-                        .qualification
+                        .ingress_qualification
+                        .provider()
                         .policy_digest,
                     ipfs_authenticator_public_key: self
                         .ipfs
@@ -5741,6 +7336,30 @@ impl Service {
     }
 
     async fn reconcile_once(&mut self) -> Result<(), GovernanceDagServiceError> {
+        let result = self.reconcile_once_inner().await;
+        if result.is_err() {
+            self.withdraw_readiness_after_reconciliation_failure().await;
+        }
+        result
+    }
+
+    async fn withdraw_readiness_after_reconciliation_failure(&self) {
+        let mut state = self.api.0.write().await;
+        state.ready = false;
+        // Keep this latched until `publish_api_snapshot` has completed a
+        // checkpoint-coherent reconciliation. A transient failure must remain
+        // visible to the alerting surface even after the failing call returns.
+        state.metrics.mirror_drift = 1;
+        self.mirror_reader.mark_unready();
+    }
+
+    async fn withdraw_readiness(&self) {
+        let mut state = self.api.0.write().await;
+        state.ready = false;
+        self.mirror_reader.mark_unready();
+    }
+
+    async fn reconcile_once_inner(&mut self) -> Result<(), GovernanceDagServiceError> {
         self.state_lock.verify().map_err(|error| {
             GovernanceDagServiceError::Filesystem(format!(
                 "service lock binding changed before reconciliation: {error}"
@@ -5750,7 +7369,7 @@ impl Service {
         self.refresh_durable_state()?;
         let source = load_committed_source_snapshot(&self.config, &self.checkpoint_store)?;
         self.config.revalidate_state_root()?;
-        validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
+        let _ = validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
         if let Some(checkpoint) = &self.checkpoint {
             self.verify_block_prefix_archive_head(
                 &checkpoint.archive_head,
@@ -5761,12 +7380,11 @@ impl Service {
             .await?;
         }
         if let Some(intent) = &self.intent {
-            validate_intent_against_source(
+            let _ = validate_intent_against_source(
                 intent,
                 self.checkpoint.as_ref(),
                 self.checkpoint_revision,
                 &source,
-                &self.config,
             )?;
             if self
                 .checkpoint
@@ -5783,15 +7401,24 @@ impl Service {
             }
         }
 
-        if let Some(checkpoint) = &self.checkpoint
+        if let Some(checkpoint) = self.checkpoint.clone()
             && checkpoint.head_block_cid == source.head.head_block_cid
             && self.intent.is_none()
         {
-            self.verify_steady_state(&source, checkpoint).await?;
-            self.publish_api_snapshot(&source, checkpoint, false)
+            if self.steady_audit_generation == Some(checkpoint.generation) {
+                self.verify_rotating_steady_state(&source, &checkpoint)
+                    .await?;
+            } else {
+                self.verify_steady_state(&source, &checkpoint).await?;
+                self.steady_audit_generation = Some(checkpoint.generation);
+                self.steady_audit_cursor = 0;
+            }
+            self.publish_api_snapshot(&source, &checkpoint, false)
                 .await?;
             return Ok(());
         }
+
+        self.withdraw_readiness().await;
 
         if self.intent.is_none() {
             let current = self.fetch_public_head().await?;
@@ -5854,7 +7481,7 @@ impl Service {
                 target_block_count: source.head.block_count,
                 target_head_bytes: source.head_bytes.clone(),
                 target_head_blake3: blake3_array(&source.head_bytes),
-                target_source_index_blake3: source.index_blake3,
+                target_source_chain_blake3: source.chain_blake3,
                 previous_public_head_blake3,
                 created_at_unix: current_unix_timestamp_seconds(),
                 archive_head: self
@@ -5880,17 +7507,23 @@ impl Service {
                 "durable publish intent disappeared before execution".to_owned(),
             )
         })?;
-        if let Some(checkpoint) = &self.checkpoint
+        let target_source = validate_intent_against_source(
+            &intent,
+            self.checkpoint.as_ref(),
+            self.checkpoint_revision,
+            &source,
+        )?;
+        if let Some(checkpoint) = self.checkpoint.clone()
             && checkpoint.generation == intent.generation
             && checkpoint.head_block_cid == intent.target_head_block_cid
         {
-            let current = self.fetch_public_head().await?;
-            require_public_matches_checkpoint(&current, checkpoint)?;
-            verify_or_recover_mirror_file(&self.config, checkpoint, &source)?;
+            self.verify_steady_state(&source, &checkpoint).await?;
+            self.steady_audit_generation = Some(checkpoint.generation);
+            self.steady_audit_cursor = 0;
             delete_publish_intent(&self.checkpoint_store, self.intent_revision)?;
             self.intent_revision = None;
             self.intent = None;
-            self.publish_api_snapshot(&source, checkpoint, false)
+            self.publish_api_snapshot(&source, &checkpoint, false)
                 .await?;
             return Ok(());
         }
@@ -5904,7 +7537,7 @@ impl Service {
             let sequence = usize::try_from(intent.blocks[position].sequence).map_err(|_| {
                 GovernanceDagServiceError::State("intent sequence exceeds host limits".to_owned())
             })?;
-            let source_block = source.blocks.get(sequence).ok_or_else(|| {
+            let source_block = target_source.blocks.get(sequence).ok_or_else(|| {
                 GovernanceDagServiceError::State(
                     "intent block no longer exists in the source".to_owned(),
                 )
@@ -5955,6 +7588,81 @@ impl Service {
             )
         })?;
 
+        let known_sequences = self
+            .checkpoint
+            .iter()
+            .flat_map(|checkpoint| checkpoint.mirror_blocks.iter())
+            .map(|block| block.sequence)
+            .chain(intent.blocks.iter().map(|block| block.sequence))
+            .collect::<BTreeSet<_>>();
+        let mut backfilled = Vec::new();
+        for source_block in retained_source_suffix(&target_source)? {
+            if known_sequences.contains(&source_block.block.sequence) {
+                continue;
+            }
+            let cid = ipfs_add_verified(
+                &self.ipfs,
+                &format!(
+                    "governance-dag-block-{:020}.to",
+                    source_block.block.sequence
+                ),
+                &source_block.bytes,
+                self.config.max_request_bytes,
+                self.config.max_response_bytes,
+            )
+            .await?;
+            published_bytes = published_bytes.saturating_add(source_block.bytes.len() as u64);
+            pin_lag = pin_lag
+                .max(current_unix_timestamp_seconds().saturating_sub(source_block.block.timestamp));
+            backfilled.push(published_block_from_source(source_block, cid)?);
+        }
+        let published_blocks = merge_published_blocks(
+            self.checkpoint.as_ref(),
+            &intent,
+            &backfilled,
+            &target_source,
+        )?;
+        let archive_head = self
+            .archive_would_be_pruned_prefix(&mut intent, &target_source, &published_blocks)
+            .await?;
+        // Seal the publication time in the intent so retries and competing
+        // instances derive byte-identical mirror payloads.
+        let published_at = intent.created_at_unix;
+        let mirror = mirror_index_value(
+            &target_source,
+            &published_blocks,
+            &archive_head,
+            intent.generation,
+            &head_ipfs_cid,
+            published_at,
+        )?;
+        let mirror_bytes = json::to_json_pretty(&mirror)
+            .map_err(|err| {
+                GovernanceDagServiceError::State(format!("mirror JSON encode failed: {err}"))
+            })?
+            .into_bytes();
+        let mirror_blake3 = blake3_array(&mirror_bytes);
+        commit_mirror_index_store(
+            &self.config,
+            &self.mirror_store,
+            self.checkpoint.as_ref(),
+            &intent,
+            mirror_bytes,
+        )?;
+
+        // The public-head CAS is the externally visible commit point. Repair
+        // and revalidate every object referenced by the final mirror before
+        // crossing it, including inherited mappings and crash-resumed intent
+        // CIDs that were not uploaded in this process.
+        self.ensure_published_objects(
+            &target_source,
+            &head_ipfs_cid,
+            &intent.target_head_bytes,
+            &published_blocks,
+        )
+        .await?;
+        self.assert_durable_state_unchanged()?;
+
         let current = self.fetch_public_head().await?;
         if let PublicHead::Present { bytes, .. } = &current {
             validate_remote_head(bytes, &source, &self.config)?;
@@ -5973,64 +7681,26 @@ impl Service {
             self.install_public_head(&intent.target_head_bytes, &head_ipfs_cid, &current)
                 .await?
         };
-        let public_token = match &installed {
-            PublicHead::Present { bytes, token }
-                if blake3_array(bytes) == intent.target_head_blake3 =>
-            {
-                token.clone()
-            }
+        match &installed {
+            PublicHead::Present { bytes, .. }
+                if blake3_array(bytes) == intent.target_head_blake3 => {}
             _ => {
                 self.intent = Some(intent);
                 return Err(GovernanceDagServiceError::Conflict(
                     "public head installation did not converge".to_owned(),
                 ));
             }
-        };
-
-        let published_blocks = merge_published_blocks(
-            self.checkpoint.as_ref(),
-            &intent,
-            &source,
-            self.config.mirror_max_entries,
-            self.config.mirror_max_bytes,
-        )?;
-        let archive_head = self
-            .archive_would_be_pruned_prefix(&mut intent, &source, &published_blocks)
-            .await?;
-        let published_at = current_unix_timestamp_seconds();
-        let mirror = mirror_index_value(
-            &source,
-            &published_blocks,
-            &archive_head,
-            intent.generation,
-            &head_ipfs_cid,
-            &public_token,
-            published_at,
-        )?;
-        let mirror_bytes = json::to_json_pretty(&mirror)
-            .map_err(|err| {
-                GovernanceDagServiceError::State(format!("mirror JSON encode failed: {err}"))
-            })?
-            .into_bytes();
-        self.checkpoint_store.assert_identity()?;
-        self.ipfs.authenticator.assert_identity()?;
-        self.config.revalidate_state_root()?;
-        write_rooted_atomic_secret(
-            &self.config.state_root_guard,
-            Path::new(MIRROR_INDEX_FILE),
-            &mirror_bytes,
-        )?;
-        self.config.revalidate_state_root()?;
+        }
         let checkpoint = CheckpointBodyV1 {
             version: CHECKPOINT_VERSION_V1,
             generation: intent.generation,
             head_block_cid: intent.target_head_block_cid.clone(),
             block_count: intent.target_block_count,
+            head_bytes: intent.target_head_bytes.clone(),
             head_bytes_blake3: intent.target_head_blake3,
             head_ipfs_cid,
-            public_head_token: public_token,
-            source_index_blake3: intent.target_source_index_blake3,
-            mirror_blake3: blake3_array(&mirror_bytes),
+            source_chain_blake3: target_source.chain_blake3,
+            mirror_blake3,
             published_at_unix: published_at,
             archive_head,
             mirror_blocks: published_blocks,
@@ -6041,6 +7711,9 @@ impl Service {
             &checkpoint,
         )?);
         self.checkpoint_generation_floor = checkpoint.generation;
+        self.verify_steady_state(&source, &checkpoint).await?;
+        self.steady_audit_generation = Some(checkpoint.generation);
+        self.steady_audit_cursor = 0;
         delete_publish_intent(&self.checkpoint_store, self.intent_revision)?;
         self.intent_revision = None;
         self.checkpoint = Some(checkpoint.clone());
@@ -6064,43 +7737,221 @@ impl Service {
         self.publish_api_snapshot(&source, &checkpoint, true).await
     }
 
+    async fn ensure_published_objects<S: SourceChainView + ?Sized>(
+        &self,
+        source: &S,
+        head_ipfs_cid: &str,
+        head_bytes: &[u8],
+        published_blocks: &[PublishedBlockV1],
+    ) -> Result<(), GovernanceDagServiceError> {
+        self.ensure_published_object(
+            "governance-dag-head.to",
+            "Governance DAG head",
+            head_ipfs_cid,
+            head_bytes,
+        )
+        .await?;
+        for published in published_blocks {
+            let position = usize::try_from(published.sequence).map_err(|_| {
+                GovernanceDagServiceError::State(
+                    "published mirror sequence exceeds host limits".to_owned(),
+                )
+            })?;
+            let source_block = source.blocks().get(position).ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "published mirror points outside its authenticated source prefix".to_owned(),
+                )
+            })?;
+            self.ensure_published_object(
+                &format!(
+                    "governance-dag-block-{:020}.to",
+                    source_block.block.sequence
+                ),
+                "Governance DAG block",
+                &published.ipfs_cid,
+                &source_block.bytes,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_published_object(
+        &self,
+        filename: &str,
+        label: &'static str,
+        cid: &str,
+        expected_bytes: &[u8],
+    ) -> Result<(), GovernanceDagServiceError> {
+        if self.verify_ipfs_object(cid, expected_bytes).await.is_ok() {
+            return Ok(());
+        }
+        let repaired = ipfs_add_verified(
+            &self.ipfs,
+            filename,
+            expected_bytes,
+            self.config.max_request_bytes,
+            self.config.max_response_bytes,
+        )
+        .await?;
+        if repaired != cid {
+            return Err(GovernanceDagServiceError::State(format!(
+                "repaired {label} produced a different content identifier"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn verify_ipfs_object(
+        &self,
+        cid: &str,
+        expected_bytes: &[u8],
+    ) -> Result<(), GovernanceDagServiceError> {
+        ipfs_verify_pin(&self.ipfs, cid, self.config.max_response_bytes).await?;
+        let expected_len = u64::try_from(expected_bytes.len()).map_err(|_| {
+            GovernanceDagServiceError::State(
+                "Governance DAG object length exceeds host limits".to_owned(),
+            )
+        })?;
+        let readback = ipfs_cat(
+            &self.ipfs,
+            cid,
+            expected_len,
+            self.config.max_response_bytes,
+        )
+        .await?;
+        if readback != expected_bytes {
+            return Err(GovernanceDagServiceError::State(
+                "Governance DAG IPFS object readback drifted".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn verify_steady_state(
         &self,
         source: &SourceSnapshot,
         checkpoint: &CheckpointBodyV1,
     ) -> Result<(), GovernanceDagServiceError> {
+        let checkpoint_source = validate_checkpoint_against_source(Some(checkpoint), source)?
+            .ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "validated checkpoint source prefix disappeared".to_owned(),
+                )
+            })?;
         let public = self.fetch_public_head().await?;
         require_public_matches_checkpoint(&public, checkpoint)?;
         if let PublicHead::Present { bytes, .. } = &public {
             validate_remote_head(bytes, source, &self.config)?;
         }
-        ipfs_verify_pin(
-            &self.ipfs,
-            &checkpoint.head_ipfs_cid,
-            self.config.max_response_bytes,
-        )
-        .await?;
-        let public_bytes = match public {
-            PublicHead::Present { bytes, .. } => bytes,
-            PublicHead::Missing => {
-                return Err(GovernanceDagServiceError::Conflict(
-                    "public head disappeared while verifying the checkpoint".to_owned(),
-                ));
-            }
-        };
-        let readback = ipfs_cat(
-            &self.ipfs,
-            &checkpoint.head_ipfs_cid,
-            public_bytes.len() as u64,
-            self.config.max_response_bytes,
-        )
-        .await?;
-        if readback != public_bytes {
-            return Err(GovernanceDagServiceError::State(
-                "checkpoint head IPFS readback drifted".to_owned(),
+        if matches!(public, PublicHead::Missing) {
+            return Err(GovernanceDagServiceError::Conflict(
+                "public head disappeared while verifying the checkpoint".to_owned(),
             ));
         }
-        verify_or_recover_mirror_file(&self.config, checkpoint, source)
+        // The checkpoint is the durable authority for these exact bytes. A
+        // missing pin or object after the public CAS is recoverable derived
+        // state, so deterministically restore it before exposing readiness.
+        self.ensure_published_objects(
+            &checkpoint_source,
+            &checkpoint.head_ipfs_cid,
+            &checkpoint.head_bytes,
+            &checkpoint.mirror_blocks,
+        )
+        .await?;
+        let _ = verify_or_recover_mirror_index_store(
+            &self.config,
+            &self.mirror_store,
+            checkpoint,
+            &checkpoint_source,
+        )?;
+        self.assert_durable_state_unchanged()?;
+        let public_readback = self.fetch_public_head().await?;
+        require_public_matches_checkpoint(&public_readback, checkpoint)?;
+        Ok(())
+    }
+
+    async fn verify_rotating_steady_state(
+        &mut self,
+        source: &SourceSnapshot,
+        checkpoint: &CheckpointBodyV1,
+    ) -> Result<(), GovernanceDagServiceError> {
+        let checkpoint_source = validate_checkpoint_against_source(Some(checkpoint), source)?
+            .ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "validated checkpoint source prefix disappeared".to_owned(),
+                )
+            })?;
+        let public = self.fetch_public_head().await?;
+        require_public_matches_checkpoint(&public, checkpoint)?;
+        if let PublicHead::Present { bytes, .. } = &public {
+            validate_remote_head(bytes, source, &self.config)?;
+            self.ensure_published_object(
+                "governance-dag-head.to",
+                "Governance DAG head",
+                &checkpoint.head_ipfs_cid,
+                &checkpoint.head_bytes,
+            )
+            .await?;
+        } else {
+            return Err(GovernanceDagServiceError::Conflict(
+                "public head disappeared while auditing the checkpoint".to_owned(),
+            ));
+        }
+
+        let retained_len = checkpoint.mirror_blocks.len();
+        let mut audited_entries = 0_usize;
+        let mut audited_bytes = 0_u64;
+        let mut cursor = self.steady_audit_cursor % retained_len;
+        while audited_entries < retained_len
+            && audited_entries < STEADY_IPFS_AUDIT_MAX_ENTRIES_PER_POLL
+        {
+            let published = &checkpoint.mirror_blocks[cursor];
+            let next_bytes = audited_bytes
+                .checked_add(published.encoded_len)
+                .ok_or_else(|| {
+                    GovernanceDagServiceError::State(
+                        "steady Governance DAG audit byte count overflowed".to_owned(),
+                    )
+                })?;
+            if audited_entries > 0 && next_bytes > STEADY_IPFS_AUDIT_MAX_BYTES_PER_POLL {
+                break;
+            }
+            let position = usize::try_from(published.sequence).map_err(|_| {
+                GovernanceDagServiceError::State(
+                    "checkpoint mirror sequence exceeds host limits".to_owned(),
+                )
+            })?;
+            let source_block = checkpoint_source.blocks.get(position).ok_or_else(|| {
+                GovernanceDagServiceError::Conflict(
+                    "checkpoint mirror points outside the authenticated source".to_owned(),
+                )
+            })?;
+            self.ensure_published_object(
+                &format!(
+                    "governance-dag-block-{:020}.to",
+                    source_block.block.sequence
+                ),
+                "Governance DAG block",
+                &published.ipfs_cid,
+                &source_block.bytes,
+            )
+            .await?;
+            audited_entries += 1;
+            audited_bytes = next_bytes;
+            cursor = (cursor + 1) % retained_len;
+        }
+        self.steady_audit_cursor = cursor;
+        let _ = verify_or_recover_mirror_index_store(
+            &self.config,
+            &self.mirror_store,
+            checkpoint,
+            &checkpoint_source,
+        )?;
+        self.assert_durable_state_unchanged()?;
+        let public_readback = self.fetch_public_head().await?;
+        require_public_matches_checkpoint(&public_readback, checkpoint)?;
+        Ok(())
     }
 
     async fn publish_api_snapshot(
@@ -6109,18 +7960,7 @@ impl Service {
         checkpoint: &CheckpointBodyV1,
         just_published: bool,
     ) -> Result<(), GovernanceDagServiceError> {
-        self.config.revalidate_state_root()?;
-        let bytes = read_rooted_file(
-            &self.config.state_root_guard,
-            Path::new(MIRROR_INDEX_FILE),
-            MUTABLE_STATE_MAX_BYTES,
-            true,
-        )?
-        .into_bytes();
-        self.config.revalidate_state_root()?;
-        let mirror: JsonValue = json::from_slice(&bytes).map_err(|err| {
-            GovernanceDagServiceError::State(format!("mirror JSON decode failed: {err}"))
-        })?;
+        let mirror = verify_mirror_index_store(&self.config, &self.mirror_store, checkpoint)?;
         let mut state = self.api.0.write().await;
         state.live = true;
         state.ready = true;
@@ -6137,16 +7977,72 @@ impl Service {
         if !just_published && state.metrics.last_publish_timestamp_seconds == 0 {
             state.metrics.last_publish_timestamp_seconds = checkpoint.published_at_unix;
         }
+        self.mirror_reader.mark_ready();
+        drop(state);
         Ok(())
     }
 }
 
-fn validate_checkpoint_against_source(
+fn authenticated_source_prefix<'a>(
+    source: &'a SourceSnapshot,
+    head_bytes: &[u8],
+    expected_block_count: u64,
+    expected_head_block_cid: &[u8],
+    expected_head_blake3: [u8; 32],
+    expected_chain_blake3: [u8; 32],
+    label: &'static str,
+) -> Result<SourcePrefix<'a>, GovernanceDagServiceError> {
+    if blake3_array(head_bytes) != expected_head_blake3 {
+        return Err(GovernanceDagServiceError::Conflict(format!(
+            "{label} head bytes do not match their authenticated digest"
+        )));
+    }
+    let head: GovernanceDagHeadV1 = decode_canonical(head_bytes, label)?;
+    head.validate().map_err(|error| {
+        GovernanceDagServiceError::Conflict(format!("{label} head is invalid: {error}"))
+    })?;
+    let block_count = usize::try_from(expected_block_count).map_err(|_| {
+        GovernanceDagServiceError::State(format!("{label} block count exceeds host limits"))
+    })?;
+    if expected_block_count == 0
+        || block_count > source.blocks.len()
+        || head.block_count != expected_block_count
+        || head.head_block_cid != expected_head_block_cid
+    {
+        return Err(GovernanceDagServiceError::Conflict(format!(
+            "{label} head metadata is not an authenticated source prefix"
+        )));
+    }
+    let blocks = &source.blocks[..block_count];
+    let chain = blocks
+        .iter()
+        .map(|block| block.block.clone())
+        .collect::<Vec<_>>();
+    validate_source_head_chain(&head, &chain).map_err(|error| {
+        GovernanceDagServiceError::Conflict(format!(
+            "{label} is not an authenticated source prefix: {error}"
+        ))
+    })?;
+    let chain_blake3 = source_chain_blake3_v1(head_bytes, blocks);
+    if chain_blake3 != expected_chain_blake3 {
+        return Err(GovernanceDagServiceError::Conflict(format!(
+            "{label} source-chain digest does not match its exact prefix bytes"
+        )));
+    }
+    Ok(SourcePrefix {
+        head,
+        head_bytes: head_bytes.to_vec(),
+        blocks,
+        chain_blake3,
+    })
+}
+
+fn validate_checkpoint_against_source<'a>(
     checkpoint: Option<&CheckpointBodyV1>,
-    source: &SourceSnapshot,
-) -> Result<(), GovernanceDagServiceError> {
+    source: &'a SourceSnapshot,
+) -> Result<Option<SourcePrefix<'a>>, GovernanceDagServiceError> {
     let Some(checkpoint) = checkpoint else {
-        return Ok(());
+        return Ok(None);
     };
     let source_block_count = u64::try_from(source.blocks.len()).map_err(|_| {
         GovernanceDagServiceError::State("source block count exceeds u64".to_owned())
@@ -6156,55 +8052,55 @@ fn validate_checkpoint_against_source(
             "source chain rolled back behind the authenticated checkpoint".to_owned(),
         ));
     }
-    if checkpoint.block_count == source_block_count
-        && checkpoint.source_index_blake3 != source.index_blake3
+    if canonical_ipfs_file_cid(&checkpoint.head_bytes).as_deref()
+        != Some(checkpoint.head_ipfs_cid.as_str())
     {
         return Err(GovernanceDagServiceError::Conflict(
-            "authenticated checkpoint source-index digest does not match the verified source"
-                .to_owned(),
+            "authenticated checkpoint IPFS CID does not match its exact head bytes".to_owned(),
         ));
     }
-    let position = usize::try_from(checkpoint.block_count - 1).map_err(|_| {
-        GovernanceDagServiceError::State("checkpoint count exceeds host limits".to_owned())
-    })?;
-    if source.blocks[position].block.block_cid != checkpoint.head_block_cid {
+    let prefix = authenticated_source_prefix(
+        source,
+        &checkpoint.head_bytes,
+        checkpoint.block_count,
+        &checkpoint.head_block_cid,
+        checkpoint.head_bytes_blake3,
+        checkpoint.source_chain_blake3,
+        "authenticated checkpoint",
+    )?;
+    let retained_source = retained_source_suffix(&prefix)?;
+    if checkpoint.mirror_blocks.len() != retained_source.len() {
         return Err(GovernanceDagServiceError::Conflict(
-            "source chain forked from the authenticated checkpoint".to_owned(),
+            "checkpoint mirror is not the exact version-1 retained source suffix".to_owned(),
         ));
     }
-    for published in &checkpoint.mirror_blocks {
-        let position = usize::try_from(published.sequence).map_err(|_| {
-            GovernanceDagServiceError::State("mirror sequence exceeds host limits".to_owned())
-        })?;
-        let source_block = source.blocks.get(position).ok_or_else(|| {
-            GovernanceDagServiceError::Conflict(
-                "checkpoint mirror points outside the source chain".to_owned(),
-            )
-        })?;
+    for (published, source_block) in checkpoint.mirror_blocks.iter().zip(retained_source) {
         let source_encoded_len = u64::try_from(source_block.bytes.len()).map_err(|_| {
             GovernanceDagServiceError::State("source block length exceeds u64".to_owned())
         })?;
         if source_block.block.block_cid != published.governance_block_cid
             || source_block.block.node.node_cid != published.governance_node_cid
             || source_block.payload_kind != published.payload_kind
+            || source_block.block.timestamp != published.timestamp
             || source_block.encoded_blake3 != published.encoded_blake3
             || source_encoded_len != published.encoded_len
+            || canonical_ipfs_file_cid(&source_block.bytes).as_deref()
+                != Some(published.ipfs_cid.as_str())
         {
             return Err(GovernanceDagServiceError::Conflict(
                 "checkpoint mirror no longer matches the verified source chain".to_owned(),
             ));
         }
     }
-    Ok(())
+    Ok(Some(prefix))
 }
 
-fn validate_intent_against_source(
+fn validate_intent_against_source<'a>(
     intent: &PublishIntentBodyV1,
     checkpoint: Option<&CheckpointBodyV1>,
     checkpoint_revision: Option<[u8; 32]>,
-    source: &SourceSnapshot,
-    config: &RuntimeConfig,
-) -> Result<(), GovernanceDagServiceError> {
+    source: &'a SourceSnapshot,
+) -> Result<SourcePrefix<'a>, GovernanceDagServiceError> {
     validate_publish_intent(intent)?;
     let source_block_count = u64::try_from(source.blocks.len()).map_err(|_| {
         GovernanceDagServiceError::State("source block count exceeds u64".to_owned())
@@ -6214,32 +8110,27 @@ fn validate_intent_against_source(
             "source rolled back behind the durable publish intent".to_owned(),
         ));
     }
-    if intent.target_block_count == source_block_count
-        && intent.target_source_index_blake3 != source.index_blake3
-    {
+    if intent.head_ipfs_cid.as_deref().is_some_and(|cid| {
+        canonical_ipfs_file_cid(&intent.target_head_bytes).as_deref() != Some(cid)
+    }) {
         return Err(GovernanceDagServiceError::Conflict(
-            "durable publish-intent source-index digest does not match the verified source"
-                .to_owned(),
+            "durable publish-intent IPFS CID does not match its exact head bytes".to_owned(),
         ));
     }
-    let target_position = usize::try_from(intent.target_block_count - 1).map_err(|_| {
-        GovernanceDagServiceError::State("intent count exceeds host limits".to_owned())
-    })?;
-    if source.blocks[target_position].block.block_cid != intent.target_head_block_cid
-        || blake3_array(&intent.target_head_bytes) != intent.target_head_blake3
-    {
-        return Err(GovernanceDagServiceError::Conflict(
-            "source forked from the durable publish intent".to_owned(),
-        ));
-    }
-    let target_head = validate_remote_head(&intent.target_head_bytes, source, config)?;
-    if target_head.block_count != intent.target_block_count
-        || target_head.head_block_cid != intent.target_head_block_cid
-    {
-        return Err(GovernanceDagServiceError::State(
-            "durable intent head metadata is inconsistent".to_owned(),
-        ));
-    }
+    let prefix = authenticated_source_prefix(
+        source,
+        &intent.target_head_bytes,
+        intent.target_block_count,
+        &intent.target_head_block_cid,
+        intent.target_head_blake3,
+        intent.target_source_chain_blake3,
+        "durable publish intent",
+    )?;
+    let completed_same_generation = checkpoint.is_some_and(|checkpoint| {
+        checkpoint.generation == intent.generation
+            && checkpoint.block_count == intent.target_block_count
+            && checkpoint.head_block_cid == intent.target_head_block_cid
+    });
     let expected_generation = match checkpoint {
         Some(checkpoint) if checkpoint.head_block_cid == intent.target_head_block_cid => {
             checkpoint.generation
@@ -6254,10 +8145,7 @@ fn validate_intent_against_source(
             "publish intent generation is not monotonic".to_owned(),
         ));
     }
-    if checkpoint.is_some_and(|checkpoint| {
-        checkpoint.generation == intent.generation
-            && checkpoint.head_block_cid == intent.target_head_block_cid
-    }) {
+    if completed_same_generation {
         if checkpoint.is_none_or(|checkpoint| checkpoint.archive_head != intent.archive_head) {
             return Err(GovernanceDagServiceError::State(
                 "completed checkpoint and retained publish intent disagree on archive progress"
@@ -6301,11 +8189,67 @@ fn validate_intent_against_source(
             }
         }
     }
+    if completed_same_generation {
+        let checkpoint = checkpoint.ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "completed publish intent lost its committed checkpoint".to_owned(),
+            )
+        })?;
+        if checkpoint.head_bytes_blake3 != intent.target_head_blake3
+            || intent.head_ipfs_cid.as_deref() != Some(checkpoint.head_ipfs_cid.as_str())
+            || checkpoint.source_chain_blake3 != intent.target_source_chain_blake3
+            || intent.blocks.iter().any(|block| block.ipfs_cid.is_none())
+            || intent
+                .blocks
+                .last()
+                .and_then(|block| block.sequence.checked_add(1))
+                != Some(intent.target_block_count)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "completed publish intent does not match its committed checkpoint".to_owned(),
+            ));
+        }
+    } else {
+        let expected_start = checkpoint.map_or(0, |checkpoint| checkpoint.block_count);
+        let expected_count = intent
+            .target_block_count
+            .checked_sub(expected_start)
+            .filter(|count| *count > 0)
+            .ok_or_else(|| {
+                GovernanceDagServiceError::State(
+                    "active publish intent does not advance its predecessor checkpoint".to_owned(),
+                )
+            })?;
+        let expected_count = usize::try_from(expected_count).map_err(|_| {
+            GovernanceDagServiceError::State(
+                "active publish-intent suffix length exceeds host limits".to_owned(),
+            )
+        })?;
+        if intent.blocks.len() != expected_count
+            || intent.blocks.first().map(|block| block.sequence) != Some(expected_start)
+            || intent
+                .blocks
+                .last()
+                .and_then(|block| block.sequence.checked_add(1))
+                != Some(intent.target_block_count)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "active publish intent is not the complete unpublished source suffix".to_owned(),
+            ));
+        }
+        if let Some(checkpoint) = checkpoint
+            && intent.previous_public_head_blake3 != Some(checkpoint.head_bytes_blake3)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "active publish intent does not bind its predecessor checkpoint".to_owned(),
+            ));
+        }
+    }
     for block in &intent.blocks {
         let position = usize::try_from(block.sequence).map_err(|_| {
             GovernanceDagServiceError::State("intent sequence exceeds host limits".to_owned())
         })?;
-        let source_block = source.blocks.get(position).ok_or_else(|| {
+        let source_block = prefix.blocks.get(position).ok_or_else(|| {
             GovernanceDagServiceError::Conflict("intent block is absent from the source".to_owned())
         })?;
         let source_encoded_len = u64::try_from(source_block.bytes.len()).map_err(|_| {
@@ -6314,15 +8258,19 @@ fn validate_intent_against_source(
         if source_block.block.block_cid != block.governance_block_cid
             || source_block.block.node.node_cid != block.governance_node_cid
             || source_block.payload_kind != block.payload_kind
+            || source_block.block.timestamp != block.timestamp
             || source_block.encoded_blake3 != block.encoded_blake3
             || source_encoded_len != block.encoded_len
+            || block.ipfs_cid.as_deref().is_some_and(|cid| {
+                canonical_ipfs_file_cid(&source_block.bytes).as_deref() != Some(cid)
+            })
         {
             return Err(GovernanceDagServiceError::Conflict(
                 "durable intent block no longer matches source bytes".to_owned(),
             ));
         }
     }
-    Ok(())
+    Ok(prefix)
 }
 
 fn require_public_matches_checkpoint(
@@ -6344,15 +8292,103 @@ fn require_public_matches_checkpoint(
     }
 }
 
-fn merge_published_blocks(
-    checkpoint: Option<&CheckpointBodyV1>,
-    intent: &PublishIntentBodyV1,
-    source: &SourceSnapshot,
+fn retained_source_suffix<'a, S: SourceChainView + ?Sized>(
+    source: &'a S,
+) -> Result<Vec<&'a SourceBlock>, GovernanceDagServiceError> {
+    retained_source_suffix_with_limits(
+        source,
+        GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1,
+        GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1,
+    )
+}
+
+fn retained_source_suffix_with_limits<'a, S: SourceChainView + ?Sized>(
+    source: &'a S,
     max_entries: usize,
     max_bytes: u64,
+) -> Result<Vec<&'a SourceBlock>, GovernanceDagServiceError> {
+    if max_entries == 0 || max_bytes == 0 {
+        return Err(GovernanceDagServiceError::State(
+            "mirror retention bounds must be non-zero".to_owned(),
+        ));
+    }
+    let mut retained = Vec::new();
+    let mut retained_bytes = 0_u64;
+    for source_block in source.blocks().iter().rev() {
+        if retained.len() == max_entries {
+            break;
+        }
+        let encoded_len = u64::try_from(source_block.bytes.len()).map_err(|_| {
+            GovernanceDagServiceError::State("source block length exceeds u64".to_owned())
+        })?;
+        let next = retained_bytes.checked_add(encoded_len).ok_or_else(|| {
+            GovernanceDagServiceError::State("mirror byte count overflow".to_owned())
+        })?;
+        if next > max_bytes {
+            if retained.is_empty() {
+                return Err(GovernanceDagServiceError::State(
+                    "the newest block alone exceeds the version-1 mirror byte ceiling".to_owned(),
+                ));
+            }
+            break;
+        }
+        retained.push(source_block);
+        retained_bytes = next;
+    }
+    retained.reverse();
+    Ok(retained)
+}
+
+fn published_block_from_source(
+    source: &SourceBlock,
+    ipfs_cid: String,
+) -> Result<PublishedBlockV1, GovernanceDagServiceError> {
+    Ok(PublishedBlockV1 {
+        sequence: source.block.sequence,
+        governance_block_cid: source.block.block_cid.clone(),
+        governance_node_cid: source.block.node.node_cid.clone(),
+        payload_kind: source.payload_kind.clone(),
+        timestamp: source.block.timestamp,
+        encoded_blake3: source.encoded_blake3,
+        encoded_len: u64::try_from(source.bytes.len()).map_err(|_| {
+            GovernanceDagServiceError::State("source block length exceeds u64".to_owned())
+        })?,
+        ipfs_cid,
+    })
+}
+
+fn insert_published_block(
+    by_sequence: &mut BTreeMap<u64, PublishedBlockV1>,
+    block: PublishedBlockV1,
+) -> Result<(), GovernanceDagServiceError> {
+    if let Some(existing) = by_sequence.get(&block.sequence) {
+        if existing != &block {
+            return Err(GovernanceDagServiceError::State(
+                "conflicting authenticated IPFS mappings exist for one source sequence".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
+    by_sequence.insert(block.sequence, block);
+    Ok(())
+}
+
+fn merge_published_blocks<S: SourceChainView + ?Sized>(
+    checkpoint: Option<&CheckpointBodyV1>,
+    intent: &PublishIntentBodyV1,
+    backfilled: &[PublishedBlockV1],
+    source: &S,
 ) -> Result<Vec<PublishedBlockV1>, GovernanceDagServiceError> {
-    let by_sequence = published_blocks_by_sequence(checkpoint, intent)?;
-    select_mirror_suffix(&by_sequence, source, max_entries, max_bytes)
+    let mut by_sequence = published_blocks_by_sequence(checkpoint, intent)?;
+    for block in backfilled {
+        insert_published_block(&mut by_sequence, block.clone())?;
+    }
+    select_mirror_suffix(
+        &by_sequence,
+        source,
+        GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1,
+        GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1,
+    )
 }
 
 fn published_blocks_by_sequence(
@@ -6362,11 +8398,7 @@ fn published_blocks_by_sequence(
     let mut by_sequence = BTreeMap::<u64, PublishedBlockV1>::new();
     if let Some(checkpoint) = checkpoint {
         for block in &checkpoint.mirror_blocks {
-            if by_sequence.insert(block.sequence, block.clone()).is_some() {
-                return Err(GovernanceDagServiceError::State(
-                    "checkpoint mirror contains an equivocal sequence".to_owned(),
-                ));
-            }
+            insert_published_block(&mut by_sequence, block.clone())?;
         }
     }
     for block in &intent.blocks {
@@ -6375,8 +8407,8 @@ fn published_blocks_by_sequence(
                 "intent block was not pinned before checkpointing".to_owned(),
             )
         })?;
-        let published = (
-            block.sequence,
+        insert_published_block(
+            &mut by_sequence,
             PublishedBlockV1 {
                 sequence: block.sequence,
                 governance_block_cid: block.governance_block_cid.clone(),
@@ -6387,21 +8419,14 @@ fn published_blocks_by_sequence(
                 encoded_len: block.encoded_len,
                 ipfs_cid,
             },
-        );
-        if let Some(previous) = by_sequence.insert(published.0, published.1.clone())
-            && previous != published.1
-        {
-            return Err(GovernanceDagServiceError::State(
-                "publish intent equivocates with the checkpoint mirror".to_owned(),
-            ));
-        }
+        )?;
     }
     Ok(by_sequence)
 }
 
-fn select_mirror_suffix(
+fn select_mirror_suffix<S: SourceChainView + ?Sized>(
     by_sequence: &BTreeMap<u64, PublishedBlockV1>,
-    source: &SourceSnapshot,
+    source: &S,
     max_entries: usize,
     max_bytes: u64,
 ) -> Result<Vec<PublishedBlockV1>, GovernanceDagServiceError> {
@@ -6412,7 +8437,7 @@ fn select_mirror_suffix(
     }
     let mut retained_sequences = Vec::new();
     let mut retained_bytes = 0_u64;
-    for source_block in source.blocks.iter().rev() {
+    for source_block in source.blocks().iter().rev() {
         if retained_sequences.len() == max_entries {
             break;
         }
@@ -6425,7 +8450,7 @@ fn select_mirror_suffix(
         if next > max_bytes {
             if retained_sequences.is_empty() {
                 return Err(GovernanceDagServiceError::State(
-                    "the head block alone exceeds mirror_max_bytes".to_owned(),
+                    "the newest block alone exceeds the version-1 mirror byte ceiling".to_owned(),
                 ));
             }
             break;
@@ -6446,9 +8471,9 @@ fn select_mirror_suffix(
         .collect()
 }
 
-fn validate_block_prefix_archive_against_source(
+fn validate_block_prefix_archive_against_source<S: SourceChainView + ?Sized>(
     archive: &SignedBlockPrefixArchiveV1,
-    source: &SourceSnapshot,
+    source: &S,
 ) -> Result<(), GovernanceDagServiceError> {
     let target_count = usize::try_from(archive.target_block_count).map_err(|_| {
         GovernanceDagServiceError::State(
@@ -6457,7 +8482,7 @@ fn validate_block_prefix_archive_against_source(
     })?;
     let target = target_count
         .checked_sub(1)
-        .and_then(|position| source.blocks.get(position))
+        .and_then(|position| source.blocks().get(position))
         .ok_or_else(|| {
             GovernanceDagServiceError::Conflict(
                 "block-prefix archive target is outside the verified source".to_owned(),
@@ -6469,14 +8494,14 @@ fn validate_block_prefix_archive_against_source(
         usize::try_from(archive.predecessor_block_count)
             .ok()
             .and_then(|count| count.checked_sub(1))
-            .and_then(|position| source.blocks.get(position))
+            .and_then(|position| source.blocks().get(position))
             .is_some_and(|block| {
                 block.block.block_cid.as_slice() == archive.predecessor_head_block_cid.as_slice()
             })
     };
     if target.block.block_cid != archive.target_head_block_cid
-        || (target_count == source.blocks.len()
-            && archive.target_source_index_blake3 != source.index_blake3)
+        || (target_count == source.blocks().len()
+            && archive.target_source_chain_blake3 != source.chain_blake3())
         || !predecessor_matches
     {
         return Err(GovernanceDagServiceError::Conflict(
@@ -6489,7 +8514,7 @@ fn validate_block_prefix_archive_against_source(
                 "block-prefix archive sequence exceeds host limits".to_owned(),
             )
         })?;
-        let source_block = source.blocks.get(position).ok_or_else(|| {
+        let source_block = source.blocks().get(position).ok_or_else(|| {
             GovernanceDagServiceError::Conflict(
                 "block-prefix archive points outside the verified source".to_owned(),
             )
@@ -6511,8 +8536,8 @@ fn validate_block_prefix_archive_against_source(
     Ok(())
 }
 
-fn block_prefix_archive_entries(
-    source: &SourceSnapshot,
+fn block_prefix_archive_entries<S: SourceChainView + ?Sized>(
+    source: &S,
     by_sequence: &BTreeMap<u64, PublishedBlockV1>,
     start_sequence: u64,
     end_sequence: u64,
@@ -6533,7 +8558,7 @@ fn block_prefix_archive_entries(
                     "block-prefix archive sequence exceeds host limits".to_owned(),
                 )
             })?;
-            let source_block = source.blocks.get(position).ok_or_else(|| {
+            let source_block = source.blocks().get(position).ok_or_else(|| {
                 GovernanceDagServiceError::State(
                     "block-prefix archive source range is incomplete".to_owned(),
                 )
@@ -6568,13 +8593,12 @@ fn estimated_block_prefix_archive_entry_bytes(
         })
 }
 
-fn mirror_index_value(
-    source: &SourceSnapshot,
+fn mirror_index_value<S: SourceChainView + ?Sized>(
+    source: &S,
     blocks: &[PublishedBlockV1],
     archive_head: &BlockPrefixArchiveHeadV1,
     generation: u64,
     head_ipfs_cid: &str,
-    public_token: &str,
     published_at: u64,
 ) -> Result<JsonValue, GovernanceDagServiceError> {
     if blocks.is_empty() {
@@ -6588,7 +8612,7 @@ fn mirror_index_value(
     let mut by_digest = JsonMap::new();
     let mut by_kind_positions = BTreeMap::<String, Vec<JsonValue>>::new();
     let source_by_sequence = source
-        .blocks
+        .blocks()
         .iter()
         .map(|source_block| (source_block.block.sequence, source_block))
         .collect::<BTreeMap<_, _>>();
@@ -6659,21 +8683,20 @@ fn mirror_index_value(
     let mut head = JsonMap::new();
     head.insert(
         "head_block_cid_hex".into(),
-        JsonValue::from(hex::encode(&source.head.head_block_cid)),
+        JsonValue::from(hex::encode(&source.head().head_block_cid)),
     );
     head.insert(
         "block_count".into(),
-        JsonValue::from(source.head.block_count),
+        JsonValue::from(source.head().block_count),
     );
     head.insert(
         "generated_at".into(),
-        JsonValue::from(source.head.generated_at),
+        JsonValue::from(source.head().generated_at),
     );
     head.insert("ipfs_cid".into(), JsonValue::from(head_ipfs_cid));
-    head.insert("public_token".into(), JsonValue::from(public_token));
     head.insert(
         "blake3".into(),
-        JsonValue::from(hex::encode(blake3_array(&source.head_bytes))),
+        JsonValue::from(hex::encode(blake3_array(source.head_bytes()))),
     );
     validate_block_prefix_archive_head(archive_head)?;
     let mut archive = JsonMap::new();
@@ -6709,7 +8732,7 @@ fn mirror_index_value(
     root.insert("archive".into(), JsonValue::Object(archive));
     root.insert(
         "block_count".into(),
-        JsonValue::from(source.head.block_count),
+        JsonValue::from(source.head().block_count),
     );
     root.insert(
         "indexed_block_count".into(),
@@ -6723,97 +8746,123 @@ fn mirror_index_value(
     Ok(JsonValue::Object(root))
 }
 
-fn verify_mirror_file(
+fn verify_mirror_index_store(
     config: &RuntimeConfig,
+    store: &TwoSlotStoreV1,
     checkpoint: &CheckpointBodyV1,
-) -> Result<(), GovernanceDagServiceError> {
-    config.revalidate_state_root()?;
-    let bytes = read_rooted_file(
-        &config.state_root_guard,
-        Path::new(MIRROR_INDEX_FILE),
-        MUTABLE_STATE_MAX_BYTES,
-        true,
-    )?
-    .into_bytes();
-    config.revalidate_state_root()?;
-    if blake3_array(&bytes) != checkpoint.mirror_blake3 {
-        return Err(GovernanceDagServiceError::State(
-            "mirror index digest does not match the authenticated checkpoint".to_owned(),
-        ));
-    }
-    let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
-        GovernanceDagServiceError::State(format!("mirror index JSON is invalid: {err}"))
-    })?;
-    let expected_head_cid = hex::encode(&checkpoint.head_block_cid);
-    let expected_archive_digest = hex::encode(checkpoint.archive_head.digest);
-    let archive = value.get("archive");
-    let archive_identity_matches = archive
-        .and_then(|archive| archive.get("generation"))
-        .and_then(JsonValue::as_u64)
-        == Some(checkpoint.archive_head.generation)
-        && archive
-            .and_then(|archive| archive.get("archived_block_count"))
-            .and_then(JsonValue::as_u64)
-            == Some(checkpoint.archive_head.archived_block_count)
-        && if checkpoint.archive_head.generation == 0 {
-            archive
-                .and_then(|archive| archive.get("blake3"))
-                .is_some_and(JsonValue::is_null)
-                && archive
-                    .and_then(|archive| archive.get("ipfs_cid"))
-                    .is_some_and(JsonValue::is_null)
-        } else {
-            archive
-                .and_then(|archive| archive.get("blake3"))
-                .and_then(JsonValue::as_str)
-                == Some(expected_archive_digest.as_str())
-                && archive
-                    .and_then(|archive| archive.get("ipfs_cid"))
-                    .and_then(JsonValue::as_str)
-                    == Some(checkpoint.archive_head.ipfs_cid.as_str())
-        };
-    if value.get("schema").and_then(JsonValue::as_str) != Some(MIRROR_INDEX_SCHEMA)
-        || value.get("generation").and_then(JsonValue::as_u64) != Some(checkpoint.generation)
-        || !archive_identity_matches
-        || value
-            .get("head")
-            .and_then(|head| head.get("head_block_cid_hex"))
-            .and_then(JsonValue::as_str)
-            != Some(expected_head_cid.as_str())
-    {
-        return Err(GovernanceDagServiceError::State(
-            "mirror index metadata is inconsistent with the checkpoint".to_owned(),
-        ));
-    }
-    Ok(())
+) -> Result<JsonValue, GovernanceDagServiceError> {
+    let (_, payload) = load_mirror_index_store(config, store)?;
+    verify_mirror_payload_against_checkpoint(&payload, checkpoint)
 }
 
-fn verify_or_recover_mirror_file(
+fn compare_and_swap_mirror_index_store(
     config: &RuntimeConfig,
-    checkpoint: &CheckpointBodyV1,
-    source: &SourceSnapshot,
-) -> Result<(), GovernanceDagServiceError> {
+    store: &TwoSlotStoreV1,
+    expected: &TwoSlotSnapshotV1,
+    desired: &MirrorIndexStorePayloadV1,
+) -> Result<MirrorIndexStorePayloadV1, GovernanceDagServiceError> {
+    let encoded = encode_mirror_index_store_payload(desired)?;
     config.revalidate_state_root()?;
-    match config
-        .state_root_guard
-        .rooted_directory()
-        .private_file_identity(OsStr::new(MIRROR_INDEX_FILE))
-    {
-        Ok(Some(_)) => return verify_mirror_file(config, checkpoint),
-        Ok(None) => {}
-        Err(error) => {
-            return Err(GovernanceDagServiceError::Filesystem(format!(
-                "cannot inspect rooted mirror index during recovery: {error}"
-            )));
-        }
+    let committed = store
+        .compare_and_swap(expected, &encoded)
+        .map_err(|error| {
+            GovernanceDagServiceError::State(format!(
+                "mirror two-slot compare-and-swap failed: {error}"
+            ))
+        })?;
+    let readback = decode_mirror_index_store_payload(committed.payload())?;
+    config.revalidate_state_root()?;
+    if readback != *desired {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot compare-and-swap readback diverged".to_owned(),
+        ));
     }
-    config.revalidate_state_root()?;
-    if source.head.head_block_cid != checkpoint.head_block_cid
-        || source.head.block_count != checkpoint.block_count
-        || blake3_array(&source.head_bytes) != checkpoint.head_bytes_blake3
+    Ok(readback)
+}
+
+fn commit_mirror_index_store(
+    config: &RuntimeConfig,
+    store: &TwoSlotStoreV1,
+    checkpoint: Option<&CheckpointBodyV1>,
+    intent: &PublishIntentBodyV1,
+    canonical_json: Vec<u8>,
+) -> Result<(), GovernanceDagServiceError> {
+    let expected_generation = match checkpoint {
+        Some(checkpoint) => checkpoint.generation.checked_add(1).ok_or_else(|| {
+            GovernanceDagServiceError::State("checkpoint generation exhausted".to_owned())
+        })?,
+        None => 1,
+    };
+    if intent.generation != expected_generation {
+        return Err(GovernanceDagServiceError::State(
+            "mirror update is not the direct successor of the authenticated checkpoint".to_owned(),
+        ));
+    }
+    let intent_bytes = norito::to_bytes(intent).map_err(|error| {
+        GovernanceDagServiceError::State(format!(
+            "publish intent encode failed while binding mirror candidate: {error}"
+        ))
+    })?;
+    let desired = MirrorIndexStorePayloadV1::committed(
+        intent.generation,
+        blake3_array(&intent_bytes),
+        canonical_json,
+    )?;
+    verify_mirror_payload_against_intent(&desired, intent)?;
+    let (snapshot, current) = load_mirror_index_store(config, store)?;
+    if current == desired {
+        return Ok(());
+    }
+
+    if current.is_empty() {
+        // A hard-cut deployment deliberately starts empty even when its sealed
+        // checkpoint predates this local representation. The checkpoint and
+        // active intent together authorize installing the direct successor.
+    } else if current.checkpoint_generation == intent.generation {
+        if checkpoint.is_some_and(|checkpoint| checkpoint.generation == intent.generation) {
+            return Err(GovernanceDagServiceError::State(
+                "authenticated mirror generation cannot be rewritten".to_owned(),
+            ));
+        }
+        // A crash may leave a candidate for this exact sealed intent. Only the
+        // same intent generation may replace it before checkpoint commit.
+        verify_mirror_payload_against_intent(&current, intent)?;
+    } else if let Some(checkpoint) = checkpoint
+        && current.checkpoint_generation == checkpoint.generation
+    {
+        let _ = verify_mirror_payload_against_checkpoint(&current, checkpoint)?;
+    } else {
+        return Err(GovernanceDagServiceError::State(
+            "mirror two-slot predecessor is neither empty, checkpointed, nor owned by the active intent"
+                .to_owned(),
+        ));
+    }
+
+    let committed = compare_and_swap_mirror_index_store(config, store, &snapshot, &desired)?;
+    verify_mirror_payload_against_intent(&committed, intent)
+}
+
+fn verify_or_recover_mirror_index_store<S: SourceChainView + ?Sized>(
+    config: &RuntimeConfig,
+    store: &TwoSlotStoreV1,
+    checkpoint: &CheckpointBodyV1,
+    source: &S,
+) -> Result<JsonValue, GovernanceDagServiceError> {
+    let (snapshot, current) = load_mirror_index_store(config, store)?;
+    if let Ok(value) = verify_mirror_payload_against_checkpoint(&current, checkpoint) {
+        return Ok(value);
+    }
+    if !current.is_empty() && current.checkpoint_generation > checkpoint.generation {
+        return Err(GovernanceDagServiceError::State(
+            "local mirror generation is ahead of the authenticated checkpoint".to_owned(),
+        ));
+    }
+    if source.head().head_block_cid != checkpoint.head_block_cid
+        || source.head().block_count != checkpoint.block_count
+        || blake3_array(source.head_bytes()) != checkpoint.head_bytes_blake3
     {
         return Err(GovernanceDagServiceError::State(
-            "missing mirror cannot be rebuilt from a source at a different head".to_owned(),
+            "derived mirror cannot be rebuilt from a source at a different head".to_owned(),
         ));
     }
     let mirror = mirror_index_value(
@@ -6822,7 +8871,6 @@ fn verify_or_recover_mirror_file(
         &checkpoint.archive_head,
         checkpoint.generation,
         &checkpoint.head_ipfs_cid,
-        &checkpoint.public_head_token,
         checkpoint.published_at_unix,
     )?;
     let bytes = json::to_json_pretty(&mirror)
@@ -6835,17 +8883,12 @@ fn verify_or_recover_mirror_file(
             "deterministic mirror recovery does not match the checkpoint digest".to_owned(),
         ));
     }
-    config.revalidate_state_root()?;
-    write_rooted_atomic_secret(
-        &config.state_root_guard,
-        Path::new(MIRROR_INDEX_FILE),
-        &bytes,
-    )?;
-    config.revalidate_state_root()?;
-    verify_mirror_file(config, checkpoint)
+    let desired = MirrorIndexStorePayloadV1::committed(checkpoint.generation, [0; 32], bytes)?;
+    let committed = compare_and_swap_mirror_index_store(config, store, &snapshot, &desired)?;
+    verify_mirror_payload_against_checkpoint(&committed, checkpoint)
 }
 
-fn service_router(state: ApiState) -> Router {
+fn service_router(state: ServiceApiState) -> Router {
     Router::new()
         .route("/healthz", get(health_handler))
         .route("/readyz", get(readiness_handler))
@@ -6874,8 +8917,8 @@ fn service_router(state: ApiState) -> Router {
         .with_state(state)
 }
 
-async fn health_handler(State(state): State<ApiState>) -> Response {
-    let snapshot = state.0.read().await;
+async fn health_handler(State(state): State<ServiceApiState>) -> Response {
+    let snapshot = state.telemetry.0.read().await;
     let mut value = JsonMap::new();
     value.insert(
         "schema".into(),
@@ -6893,14 +8936,15 @@ async fn health_handler(State(state): State<ApiState>) -> Response {
     )
 }
 
-async fn readiness_handler(State(state): State<ApiState>) -> Response {
-    let snapshot = state.0.read().await;
+async fn readiness_handler(State(state): State<ServiceApiState>) -> Response {
+    let ready = authenticated_mirror_snapshot(&state).await.is_ok();
+    let snapshot = state.telemetry.0.read().await;
     let mut value = JsonMap::new();
     value.insert(
         "schema".into(),
         JsonValue::from("sorafs.governance_dag.readiness.v1"),
     );
-    value.insert("ready".into(), JsonValue::from(snapshot.ready));
+    value.insert("ready".into(), JsonValue::from(ready));
     value.insert(
         "error".into(),
         snapshot
@@ -6909,7 +8953,7 @@ async fn readiness_handler(State(state): State<ApiState>) -> Response {
             .map_or(JsonValue::Null, |error| JsonValue::from(error.clone())),
     );
     json_response(
-        if snapshot.ready {
+        if ready {
             StatusCode::OK
         } else {
             StatusCode::SERVICE_UNAVAILABLE
@@ -6919,7 +8963,11 @@ async fn readiness_handler(State(state): State<ApiState>) -> Response {
     )
 }
 
-async fn metrics_handler(State(state): State<ApiState>) -> Response {
+async fn metrics_handler(State(state): State<ServiceApiState>) -> Response {
+    metrics_response(&state.telemetry).await
+}
+
+async fn metrics_response(state: &ApiState) -> Response {
     let snapshot = state.0.read().await;
     let metrics = snapshot.metrics.clone();
     let mut body = format!(
@@ -6988,11 +9036,29 @@ sorafs_governance_dag_mirror_drift {}\n",
     response
 }
 
-async fn dashboard_handler(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    let snapshot = state.0.read().await;
-    let Some(mirror) = &snapshot.mirror else {
-        return json_error(StatusCode::SERVICE_UNAVAILABLE, "mirror is not ready");
+async fn authenticated_mirror_snapshot(
+    state: &ServiceApiState,
+) -> Result<GovernanceDagMirrorSnapshotV1, Response> {
+    let reader = state.mirror_reader.clone();
+    match tokio::task::spawn_blocking(move || reader.read()).await {
+        Ok(Ok(Some(snapshot))) => Ok(snapshot),
+        Ok(Ok(None)) | Ok(Err(_)) => Err(json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authenticated Governance DAG mirror is not ready",
+        )),
+        Err(_) => Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authenticated Governance DAG mirror read failed",
+        )),
+    }
+}
+
+async fn dashboard_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
+    let snapshot = match authenticated_mirror_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
+        Err(response) => return response,
     };
+    let mirror = snapshot.mirror();
     let blocks = mirror
         .get("blocks")
         .and_then(JsonValue::as_array)
@@ -7033,14 +9099,12 @@ async fn dashboard_handler(State(state): State<ApiState>, headers: HeaderMap) ->
     json_response(StatusCode::OK, JsonValue::Object(value), &headers)
 }
 
-async fn head_handler(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    let snapshot = state.0.read().await;
-    let Some(head) = snapshot
-        .mirror
-        .as_ref()
-        .and_then(|mirror| mirror.get("head"))
-        .cloned()
-    else {
+async fn head_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
+    let snapshot = match authenticated_mirror_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
+        Err(response) => return response,
+    };
+    let Some(head) = snapshot.mirror().get("head").cloned() else {
         return json_error(StatusCode::SERVICE_UNAVAILABLE, "mirror is not ready");
     };
     let mut value = JsonMap::new();
@@ -7053,7 +9117,7 @@ async fn head_handler(State(state): State<ApiState>, headers: HeaderMap) -> Resp
 }
 
 async fn block_handler(
-    State(state): State<ApiState>,
+    State(state): State<ServiceApiState>,
     headers: HeaderMap,
     AxumPath(cid): AxumPath<String>,
 ) -> Response {
@@ -7061,7 +9125,7 @@ async fn block_handler(
 }
 
 async fn node_handler(
-    State(state): State<ApiState>,
+    State(state): State<ServiceApiState>,
     headers: HeaderMap,
     AxumPath(cid): AxumPath<String>,
 ) -> Response {
@@ -7069,7 +9133,7 @@ async fn node_handler(
 }
 
 async fn lookup_handler(
-    state: ApiState,
+    state: ServiceApiState,
     headers: HeaderMap,
     cid: String,
     field: &str,
@@ -7081,11 +9145,13 @@ async fn lookup_handler(
             "lookup CID must be lowercase 32-byte hex",
         );
     }
-    let snapshot = state.0.read().await;
+    let snapshot = match authenticated_mirror_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
+        Err(response) => return response,
+    };
     let block = snapshot
-        .mirror
-        .as_ref()
-        .and_then(|mirror| mirror.get("blocks"))
+        .mirror()
+        .get("blocks")
         .and_then(JsonValue::as_array)
         .and_then(|blocks| {
             blocks
@@ -7109,7 +9175,7 @@ async fn lookup_handler(
 }
 
 async fn digest_handler(
-    State(state): State<ApiState>,
+    State(state): State<ServiceApiState>,
     headers: HeaderMap,
     AxumPath(digest): AxumPath<String>,
 ) -> Response {
@@ -7119,11 +9185,13 @@ async fn digest_handler(
             "encoded digest must be lowercase 32-byte hex",
         );
     }
-    let snapshot = state.0.read().await;
+    let snapshot = match authenticated_mirror_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
+        Err(response) => return response,
+    };
     let blocks = snapshot
-        .mirror
-        .as_ref()
-        .and_then(|mirror| mirror.get("blocks"))
+        .mirror()
+        .get("blocks")
         .and_then(JsonValue::as_array)
         .map(|blocks| {
             blocks
@@ -7149,11 +9217,12 @@ async fn digest_handler(
     json_response(StatusCode::OK, JsonValue::Object(value), &headers)
 }
 
-async fn checkpoint_handler(State(state): State<ApiState>, headers: HeaderMap) -> Response {
-    let snapshot = state.0.read().await;
-    let Some(checkpoint) = &snapshot.checkpoint else {
-        return json_error(StatusCode::SERVICE_UNAVAILABLE, "checkpoint is not ready");
+async fn checkpoint_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
+    let snapshot = match authenticated_mirror_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
+        Err(response) => return response,
     };
+    let checkpoint = snapshot.checkpoint();
     let mut value = JsonMap::new();
     value.insert(
         "schema".into(),
@@ -7263,3158 +9332,9 @@ fn empty_response(status: StatusCode) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        FilesystemGovernancePublisher, GovernanceDagCanonicalRequestHeaderV1,
-        GovernanceDagRuntimeSigner, GovernancePublisher,
-        governance::{
-            qualify_governance_dag_runtime_checkpoint_store,
-            qualify_governance_dag_runtime_signer_provider,
-        },
-    };
-    use axum::{
-        body::Bytes,
-        extract::{RawQuery, State},
-        http::{HeaderName, Request},
-        response::Redirect,
-        routing::{any, post},
-    };
-    use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
-    use norito::codec::Encode as _;
-    use sorafs_manifest::{
-        GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
-        GovernanceDagSubmissionOriginV1, GovernanceDagSubmissionProvenanceV1, GovernanceLogNodeV1,
-        GovernanceLogSignatureV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
-        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
-        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
-        deal::{
-            DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
-            DealSettlementStatusV1, DealSettlementV1, XorQuantity,
-        },
-        governance_dag_block_cid_v1, governance_dag_submission_account_digest_v1,
-    };
-    use std::{
-        collections::{HashMap, VecDeque},
-        fmt,
-        process::{Child, Command, Stdio},
-        sync::{
-            Arc, Barrier, Mutex as StdMutex,
-            atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
-        },
-    };
-    use tempfile::TempDir;
-    use tokio::{sync::Mutex, task::JoinHandle};
-    use tower::ServiceExt as _;
-    #[test]
-    fn service_default_request_bound_covers_single_entry_archive_ceiling() {
-        let service = SorafsGovernanceDagService::default();
-        let max_request_bytes = usize::try_from(service.max_request_bytes.0)
-            .expect("default request ceiling fits usize");
-        assert_eq!(max_request_bytes, BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1);
-        assert!(
-            max_request_bytes > GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
-            "archive publication has an explicit wrapper allowance"
-        );
-        let archive_decode_limits =
-            block_prefix_archive_decode_limits(BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1);
-        assert!(archive_decode_limits.max_total_elements() > MAX_REPUTATION_TRUST_EDGES);
-    }
-
-    #[test]
-    fn maximum_admitted_block_has_exact_archive_and_request_boundary() {
-        let request_ceiling = u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
-            .expect("archive request ceiling fits u64");
-        assert_eq!(
-            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1
-                - GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1,
-            BLOCK_PREFIX_ARCHIVE_CANONICAL_OVERHEAD_BYTES_V1,
-        );
-        assert_eq!(
-            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1 - BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1,
-            BLOCK_PREFIX_ARCHIVE_MULTIPART_OVERHEAD_BYTES_V1,
-        );
-        assert!(block_prefix_archive_lengths_fit(
-            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1,
-            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1,
-            request_ceiling,
-        ));
-        assert!(!block_prefix_archive_lengths_fit(
-            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1 + 1,
-            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1,
-            request_ceiling,
-        ));
-        assert!(!block_prefix_archive_lengths_fit(
-            BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1,
-            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1 + 1,
-            request_ceiling,
-        ));
-    }
-    // Keep one target-gated assertion for every ABI branch. Overlapping branches
-    // fail with duplicate definitions; missing branches fail to resolve the flag.
-    #[cfg(all(
-        target_os = "linux",
-        any(
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "m68k",
-            target_arch = "powerpc",
-            target_arch = "powerpc64"
-        )
-    ))]
-    #[test]
-    fn linux_no_follow_flag_matches_low_flag_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x8000);
-    }
-    #[cfg(all(
-        target_os = "linux",
-        not(any(
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "m68k",
-            target_arch = "powerpc",
-            target_arch = "powerpc64"
-        ))
-    ))]
-    #[test]
-    fn linux_no_follow_flag_matches_generic_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-    }
-    #[cfg(all(
-        target_os = "android",
-        any(target_arch = "aarch64", target_arch = "arm")
-    ))]
-    #[test]
-    fn android_arm_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x8000);
-    }
-    #[cfg(all(
-        target_os = "android",
-        any(target_arch = "x86", target_arch = "x86_64")
-    ))]
-    #[test]
-    fn android_x86_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-    }
-    #[cfg(all(target_os = "android", target_arch = "riscv64"))]
-    #[test]
-    fn android_riscv64_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x400000);
-    }
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "riscv32", target_arch = "riscv64")
-    ))]
-    #[test]
-    fn linux_riscv_no_follow_flag_remains_generic_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-    }
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))]
-    #[test]
-    fn apple_and_bsd_no_follow_flag_matches_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x100);
-    }
-    const TEST_CID_PAYLOAD: &str = "bafkreibdt5m62vphg7dxcr6pkwwqygydbnwx5z2iu5bgsuxzxbjnlkjv4u";
-    const TEST_CID_BLOCK: &str = "bafkreicjnlfibzgy6kp3r2gnqfwdv62i2pyqhfylhixocyambdfgomtn5y";
-    const TEST_CID_HEAD: &str = "bafkreie7fzwthi3rp3ucmnj2ibf2iymndlxlnb4226jwxtuo2x2gqfesju";
-
-    fn xor(value: &str) -> XorQuantity {
-        value.parse().expect("canonical XOR quantity")
-    }
-    const TEST_CID_OLD: &str = "bafkreiglubvvonx26z7fjmd3kypk5fbzlz3uyul2pwiquvbwtyjghth32q";
-    const TEST_CID_NEW: &str = "bafkreiarkb5a4l26nhk57jakmkq3263o4v7gxtmfyz6jxbbrwnx76ioeg4";
-    const TEST_CID_ATTACKER: &str = "bafkreihgjoryus4vrrzlydkccfilursggzbcjbpnol5locdmo2i44qaizq";
-    const KUBO_INTEGRATION_ENV: &str = "SORAFS_RUN_KUBO_INTEGRATION";
-    const KUBO_BIN_ENV: &str = "SORAFS_KUBO_BIN";
-    const KUBO_IPNS_KEY_ALIAS: &str = "sorafs-gdag-integration";
-    const TEST_IPFS_AUTH_HANDLE: &str = "vault:governance/ipfs:primary";
-    const TEST_HEAD_AUTH_HANDLE: &str = "vault:governance/head:primary";
-    const TEST_CHECKPOINT_STORE_HANDLE: &str = "kms:governance/checkpoint:primary";
-    const TEST_PRODUCER_SIGNER_HANDLE: &str = "hsm:governance/source-signer:primary";
-    const TEST_PRODUCER_PEER_ID: &str = "12D3KooWGovernanceServiceTest";
-    const TEST_AUTH_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
-        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x81; 32]);
-    const TEST_STORE_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
-        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x82; 32]);
-    const TEST_PRODUCER_SIGNER_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
-        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x83; 32]);
-
-    struct TestAuthenticator {
-        handle: String,
-        private_key: PrivateKey,
-        public_key: [u8; 32],
-        provider_secret: StdMutex<String>,
-        nonce_counter: AtomicU64,
-        qualification_revision: AtomicU64,
-        qualification_refuse: AtomicBool,
-        drift_during_authentication: AtomicBool,
-        refuse: AtomicBool,
-    }
-
-    impl fmt::Debug for TestAuthenticator {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("TestAuthenticator")
-                .field("handle", &self.handle)
-                .field("hsm", &"[REDACTED]")
-                .finish()
-        }
-    }
-
-    impl TestAuthenticator {
-        fn new(handle: &str, provider_secret: &str) -> Self {
-            let (private_key, public_key) = test_request_auth_keypair(handle);
-            Self {
-                handle: handle.to_owned(),
-                private_key,
-                public_key,
-                provider_secret: StdMutex::new(provider_secret.to_owned()),
-                nonce_counter: AtomicU64::new(1),
-                qualification_revision: AtomicU64::new(1),
-                qualification_refuse: AtomicBool::new(false),
-                drift_during_authentication: AtomicBool::new(false),
-                refuse: AtomicBool::new(false),
-            }
-        }
-
-        fn rotate(&self, provider_secret: &str) {
-            *self
-                .provider_secret
-                .lock()
-                .expect("lock test provider diagnostic") = provider_secret.to_owned();
-        }
-
-        fn signed_envelope(
-            &self,
-            request: &GovernanceDagCanonicalRequestV1,
-        ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String> {
-            let now = current_unix_timestamp_seconds();
-            let counter = self.nonce_counter.fetch_add(1, AtomicOrdering::SeqCst);
-            let mut nonce = blake3_array(self.handle.as_bytes());
-            nonce[..8].copy_from_slice(&counter.to_be_bytes());
-            let payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
-                request,
-                now,
-                now.saturating_add(15),
-                nonce,
-                self.public_key,
-            );
-            let signature =
-                IrohaSignature::try_new(&self.private_key, &payload).map_err(|_| "signing")?;
-            let signature: [u8; 64] = signature
-                .payload()
-                .try_into()
-                .map_err(|_| "signature length")?;
-            GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
-                request,
-                now,
-                now.saturating_add(15),
-                nonce,
-                self.public_key,
-                signature,
-            )
-            .map_err(str::to_owned)
-        }
-    }
-
-    fn test_request_auth_keypair(handle: &str) -> (PrivateKey, [u8; 32]) {
-        let seed = blake3_array(handle.as_bytes());
-        let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, &seed)
-            .expect("test request-auth Ed25519 seed is valid");
-        let keypair = KeyPair::from_private_key(private_key.clone())
-            .expect("derive test request-auth keypair");
-        let (algorithm, bytes) = keypair
-            .public_key()
-            .try_to_bytes()
-            .expect("encode test request-auth public key");
-        assert_eq!(algorithm, Algorithm::Ed25519);
-        let public_key = bytes
-            .try_into()
-            .expect("test Ed25519 public key has 32 bytes");
-        (private_key, public_key)
-    }
-
-    fn test_request_auth_public_key(handle: &str) -> [u8; 32] {
-        test_request_auth_keypair(handle).1
-    }
-
-    fn signed_test_request_auth_envelope(
-        handle: &str,
-        request: &GovernanceDagCanonicalRequestV1,
-        issued_at: u64,
-        expires_at: u64,
-        nonce: [u8; 32],
-    ) -> GovernanceDagRequestAuthenticationEnvelopeV1 {
-        let (private_key, public_key) = test_request_auth_keypair(handle);
-        let payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
-            request, issued_at, expires_at, nonce, public_key,
-        );
-        let signature = IrohaSignature::try_new(&private_key, &payload)
-            .expect("sign test request-auth payload");
-        let signature = signature
-            .payload()
-            .try_into()
-            .expect("test Ed25519 signature has 64 bytes");
-        GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
-            request, issued_at, expires_at, nonce, public_key, signature,
-        )
-        .expect("construct test request-auth envelope")
-    }
-
-    fn request_auth_header_fields(
-        envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
-    ) -> Vec<(String, Vec<u8>)> {
-        governance_dag_request_authentication_headers_v1(envelope)
-            .into_iter()
-            .map(|(name, value)| (name.to_owned(), value.into_bytes()))
-            .collect()
-    }
-
-    struct TestBackendRequest<'a> {
-        canonical: &'a GovernanceDagCanonicalRequestV1,
-        authentication_headers: &'a [(String, Vec<u8>)],
-        body: &'a [u8],
-    }
-
-    impl<'a> TestBackendRequest<'a> {
-        fn new(
-            canonical: &'a GovernanceDagCanonicalRequestV1,
-            authentication_headers: &'a [(String, Vec<u8>)],
-            body: &'a [u8],
-        ) -> Self {
-            Self {
-                canonical,
-                authentication_headers,
-                body,
-            }
-        }
-    }
-
-    fn verify_request_before_test_backend(
-        request: TestBackendRequest<'_>,
-        expected_scope: GovernanceDagAuthenticationScope,
-        policy: &GovernanceDagRequestAuthenticationPolicyV1,
-        now: u64,
-        replay_cache: &mut GovernanceDagRequestAuthenticationReplayCacheV1,
-        backend_calls: &AtomicU64,
-    ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
-        let mut receiver = GovernanceDagHttpRequestReceiverV1::try_new(
-            expected_scope,
-            1024 * 1024,
-            policy,
-            replay_cache,
-        )?;
-        let verified_request = receiver.verify_http_request(
-            request.canonical.method(),
-            request.canonical.canonical_url(),
-            request
-                .canonical
-                .selected_headers()
-                .iter()
-                .map(|header| (header.name(), header.value().as_bytes()))
-                .chain(
-                    request
-                        .authentication_headers
-                        .iter()
-                        .map(|(name, value)| (name.as_str(), value.as_slice())),
-                ),
-            request.body,
-            now,
-        )?;
-        if verified_request != *request.canonical {
-            return Err(GovernanceDagRequestAuthenticationErrorV1::RequestMismatch);
-        }
-        backend_calls.fetch_add(1, AtomicOrdering::SeqCst);
-        Ok(())
-    }
-
-    fn canonical_test_request(
-        scope: GovernanceDagAuthenticationScope,
-        method: &str,
-        url: &str,
-        headers: &[(&str, &str)],
-        body: &[u8],
-    ) -> GovernanceDagCanonicalRequestV1 {
-        let mut headers = headers
-            .iter()
-            .map(|(name, value)| {
-                GovernanceDagCanonicalRequestHeaderV1::try_new(name, value)
-                    .expect("canonical test request header")
-            })
-            .collect::<Vec<_>>();
-        headers.sort_unstable();
-        GovernanceDagCanonicalRequestV1::try_new(
-            scope,
-            method,
-            url,
-            headers,
-            body.len() as u64,
-            blake3_array(body),
-            1024 * 1024,
-        )
-        .expect("canonical test request")
-    }
-
-    impl GovernanceDagRequestAuthenticator for TestAuthenticator {
-        fn handle(&self) -> &str {
-            &self.handle
-        }
-
-        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
-                return Err("auth_token=must-never-escape".to_owned());
-            }
-            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
-                self.qualification_revision.load(AtomicOrdering::SeqCst),
-                [0x81; 32],
-            ))
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            self.public_key
-        }
-
-        fn authenticate(
-            &self,
-            request: &GovernanceDagCanonicalRequestV1,
-        ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String> {
-            if self
-                .drift_during_authentication
-                .swap(false, AtomicOrdering::SeqCst)
-            {
-                self.qualification_revision
-                    .fetch_add(1, AtomicOrdering::SeqCst);
-            }
-            if self.refuse.load(AtomicOrdering::SeqCst) {
-                return Err(format!(
-                    "hsm_diagnostic={}",
-                    self.provider_secret.lock().map_err(|_| "poisoned")?
-                ));
-            }
-            self.signed_envelope(request)
-        }
-    }
-
-    struct FinalRequestAuthenticator {
-        signer: TestAuthenticator,
-        expected_body_length: u64,
-        expected_body_blake3: [u8; 32],
-        expected_condition: HeaderName,
-        expected_condition_value: HeaderValue,
-        observed_put: AtomicBool,
-    }
-
-    impl fmt::Debug for FinalRequestAuthenticator {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("FinalRequestAuthenticator")
-                .field("expected_body", &"[REDACTED]")
-                .field("expected_condition", &self.expected_condition)
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl FinalRequestAuthenticator {
-        fn new(
-            expected_body: &[u8],
-            expected_condition: HeaderName,
-            expected_condition_value: HeaderValue,
-        ) -> Self {
-            Self {
-                signer: TestAuthenticator::new(TEST_HEAD_AUTH_HANDLE, "final-request-hsm"),
-                expected_body_length: expected_body.len() as u64,
-                expected_body_blake3: blake3_array(expected_body),
-                expected_condition,
-                expected_condition_value,
-                observed_put: AtomicBool::new(false),
-            }
-        }
-    }
-
-    impl GovernanceDagRequestAuthenticator for FinalRequestAuthenticator {
-        fn handle(&self) -> &str {
-            TEST_HEAD_AUTH_HANDLE
-        }
-
-        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            Ok(TEST_AUTH_QUALIFICATION)
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            self.signer.public_key()
-        }
-
-        fn authenticate(
-            &self,
-            request: &GovernanceDagCanonicalRequestV1,
-        ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String> {
-            if request.method() == Method::PUT.as_str() {
-                let expected_condition = self.expected_condition.as_str();
-                let expected_condition_value = self
-                    .expected_condition_value
-                    .to_str()
-                    .map_err(|_| "noncanonical expected condition")?;
-                let observed = request
-                    .selected_headers()
-                    .iter()
-                    .map(|header| (header.name(), header.value()))
-                    .collect::<BTreeMap<_, _>>();
-                if request.scope() != GovernanceDagAuthenticationScope::SignedHead
-                    || observed.get(header::CONTENT_TYPE.as_str()).copied()
-                        != Some("application/vnd.iroha.norito")
-                    || observed.get(expected_condition).copied() != Some(expected_condition_value)
-                    || request.body_length() != self.expected_body_length
-                    || request.body_blake3() != self.expected_body_blake3
-                {
-                    return Err(
-                        "signed-head authenticator received an incomplete PUT request".to_owned(),
-                    );
-                }
-                self.observed_put.store(true, AtomicOrdering::SeqCst);
-            }
-            self.signer.signed_envelope(request)
-        }
-    }
-
-    #[derive(Default)]
-    struct TestSealedStoreInner {
-        checkpoint: Option<GovernanceDagSealedStateRecord>,
-        publish_intent: Option<GovernanceDagSealedStateRecord>,
-        producer_checkpoint: Option<GovernanceDagSealedStateRecord>,
-        producer_publish_intent: Option<GovernanceDagSealedStateRecord>,
-        ipfs_request_replay: Option<GovernanceDagSealedStateRecord>,
-        signed_head_request_replay: Option<GovernanceDagSealedStateRecord>,
-        checkpoint_generation_floor: u64,
-        intent_generation_floor: u64,
-        producer_checkpoint_generation_floor: u64,
-        producer_intent_generation_floor: u64,
-        ipfs_request_replay_generation_floor: u64,
-        signed_head_request_replay_generation_floor: u64,
-    }
-
-    struct TestSealedStore {
-        handle: String,
-        inner: StdMutex<TestSealedStoreInner>,
-        qualification_revision: AtomicU64,
-        qualification_refuse: AtomicBool,
-        drift_during_operation: AtomicBool,
-        drift_during_replay_cas: AtomicBool,
-        refuse: AtomicBool,
-        replay_load_barrier: Option<Arc<Barrier>>,
-        replay_initial_loads_remaining: AtomicU64,
-        replay_cas_calls: AtomicU64,
-        replay_cas_completed: AtomicBool,
-        diverge_replay_readback: AtomicBool,
-    }
-
-    impl fmt::Debug for TestSealedStore {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("TestSealedStore")
-                .field("handle", &self.handle)
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl TestSealedStore {
-        fn new(handle: &str) -> Self {
-            Self {
-                handle: handle.to_owned(),
-                inner: StdMutex::new(TestSealedStoreInner::default()),
-                qualification_revision: AtomicU64::new(1),
-                qualification_refuse: AtomicBool::new(false),
-                drift_during_operation: AtomicBool::new(false),
-                drift_during_replay_cas: AtomicBool::new(false),
-                refuse: AtomicBool::new(false),
-                replay_load_barrier: None,
-                replay_initial_loads_remaining: AtomicU64::new(0),
-                replay_cas_calls: AtomicU64::new(0),
-                replay_cas_completed: AtomicBool::new(false),
-                diverge_replay_readback: AtomicBool::new(false),
-            }
-        }
-
-        fn with_replay_load_barrier(mut self, barrier: Arc<Barrier>) -> Self {
-            self.replay_load_barrier = Some(barrier);
-            self.replay_initial_loads_remaining = AtomicU64::new(2);
-            self
-        }
-
-        fn maybe_drift(&self) {
-            if self
-                .drift_during_operation
-                .swap(false, AtomicOrdering::SeqCst)
-            {
-                self.qualification_revision
-                    .fetch_add(1, AtomicOrdering::SeqCst);
-            }
-        }
-
-        fn slot(
-            inner: &TestSealedStoreInner,
-            slot: GovernanceDagSealedStateSlot,
-        ) -> &Option<GovernanceDagSealedStateRecord> {
-            match slot {
-                GovernanceDagSealedStateSlot::Checkpoint => &inner.checkpoint,
-                GovernanceDagSealedStateSlot::PublishIntent => &inner.publish_intent,
-                GovernanceDagSealedStateSlot::ProducerCheckpoint => &inner.producer_checkpoint,
-                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
-                    &inner.producer_publish_intent
-                }
-                GovernanceDagSealedStateSlot::IpfsRequestReplay => &inner.ipfs_request_replay,
-                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
-                    &inner.signed_head_request_replay
-                }
-            }
-        }
-
-        fn slot_mut(
-            inner: &mut TestSealedStoreInner,
-            slot: GovernanceDagSealedStateSlot,
-        ) -> &mut Option<GovernanceDagSealedStateRecord> {
-            match slot {
-                GovernanceDagSealedStateSlot::Checkpoint => &mut inner.checkpoint,
-                GovernanceDagSealedStateSlot::PublishIntent => &mut inner.publish_intent,
-                GovernanceDagSealedStateSlot::ProducerCheckpoint => &mut inner.producer_checkpoint,
-                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
-                    &mut inner.producer_publish_intent
-                }
-                GovernanceDagSealedStateSlot::IpfsRequestReplay => &mut inner.ipfs_request_replay,
-                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
-                    &mut inner.signed_head_request_replay
-                }
-            }
-        }
-    }
-
-    impl GovernanceDagSealedCheckpointStore for TestSealedStore {
-        fn handle(&self) -> &str {
-            &self.handle
-        }
-
-        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
-                return Err("kms_access_token=must-never-escape".to_owned());
-            }
-            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
-                self.qualification_revision.load(AtomicOrdering::SeqCst),
-                [0x82; 32],
-            ))
-        }
-
-        fn load(
-            &self,
-            slot: GovernanceDagSealedStateSlot,
-        ) -> Result<Option<GovernanceDagSealedStateRecord>, String> {
-            self.maybe_drift();
-            if self.refuse.load(AtomicOrdering::SeqCst) {
-                return Err("kms_access_token=must-never-escape".to_owned());
-            }
-            let inner = self.inner.lock().map_err(|_| "poisoned".to_owned())?;
-            let mut record = Self::slot(&inner, slot).clone();
-            drop(inner);
-            if matches!(
-                slot,
-                GovernanceDagSealedStateSlot::IpfsRequestReplay
-                    | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
-            ) && self.replay_cas_completed.load(AtomicOrdering::SeqCst)
-                && self
-                    .diverge_replay_readback
-                    .swap(false, AtomicOrdering::SeqCst)
-                && let Some(observed) = &record
-            {
-                record = Some(GovernanceDagSealedStateRecord::new(
-                    slot,
-                    observed.generation,
-                    norito::to_bytes(&RequestAuthReplayStateV1 {
-                        version: REQUEST_AUTH_REPLAY_STATE_VERSION_V1,
-                        entries: Vec::new(),
-                    })
-                    .expect("encode divergent replay readback"),
-                ));
-            }
-            if matches!(
-                slot,
-                GovernanceDagSealedStateSlot::IpfsRequestReplay
-                    | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
-            ) && self
-                .replay_initial_loads_remaining
-                .fetch_update(
-                    AtomicOrdering::SeqCst,
-                    AtomicOrdering::SeqCst,
-                    |remaining| remaining.checked_sub(1),
-                )
-                .is_ok()
-                && let Some(barrier) = &self.replay_load_barrier
-            {
-                barrier.wait();
-            }
-            Ok(record)
-        }
-
-        fn compare_and_swap(
-            &self,
-            slot: GovernanceDagSealedStateSlot,
-            expected_revision: Option<[u8; 32]>,
-            next: GovernanceDagSealedStateRecord,
-        ) -> Result<(), String> {
-            let is_replay_slot = matches!(
-                slot,
-                GovernanceDagSealedStateSlot::IpfsRequestReplay
-                    | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
-            );
-            if is_replay_slot {
-                self.replay_cas_calls.fetch_add(1, AtomicOrdering::SeqCst);
-                if self
-                    .drift_during_replay_cas
-                    .swap(false, AtomicOrdering::SeqCst)
-                {
-                    self.qualification_revision
-                        .fetch_add(1, AtomicOrdering::SeqCst);
-                }
-            }
-            self.maybe_drift();
-            if self.refuse.load(AtomicOrdering::SeqCst) {
-                return Err("kms_access_token=must-never-escape".to_owned());
-            }
-            if !next.has_valid_revision(slot) || next.generation == 0 {
-                return Err("invalid sealed record".to_owned());
-            }
-            let mut inner = self.inner.lock().map_err(|_| "poisoned".to_owned())?;
-            let current_revision = Self::slot(&inner, slot)
-                .as_ref()
-                .map(|record| record.revision);
-            if current_revision != expected_revision {
-                return Err("compare-and-swap conflict".to_owned());
-            }
-            let floor = match slot {
-                GovernanceDagSealedStateSlot::Checkpoint => inner.checkpoint_generation_floor,
-                GovernanceDagSealedStateSlot::PublishIntent => inner.intent_generation_floor,
-                GovernanceDagSealedStateSlot::ProducerCheckpoint => {
-                    inner.producer_checkpoint_generation_floor
-                }
-                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
-                    inner.producer_intent_generation_floor
-                }
-                GovernanceDagSealedStateSlot::IpfsRequestReplay => {
-                    inner.ipfs_request_replay_generation_floor
-                }
-                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
-                    inner.signed_head_request_replay_generation_floor
-                }
-            };
-            let generation_valid = match slot {
-                GovernanceDagSealedStateSlot::Checkpoint => next.generation > floor,
-                GovernanceDagSealedStateSlot::PublishIntent
-                    if Self::slot(&inner, slot).is_some() =>
-                {
-                    next.generation >= floor
-                }
-                GovernanceDagSealedStateSlot::PublishIntent => next.generation > floor,
-                GovernanceDagSealedStateSlot::ProducerCheckpoint
-                | GovernanceDagSealedStateSlot::ProducerPublishIntent
-                | GovernanceDagSealedStateSlot::IpfsRequestReplay
-                | GovernanceDagSealedStateSlot::SignedHeadRequestReplay => next.generation > floor,
-            };
-            if !generation_valid {
-                return Err("monotonic generation rollback".to_owned());
-            }
-            match slot {
-                GovernanceDagSealedStateSlot::Checkpoint => {
-                    inner.checkpoint_generation_floor = next.generation;
-                }
-                GovernanceDagSealedStateSlot::PublishIntent => {
-                    inner.intent_generation_floor = next.generation;
-                }
-                GovernanceDagSealedStateSlot::ProducerCheckpoint => {
-                    inner.producer_checkpoint_generation_floor = next.generation;
-                }
-                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
-                    inner.producer_intent_generation_floor = next.generation;
-                }
-                GovernanceDagSealedStateSlot::IpfsRequestReplay => {
-                    inner.ipfs_request_replay_generation_floor = next.generation;
-                }
-                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
-                    inner.signed_head_request_replay_generation_floor = next.generation;
-                }
-            }
-            *Self::slot_mut(&mut inner, slot) = Some(next);
-            if is_replay_slot {
-                self.replay_cas_completed
-                    .store(true, AtomicOrdering::SeqCst);
-            }
-            Ok(())
-        }
-
-        fn delete(
-            &self,
-            slot: GovernanceDagSealedStateSlot,
-            expected_revision: [u8; 32],
-        ) -> Result<(), String> {
-            self.maybe_drift();
-            if self.refuse.load(AtomicOrdering::SeqCst) {
-                return Err("kms_access_token=must-never-escape".to_owned());
-            }
-            let mut inner = self.inner.lock().map_err(|_| "poisoned".to_owned())?;
-            let current_revision = Self::slot(&inner, slot)
-                .as_ref()
-                .map(|record| record.revision);
-            if current_revision != Some(expected_revision) {
-                return Err("compare-and-swap conflict".to_owned());
-            }
-            *Self::slot_mut(&mut inner, slot) = None;
-            Ok(())
-        }
-    }
-
-    fn test_replay_store() -> OpaqueCheckpointStore {
-        OpaqueCheckpointStore::try_new(
-            TEST_CHECKPOINT_STORE_HANDLE,
-            TEST_STORE_QUALIFICATION,
-            Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE)),
-        )
-        .expect("bind test sealed replay store")
-    }
-
-    fn test_request_auth_policy(
-        public_key: [u8; 32],
-    ) -> GovernanceDagRequestAuthenticationPolicyV1 {
-        validate_request_auth_policy(public_key, 30, 5, "test authenticator")
-            .expect("construct test request-auth policy")
-    }
-
-    fn test_authenticator(
-        handle: &str,
-        authentication_scope: GovernanceDagAuthenticationScope,
-    ) -> OpaqueAuthenticator {
-        let provider = Arc::new(TestAuthenticator::new(handle, "test-only-hsm"));
-        OpaqueAuthenticator::try_new(
-            handle,
-            TEST_AUTH_QUALIFICATION,
-            test_request_auth_policy(provider.public_key()),
-            provider,
-            authentication_scope,
-            test_replay_store(),
-            "test authenticator",
-        )
-        .expect("bind test authenticator")
-    }
-
-    fn test_runtime_providers(
-        checkpoint_store: Arc<TestSealedStore>,
-    ) -> GovernanceDagServiceRuntimeProviders {
-        GovernanceDagServiceRuntimeProviders {
-            ipfs_authenticator: Some(Arc::new(TestAuthenticator::new(
-                TEST_IPFS_AUTH_HANDLE,
-                "test-only-ipfs-bearer",
-            ))),
-            head_authenticator: Some(Arc::new(TestAuthenticator::new(
-                TEST_HEAD_AUTH_HANDLE,
-                "test-only-head-bearer",
-            ))),
-            checkpoint_store: Some(checkpoint_store),
-        }
-    }
-
-    struct TestRuntimeProviderRegistry {
-        providers: GovernanceDagServiceRuntimeProviders,
-        failure: Option<GovernanceDagServiceRuntimeProviderRegistryErrorV1>,
-        observed_bindings: StdMutex<Option<GovernanceDagServiceRuntimeProviderBindingsV1>>,
-    }
-
-    impl TestRuntimeProviderRegistry {
-        fn returning(providers: GovernanceDagServiceRuntimeProviders) -> Self {
-            Self {
-                providers,
-                failure: None,
-                observed_bindings: StdMutex::new(None),
-            }
-        }
-
-        fn failing(failure: GovernanceDagServiceRuntimeProviderRegistryErrorV1) -> Self {
-            Self {
-                providers: GovernanceDagServiceRuntimeProviders::default(),
-                failure: Some(failure),
-                observed_bindings: StdMutex::new(None),
-            }
-        }
-    }
-
-    impl GovernanceDagServiceRuntimeProviderRegistryV1 for TestRuntimeProviderRegistry {
-        fn resolve(
-            &self,
-            bindings: &GovernanceDagServiceRuntimeProviderBindingsV1,
-        ) -> Result<
-            GovernanceDagServiceRuntimeProviders,
-            GovernanceDagServiceRuntimeProviderRegistryErrorV1,
-        > {
-            *self
-                .observed_bindings
-                .lock()
-                .expect("lock observed registry bindings") = Some(bindings.clone());
-            if let Some(failure) = self.failure {
-                return Err(failure);
-            }
-            Ok(self.providers.clone())
-        }
-    }
-
-    fn test_checkpoint_store(provider: Arc<TestSealedStore>) -> OpaqueCheckpointStore {
-        OpaqueCheckpointStore::try_new(
-            TEST_CHECKPOINT_STORE_HANDLE,
-            TEST_STORE_QUALIFICATION,
-            provider,
-        )
-        .expect("bind test sealed checkpoint store")
-    }
-
-    fn test_sealed_http_receiver(
-        scope: GovernanceDagAuthenticationScope,
-        provider: Arc<TestSealedStore>,
-    ) -> GovernanceDagSealedHttpRequestReceiverV1 {
-        let authenticator_handle = match scope {
-            GovernanceDagAuthenticationScope::Ipfs => TEST_IPFS_AUTH_HANDLE,
-            GovernanceDagAuthenticationScope::SignedHead => TEST_HEAD_AUTH_HANDLE,
-        };
-        GovernanceDagSealedHttpRequestReceiverV1::try_new(
-            scope,
-            1024 * 1024,
-            test_request_auth_policy(test_request_auth_public_key(authenticator_handle)),
-            TEST_CHECKPOINT_STORE_HANDLE,
-            TEST_STORE_QUALIFICATION,
-            Some(provider),
-        )
-        .expect("bind sealed HTTP ingress receiver")
-    }
-
-    fn sealed_receiver_request_parts(
-        scope: GovernanceDagAuthenticationScope,
-        method: &str,
-        url: &str,
-        selected_headers: &[(&str, &str)],
-        body: &[u8],
-        now: u64,
-        nonce: [u8; 32],
-    ) -> (GovernanceDagCanonicalRequestV1, Vec<(String, Vec<u8>)>) {
-        let request = canonical_test_request(scope, method, url, selected_headers, body);
-        let authenticator_handle = match scope {
-            GovernanceDagAuthenticationScope::Ipfs => TEST_IPFS_AUTH_HANDLE,
-            GovernanceDagAuthenticationScope::SignedHead => TEST_HEAD_AUTH_HANDLE,
-        };
-        let envelope =
-            signed_test_request_auth_envelope(authenticator_handle, &request, now, now + 15, nonce);
-        let mut headers = request_auth_header_fields(&envelope);
-        headers.extend(
-            selected_headers
-                .iter()
-                .map(|(name, value)| ((*name).to_owned(), value.as_bytes().to_vec())),
-        );
-        headers.push((
-            "content-length".to_owned(),
-            body.len().to_string().into_bytes(),
-        ));
-        (request, headers)
-    }
-
-    fn test_authenticator_with_store(
-        provider: Arc<TestAuthenticator>,
-        authentication_scope: GovernanceDagAuthenticationScope,
-        store: Arc<TestSealedStore>,
-    ) -> OpaqueAuthenticator {
-        let handle = provider.handle().to_owned();
-        OpaqueAuthenticator::try_new(
-            &handle,
-            TEST_AUTH_QUALIFICATION,
-            test_request_auth_policy(provider.public_key()),
-            provider,
-            authentication_scope,
-            test_checkpoint_store(store),
-            "test authenticator",
-        )
-        .expect("bind test authenticator to shared sealed replay state")
-    }
-
-    fn runtime_boundary_view(root: &Path) -> SorafsGovernanceDagServiceView {
-        let source_dir = root.join("source");
-        let state_dir = root.join("state");
-        fs::create_dir_all(&source_dir).expect("create test source directory");
-        let publisher_public_key_hex = hex::encode(
-            ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
-                .verifying_key()
-                .to_bytes(),
-        );
-        SorafsGovernanceDagServiceView {
-            source_dir: Some(source_dir),
-            producer_publisher_peer_id: Some(TEST_PRODUCER_PEER_ID.to_owned()),
-            producer_signer_handle: Some(TEST_PRODUCER_SIGNER_HANDLE.to_owned()),
-            producer_signer_revision: Some(TEST_PRODUCER_SIGNER_QUALIFICATION.revision),
-            producer_signer_policy_digest: Some(TEST_PRODUCER_SIGNER_QUALIFICATION.policy_digest),
-            producer_publisher_public_key_hex: Some(publisher_public_key_hex.clone()),
-            service: SorafsGovernanceDagService {
-                enabled: true,
-                state_dir: Some(state_dir),
-                ipfs_api_url: Some("http://127.0.0.1:5001".to_owned()),
-                signed_head_url: Some("http://127.0.0.1:9099/head".to_owned()),
-                ipfs_authenticator_handle: Some(TEST_IPFS_AUTH_HANDLE.to_owned()),
-                ipfs_authenticator_revision: Some(TEST_AUTH_QUALIFICATION.revision),
-                ipfs_authenticator_policy_digest: Some(TEST_AUTH_QUALIFICATION.policy_digest),
-                ipfs_request_auth_public_key: Some(test_request_auth_public_key(
-                    TEST_IPFS_AUTH_HANDLE,
-                )),
-                head_authenticator_handle: Some(TEST_HEAD_AUTH_HANDLE.to_owned()),
-                head_authenticator_revision: Some(TEST_AUTH_QUALIFICATION.revision),
-                head_authenticator_policy_digest: Some(TEST_AUTH_QUALIFICATION.policy_digest),
-                head_request_auth_public_key: Some(test_request_auth_public_key(
-                    TEST_HEAD_AUTH_HANDLE,
-                )),
-                checkpoint_store_handle: Some(TEST_CHECKPOINT_STORE_HANDLE.to_owned()),
-                checkpoint_store_revision: Some(TEST_STORE_QUALIFICATION.revision),
-                checkpoint_store_policy_digest: Some(TEST_STORE_QUALIFICATION.policy_digest),
-                publisher_public_key_hex: Some(publisher_public_key_hex),
-                allow_insecure_http: true,
-                allow_private_ipfs_endpoint: true,
-                allow_private_head_endpoint: true,
-                max_request_bytes: iroha_config::base::util::Bytes(
-                    u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1)
-                        .expect("archive request ceiling fits u64"),
-                ),
-                listen_addr: "127.0.0.1:0".to_owned(),
-                ..SorafsGovernanceDagService::default()
-            },
-        }
-    }
-
-    #[test]
-    fn configured_publisher_key_requires_one_canonical_strong_ed25519_point() {
-        let valid = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
-            .verifying_key()
-            .to_bytes();
-        assert_eq!(
-            decode_strong_ed25519_public_key_hex(&hex::encode(valid), "publisher key")
-                .expect("strong canonical key"),
-            valid
-        );
-
-        let identity = {
-            let mut encoded = [0_u8; 32];
-            encoded[0] = 1;
-            encoded
-        };
-        assert!(matches!(
-            decode_strong_ed25519_public_key_hex(&hex::encode(identity), "publisher key"),
-            Err(GovernanceDagServiceError::Config(message))
-                if message.contains("canonical strong Ed25519")
-        ));
-
-        let mut noncanonical = [0xff_u8; 32];
-        noncanonical[0] = 0xed;
-        noncanonical[31] = 0x7f;
-        assert!(
-            decode_strong_ed25519_public_key_hex(&hex::encode(noncanonical), "publisher key")
-                .is_err()
-        );
-        assert!(
-            decode_strong_ed25519_public_key_hex(&"11".repeat(32), "publisher key").is_err(),
-            "mixed-torsion Ed25519 encodings must fail the production subgroup check"
-        );
-    }
-
-    struct KuboHarness {
-        _root: TempDir,
-        repo: PathBuf,
-        binary: PathBuf,
-        api_url: String,
-        daemon_log: PathBuf,
-        child: Option<Child>,
-    }
-
-    impl KuboHarness {
-        async fn start() -> Self {
-            assert_eq!(
-                std::env::var(KUBO_INTEGRATION_ENV).as_deref(),
-                Ok("1"),
-                "set {KUBO_INTEGRATION_ENV}=1 to run the isolated Kubo integration lane"
-            );
-            let binary = std::env::var_os(KUBO_BIN_ENV)
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("ipfs"));
-            let root = secure_temp_dir();
-            let repo = root.path().join("ipfs-repo");
-            fs::create_dir(&repo).expect("create isolated Kubo repository");
-            #[cfg(unix)]
-            fs::set_permissions(&repo, fs::Permissions::from_mode(0o700))
-                .expect("secure isolated Kubo repository");
-
-            Self::run_command(
-                &binary,
-                &repo,
-                &[
-                    "init",
-                    "--empty-repo",
-                    "--profile=test,autoconf-off,announce-off",
-                ],
-            );
-            Self::run_command(
-                &binary,
-                &repo,
-                &["config", "Addresses.API", "/ip4/127.0.0.1/tcp/0"],
-            );
-            Self::run_command(
-                &binary,
-                &repo,
-                &["config", "Addresses.Gateway", "/ip4/127.0.0.1/tcp/0"],
-            );
-            Self::run_command(
-                &binary,
-                &repo,
-                &[
-                    "config",
-                    "--json",
-                    "Addresses.Swarm",
-                    r#"["/ip4/127.0.0.1/tcp/0"]"#,
-                ],
-            );
-            Self::run_command(
-                &binary,
-                &repo,
-                &["config", "--bool", "Discovery.MDNS.Enabled", "false"],
-            );
-            Self::assert_network_isolation(&binary, &repo);
-
-            let daemon_log = root.path().join("kubo-daemon.log");
-            let stdout = File::create(&daemon_log).expect("create Kubo daemon log");
-            let stderr = stdout.try_clone().expect("clone Kubo daemon log handle");
-            let child = Command::new(&binary)
-                .arg("daemon")
-                .env("IPFS_PATH", &repo)
-                .env("IPFS_TELEMETRY", "off")
-                .stdin(Stdio::null())
-                .stdout(Stdio::from(stdout))
-                .stderr(Stdio::from(stderr))
-                .spawn()
-                .unwrap_or_else(|err| panic!("start isolated Kubo daemon: {err}"));
-            let mut harness = Self {
-                _root: root,
-                repo,
-                binary,
-                api_url: String::new(),
-                daemon_log,
-                child: Some(child),
-            };
-            harness.api_url = harness.wait_for_api().await;
-            harness.wait_until_ready().await;
-            harness
-        }
-
-        fn run_command(binary: &Path, repo: &Path, args: &[&str]) -> Vec<u8> {
-            let output = Command::new(binary)
-                .args(args)
-                .env("IPFS_PATH", repo)
-                .env("IPFS_TELEMETRY", "off")
-                .stdin(Stdio::null())
-                .output()
-                .unwrap_or_else(|err| panic!("run isolated Kubo command `{args:?}`: {err}"));
-            assert!(
-                output.status.success(),
-                "isolated Kubo command `{args:?}` failed with {}\nstdout:\n{}\nstderr:\n{}",
-                output.status,
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr),
-            );
-            output.stdout
-        }
-
-        fn assert_network_isolation(binary: &Path, repo: &Path) {
-            let bytes = Self::run_command(binary, repo, &["config", "show"]);
-            let config: JsonValue =
-                json::from_slice(&bytes).expect("isolated Kubo config must be JSON");
-            let null_or_empty = |value: Option<&JsonValue>| {
-                value.is_none_or(|value| {
-                    value.is_null() || value.as_array().is_some_and(Vec::is_empty)
-                })
-            };
-            assert_eq!(
-                config
-                    .get("AutoConf")
-                    .and_then(|value| value.get("Enabled"))
-                    .and_then(JsonValue::as_bool),
-                Some(false),
-                "isolated Kubo must disable remote AutoConf"
-            );
-            assert!(
-                null_or_empty(config.get("Bootstrap")),
-                "isolated Kubo must have no bootstrap peers"
-            );
-            assert!(null_or_empty(
-                config.get("DNS").and_then(|value| value.get("Resolvers"))
-            ));
-            assert!(null_or_empty(
-                config
-                    .get("Ipns")
-                    .and_then(|value| value.get("DelegatedPublishers"))
-            ));
-            assert!(null_or_empty(
-                config
-                    .get("Routing")
-                    .and_then(|value| value.get("DelegatedRouters"))
-            ));
-            assert_eq!(
-                config
-                    .get("Provide")
-                    .and_then(|value| value.get("Enabled"))
-                    .and_then(JsonValue::as_bool),
-                Some(false),
-                "isolated Kubo must disable content announcements"
-            );
-            let addresses = config
-                .get("Addresses")
-                .expect("isolated Kubo config has Addresses");
-            for field in ["API", "Gateway"] {
-                assert_eq!(
-                    addresses.get(field).and_then(JsonValue::as_str),
-                    Some("/ip4/127.0.0.1/tcp/0"),
-                    "isolated Kubo {field} listener must be loopback-only"
-                );
-            }
-            assert_eq!(
-                addresses
-                    .get("Swarm")
-                    .and_then(JsonValue::as_array)
-                    .and_then(|values| values.first())
-                    .and_then(JsonValue::as_str),
-                Some("/ip4/127.0.0.1/tcp/0"),
-                "isolated Kubo swarm listener must be loopback-only"
-            );
-            assert_eq!(
-                addresses
-                    .get("Swarm")
-                    .and_then(JsonValue::as_array)
-                    .map(Vec::len),
-                Some(1),
-                "isolated Kubo must expose only one loopback swarm listener"
-            );
-        }
-
-        async fn wait_for_api(&mut self) -> String {
-            let api_path = self.repo.join("api");
-            let deadline = time::Instant::now() + Duration::from_secs(20);
-            loop {
-                if let Ok(raw) = fs::read_to_string(&api_path) {
-                    let raw = raw.trim();
-                    let components = raw.split('/').collect::<Vec<_>>();
-                    if components.len() == 5
-                        && components[1] == "ip4"
-                        && components[2] == "127.0.0.1"
-                        && components[3] == "tcp"
-                        && components[4].parse::<u16>().is_ok_and(|port| port != 0)
-                    {
-                        return format!("http://127.0.0.1:{}/", components[4]);
-                    }
-                    panic!("Kubo published a non-loopback or malformed API address: {raw}");
-                }
-                if let Some(status) = self
-                    .child
-                    .as_mut()
-                    .expect("Kubo child exists while starting")
-                    .try_wait()
-                    .expect("inspect Kubo daemon status")
-                {
-                    panic!(
-                        "isolated Kubo daemon exited early with {status}\n{}",
-                        self.log_text()
-                    );
-                }
-                assert!(
-                    time::Instant::now() < deadline,
-                    "timed out waiting for isolated Kubo API\n{}",
-                    self.log_text()
-                );
-                time::sleep(Duration::from_millis(25)).await;
-            }
-        }
-
-        async fn wait_until_ready(&self) {
-            let endpoint = self.endpoint();
-            let url = endpoint
-                .ipfs_url("api/v0/version", &[])
-                .expect("construct Kubo version URL");
-            let deadline = time::Instant::now() + Duration::from_secs(20);
-            loop {
-                let request = endpoint
-                    .request(Method::POST, url.clone())
-                    .expect("construct Kubo readiness request");
-                if let Ok(response) = endpoint
-                    .execute(request, "Kubo readiness request failed")
-                    .await
-                    && response.status().is_success()
-                {
-                    let body = read_bounded_response(response, 64 * 1024)
-                        .await
-                        .expect("read Kubo version response");
-                    let value: JsonValue =
-                        json::from_slice(&body).expect("Kubo version response must be JSON");
-                    let version = value
-                        .get("Version")
-                        .and_then(JsonValue::as_str)
-                        .expect("Kubo version response has Version");
-                    eprintln!("isolated Kubo {version} ready at {}", self.api_url);
-                    return;
-                }
-                assert!(
-                    time::Instant::now() < deadline,
-                    "timed out waiting for isolated Kubo readiness\n{}",
-                    self.log_text()
-                );
-                time::sleep(Duration::from_millis(25)).await;
-            }
-        }
-
-        fn endpoint(&self) -> PinnedEndpoint {
-            PinnedEndpoint {
-                url: Url::parse(&self.api_url).expect("parse isolated Kubo API URL"),
-                client: Client::builder()
-                    .no_proxy()
-                    .redirect(Policy::none())
-                    .connect_timeout(Duration::from_secs(5))
-                    .timeout(Duration::from_secs(20))
-                    .build()
-                    .expect("construct isolated Kubo HTTP client"),
-                authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
-                authenticator: test_authenticator(
-                    TEST_IPFS_AUTH_HANDLE,
-                    GovernanceDagAuthenticationScope::Ipfs,
-                ),
-                max_request_bytes: GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
-            }
-        }
-
-        fn log_text(&self) -> String {
-            fs::read_to_string(&self.daemon_log)
-                .unwrap_or_else(|err| format!("cannot read Kubo daemon log: {err}"))
-        }
-
-        fn stop_child(&mut self) {
-            let Some(mut child) = self.child.take() else {
-                return;
-            };
-            let _ = Command::new(&self.binary)
-                .arg("shutdown")
-                .env("IPFS_PATH", &self.repo)
-                .env("IPFS_TELEMETRY", "off")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => return,
-                    Ok(None) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(Duration::from_millis(25));
-                    }
-                    Ok(None) | Err(_) => {
-                        // This fallback can only target the exact child spawned above.
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return;
-                    }
-                }
-            }
-        }
-
-        fn shutdown(mut self) {
-            self.stop_child();
-        }
-    }
-
-    impl Drop for KuboHarness {
-        fn drop(&mut self) {
-            self.stop_child();
-        }
-    }
-
-    struct TestSigner {
-        private_key: PrivateKey,
-        public_key: [u8; 32],
-    }
-
-    impl TestSigner {
-        fn new(seed: u8) -> Self {
-            let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
-                .expect("test Ed25519 seed is valid");
-            let keypair = KeyPair::from_private_key(private_key.clone())
-                .expect("derive test Ed25519 keypair");
-            let (algorithm, bytes) = keypair
-                .public_key()
-                .try_to_bytes()
-                .expect("encode test public key");
-            assert_eq!(algorithm, Algorithm::Ed25519);
-            let mut public_key = [0_u8; 32];
-            public_key.copy_from_slice(bytes);
-            Self {
-                private_key,
-                public_key,
-            }
-        }
-
-        fn sign(&self, payload: &[u8]) -> GovernanceLogSignatureV1 {
-            let signature = IrohaSignature::try_new(&self.private_key, payload)
-                .expect("sign test governance payload");
-            GovernanceLogSignatureV1 {
-                algorithm: GovernanceSignatureAlgorithm::Ed25519,
-                public_key: self.public_key.to_vec(),
-                signature: signature.payload().to_vec(),
-            }
-        }
-    }
-
-    struct PublisherTestSigner {
-        handle: String,
-        peer_id: Vec<u8>,
-        signer: TestSigner,
-    }
-
-    impl fmt::Debug for PublisherTestSigner {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PublisherTestSigner")
-                .field("handle", &self.handle)
-                .field("peer_id", &self.peer_id)
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl GovernanceDagRuntimeSigner for PublisherTestSigner {
-        fn handle(&self) -> &str {
-            &self.handle
-        }
-
-        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
-                1, [0x83; 32],
-            ))
-        }
-
-        fn publisher_peer_id(&self) -> &[u8] {
-            &self.peer_id
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            self.signer.public_key
-        }
-
-        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
-            self.signer
-                .sign(payload)
-                .signature
-                .try_into()
-                .map_err(|_| "test signature length".to_owned())
-        }
-    }
-
-    fn empty_signature() -> GovernanceLogSignatureV1 {
-        GovernanceLogSignatureV1 {
-            algorithm: GovernanceSignatureAlgorithm::Ed25519,
-            public_key: Vec::new(),
-            signature: Vec::new(),
-        }
-    }
-
-    fn settlement(sequence: u64, timestamp: u64) -> DealSettlementV1 {
-        let mut deal_id = [0x11; 32];
-        deal_id[..8].copy_from_slice(&sequence.saturating_add(1).to_le_bytes());
-        let settled_at = timestamp.saturating_sub(1);
-        let mut ledger = DealLedgerSnapshotV1 {
-            version: DEAL_LEDGER_VERSION_V1,
-            snapshot_id: [0; 32],
-            sequence: 1,
-            previous_snapshot_id: None,
-            deal_id,
-            terms_digest: [0x44; 32],
-            provider_id: [0x22; 32],
-            client_id: [0x33; 32],
-            deal_start_epoch: settled_at.saturating_sub(2),
-            deal_end_epoch: settled_at.saturating_sub(1),
-            settlement_window_epochs: 2,
-            window_start_epoch: settled_at.saturating_sub(2),
-            window_end_epoch: settled_at,
-            provider_accrual: xor("0.00000001"),
-            client_liability: xor("0.00000001"),
-            micropayment_credit_generated: XorQuantity::zero(),
-            micropayment_credit_applied: XorQuantity::zero(),
-            micropayment_credit_carry: XorQuantity::zero(),
-            client_debit: xor("0.00000001"),
-            outstanding_liability: XorQuantity::zero(),
-            bond_total: xor("0.00000002"),
-            bond_locked: XorQuantity::zero(),
-            bond_slashed: XorQuantity::zero(),
-            bond_released: xor("0.00000002"),
-            window_expected_charge: xor("0.00000001"),
-            window_micropayment_generated: XorQuantity::zero(),
-            window_micropayment_applied: XorQuantity::zero(),
-            window_client_debit: xor("0.00000001"),
-            window_bond_slashed: XorQuantity::zero(),
-            window_bond_released: xor("0.00000002"),
-            captured_at: settled_at,
-        };
-        ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
-        let mut settlement = DealSettlementV1 {
-            version: DEAL_SETTLEMENT_VERSION_V1,
-            settlement_id: [0; 32],
-            deal_id,
-            ledger,
-            status: DealSettlementStatusV1::Completed,
-            settled_at,
-            audit_notes: None,
-        };
-        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
-        settlement
-    }
-
-    fn signed_source(count: usize, seed: u8, first_timestamp: u64) -> SourceSnapshot {
-        let signer = TestSigner::new(seed);
-        let peer_id = TEST_PRODUCER_PEER_ID.as_bytes().to_vec();
-        let mut previous_node_cid = None;
-        let mut previous_block_cid = None;
-        let mut source_blocks = Vec::new();
-        let mut decoded_blocks = Vec::new();
-        for sequence in 0..count as u64 {
-            let timestamp = first_timestamp.saturating_add(sequence);
-            let mut node = GovernanceLogNodeV1 {
-                version: GOVERNANCE_LOG_VERSION_V1,
-                node_cid: Vec::new(),
-                prev_cid: previous_node_cid.clone(),
-                timestamp,
-                publisher_peer_id: peer_id.clone(),
-                submission_provenance: None,
-                payload: GovernanceLogPayloadV1::DealSettlement(Box::new(settlement(
-                    sequence, timestamp,
-                ))),
-                publisher_signature: empty_signature(),
-            };
-            node.node_cid = node.recompute_node_cid().expect("derive test node CID");
-            node.publisher_signature = signer.sign(
-                &node
-                    .signature_payload_bytes()
-                    .expect("encode test node signing payload"),
-            );
-            let block_cid = governance_dag_block_cid_v1(
-                previous_block_cid.as_deref(),
-                sequence,
-                timestamp,
-                &peer_id,
-                &node,
-            )
-            .expect("derive test block CID");
-            let mut block = GovernanceDagBlockV1 {
-                version: GOVERNANCE_DAG_BLOCK_VERSION_V1,
-                block_cid,
-                prev_block_cid: previous_block_cid.clone(),
-                sequence,
-                timestamp,
-                publisher_peer_id: peer_id.clone(),
-                node,
-                block_signature: empty_signature(),
-            };
-            block.block_signature = signer.sign(
-                &block
-                    .signature_payload_bytes()
-                    .expect("encode test block signing payload"),
-            );
-            block.validate().expect("test block is valid");
-            let bytes = norito::to_bytes(&block).expect("encode test block");
-            previous_node_cid = Some(block.node.node_cid.clone());
-            previous_block_cid = Some(block.block_cid.clone());
-            decoded_blocks.push(block.clone());
-            source_blocks.push(SourceBlock {
-                encoded_blake3: blake3_array(&bytes),
-                payload_kind: "deal_settlement".to_owned(),
-                block,
-                bytes,
-            });
-        }
-        let last = source_blocks.last().expect("test source is non-empty");
-        let checkpoint_cid = (count > GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1).then(|| {
-            source_blocks[count - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1]
-                .block
-                .block_cid
-                .clone()
-        });
-        let mut head = GovernanceDagHeadV1 {
-            version: GOVERNANCE_DAG_HEAD_VERSION_V1,
-            head_block_cid: last.block.block_cid.clone(),
-            block_count: count as u64,
-            generated_at: last.block.timestamp,
-            publisher_peer_id: peer_id,
-            checkpoint_cid,
-            head_signature: empty_signature(),
-        };
-        head.head_signature = signer.sign(
-            &head
-                .signature_payload_bytes()
-                .expect("encode test head signing payload"),
-        );
-        validate_governance_dag_head_against_chain_v1(&head, &decoded_blocks)
-            .expect("test source chain is valid");
-        let head_bytes = norito::to_bytes(&head).expect("encode test head");
-        SourceSnapshot {
-            index_blake3: [0x44; 32],
-            head,
-            head_bytes,
-            blocks: source_blocks,
-        }
-    }
-
-    fn appeal_finance_report(timestamp: u64) -> SoraFsAppealFinanceReportV1 {
-        SoraFsAppealFinanceReportV1 {
-            version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
-            report_id: [0x42; 16],
-            case_id: "case-42".to_owned(),
-            round_id: Some("round-1".to_owned()),
-            generated_at_unix_ms: timestamp.saturating_mul(1_000),
-            appeal_finance_config_version: "baseline-v1".to_owned(),
-            evidence_bundle_digest: Some([0xA7; 32]),
-            outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
-            deposit_xor: xor("420"),
-            refund: SoraFsAppealFinanceAccountFlowV1 {
-                account_id: "refund-account".to_owned(),
-                amount_xor: xor("420"),
-            },
-            treasury: SoraFsAppealFinanceAccountFlowV1 {
-                account_id: "treasury-account".to_owned(),
-                amount_xor: xor("50"),
-            },
-            held: SoraFsAppealFinanceAccountFlowV1 {
-                account_id: "escrow-account".to_owned(),
-                amount_xor: XorQuantity::zero(),
-            },
-            panel_size: 3,
-            panel_reward_total_xor: xor("85"),
-            rewards_paid_total_xor: xor("60"),
-            rewards_forfeited_treasury_xor: xor("25"),
-            juror_payouts: vec![
-                SoraFsAppealFinanceJurorPayoutV1 {
-                    juror_id: "juror-a".to_owned(),
-                    stipend_xor: xor("25"),
-                    bonus_xor: xor("5"),
-                    total_xor: xor("30"),
-                },
-                SoraFsAppealFinanceJurorPayoutV1 {
-                    juror_id: "juror-b".to_owned(),
-                    stipend_xor: xor("25"),
-                    bonus_xor: xor("5"),
-                    total_xor: xor("30"),
-                },
-            ],
-            no_show_juror_ids: vec!["juror-c".to_owned()],
-        }
-    }
-
-    fn signed_finance_source(seed: u8, timestamp: u64) -> SourceSnapshot {
-        let signer = TestSigner::new(seed);
-        let account_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
-            .expect("derive canonical submission account");
-        let account = iroha_data_model::account::AccountId::new(account_key.public_key().clone());
-        let mut source = signed_source(1, seed, timestamp);
-        let source_block = source.blocks.first_mut().expect("single source block");
-        source_block.block.node.payload =
-            GovernanceLogPayloadV1::AppealFinanceReport(appeal_finance_report(timestamp));
-        source_block.block.node.submission_provenance = Some(GovernanceDagSubmissionProvenanceV1 {
-            publisher_account_digest: governance_dag_submission_account_digest_v1(
-                &account.encode(),
-            ),
-            origin: GovernanceDagSubmissionOriginV1::AppealFinanceReport,
-        });
-        source_block.block.node.node_cid = source_block
-            .block
-            .node
-            .recompute_node_cid()
-            .expect("derive attributed node CID");
-        source_block.block.node.publisher_signature = signer.sign(
-            &source_block
-                .block
-                .node
-                .signature_payload_bytes()
-                .expect("encode attributed node signing payload"),
-        );
-        source_block.block.block_cid = source_block
-            .block
-            .recompute_block_cid()
-            .expect("derive attributed block CID");
-        source_block.block.block_signature = signer.sign(
-            &source_block
-                .block
-                .signature_payload_bytes()
-                .expect("encode attributed block signing payload"),
-        );
-        source_block
-            .block
-            .validate()
-            .expect("attributed source block validates");
-        source_block.bytes =
-            norito::to_bytes(&source_block.block).expect("encode attributed source block");
-        source_block.encoded_blake3 = blake3_array(&source_block.bytes);
-        source_block.payload_kind = "appeal_finance_report".to_owned();
-
-        source.head.head_block_cid = source_block.block.block_cid.clone();
-        source.head.head_signature = signer.sign(
-            &source
-                .head
-                .signature_payload_bytes()
-                .expect("encode attributed head signing payload"),
-        );
-        validate_governance_dag_head_against_chain_v1(&source.head, &[source_block.block.clone()])
-            .expect("attributed source head validates");
-        source.head_bytes = norito::to_bytes(&source.head).expect("encode attributed source head");
-        source
-    }
-
-    fn test_runtime_config(source: &SourceSnapshot, root: &Path) -> RuntimeConfig {
-        let mut expected_public_key = [0_u8; 32];
-        expected_public_key.copy_from_slice(&source.head.head_signature.public_key);
-        let source_dir = root.join("source");
-        let state_dir = root.join("state");
-        fs::create_dir_all(&source_dir).expect("create test source root");
-        fs::create_dir_all(&state_dir).expect("create test state root");
-        RuntimeConfig {
-            source_root_guard: GovernanceFilesystemRootGuard::capture_source(&source_dir)
-                .expect("fence test source root"),
-            source_dir,
-            state_root_guard: GovernanceFilesystemRootGuard::capture_writer(&state_dir)
-                .expect("fence test state root"),
-            listen_addr: "127.0.0.1:0".parse().expect("test address"),
-            poll_interval: Duration::from_millis(10),
-            max_response_bytes: 1024 * 1024,
-            max_request_bytes: 1024 * 1024,
-            mirror_max_entries: 1024,
-            mirror_max_bytes: 1024 * 1024,
-            max_head_age_secs: 3600,
-            max_future_skew_secs: 60,
-            allow_head_bootstrap: true,
-            expected_producer_signer_handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
-            expected_producer_signer_qualification: TEST_PRODUCER_SIGNER_QUALIFICATION,
-            expected_publisher_peer_id: source.head.publisher_peer_id.clone(),
-            expected_public_key,
-        }
-    }
-
-    fn checkpoint_from_source(source: &SourceSnapshot) -> CheckpointBodyV1 {
-        let mirror_blocks = source
-            .blocks
-            .iter()
-            .map(|block| PublishedBlockV1 {
-                sequence: block.block.sequence,
-                governance_block_cid: block.block.block_cid.clone(),
-                governance_node_cid: block.block.node.node_cid.clone(),
-                payload_kind: block.payload_kind.clone(),
-                timestamp: block.block.timestamp,
-                encoded_blake3: block.encoded_blake3,
-                encoded_len: block.bytes.len() as u64,
-                ipfs_cid: TEST_CID_BLOCK.to_owned(),
-            })
-            .collect();
-        CheckpointBodyV1 {
-            version: CHECKPOINT_VERSION_V1,
-            generation: 1,
-            head_block_cid: source.head.head_block_cid.clone(),
-            block_count: source.head.block_count,
-            head_bytes_blake3: blake3_array(&source.head_bytes),
-            head_ipfs_cid: TEST_CID_HEAD.to_owned(),
-            public_head_token: "public-token".to_owned(),
-            source_index_blake3: source.index_blake3,
-            mirror_blake3: [0x55; 32],
-            published_at_unix: source.head.generated_at,
-            archive_head: BlockPrefixArchiveHeadV1::empty(),
-            mirror_blocks,
-        }
-    }
-
-    fn intent_from_source(source: &SourceSnapshot) -> PublishIntentBodyV1 {
-        PublishIntentBodyV1 {
-            version: PUBLISH_INTENT_VERSION_V1,
-            generation: 1,
-            target_head_block_cid: source.head.head_block_cid.clone(),
-            target_block_count: source.head.block_count,
-            target_head_bytes: source.head_bytes.clone(),
-            target_head_blake3: blake3_array(&source.head_bytes),
-            target_source_index_blake3: source.index_blake3,
-            previous_public_head_blake3: None,
-            created_at_unix: source.head.generated_at,
-            archive_head: BlockPrefixArchiveHeadV1::empty(),
-            blocks: source
-                .blocks
-                .iter()
-                .map(|block| IntentBlockV1 {
-                    sequence: block.block.sequence,
-                    governance_block_cid: block.block.block_cid.clone(),
-                    governance_node_cid: block.block.node.node_cid.clone(),
-                    payload_kind: block.payload_kind.clone(),
-                    timestamp: block.block.timestamp,
-                    encoded_blake3: block.encoded_blake3,
-                    encoded_len: block.bytes.len() as u64,
-                    ipfs_cid: Some(TEST_CID_BLOCK.to_owned()),
-                })
-                .collect(),
-            head_ipfs_cid: Some(TEST_CID_HEAD.to_owned()),
-        }
-    }
-
-    fn block_prefix_archive_test_endpoint() -> PinnedEndpoint {
-        PinnedEndpoint {
-            url: Url::parse("http://127.0.0.1:1/").expect("parse test archive endpoint"),
-            client: Client::builder()
-                .no_proxy()
-                .redirect(Policy::none())
-                .build()
-                .expect("build test archive client"),
-            authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
-            authenticator: test_authenticator(
-                TEST_IPFS_AUTH_HANDLE,
-                GovernanceDagAuthenticationScope::Ipfs,
-            ),
-            max_request_bytes: 1024 * 1024,
-        }
-    }
-
-    fn signed_block_prefix_archive_fixture(
-        source: &SourceSnapshot,
-        start: u64,
-        end: u64,
-        predecessor: BlockPrefixArchiveHeadV1,
-        endpoint: &PinnedEndpoint,
-    ) -> (
-        SignedBlockPrefixArchiveV1,
-        Vec<u8>,
-        BlockPrefixArchiveHeadV1,
-    ) {
-        signed_block_prefix_archive_fixture_with_checkpoint(
-            source,
-            start,
-            end,
-            predecessor,
-            CheckpointCommitmentV1::empty(),
-            1,
-            endpoint,
-        )
-    }
-
-    fn signed_block_prefix_archive_fixture_with_checkpoint(
-        source: &SourceSnapshot,
-        start: u64,
-        end: u64,
-        predecessor: BlockPrefixArchiveHeadV1,
-        checkpoint: CheckpointCommitmentV1,
-        target_generation: u64,
-        endpoint: &PinnedEndpoint,
-    ) -> (
-        SignedBlockPrefixArchiveV1,
-        Vec<u8>,
-        BlockPrefixArchiveHeadV1,
-    ) {
-        let mut intent = intent_from_source(source);
-        intent.generation = target_generation;
-        for (intent_block, source_block) in intent.blocks.iter_mut().zip(&source.blocks) {
-            intent_block.ipfs_cid = Some(canonical_raw_sha256_cid(&source_block.bytes));
-        }
-        let by_sequence = published_blocks_by_sequence(None, &intent)
-            .expect("construct published-block fixture map");
-        let archive = SignedBlockPrefixArchiveV1 {
-            version: BLOCK_PREFIX_ARCHIVE_VERSION_V1,
-            archive_generation: predecessor.generation + 1,
-            predecessor,
-            predecessor_checkpoint_revision: checkpoint.revision,
-            predecessor_checkpoint_digest: checkpoint.digest,
-            predecessor_block_count: checkpoint.block_count,
-            predecessor_head_block_cid: checkpoint.head_block_cid,
-            target_checkpoint_generation: intent.generation,
-            target_head_block_cid: intent.target_head_block_cid,
-            target_block_count: intent.target_block_count,
-            target_source_index_blake3: intent.target_source_index_blake3,
-            ipfs_authenticator_handle: endpoint.authenticator.handle.clone(),
-            ipfs_authenticator_revision: endpoint.authenticator.qualification.revision,
-            ipfs_authenticator_policy_digest: endpoint.authenticator.qualification.policy_digest,
-            ipfs_authenticator_public_key: endpoint.authenticator.verification_policy.public_key(),
-            checkpoint_store_handle: TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
-            checkpoint_store_revision: TEST_STORE_QUALIFICATION.revision,
-            checkpoint_store_policy_digest: TEST_STORE_QUALIFICATION.policy_digest,
-            archived_block_count: end,
-            blocks: block_prefix_archive_entries(source, &by_sequence, start, end)
-                .expect("construct exact archive entries"),
-        };
-        validate_signed_block_prefix_archive(&archive).expect("validate archive fixture");
-        validate_block_prefix_archive_against_source(&archive, source)
-            .expect("bind archive fixture to source");
-        let bytes = norito::to_bytes(&archive).expect("encode archive fixture");
-        let descriptor = block_prefix_archive_add_descriptor(endpoint, &archive, &bytes)
-            .expect("build archive add descriptor");
-        let envelope = endpoint
-            .authenticator
-            .authenticate(&descriptor)
-            .expect("authenticate archive add descriptor");
-        let head = BlockPrefixArchiveHeadV1 {
-            generation: archive.archive_generation,
-            digest: blake3_array(&bytes),
-            ipfs_cid: canonical_raw_sha256_cid(&bytes),
-            archived_block_count: archive.archived_block_count,
-            last_block_cid: archive
-                .blocks
-                .last()
-                .expect("archive fixture has a last block")
-                .published
-                .governance_block_cid
-                .clone(),
-            last_node_cid: archive
-                .blocks
-                .last()
-                .expect("archive fixture has a last block")
-                .published
-                .governance_node_cid
-                .clone(),
-            predecessor_checkpoint_revision: archive.predecessor_checkpoint_revision,
-            predecessor_checkpoint_digest: archive.predecessor_checkpoint_digest,
-            predecessor_block_count: archive.predecessor_block_count,
-            predecessor_head_block_cid: archive.predecessor_head_block_cid.clone(),
-            publication: Some(
-                BlockPrefixArchivePublicationV1::from_envelope(&envelope, &descriptor)
-                    .expect("convert archive publication"),
-            ),
-        };
-        verify_block_prefix_archive_publication(&archive, &bytes, &head)
-            .expect("verify archive publication fixture");
-        (archive, bytes, head)
-    }
-
-    fn secure_temp_dir() -> TempDir {
-        let temp_root = std::env::temp_dir()
-            .canonicalize()
-            .expect("resolve the physical temporary-directory root");
-        let dir = tempfile::Builder::new()
-            .prefix("sorafs-governance-service-")
-            .tempdir_in(temp_root)
-            .expect("create test directory");
-        #[cfg(unix)]
-        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
-            .expect("secure test directory");
-        dir
-    }
-
-    fn write_test_sidecar_file(path: &Path, bytes: &[u8]) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("create source sidecar parent");
-        }
-        fs::write(path, bytes).expect("write source sidecar payload");
-        fs::write(
-            digest_sidecar_path(path),
-            format!("{}\n", hex::encode(blake3_array(bytes))),
-        )
-        .expect("write source sidecar digest");
-    }
-
-    fn materialize_source_snapshot(root: &Path, source: &mut SourceSnapshot) {
-        fs::create_dir_all(root).expect("create Governance DAG source root");
-        let mut entries = Vec::with_capacity(source.blocks.len());
-        let mut by_digest = JsonMap::new();
-        let mut by_source_payload_digest = BTreeMap::<String, Vec<JsonValue>>::new();
-        let mut by_kind = BTreeMap::<String, Vec<JsonValue>>::new();
-        for (position, block) in source.blocks.iter().enumerate() {
-            let block_cid_hex = hex::encode(&block.block.block_cid);
-            let block_path_label = format!(
-                "runtime-dag/blocks/{:020}_{block_cid_hex}.to",
-                block.block.sequence
-            );
-            write_test_sidecar_file(&root.join(&block_path_label), &block.bytes);
-            let source_payload_bytes = canonical_source_payload_bytes(&block.block.node.payload)
-                .expect("encode test source payload");
-            let source_payload_path_label =
-                format!("source-payloads/{:020}.to", block.block.sequence);
-            write_test_sidecar_file(
-                &root.join(&source_payload_path_label),
-                &source_payload_bytes,
-            );
-            let source_payload_digest_hex = hex::encode(blake3_array(&source_payload_bytes));
-
-            let digest_hex = hex::encode(block.encoded_blake3);
-            let mut entry = JsonMap::new();
-            entry.insert("position".into(), JsonValue::from(position as u64));
-            entry.insert("sequence".into(), JsonValue::from(block.block.sequence));
-            entry.insert("block_path".into(), JsonValue::from(block_path_label));
-            entry.insert(
-                "encoded_path".into(),
-                JsonValue::from(source_payload_path_label),
-            );
-            entry.insert(
-                "json_path".into(),
-                JsonValue::from(format!("source-payloads/{:020}.json", block.block.sequence)),
-            );
-            entry.insert(
-                "encoded_len".into(),
-                JsonValue::from(block.bytes.len() as u64),
-            );
-            entry.insert(
-                "source_payload_len".into(),
-                JsonValue::from(source_payload_bytes.len() as u64),
-            );
-            entry.insert(
-                "source_payload_blake3".into(),
-                JsonValue::from(source_payload_digest_hex.clone()),
-            );
-            entry.insert("block_cid_hex".into(), JsonValue::from(block_cid_hex));
-            entry.insert(
-                "node_cid_hex".into(),
-                JsonValue::from(hex::encode(&block.block.node.node_cid)),
-            );
-            entry.insert(
-                "prev_block_cid_hex".into(),
-                block
-                    .block
-                    .prev_block_cid
-                    .as_ref()
-                    .map(hex::encode)
-                    .map(JsonValue::from)
-                    .unwrap_or(JsonValue::Null),
-            );
-            entry.insert(
-                "prev_node_cid_hex".into(),
-                block
-                    .block
-                    .node
-                    .prev_cid
-                    .as_ref()
-                    .map(hex::encode)
-                    .map(JsonValue::from)
-                    .unwrap_or(JsonValue::Null),
-            );
-            entry.insert(
-                "payload_kind".into(),
-                JsonValue::from(block.payload_kind.clone()),
-            );
-            entry.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
-            entries.push(JsonValue::Object(entry));
-            by_digest.insert(
-                digest_hex,
-                JsonValue::Array(vec![JsonValue::from(position as u64)]),
-            );
-            by_source_payload_digest
-                .entry(source_payload_digest_hex)
-                .or_default()
-                .push(JsonValue::from(position as u64));
-            by_kind
-                .entry(block.payload_kind.clone())
-                .or_default()
-                .push(JsonValue::from(position as u64));
-        }
-        write_test_sidecar_file(&root.join("runtime-dag/head.to"), &source.head_bytes);
-
-        let mut index = JsonMap::new();
-        index.insert("schema".into(), JsonValue::from(RUNTIME_INDEX_SCHEMA));
-        index.insert(
-            "publisher_public_key_hex".into(),
-            JsonValue::from(hex::encode(&source.head.head_signature.public_key)),
-        );
-        index.insert(
-            "publisher_peer_id_hex".into(),
-            JsonValue::from(hex::encode(&source.head.publisher_peer_id)),
-        );
-        index.insert(
-            "head_block_cid_hex".into(),
-            JsonValue::from(hex::encode(&source.head.head_block_cid)),
-        );
-        index.insert(
-            "head_generated_at".into(),
-            JsonValue::from(source.head.generated_at),
-        );
-        index.insert("head_path".into(), JsonValue::from("runtime-dag/head.to"));
-        index.insert(
-            "block_count".into(),
-            JsonValue::from(source.head.block_count),
-        );
-        index.insert("by_encoded_blake3".into(), JsonValue::Object(by_digest));
-        index.insert(
-            "by_source_payload_blake3".into(),
-            JsonValue::Object(
-                by_source_payload_digest
-                    .into_iter()
-                    .map(|(digest, positions)| (digest, JsonValue::Array(positions)))
-                    .collect(),
-            ),
-        );
-        index.insert(
-            "by_payload_kind".into(),
-            JsonValue::Object(
-                by_kind
-                    .into_iter()
-                    .map(|(kind, positions)| (kind, JsonValue::Array(positions)))
-                    .collect(),
-            ),
-        );
-        index.insert("blocks".into(), JsonValue::Array(entries));
-        let index_bytes = json::to_json_pretty(&JsonValue::Object(index))
-            .expect("encode Governance DAG runtime index")
-            .into_bytes();
-        source.index_blake3 = blake3_array(&index_bytes);
-        write_test_sidecar_file(&root.join("runtime-dag-index.json"), &index_bytes);
-    }
-
-    fn producer_checkpoint_from_source(
-        root: &Path,
-        source: &SourceSnapshot,
-    ) -> RuntimeDagProducerCheckpointV1 {
-        RuntimeDagProducerCheckpointV1 {
-            version: GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1,
-            root_digest: runtime_dag_producer_root_digest(root)
-                .expect("derive canonical test producer root digest"),
-            signer_handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
-            signer_revision: TEST_PRODUCER_SIGNER_QUALIFICATION.revision,
-            signer_policy_digest: TEST_PRODUCER_SIGNER_QUALIFICATION.policy_digest,
-            checkpoint_store_handle: TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
-            checkpoint_store_revision: TEST_STORE_QUALIFICATION.revision,
-            checkpoint_store_policy_digest: TEST_STORE_QUALIFICATION.policy_digest,
-            publisher_peer_id: source.head.publisher_peer_id.clone(),
-            publisher_public_key: source
-                .head
-                .head_signature
-                .public_key
-                .as_slice()
-                .try_into()
-                .expect("test source public key is 32 bytes"),
-            block_count: source.head.block_count,
-            head_block_cid: source
-                .head
-                .head_block_cid
-                .as_slice()
-                .try_into()
-                .expect("test source head CID is 32 bytes"),
-            head_bytes_digest: blake3_array(&source.head_bytes),
-            index_bytes_digest: source.index_blake3,
-            qualification_transition_generation: 0,
-            qualification_transition_digest: [0; 32],
-            qualification_archive_generation: 0,
-            qualification_archive_digest: [0; 32],
-        }
-    }
-
-    fn seed_producer_checkpoint(
-        provider: &TestSealedStore,
-        root: &Path,
-        source: &SourceSnapshot,
-    ) -> GovernanceDagSealedStateRecord {
-        let checkpoint = producer_checkpoint_from_source(root, source);
-        let generation = checkpoint
-            .block_count
-            .checked_add(checkpoint.qualification_transition_generation)
-            .and_then(|generation| {
-                generation.checked_add(checkpoint.qualification_archive_generation)
-            })
-            .and_then(|generation| generation.checked_add(1))
-            .expect("test producer generation");
-        let record = GovernanceDagSealedStateRecord::new(
-            GovernanceDagSealedStateSlot::ProducerCheckpoint,
-            generation,
-            norito::to_bytes(&checkpoint).expect("encode test producer checkpoint"),
-        );
-        provider
-            .compare_and_swap(
-                GovernanceDagSealedStateSlot::ProducerCheckpoint,
-                None,
-                record.clone(),
-            )
-            .expect("seed test producer checkpoint");
-        record
-    }
-
-    async fn kubo_key_generate(endpoint: &PinnedEndpoint, alias: &str) -> String {
-        let url = endpoint
-            .ipfs_url(
-                "api/v0/key/gen",
-                &[("arg", alias), ("type", "ed25519"), ("ipns-base", "base36")],
-            )
-            .expect("construct Kubo key generation URL");
-        let request = endpoint
-            .request(Method::POST, url)
-            .expect("construct Kubo key generation request");
-        let response = endpoint
-            .execute(request, "Kubo key generation request failed")
-            .await
-            .expect("send Kubo key generation request");
-        assert!(response.status().is_success(), "Kubo key generation failed");
-        let body = read_bounded_response(response, 64 * 1024)
-            .await
-            .expect("read Kubo key generation response");
-        let value: JsonValue = json::from_slice(&body).expect("Kubo key response must be JSON");
-        let name = value
-            .get("Name")
-            .and_then(JsonValue::as_str)
-            .expect("Kubo key response has Name");
-        assert_eq!(name, alias);
-        validate_public_token(
-            value
-                .get("Id")
-                .and_then(JsonValue::as_str)
-                .expect("Kubo key response has Id"),
-            "Kubo IPNS key id",
-        )
-        .expect("Kubo returns a canonical IPNS key id")
-    }
-
-    async fn kubo_unpin(endpoint: &PinnedEndpoint, cid: &str) {
-        let url = endpoint
-            .ipfs_url("api/v0/pin/rm", &[("arg", cid), ("recursive", "true")])
-            .expect("construct Kubo unpin URL");
-        let request = endpoint
-            .request(Method::POST, url)
-            .expect("construct Kubo unpin request");
-        let response = endpoint
-            .execute(request, "Kubo unpin request failed")
-            .await
-            .expect("send Kubo unpin request");
-        assert!(response.status().is_success(), "Kubo unpin failed");
-        let _ = read_bounded_response(response, 64 * 1024)
-            .await
-            .expect("read Kubo unpin response");
-    }
-
-    async fn assert_kubo_has_no_swarm_peers(endpoint: &PinnedEndpoint) {
-        let url = endpoint
-            .ipfs_url("api/v0/swarm/peers", &[])
-            .expect("construct Kubo swarm peers URL");
-        let request = endpoint
-            .request(Method::POST, url)
-            .expect("construct Kubo swarm peers request");
-        let response = endpoint
-            .execute(request, "Kubo swarm-peers request failed")
-            .await
-            .expect("send Kubo swarm peers request");
-        assert!(response.status().is_success());
-        let body = read_bounded_response(response, 64 * 1024)
-            .await
-            .expect("read Kubo swarm peers response");
-        let value: JsonValue = json::from_slice(&body).expect("Kubo swarm response must be JSON");
-        assert!(
-            value
-                .get("Peers")
-                .is_none_or(|peers| peers.is_null() || peers.as_array().is_some_and(Vec::is_empty)),
-            "isolated Kubo must have no swarm peers: {value:?}"
-        );
-    }
-
-    fn real_kubo_service_view(
-        source: &SourceSnapshot,
-        source_dir: &Path,
-        state_dir: &Path,
-        api_url: &str,
-        ipns_name: &str,
-    ) -> SorafsGovernanceDagServiceView {
-        let paths = [source_dir, state_dir];
-        assert!(paths.iter().all(|path| {
-            let path = path.to_string_lossy();
-            !path.contains(['"', '\\', '\n', '\r'])
-        }));
-        let config = format!(
-            r#"[sorafs.storage]
-governance_dag_dir = "{}"
-governance_dag_publisher_peer_id = "{TEST_PRODUCER_PEER_ID}"
-governance_dag_signer_handle = "{TEST_PRODUCER_SIGNER_HANDLE}"
-governance_dag_signer_revision = 1
-governance_dag_signer_policy_digest_hex = "{}"
-governance_dag_publisher_public_key_hex = "{}"
-
-[sorafs.storage.governance_dag_service]
-enabled = true
-state_dir = "{}"
-ipfs_api_url = "{}"
-head_mode = "ipns"
-ipns_name = "{}"
-ipns_key_name = "{}"
-ipfs_authenticator_handle = "{TEST_IPFS_AUTH_HANDLE}"
-ipfs_authenticator_revision = 1
-ipfs_authenticator_policy_digest_hex = "{}"
-ipfs_request_auth_public_key_hex = "{}"
-checkpoint_store_handle = "{TEST_CHECKPOINT_STORE_HANDLE}"
-checkpoint_store_revision = 1
-checkpoint_store_policy_digest_hex = "{}"
-publisher_public_key_hex = "{}"
-poll_interval_secs = 1
-connect_timeout_ms = 5000
-request_timeout_ms = 20000
-dns_timeout_ms = 5000
-max_request_bytes = {}
-max_head_age_secs = 3600
-max_future_skew_secs = 60
-allow_insecure_http = true
-allow_private_ipfs_endpoint = true
-allow_head_bootstrap = true
-listen_addr = "127.0.0.1:0"
-"#,
-            source_dir.display(),
-            "83".repeat(32),
-            hex::encode(&source.head.head_signature.public_key),
-            state_dir.display(),
-            api_url,
-            ipns_name,
-            KUBO_IPNS_KEY_ALIAS,
-            "81".repeat(32),
-            hex::encode(test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE)),
-            "82".repeat(32),
-            hex::encode(&source.head.head_signature.public_key),
-            BLOCK_PREFIX_ARCHIVE_MAX_REQUEST_BYTES_V1,
-        );
-        let config_path = state_dir
-            .parent()
-            .expect("integration state directory has parent")
-            .join("governance-dag-service.toml");
-        fs::write(&config_path, config).expect("write standalone G-DAG service config");
-        load_service_config(&config_path).expect("parse standalone G-DAG service config")
-    }
-
-    async fn spawn_router_with_authenticator(
-        router: Router,
-        path: &str,
-        authentication_scope: GovernanceDagAuthenticationScope,
-        authenticator: OpaqueAuthenticator,
-    ) -> (PinnedEndpoint, JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind mock service");
-        let address = listener.local_addr().expect("mock listener address");
-        let handle = tokio::spawn(async move {
-            let _ = axum::serve(listener, router.into_make_service()).await;
-        });
-        let url = Url::parse(&format!("http://{address}{path}")).expect("mock URL");
-        let client = Client::builder()
-            .no_proxy()
-            .redirect(Policy::none())
-            .build()
-            .expect("mock HTTP client");
-        (
-            PinnedEndpoint {
-                url,
-                client,
-                authentication_scope,
-                authenticator,
-                max_request_bytes: GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
-            },
-            handle,
-        )
-    }
-
-    async fn spawn_router(router: Router, path: &str) -> (PinnedEndpoint, JoinHandle<()>) {
-        spawn_router_with_authenticator(
-            router,
-            path,
-            GovernanceDagAuthenticationScope::Ipfs,
-            test_authenticator(
-                TEST_IPFS_AUTH_HANDLE,
-                GovernanceDagAuthenticationScope::Ipfs,
-            ),
-        )
-        .await
-    }
-
-    fn test_response(status: StatusCode, body: impl Into<Body>) -> Response {
-        let mut response = Response::new(body.into());
-        *response.status_mut() = status;
-        response
-    }
-
-    #[derive(Clone)]
-    struct MockIpfsState {
-        add_body: Arc<Vec<u8>>,
-        cat_body: Arc<Vec<u8>>,
-        pin_present: bool,
-    }
-
-    async fn mock_ipfs_add(State(state): State<MockIpfsState>) -> Response {
-        test_response(StatusCode::OK, state.add_body.as_ref().clone())
-    }
-
-    async fn mock_ipfs_pin_add() -> Response {
-        test_response(StatusCode::OK, "{}")
-    }
-
-    async fn mock_ipfs_pin_ls(State(state): State<MockIpfsState>) -> Response {
-        let body = if state.pin_present {
-            format!(r#"{{"Keys":{{"{TEST_CID_PAYLOAD}":{{}}}}}}"#)
-        } else {
-            r#"{"Keys":{}}"#.to_owned()
-        };
-        test_response(StatusCode::OK, body)
-    }
-
-    async fn mock_ipfs_cat(State(state): State<MockIpfsState>) -> Response {
-        test_response(StatusCode::OK, state.cat_body.as_ref().clone())
-    }
-
-    fn mock_ipfs_router(state: MockIpfsState) -> Router {
-        Router::new()
-            .route("/api/v0/add", post(mock_ipfs_add))
-            .route("/api/v0/pin/add", post(mock_ipfs_pin_add))
-            .route("/api/v0/pin/ls", post(mock_ipfs_pin_ls))
-            .route("/api/v0/cat", post(mock_ipfs_cat))
-            .with_state(state)
-    }
-
-    async fn count_unexpected_publication_io(
-        State(request_count): State<Arc<AtomicU64>>,
-    ) -> Response {
-        request_count.fetch_add(1, AtomicOrdering::SeqCst);
-        test_response(StatusCode::INTERNAL_SERVER_ERROR, "unexpected request")
-    }
-
-    #[derive(Default)]
-    struct SignedHeadInner {
-        bytes: Option<Vec<u8>>,
-        etag: String,
-        put_status: Option<StatusCode>,
-        readback_override: Option<Vec<u8>>,
-        put_count: u64,
-    }
-
-    #[derive(Clone)]
-    struct SignedHeadState(Arc<Mutex<SignedHeadInner>>);
-
-    async fn mock_signed_head_get(State(state): State<SignedHeadState>) -> Response {
-        let state = state.0.lock().await;
-        let Some(bytes) = &state.bytes else {
-            return test_response(StatusCode::NOT_FOUND, Body::empty());
-        };
-        let mut response = test_response(StatusCode::OK, bytes.clone());
-        response.headers_mut().insert(
-            header::ETAG,
-            HeaderValue::from_str(&state.etag).expect("mock ETag"),
-        );
-        response
-    }
-
-    async fn mock_signed_head_put(
-        State(state): State<SignedHeadState>,
-        _headers: HeaderMap,
-        body: Bytes,
-    ) -> Response {
-        let mut state = state.0.lock().await;
-        state.put_count = state.put_count.saturating_add(1);
-        if let Some(status) = state.put_status {
-            return test_response(status, Body::empty());
-        }
-        state.bytes = Some(
-            state
-                .readback_override
-                .clone()
-                .unwrap_or_else(|| body.to_vec()),
-        );
-        state.etag = "\"v2\"".to_owned();
-        test_response(StatusCode::NO_CONTENT, Body::empty())
-    }
-
-    async fn spawn_signed_head(
-        inner: SignedHeadInner,
-    ) -> (PinnedEndpoint, SignedHeadState, JoinHandle<()>) {
-        spawn_signed_head_with_authenticator(
-            inner,
-            test_authenticator(
-                TEST_HEAD_AUTH_HANDLE,
-                GovernanceDagAuthenticationScope::SignedHead,
-            ),
-        )
-        .await
-    }
-
-    async fn spawn_signed_head_with_authenticator(
-        inner: SignedHeadInner,
-        authenticator: OpaqueAuthenticator,
-    ) -> (PinnedEndpoint, SignedHeadState, JoinHandle<()>) {
-        let state = SignedHeadState(Arc::new(Mutex::new(inner)));
-        let router = Router::new()
-            .route("/head", get(mock_signed_head_get).put(mock_signed_head_put))
-            .with_state(state.clone());
-        let (endpoint, handle) = spawn_router_with_authenticator(
-            router,
-            "/head",
-            GovernanceDagAuthenticationScope::SignedHead,
-            authenticator,
-        )
-        .await;
-        (endpoint, state, handle)
-    }
-
-    #[derive(Clone)]
-    struct IpnsMockState {
-        resolutions: Arc<Mutex<VecDeque<String>>>,
-        bodies: Arc<HashMap<String, Vec<u8>>>,
-        publish_count: Arc<AtomicU64>,
-    }
-
-    fn raw_query_arg(raw: Option<&str>) -> Option<&str> {
-        raw?.split('&').find_map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            (key == "arg").then_some(value)
-        })
-    }
-
-    async fn mock_ipns_resolve(
-        State(state): State<IpnsMockState>,
-        RawQuery(_raw): RawQuery,
-    ) -> Response {
-        let cid = state.resolutions.lock().await.pop_front();
-        match cid {
-            Some(cid) => test_response(StatusCode::OK, format!(r#"{{"Path":"/ipfs/{cid}"}}"#)),
-            None => test_response(StatusCode::NOT_FOUND, "{}"),
-        }
-    }
-
-    async fn mock_ipns_publish(State(state): State<IpnsMockState>) -> Response {
-        state.publish_count.fetch_add(1, Ordering::SeqCst);
-        test_response(StatusCode::OK, "{}")
-    }
-
-    async fn mock_ipns_cat(
-        State(state): State<IpnsMockState>,
-        RawQuery(raw): RawQuery,
-    ) -> Response {
-        let Some(cid) = raw_query_arg(raw.as_deref()) else {
-            return test_response(StatusCode::BAD_REQUEST, Body::empty());
-        };
-        match state.bodies.get(cid) {
-            Some(bytes) => test_response(StatusCode::OK, bytes.clone()),
-            None => test_response(StatusCode::NOT_FOUND, Body::empty()),
-        }
-    }
-
-    fn mock_ipns_router(state: IpnsMockState) -> Router {
-        Router::new()
-            .route("/api/v0/name/resolve", post(mock_ipns_resolve))
-            .route("/api/v0/name/publish", post(mock_ipns_publish))
-            .route("/api/v0/cat", post(mock_ipns_cat))
-            .with_state(state)
-    }
-
-    #[derive(Clone)]
-    struct IpnsResolveFailureState {
-        status: StatusCode,
-        publish_count: Arc<AtomicU64>,
-    }
-
-    async fn mock_ipns_resolve_failure(State(state): State<IpnsResolveFailureState>) -> Response {
-        test_response(state.status, "{}")
-    }
-
-    async fn mock_ipns_publish_after_failure(
-        State(state): State<IpnsResolveFailureState>,
-    ) -> Response {
-        state.publish_count.fetch_add(1, Ordering::SeqCst);
-        test_response(StatusCode::OK, "{}")
-    }
-
-    fn mock_ipns_resolve_failure_router(state: IpnsResolveFailureState) -> Router {
-        Router::new()
-            .route("/api/v0/name/resolve", post(mock_ipns_resolve_failure))
-            .route(
-                "/api/v0/name/publish",
-                post(mock_ipns_publish_after_failure),
-            )
-            .with_state(state)
-    }
-
-    async fn response_header_bomb() -> Response {
-        let mut response = test_response(StatusCode::OK, "ok");
-        for index in 0..=MAX_RESPONSE_HEADERS {
-            let name = HeaderName::from_bytes(format!("x-test-{index}").as_bytes())
-                .expect("mock header name");
-            response
-                .headers_mut()
-                .insert(name, HeaderValue::from_static("value"));
-        }
-        response
-    }
-
-    async fn response_body_bomb() -> Response {
-        test_response(StatusCode::OK, vec![0_u8; 17])
-    }
-
-    async fn response_gzip() -> Response {
-        let mut response = test_response(StatusCode::OK, "abc");
-        response
-            .headers_mut()
-            .insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-        response
-    }
-
-    async fn mock_authenticator_drift(State(provider): State<Arc<TestAuthenticator>>) -> Response {
-        provider
-            .qualification_revision
-            .fetch_add(1, AtomicOrdering::SeqCst);
-        test_response(StatusCode::OK, "qualified-before-response")
-    }
-
+    include!("governance_service/tests/support.rs");
     include!("governance_service/tests/archive_and_replay.rs");
-
     include!("governance_service/tests/authenticated_receivers_and_startup.rs");
-
-    #[tokio::test]
-    async fn service_rejects_in_process_sealed_checkpoint_rollback() {
-        let root = secure_temp_dir();
-        let view = runtime_boundary_view(root.path());
-        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
-        let store = test_checkpoint_store(provider.clone());
-        let source = signed_source(1, 0x6A, 1_800_000_000);
-        let mut checkpoint = checkpoint_from_source(&source);
-        checkpoint.generation = 2;
-        save_checkpoint(&store, None, &checkpoint).expect("seed generation-two checkpoint");
-
-        let mut service = Service::from_view(view, test_runtime_providers(provider.clone()))
-            .await
-            .expect("initialize service at generation two");
-
-        let mut rolled_back = checkpoint;
-        rolled_back.generation = 1;
-        let payload = norito::to_bytes(&rolled_back).expect("encode rollback checkpoint");
-        let record = GovernanceDagSealedStateRecord::new(
-            GovernanceDagSealedStateSlot::Checkpoint,
-            1,
-            payload,
-        );
-        provider
-            .inner
-            .lock()
-            .expect("lock test checkpoint store")
-            .checkpoint = Some(record);
-
-        let error = service
-            .reconcile_once()
-            .await
-            .expect_err("checkpoint rollback must fail before source/network work");
-        assert!(error.to_string().contains("rolled back"));
-
-        provider
-            .inner
-            .lock()
-            .expect("lock test checkpoint store")
-            .checkpoint = None;
-        let error = service
-            .reconcile_once()
-            .await
-            .expect_err("checkpoint deletion must fail before source/network work");
-        assert!(error.to_string().contains("removed the active checkpoint"));
-    }
-
-    #[tokio::test]
-    async fn hardened_http_refuses_redirect_header_body_and_encoding_attacks() {
-        let redirect_router = Router::new()
-            .route(
-                "/redirect",
-                get(|| async { Redirect::temporary("/target") }),
-            )
-            .route("/target", get(|| async { "followed" }));
-        let (redirect, redirect_task) = spawn_router(redirect_router, "/redirect").await;
-        let request = redirect
-            .request(Method::GET, redirect.url.clone())
-            .expect("build redirect request");
-        let response = redirect
-            .execute(request, "redirect test request failed")
-            .await
-            .expect("receive redirect response");
-        assert!(response.status().is_redirection());
-        redirect_task.abort();
-
-        let router = Router::new()
-            .route("/headers", get(response_header_bomb))
-            .route("/body", get(response_body_bomb))
-            .route("/gzip", get(response_gzip));
-        let (endpoint, task) = spawn_router(router, "/headers").await;
-        let request = endpoint
-            .request(Method::GET, endpoint.url.clone())
-            .expect("build header request");
-        let response = endpoint
-            .execute(request, "header-bound test request failed")
-            .await
-            .expect("receive header response");
-        assert!(read_bounded_response(response, 1024).await.is_err());
-
-        let mut body_url = endpoint.url.clone();
-        body_url.set_path("/body");
-        let request = endpoint
-            .request(Method::GET, body_url)
-            .expect("build body request");
-        let response = endpoint
-            .execute(request, "body-bound test request failed")
-            .await
-            .expect("receive body response");
-        assert!(read_bounded_response(response, 16).await.is_err());
-
-        let mut gzip_url = endpoint.url.clone();
-        gzip_url.set_path("/gzip");
-        let request = endpoint
-            .request(Method::GET, gzip_url)
-            .expect("build gzip request");
-        let response = endpoint
-            .execute(request, "encoding test request failed")
-            .await
-            .expect("receive gzip response");
-        assert!(read_bounded_response(response, 16).await.is_err());
-        task.abort();
-    }
-
-    #[tokio::test]
-    async fn ipfs_publication_rejects_malformed_cid_missing_pin_and_wrong_readback() {
-        let cases = [
-            MockIpfsState {
-                add_body: Arc::new(b"not-json".to_vec()),
-                cat_body: Arc::new(b"payload".to_vec()),
-                pin_present: true,
-            },
-            MockIpfsState {
-                add_body: Arc::new(br#"{"Hash":"bad/cid"}"#.to_vec()),
-                cat_body: Arc::new(b"payload".to_vec()),
-                pin_present: true,
-            },
-            MockIpfsState {
-                add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_PAYLOAD}"}}"#).into_bytes()),
-                cat_body: Arc::new(b"payload".to_vec()),
-                pin_present: false,
-            },
-            MockIpfsState {
-                add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_BLOCK}"}}"#).into_bytes()),
-                cat_body: Arc::new(b"payload".to_vec()),
-                pin_present: true,
-            },
-            MockIpfsState {
-                add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_PAYLOAD}"}}"#).into_bytes()),
-                cat_body: Arc::new(b"different".to_vec()),
-                pin_present: true,
-            },
-        ];
-        for state in cases {
-            let (endpoint, task) = spawn_router(mock_ipfs_router(state), "/").await;
-            let result = ipfs_add_verified(&endpoint, "block.to", b"payload", 1024, 1024).await;
-            assert!(result.is_err());
-            task.abort();
-        }
-
-        let valid = MockIpfsState {
-            add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_PAYLOAD}"}}"#).into_bytes()),
-            cat_body: Arc::new(b"payload".to_vec()),
-            pin_present: true,
-        };
-        let (endpoint, task) = spawn_router(mock_ipfs_router(valid), "/").await;
-        assert_eq!(
-            ipfs_add_verified(&endpoint, "block.to", b"payload", 1024, 1024)
-                .await
-                .expect("valid mock IPFS publication"),
-            TEST_CID_PAYLOAD
-        );
-        task.abort();
-    }
-
-    #[test]
-    fn canonical_ipfs_cid_is_derived_from_exact_payload_bytes() {
-        assert_eq!(canonical_raw_sha256_cid(b"payload"), TEST_CID_PAYLOAD);
-        assert_eq!(
-            validate_ipfs_cid_for_bytes(TEST_CID_PAYLOAD, b"payload")
-                .expect("canonical CID commits to the exact bytes"),
-            TEST_CID_PAYLOAD
-        );
-        assert!(
-            validate_ipfs_cid_for_bytes(TEST_CID_PAYLOAD, b"payload-tampered").is_err(),
-            "a canonical but substituted CID must not authenticate different bytes"
-        );
-    }
-
-    #[test]
-    fn ipfs_multipart_body_is_deterministic_bounded_and_cloneable() {
-        let (boundary, body) =
-            canonical_ipfs_multipart_body("governance-head.to", b"\0payload\r\n")
-                .expect("construct canonical multipart body");
-        let (replayed_boundary, replayed_body) =
-            canonical_ipfs_multipart_body("governance-head.to", b"\0payload\r\n")
-                .expect("replay canonical multipart body");
-        assert_eq!(boundary, replayed_boundary);
-        assert_eq!(body, replayed_body);
-        assert!(boundary.len() <= 70);
-        assert!(body.starts_with(format!("--{boundary}\r\n").as_bytes()));
-        assert!(body.ends_with(format!("\r\n--{boundary}--\r\n").as_bytes()));
-        assert!(
-            body.windows(b"\0payload\r\n".len())
-                .any(|window| window == b"\0payload\r\n")
-        );
-        assert!(canonical_ipfs_multipart_body("../escape", b"payload").is_err());
-
-        let request = Client::new()
-            .post("https://example.invalid/api/v0/add")
-            .header(
-                header::CONTENT_TYPE,
-                format!("multipart/form-data; boundary={boundary}"),
-            )
-            .body(body);
-        assert!(
-            request.try_clone().is_some(),
-            "the final multipart request must remain inspectable by the authenticator"
-        );
-    }
-
-    #[tokio::test]
-    async fn signed_head_authenticator_receives_final_body_and_cas_headers() {
-        let cases = [
-            (
-                SignedHeadInner {
-                    bytes: Some(b"old".to_vec()),
-                    etag: "\"v1\"".to_owned(),
-                    ..SignedHeadInner::default()
-                },
-                PublicHead::Present {
-                    bytes: b"old".to_vec(),
-                    token: "\"v1\"".to_owned(),
-                },
-                header::IF_MATCH,
-                HeaderValue::from_static("\"v1\""),
-                false,
-            ),
-            (
-                SignedHeadInner::default(),
-                PublicHead::Missing,
-                header::IF_NONE_MATCH,
-                HeaderValue::from_static("*"),
-                true,
-            ),
-        ];
-        for (inner, current, condition, condition_value, allow_bootstrap) in cases {
-            let provider = Arc::new(FinalRequestAuthenticator::new(
-                b"new",
-                condition,
-                condition_value,
-            ));
-            let authenticator = OpaqueAuthenticator::try_new(
-                TEST_HEAD_AUTH_HANDLE,
-                TEST_AUTH_QUALIFICATION,
-                test_request_auth_policy(provider.public_key()),
-                provider.clone(),
-                GovernanceDagAuthenticationScope::SignedHead,
-                test_replay_store(),
-                "signed-head authenticator",
-            )
-            .expect("bind final-request authenticator");
-            let (endpoint, _state, task) =
-                spawn_signed_head_with_authenticator(inner, authenticator).await;
-            let installed =
-                put_signed_http_head(&endpoint, b"new", &current, allow_bootstrap, 1024)
-                    .await
-                    .expect("authenticate and install the final conditional request");
-            assert!(matches!(
-                installed,
-                PublicHead::Present { bytes, .. } if bytes == b"new"
-            ));
-            assert!(
-                provider.observed_put.load(AtomicOrdering::SeqCst),
-                "authenticator must observe the body and conditional headers before execution"
-            );
-            task.abort();
-        }
-    }
-
-    #[tokio::test]
-    async fn signed_head_cas_rejects_conflict_bootstrap_and_readback_drift() {
-        for status in [StatusCode::CONFLICT, StatusCode::PRECONDITION_FAILED] {
-            let (endpoint, _state, task) = spawn_signed_head(SignedHeadInner {
-                bytes: Some(b"old".to_vec()),
-                etag: "\"v1\"".to_owned(),
-                put_status: Some(status),
-                ..SignedHeadInner::default()
-            })
-            .await;
-            let current = PublicHead::Present {
-                bytes: b"old".to_vec(),
-                token: "\"v1\"".to_owned(),
-            };
-            assert!(
-                put_signed_http_head(&endpoint, b"new", &current, false, 1024)
-                    .await
-                    .is_err()
-            );
-            task.abort();
-        }
-
-        let (endpoint, state, task) = spawn_signed_head(SignedHeadInner::default()).await;
-        assert!(
-            put_signed_http_head(&endpoint, b"new", &PublicHead::Missing, false, 1024)
-                .await
-                .is_err()
-        );
-        assert_eq!(state.0.lock().await.put_count, 0);
-        task.abort();
-
-        let (endpoint, _state, task) = spawn_signed_head(SignedHeadInner {
-            bytes: Some(b"old".to_vec()),
-            etag: "\"v1\"".to_owned(),
-            readback_override: Some(b"attacker".to_vec()),
-            ..SignedHeadInner::default()
-        })
-        .await;
-        let current = PublicHead::Present {
-            bytes: b"old".to_vec(),
-            token: "\"v1\"".to_owned(),
-        };
-        assert!(
-            put_signed_http_head(&endpoint, b"new", &current, false, 1024)
-                .await
-                .is_err()
-        );
-        task.abort();
-    }
-
-    #[tokio::test]
-    async fn ipns_publication_rejects_pre_post_movement_and_readback_drift() {
-        let initial = PublicHead::Present {
-            bytes: b"old".to_vec(),
-            token: TEST_CID_OLD.to_owned(),
-        };
-        let cases = [
-            (
-                VecDeque::from([TEST_CID_ATTACKER.to_owned()]),
-                HashMap::from([(TEST_CID_ATTACKER.to_owned(), b"attacker".to_vec())]),
-            ),
-            (
-                VecDeque::from([TEST_CID_OLD.to_owned(), TEST_CID_ATTACKER.to_owned()]),
-                HashMap::from([
-                    (TEST_CID_OLD.to_owned(), b"old".to_vec()),
-                    (TEST_CID_ATTACKER.to_owned(), b"attacker".to_vec()),
-                ]),
-            ),
-            (
-                VecDeque::from([TEST_CID_OLD.to_owned(), TEST_CID_NEW.to_owned()]),
-                HashMap::from([
-                    (TEST_CID_OLD.to_owned(), b"old".to_vec()),
-                    (TEST_CID_NEW.to_owned(), b"wrong".to_vec()),
-                ]),
-            ),
-        ];
-        for (resolutions, bodies) in cases {
-            let state = IpnsMockState {
-                resolutions: Arc::new(Mutex::new(resolutions)),
-                bodies: Arc::new(bodies),
-                publish_count: Arc::new(AtomicU64::new(0)),
-            };
-            let (endpoint, task) = spawn_router(mock_ipns_router(state), "/").await;
-            assert!(
-                publish_ipns_head(
-                    &endpoint,
-                    IpnsHeadPublishRequest {
-                        name: "test-name",
-                        key_name: "test-key",
-                        head_cid: TEST_CID_NEW,
-                        bytes: b"new",
-                        initial: &initial,
-                        allow_bootstrap: false,
-                        max_response_bytes: 1024,
-                    },
-                )
-                .await
-                .is_err()
-            );
-            task.abort();
-        }
-    }
-
-    #[test]
-    fn ipns_absence_profile_is_narrow_and_exact() {
-        assert!(is_authenticated_ipns_absence(StatusCode::NOT_FOUND, b"{}"));
-        assert!(is_authenticated_ipns_absence(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            br#"{"Message":"could not resolve name","Code":0,"Type":"error"}"#
-        ));
-        assert!(!is_authenticated_ipns_absence(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            br#"{"Message":"routing unavailable","Code":0,"Type":"error"}"#
-        ));
-        assert!(!is_authenticated_ipns_absence(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            br#"{"Message":"could not resolve name","Code":0,"Type":"error","Retry":true}"#
-        ));
-        assert!(!is_authenticated_ipns_absence(
-            StatusCode::TOO_MANY_REQUESTS,
-            br#"{"Message":"could not resolve name","Code":0,"Type":"error"}"#
-        ));
-    }
-
-    #[tokio::test]
-    async fn ipns_resolution_errors_never_authorize_bootstrap_publication() {
-        for status in [
-            StatusCode::UNAUTHORIZED,
-            StatusCode::FORBIDDEN,
-            StatusCode::TOO_MANY_REQUESTS,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            StatusCode::SERVICE_UNAVAILABLE,
-        ] {
-            let publish_count = Arc::new(AtomicU64::new(0));
-            let state = IpnsResolveFailureState {
-                status,
-                publish_count: publish_count.clone(),
-            };
-            let (endpoint, task) = spawn_router(mock_ipns_resolve_failure_router(state), "/").await;
-            let error = publish_ipns_head(
-                &endpoint,
-                IpnsHeadPublishRequest {
-                    name: "test-name",
-                    key_name: "test-key",
-                    head_cid: TEST_CID_NEW,
-                    bytes: b"new",
-                    initial: &PublicHead::Missing,
-                    allow_bootstrap: true,
-                    max_response_bytes: 1024,
-                },
-            )
-            .await
-            .expect_err("authenticated resolver failure must fail closed");
-            assert!(error.to_string().contains(status.as_str()));
-            assert_eq!(
-                publish_count.load(AtomicOrdering::SeqCst),
-                0,
-                "resolver failure must not be reclassified as authenticated absence"
-            );
-            task.abort();
-        }
-    }
-
-    #[test]
-    fn mirror_index_exposes_only_signed_submission_provenance() {
-        let source = signed_finance_source(0x39, 1_800_000_000);
-        let checkpoint = checkpoint_from_source(&source);
-        let mirror = mirror_index_value(
-            &source,
-            &checkpoint.mirror_blocks,
-            &checkpoint.archive_head,
-            checkpoint.generation,
-            &checkpoint.head_ipfs_cid,
-            &checkpoint.public_head_token,
-            checkpoint.published_at_unix,
-        )
-        .expect("build attributed mirror index");
-        let entry = mirror
-            .get("blocks")
-            .and_then(JsonValue::as_array)
-            .and_then(|blocks| blocks.first())
-            .expect("attributed mirror block");
-        let signed = source.blocks[0]
-            .block
-            .node
-            .submission_provenance
-            .as_ref()
-            .expect("signed submission provenance");
-        assert_eq!(
-            entry
-                .get("submission_publisher_account_digest_hex")
-                .and_then(JsonValue::as_str),
-            Some(hex::encode(signed.publisher_account_digest).as_str())
-        );
-        assert_eq!(
-            entry.get("submission_origin").and_then(JsonValue::as_str),
-            Some(signed.origin.label())
-        );
-
-        let internal_source = signed_source(1, 0x38, 1_800_000_000);
-        let internal_checkpoint = checkpoint_from_source(&internal_source);
-        let internal_mirror = mirror_index_value(
-            &internal_source,
-            &internal_checkpoint.mirror_blocks,
-            &internal_checkpoint.archive_head,
-            internal_checkpoint.generation,
-            &internal_checkpoint.head_ipfs_cid,
-            &internal_checkpoint.public_head_token,
-            internal_checkpoint.published_at_unix,
-        )
-        .expect("build internal-producer mirror index");
-        let internal_entry = internal_mirror
-            .get("blocks")
-            .and_then(JsonValue::as_array)
-            .and_then(|blocks| blocks.first())
-            .expect("internal mirror block");
-        assert_eq!(
-            internal_entry.get("submission_publisher_account_digest_hex"),
-            Some(&JsonValue::Null)
-        );
-        assert_eq!(
-            internal_entry.get("submission_origin"),
-            Some(&JsonValue::Null)
-        );
-    }
-
-    #[test]
-    fn mirror_file_rejects_truncation_metadata_drift_and_recovers_when_missing() {
-        let dir = secure_temp_dir();
-        let source = signed_source(2, 0x3a, 1_800_000_000);
-        let config = test_runtime_config(&source, dir.path());
-        let mut checkpoint = checkpoint_from_source(&source);
-        let mirror = mirror_index_value(
-            &source,
-            &checkpoint.mirror_blocks,
-            &checkpoint.archive_head,
-            checkpoint.generation,
-            &checkpoint.head_ipfs_cid,
-            &checkpoint.public_head_token,
-            checkpoint.published_at_unix,
-        )
-        .expect("build test mirror");
-        let canonical = json::to_json_pretty(&mirror)
-            .expect("encode test mirror")
-            .into_bytes();
-        checkpoint.mirror_blake3 = blake3_array(&canonical);
-        let path = config.state_root_guard.root().join(MIRROR_INDEX_FILE);
-        write_rooted_atomic_secret(
-            &config.state_root_guard,
-            Path::new(MIRROR_INDEX_FILE),
-            &canonical,
-        )
-        .expect("write test mirror");
-        verify_mirror_file(&config, &checkpoint).expect("valid mirror accepted");
-
-        fs::remove_file(&path).expect("remove mirror for recovery");
-        verify_or_recover_mirror_file(&config, &checkpoint, &source)
-            .expect("missing mirror rebuilt deterministically");
-        assert_eq!(fs::read(&path).expect("read rebuilt mirror"), canonical);
-
-        fs::write(&path, &canonical[..canonical.len() / 2]).expect("truncate mirror");
-        assert!(verify_mirror_file(&config, &checkpoint).is_err());
-
-        for field in ["schema", "generation", "head"] {
-            let mut value = mirror.clone();
-            match field {
-                "schema" => {
-                    value
-                        .as_object_mut()
-                        .expect("mirror object")
-                        .insert("schema".into(), JsonValue::from("wrong.schema"));
-                }
-                "generation" => {
-                    value
-                        .as_object_mut()
-                        .expect("mirror object")
-                        .insert("generation".into(), JsonValue::from(99_u64));
-                }
-                "head" => {
-                    value
-                        .get_mut("head")
-                        .and_then(JsonValue::as_object_mut)
-                        .expect("head object")
-                        .insert(
-                            "head_block_cid_hex".into(),
-                            JsonValue::from("00".repeat(32)),
-                        );
-                }
-                _ => unreachable!("closed test field set"),
-            }
-            let bytes = json::to_json_pretty(&value)
-                .expect("encode drifted mirror")
-                .into_bytes();
-            let mut matching_digest_checkpoint = checkpoint.clone();
-            matching_digest_checkpoint.mirror_blake3 = blake3_array(&bytes);
-            fs::write(&path, bytes).expect("write drifted mirror");
-            assert!(verify_mirror_file(&config, &matching_digest_checkpoint).is_err());
-        }
-    }
-
+    include!("governance_service/tests/publication_and_mirror.rs");
     include!("governance_service/tests/restart_and_live_kubo.rs");
 }

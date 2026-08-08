@@ -93,8 +93,7 @@ struct RuntimeProviderBindingWireV1 {
     native_signer_binding: Option<NativeTransactionSignerBindingWireV1>,
     governance_dag_publisher_peer_id: Option<Vec<u8>>,
     governance_dag_publisher_public_key: Option<[u8; 32]>,
-    governance_request_auth_public_key: Option<[u8; 32]>,
-    governance_request_auth_max_body_bytes: Option<u64>,
+    governance_request_ingress_binding: Option<GovernanceRequestIngressBindingWireV1>,
     provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>,
     provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>,
     provider_ingest_checkpoint_max_bytes: Option<u64>,
@@ -111,6 +110,57 @@ struct RuntimeProviderBindingWireV1 {
     evidence_viewer_archive_max_bytes: Option<u64>,
     moderation_panel_notification_archive_binding:
         Option<ModerationPanelNotificationArchiveBindingWireV1>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+struct GovernanceRequestIngressBindingWireV1 {
+    scope: u8,
+    endpoint_binding: [u8; 32],
+    public_key: [u8; 32],
+    max_body_bytes: u64,
+    max_envelope_lifetime_secs: u64,
+    max_future_skew_secs: u64,
+}
+
+impl From<sorafs_node::GovernanceDagRequestIngressBindingV1>
+    for GovernanceRequestIngressBindingWireV1
+{
+    fn from(binding: sorafs_node::GovernanceDagRequestIngressBindingV1) -> Self {
+        let scope = match binding.scope() {
+            sorafs_node::GovernanceDagAuthenticationScope::Ipfs => 1,
+            sorafs_node::GovernanceDagAuthenticationScope::SignedHead => 2,
+        };
+        Self {
+            scope,
+            endpoint_binding: binding.endpoint_binding(),
+            public_key: binding.public_key(),
+            max_body_bytes: binding.max_body_bytes(),
+            max_envelope_lifetime_secs: binding.max_envelope_lifetime_secs(),
+            max_future_skew_secs: binding.max_future_skew_secs(),
+        }
+    }
+}
+
+impl GovernanceRequestIngressBindingWireV1 {
+    fn try_into_binding(
+        self,
+    ) -> Result<sorafs_node::GovernanceDagRequestIngressBindingV1, IrohaRuntimeProviderCatalogErrorV1>
+    {
+        let scope = match self.scope {
+            1 => sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
+            2 => sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+            _ => return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding),
+        };
+        sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+            scope,
+            self.endpoint_binding,
+            self.public_key,
+            self.max_body_bytes,
+            self.max_envelope_lifetime_secs,
+            self.max_future_skew_secs,
+        )
+        .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
@@ -572,11 +622,18 @@ fn validate_catalog_relationships(
 
     let governance_ipfs = find(IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator);
     let governance_head = find(IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator);
-    if let (Some(ipfs), Some(head)) = (governance_ipfs, governance_head)
-        && ipfs.governance_request_auth_max_body_bytes()
-            != head.governance_request_auth_max_body_bytes()
-    {
-        return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
+    if let (Some(ipfs), Some(head)) = (governance_ipfs, governance_head) {
+        let ipfs = ipfs
+            .governance_request_ingress_binding()
+            .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
+        let head = head
+            .governance_request_ingress_binding()
+            .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
+        if ipfs.max_envelope_lifetime_secs() != head.max_envelope_lifetime_secs()
+            || ipfs.max_future_skew_secs() != head.max_future_skew_secs()
+        {
+            return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding);
+        }
     }
 
     Ok(())
@@ -667,9 +724,9 @@ impl RuntimeProviderBindingWireV1 {
                 .governance_dag_publisher_peer_id()
                 .map(<[u8]>::to_vec),
             governance_dag_publisher_public_key: binding.governance_dag_publisher_public_key(),
-            governance_request_auth_public_key: binding.governance_request_auth_public_key(),
-            governance_request_auth_max_body_bytes: binding
-                .governance_request_auth_max_body_bytes(),
+            governance_request_ingress_binding: binding
+                .governance_request_ingress_binding()
+                .map(GovernanceRequestIngressBindingWireV1::from),
             provider_ingest_signer_binding: binding
                 .provider_ingest_signer_binding()
                 .map(ProviderIngestSignerBindingWireV1::try_from_binding)
@@ -876,10 +933,9 @@ impl RuntimeProviderBindingWireV1 {
                     self.handle.clone(),
                     revision,
                     policy_digest,
-                    self.governance_request_auth_public_key
-                        .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
-                    self.governance_request_auth_max_body_bytes
-                        .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
+                    self.governance_request_ingress_binding
+                        .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?
+                        .try_into_binding()?,
                 )
                 .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
             }
@@ -2056,6 +2112,24 @@ mod tests {
 
         let governance_key = ed25519_bytes(0x70);
         let governance = |slot, max_body_bytes| {
+            let scope = match slot {
+                IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator => {
+                    sorafs_node::GovernanceDagAuthenticationScope::Ipfs
+                }
+                IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator => {
+                    sorafs_node::GovernanceDagAuthenticationScope::SignedHead
+                }
+                _ => unreachable!(),
+            };
+            let ingress_binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+                scope,
+                [slot.wire_id().to_le_bytes()[0]; 32],
+                governance_key,
+                max_body_bytes,
+                30,
+                5,
+            )
+            .expect("construct Governance request-ingress fixture");
             IrohaRuntimeProviderBindingV1::try_new_governance_request_auth(
                 slot,
                 match slot {
@@ -2069,8 +2143,7 @@ mod tests {
                 },
                 3,
                 [slot.wire_id().to_le_bytes()[0]; 32],
-                governance_key,
-                max_body_bytes,
+                ingress_binding,
             )
             .expect("construct Governance request-auth fixture")
         };
@@ -2084,11 +2157,39 @@ mod tests {
                 1024 * 1024,
             ),
         ]);
+        let ipns_request = wire_from_bindings(vec![governance(
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+            1024 * 1024,
+        )]);
+        assert_valid_wire(&ipns_request);
+
+        let mut missing_ingress = ipns_request.clone();
+        wire_binding_mut(
+            &mut missing_ingress,
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+        )
+        .governance_request_ingress_binding = None;
+        assert_invalid_wire(&missing_ingress);
+
+        let mut substituted_scope = ipns_request;
+        wire_binding_mut(
+            &mut substituted_scope,
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+        )
+        .governance_request_ingress_binding
+        .as_mut()
+        .expect("Governance IPFS ingress binding")
+        .scope = 2;
+        assert_invalid_wire(&substituted_scope);
+
         wire_binding_mut(
             &mut governance_bound,
             IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
         )
-        .governance_request_auth_max_body_bytes = Some(1024 * 1024 + 1);
+        .governance_request_ingress_binding
+        .as_mut()
+        .expect("Governance head ingress binding")
+        .max_future_skew_secs = 6;
         assert_invalid_wire(&governance_bound);
     }
 

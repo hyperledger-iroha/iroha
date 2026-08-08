@@ -134,6 +134,7 @@ fn build_fixture<R: RngCore + CryptoRng>(
     let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
         context: context()?,
         asset_definition_id,
+        public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
         pool_id,
         program_id,
         action_digest: PrivacyActionDigestV1::new([0; 32]),

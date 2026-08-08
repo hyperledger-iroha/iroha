@@ -412,21 +412,6 @@ impl From<crate::isi::zk::CancelConfidentialPolicyTransition> for InstructionBox
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::zk::Shield> for InstructionBox {
-    fn from(i: crate::isi::zk::Shield) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::ZkTransfer> for InstructionBox {
-    fn from(i: crate::isi::zk::ZkTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::Unshield> for InstructionBox {
-    fn from(i: crate::isi::zk::Unshield) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
 impl From<crate::isi::zk::CreateElection> for InstructionBox {
     fn from(i: crate::isi::zk::CreateElection) -> Self {
         InstructionBox(Box::new(i))
@@ -1050,42 +1035,6 @@ impl From<crate::isi::escrow::ExpireAssetLock> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::escrow::OpenAnonymousAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::OpenAnonymousAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::AcceptAnonymousAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::AcceptAnonymousAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::MarkAnonymousEscrowPaymentSent> for InstructionBox {
-    fn from(i: crate::isi::escrow::MarkAnonymousEscrowPaymentSent) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::ReleaseAnonymousAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::ReleaseAnonymousAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::CancelAnonymousAssetEscrow> for InstructionBox {
-    fn from(i: crate::isi::escrow::CancelAnonymousAssetEscrow) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::OpenAnonymousEscrowDispute> for InstructionBox {
-    fn from(i: crate::isi::escrow::OpenAnonymousEscrowDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::escrow::ResolveAnonymousEscrowDispute> for InstructionBox {
-    fn from(i: crate::isi::escrow::ResolveAnonymousEscrowDispute) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
 // Allow direct boxing of SoraNet VPN lease escrow instructions.
 impl From<crate::isi::vpn::OpenVpnLeaseEscrow> for InstructionBox {
     fn from(i: crate::isi::vpn::OpenVpnLeaseEscrow) -> Self {
@@ -1469,6 +1418,7 @@ macro_rules! impl_musubi_instruction_box {
 impl_musubi_instruction_box!(
     RegisterMusubiNamespaceBindingV1,
     RegisterMusubiArchiveV1,
+    RegisterMusubiProviderBundleAttestationV1,
     AddMusubiArchiveLocationV1,
     RetireMusubiArchiveLocationV1,
     PublishMusubiReleaseV1,
@@ -4334,13 +4284,10 @@ pub mod prelude {
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },
         escrow::{
-            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, AttestEscrowCondition,
-            CancelAnonymousAssetEscrow, CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock,
-            ExpireAssetLock, ExpireConditionalEscrow, MarkAnonymousEscrowPaymentSent,
-            MarkEscrowPaymentSent, OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute,
+            AcceptAssetEscrow, AttestEscrowCondition, CancelAssetEscrow, CancelAssetLock,
+            DrawdownAssetLock, ExpireAssetLock, ExpireConditionalEscrow, MarkEscrowPaymentSent,
             OpenAssetEscrow, OpenAssetLock, OpenConditionalEscrow, OpenEscrowDispute,
-            ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
-            ResolveEscrowDispute,
+            ReleaseAssetEscrow, ResolveEscrowDispute,
         },
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,

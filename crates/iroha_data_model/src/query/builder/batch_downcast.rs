@@ -8,7 +8,7 @@ use crate::{
     asset::{AssetDefinitionId, AssetId, definition::AssetDefinition, value::Asset},
     block::{BlockHeader, SignedBlock},
     domain::{Domain, DomainId},
-    escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord},
+    escrow::AssetEscrowRecord,
     events::data::oracle::FeedEventRecord,
     metadata::Metadata,
     name::Name,
@@ -132,7 +132,6 @@ mod single_item {
         OracleChangeProposal,
         TwitterBindingRecord,
         AssetEscrowRecord,
-        AnonymousAssetEscrowRecord,
     );
 }
 

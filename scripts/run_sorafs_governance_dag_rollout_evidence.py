@@ -106,7 +106,7 @@ EVIDENCE_OPTIONS_BY_KIND = {
     "operator_recovery": "operator_recovery_evidence",
     "dashboard_api": "dashboard_api_evidence",
     "observability": "observability_evidence",
-    "ipfs_ipns_e2e": "ipfs_ipns_e2e_evidence",
+    "publication_e2e": "publication_e2e_evidence",
     "governance_approval": "governance_approval_evidence",
 }
 
@@ -117,7 +117,7 @@ EVIDENCE_FLAGS_BY_KIND = {
     "operator_recovery": "--operator-recovery-evidence",
     "dashboard_api": "--dashboard-api-evidence",
     "observability": "--observability-evidence",
-    "ipfs_ipns_e2e": "--ipfs-ipns-e2e-evidence",
+    "publication_e2e": "--publication-e2e-evidence",
     "governance_approval": "--governance-approval-evidence",
 }
 
@@ -333,7 +333,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=[],
         metavar="PATH",
-        help="Payload-free IPFS/IPNS publisher service canary JSON.",
+        help="Payload-free fixed-profile Kubo and signed-HTTP publisher canary JSON.",
     )
     parser.add_argument(
         "--mirror-datastore-evidence",
@@ -341,7 +341,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=[],
         metavar="PATH",
-        help="Payload-free RocksDB/IPLD mirror datastore canary JSON.",
+        help="Payload-free sealed, fixed-retention mirror datastore canary JSON.",
     )
     parser.add_argument(
         "--operator-recovery-evidence",
@@ -357,7 +357,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=[],
         metavar="PATH",
-        help="Payload-free runtime/IPFS-backed dashboard API canary JSON.",
+        help="Payload-free fresh, liveness-bound service mirror API canary JSON.",
     )
     parser.add_argument(
         "--observability-evidence",
@@ -368,12 +368,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Payload-free live metric and alert canary JSON.",
     )
     parser.add_argument(
-        "--ipfs-ipns-e2e-evidence",
+        "--publication-e2e-evidence",
         action="append",
         type=Path,
         default=[],
         metavar="PATH",
-        help="Payload-free IPFS/IPNS end-to-end test canary JSON.",
+        help="Payload-free first-release publication end-to-end canary JSON.",
     )
     parser.add_argument(
         "--governance-approval-evidence",

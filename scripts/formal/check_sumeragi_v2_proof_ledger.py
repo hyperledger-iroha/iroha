@@ -75425,11 +75425,8 @@ if existing == *artifact {
             data_path,
         ));
     }
-    if let Some(frontier) =
-        self.publish_lane_merge_application_frontier_locked(&entry, artifact)?
-    {
-        self.compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?;
-    }
+    self.reconcile_post_wsv_lane_artifact_budget_for_receipt_locked(pending_canonical_bytes, artifact,)?;
+    let _ = self.publish_lane_merge_application_frontier_locked(pending_canonical_bytes, &entry, artifact,)?;
     return Ok(());
 }
 """,
@@ -75978,6 +75975,7 @@ if Self::parse_native_amx_evidence_path(&path)?.is_some() {
         (
             """
 if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+    || Self::autonomous_lifecycle_cursor_coordinates(name).is_some() || Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_some()
     || Self::autonomous_two_height_coordinates(
         name,
         AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
@@ -76167,6 +76165,8 @@ if Self::parse_native_amx_evidence_path(&path)?.is_some() {
         (
             """
 if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+    || Self::autonomous_lifecycle_cursor_coordinates(name).is_some()
+    || Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_some()
     || Self::autonomous_two_height_coordinates(
         name,
         AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,

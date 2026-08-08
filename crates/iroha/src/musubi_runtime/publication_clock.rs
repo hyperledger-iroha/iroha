@@ -390,17 +390,14 @@ impl MusubiPublicationServiceClockV1 for DurableMusubiPublicationServiceClockV1 
             floor_ms: sampled,
             ..self.state.clone()
         };
-        let state_identity = match write_state(
+        let Ok(state_identity) = write_state(
             self.storage_context(),
             Some(self.state_identity),
             Some(&self.state),
             &next,
-        ) {
-            Ok(identity) => identity,
-            Err(_) => {
-                self.poisoned = true;
-                return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
-            }
+        ) else {
+            self.poisoned = true;
+            return Err(MusubiPublicationServiceBackendErrorV1::Retryable);
         };
         self.state_identity = state_identity;
         self.state = next;

@@ -6,9 +6,12 @@
  *
  * The canonical operator interface is:
  *
- *   node tools/openapi/scripts/provision-openapi-cargo-lock.mjs
+ *   node tools/openapi/scripts/provision-openapi-cargo-lock.mjs provision
  *   node tools/openapi/scripts/provision-openapi-cargo-lock.mjs \
- *     --source=/absolute/canonical/Cargo.lock
+ *     provision --source=/absolute/canonical/Cargo.lock
+ *   node tools/openapi/scripts/provision-openapi-cargo-lock.mjs \
+ *     pin --source=/absolute/canonical/Cargo.lock \
+ *     --output=/absolute/external/staging/openapi-cargo-lock-v1.txt
  *
  * An exact existing root lock is reused. Otherwise an operator source is
  * preferred; without one, Cargo generates a candidate only at an isolated
@@ -17,7 +20,7 @@
  */
 import {spawn} from 'node:child_process';
 import {createHash, randomBytes} from 'node:crypto';
-import {constants as fsConstants} from 'node:fs';
+import {constants as fsConstants, readFileSync} from 'node:fs';
 import {
   link,
   lstat,
@@ -32,6 +35,8 @@ import path from 'node:path';
 import {TextDecoder} from 'node:util';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
+import {writeOpenApiAtomicFile} from './lib/openapi-safe-file.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -39,12 +44,11 @@ export const OPENAPI_CARGO_LOCK_PIN_SCHEMA =
   'iroha.openapi.cargo-lock.v1';
 export const OPENAPI_CARGO_LOCK_PROVISION_SCHEMA =
   'iroha.openapi.cargo-lock.provision.v1';
+export const OPENAPI_CARGO_LOCK_PIN_OWNER_SCHEMA =
+  'iroha.openapi.cargo-lock-pin.owner.v1';
 export const OPENAPI_CARGO_LOCK_PATH = 'Cargo.lock';
 export const OPENAPI_CARGO_LOCK_PIN_PATH =
   'release/openapi-cargo-lock-v1.txt';
-export const OPENAPI_CARGO_LOCK_EXPECTED_BYTES = 315_213;
-export const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX =
-  'c52a098b84fe27deda651868a87cf0670250a38a999ddf299a1061b2f37fa528';
 export const OPENAPI_CARGO_LOCK_MAX_BYTES = 16 * 1024 * 1024;
 export const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES = 1024;
 
@@ -52,41 +56,15 @@ const IO_CHUNK_BYTES = 64 * 1024;
 const GIT_MAX_BUFFER_BYTES = 1024 * 1024;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const defaultRepoRoot = path.resolve(__dirname, '..', '..', '..');
-const GIT_REPOSITORY_ENVIRONMENT_VARIABLES = Object.freeze([
-  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-  'GIT_COMMON_DIR',
-  'GIT_CONFIG',
-  'GIT_CONFIG_COUNT',
-  'GIT_CONFIG_PARAMETERS',
-  'GIT_DIR',
-  'GIT_GRAFT_FILE',
-  'GIT_IMPLICIT_WORK_TREE',
-  'GIT_INDEX_FILE',
-  'GIT_INTERNAL_SUPER_PREFIX',
-  'GIT_NAMESPACE',
-  'GIT_NO_REPLACE_OBJECTS',
-  'GIT_OBJECT_DIRECTORY',
-  'GIT_PREFIX',
-  'GIT_REPLACE_REF_BASE',
-  'GIT_SHALLOW_FILE',
-  'GIT_WORK_TREE',
-]);
+const sourceBoundPin = parseOpenApiCargoLockPin(
+  readFileSync(path.join(defaultRepoRoot, OPENAPI_CARGO_LOCK_PIN_PATH)),
+);
 
-/**
- * Remove inherited state that can redirect Git away from an explicit cwd.
- */
-export function isolateGitRepositoryEnvironment(environment = process.env) {
-  const isolated = {...environment};
-  for (const variable of GIT_REPOSITORY_ENVIRONMENT_VARIABLES) {
-    delete isolated[variable];
-  }
-  for (const variable of Object.keys(isolated)) {
-    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(variable)) {
-      delete isolated[variable];
-    }
-  }
-  return isolated;
-}
+// Release-gate exports are derived from the tracked pin at module load and are
+// not independent size or digest authorities.
+export const OPENAPI_CARGO_LOCK_EXPECTED_BYTES = sourceBoundPin.bytes;
+export const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX =
+  sourceBoundPin.sha256Hex;
 
 /**
  * Parse the canonical command-line surface.
@@ -95,6 +73,20 @@ export function parseArgs(argv) {
   if (!Array.isArray(argv)) {
     throw new TypeError('provisioner arguments must be an array');
   }
+  if (argv.length === 0) {
+    throw new Error('OpenAPI Cargo.lock owner requires a provision or pin command');
+  }
+  const [command, ...arguments_] = argv;
+  if (command === 'provision') {
+    return parseProvisionArgs(arguments_);
+  }
+  if (command === 'pin') {
+    return parsePinOwnerArgs(arguments_);
+  }
+  throw new Error(`unknown OpenAPI Cargo.lock owner command: ${String(command)}`);
+}
+
+function parseProvisionArgs(argv) {
   let sourcePath;
   for (const argument of argv) {
     if (typeof argument !== 'string') {
@@ -108,21 +100,91 @@ export function parseArgs(argv) {
       if (sourcePath.length === 0) {
         throw new Error('--source must not be empty');
       }
-      if (!path.isAbsolute(sourcePath)) {
+      if (!path.isAbsolute(sourcePath) || path.resolve(sourcePath) !== sourcePath) {
         throw new Error('--source must be an absolute canonical path');
       }
       continue;
     }
     throw new Error(`unknown provision-openapi-cargo-lock option: ${argument}`);
   }
-  return {sourcePath};
+  return {command: 'provision', sourcePath};
 }
 
-/**
- * Parse the tracked, exact V1 lock pin.
- */
+function parsePinOwnerArgs(argv) {
+  let sourcePath;
+  let outputPath;
+  let checkPath;
+  for (const argument of argv) {
+    if (typeof argument !== 'string') {
+      throw new TypeError('pin-owner arguments must be strings');
+    }
+    if (argument.startsWith('--source=')) {
+      if (sourcePath !== undefined) {
+        throw new Error('pin owner accepts --source only once');
+      }
+      sourcePath = parseAbsolutePinOwnerPath(
+        argument.slice('--source='.length),
+        '--source',
+      );
+      continue;
+    }
+    if (argument.startsWith('--output=')) {
+      if (outputPath !== undefined) {
+        throw new Error('pin owner accepts --output only once');
+      }
+      outputPath = parseAbsolutePinOwnerPath(
+        argument.slice('--output='.length),
+        '--output',
+      );
+      continue;
+    }
+    if (argument.startsWith('--check=')) {
+      if (checkPath !== undefined) {
+        throw new Error('pin owner accepts --check only once');
+      }
+      checkPath = parseAbsolutePinOwnerPath(
+        argument.slice('--check='.length),
+        '--check',
+      );
+      continue;
+    }
+    throw new Error(`unknown OpenAPI Cargo.lock pin-owner option: ${argument}`);
+  }
+  if (sourcePath === undefined) {
+    throw new Error('pin owner requires explicit --source=/absolute/Cargo.lock');
+  }
+  if ((outputPath === undefined) === (checkPath === undefined)) {
+    throw new Error('pin owner requires exactly one of --output or --check');
+  }
+  if ((outputPath ?? checkPath) === sourcePath) {
+    throw new Error('pin owner source and destination paths must not alias');
+  }
+  return {command: 'pin', sourcePath, outputPath, checkPath};
+}
+
+function parseAbsolutePinOwnerPath(value, option) {
+  if (
+    !value ||
+    value.trim() !== value ||
+    value.startsWith('-') ||
+    !path.isAbsolute(value) ||
+    path.resolve(value) !== value ||
+    path.dirname(value) === value ||
+    path.dirname(value) === path.parse(value).root
+  ) {
+    throw new Error(`${option} requires an absolute normalized file path`);
+  }
+  return value;
+}
+
+/** Parse the tracked, canonical V1 lock pin. */
 export function parseOpenApiCargoLockPin(value) {
   const bytes = toBuffer(value, 'OpenAPI Cargo.lock pin');
+  if (bytes.length === 0 || bytes.length > OPENAPI_CARGO_LOCK_PIN_MAX_BYTES) {
+    throw new Error(
+      `OpenAPI Cargo.lock pin must contain 1..${OPENAPI_CARGO_LOCK_PIN_MAX_BYTES} bytes`,
+    );
+  }
   let text;
   try {
     text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
@@ -137,10 +199,7 @@ export function parseOpenApiCargoLockPin(value) {
     );
   }
   const lines = text.slice(0, -1).split('\n');
-  if (
-    lines.length !== 3 ||
-    lines[0] !== OPENAPI_CARGO_LOCK_PIN_SCHEMA
-  ) {
+  if (lines.length !== 3 || lines[0] !== OPENAPI_CARGO_LOCK_PIN_SCHEMA) {
     throw new Error('OpenAPI Cargo.lock pin has an invalid schema');
   }
   const byteMatch = /^bytes=([1-9][0-9]*)$/.exec(lines[1]);
@@ -161,13 +220,8 @@ export function parseOpenApiCargoLockPin(value) {
       `OpenAPI Cargo.lock pin bytes must be within 1..${OPENAPI_CARGO_LOCK_MAX_BYTES}`,
     );
   }
-  if (
-    expectedBytes !== OPENAPI_CARGO_LOCK_EXPECTED_BYTES ||
-    digestMatch[1] !== OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX
-  ) {
-    throw new Error(
-      'OpenAPI Cargo.lock pin does not match the exact V1 size and SHA-256',
-    );
+  if (digestMatch[1] === '0'.repeat(64)) {
+    throw new Error('OpenAPI Cargo.lock pin SHA-256 must be nonzero');
   }
   return {
     schema: lines[0],
@@ -176,18 +230,19 @@ export function parseOpenApiCargoLockPin(value) {
   };
 }
 
-/**
- * Validate candidate bytes against the tracked pin.
- */
+/** Validate exact Cargo.lock bytes against one canonical V1 pin. */
 export function validateOpenApiCargoLockBytes(value, pin) {
   const bytes = toBuffer(value, 'OpenAPI Cargo.lock');
   if (
     !pin ||
     pin.schema !== OPENAPI_CARGO_LOCK_PIN_SCHEMA ||
-    pin.bytes !== OPENAPI_CARGO_LOCK_EXPECTED_BYTES ||
-    pin.sha256Hex !== OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX
+    !Number.isSafeInteger(pin.bytes) ||
+    pin.bytes <= 0 ||
+    pin.bytes > OPENAPI_CARGO_LOCK_MAX_BYTES ||
+    !SHA256_HEX.test(pin.sha256Hex) ||
+    pin.sha256Hex === '0'.repeat(64)
   ) {
-    throw new Error('OpenAPI Cargo.lock validation requires the exact V1 pin');
+    throw new Error('OpenAPI Cargo.lock validation requires one canonical V1 pin');
   }
   if (bytes.length === 0) {
     throw new Error('OpenAPI Cargo.lock must not be empty');
@@ -209,6 +264,25 @@ export function validateOpenApiCargoLockBytes(value, pin) {
     );
   }
   return bytes;
+}
+
+/** Encode the sole canonical V1 pin for explicit Cargo.lock bytes. */
+export function encodeOpenApiCargoLockPin(value) {
+  const bytes = toBuffer(value, 'OpenAPI Cargo.lock');
+  if (bytes.length === 0) {
+    throw new Error('OpenAPI Cargo.lock must not be empty');
+  }
+  if (bytes.length > OPENAPI_CARGO_LOCK_MAX_BYTES) {
+    throw new Error(
+      `OpenAPI Cargo.lock exceeds the ${OPENAPI_CARGO_LOCK_MAX_BYTES}-byte limit`,
+    );
+  }
+  return Buffer.from(
+    `${OPENAPI_CARGO_LOCK_PIN_SCHEMA}\n` +
+      `bytes=${bytes.length}\n` +
+      `sha256_hex=${sha256Hex(bytes)}\n`,
+    'utf8',
+  );
 }
 
 /**
@@ -426,6 +500,22 @@ export async function validateOpenApiCargoLockGitPolicy(repoRoot) {
       'OpenAPI Cargo.lock V1 pin index and HEAD entries must reference the same blob',
     );
   }
+  const [committedPin, workingPin] = await Promise.all([
+    gitBytes(root, ['cat-file', 'blob', pinHeadMatch[1]]),
+    readOpenApiCargoLockStable(
+      path.join(root, OPENAPI_CARGO_LOCK_PIN_PATH),
+      {
+        label: 'tracked OpenAPI Cargo.lock V1 pin',
+        maxBytes: OPENAPI_CARGO_LOCK_PIN_MAX_BYTES,
+      },
+    ),
+  ]);
+  if (!committedPin.equals(workingPin.bytes)) {
+    throw new Error(
+      'OpenAPI Cargo.lock V1 pin working file must exactly match its HEAD blob',
+    );
+  }
+  parseOpenApiCargoLockPin(committedPin);
   return root;
 }
 
@@ -487,9 +577,9 @@ export async function provisionOpenApiCargoLock({
   if (existing) {
     validateOpenApiCargoLockBytes(existing.bytes, pin);
     await validateOpenApiCargoLockGitPolicy(root);
-    await assertStableSnapshot(pinSnapshot);
-    await assertStableSnapshot(existing);
-    return provisionSummary('reused', 'existing');
+    await assertOpenApiCargoLockSnapshotStable(pinSnapshot);
+    await assertOpenApiCargoLockSnapshotStable(existing);
+    return provisionSummary('reused', 'existing', pin);
   }
 
   let isolatedDirectory;
@@ -532,7 +622,7 @@ export async function provisionOpenApiCargoLock({
         sourceKind,
       });
     }
-    await assertStableSnapshot(candidate);
+    await assertOpenApiCargoLockSnapshotStable(candidate);
     await assertTargetAbsent(targetPath);
     await installAbsentAtomic(targetPath, candidate.bytes);
 
@@ -541,15 +631,138 @@ export async function provisionOpenApiCargoLock({
     });
     validateOpenApiCargoLockBytes(installed.bytes, pin);
     await validateOpenApiCargoLockGitPolicy(root);
-    await assertStableSnapshot(pinSnapshot);
-    await assertStableSnapshot(candidate);
-    await assertStableSnapshot(installed);
-    return provisionSummary('installed', sourceKind);
+    await assertOpenApiCargoLockSnapshotStable(pinSnapshot);
+    await assertOpenApiCargoLockSnapshotStable(candidate);
+    await assertOpenApiCargoLockSnapshotStable(installed);
+    return provisionSummary('installed', sourceKind, pin);
   } finally {
     if (isolatedDirectory) {
       await rm(isolatedDirectory, {recursive: true, force: true});
     }
   }
+}
+
+/**
+ * Derive or verify the canonical V1 pin without editing Cargo.lock or the
+ * tracked release pin. Output is restricted to external staging paths.
+ */
+export async function generateOpenApiCargoLockPin({
+  sourcePath,
+  outputPath,
+  checkPath,
+  repoRoot = defaultRepoRoot,
+  beforePublish,
+}) {
+  requirePinOwnerFilePath(sourcePath, 'pin-owner source');
+  if ((outputPath === undefined) === (checkPath === undefined)) {
+    throw new Error('pin owner requires exactly one output or check path');
+  }
+  if (beforePublish !== undefined && typeof beforePublish !== 'function') {
+    throw new TypeError('pin-owner beforePublish must be a function');
+  }
+  const root = await requireCanonicalRepoRoot(repoRoot);
+  const canonicalSource = await requireCanonicalSourcePath(sourcePath);
+  const source = await readOpenApiCargoLockStable(canonicalSource, {
+    label: 'pin-owner Cargo.lock source',
+  });
+  const pinBytes = encodeOpenApiCargoLockPin(source.bytes);
+  const pin = parseOpenApiCargoLockPin(pinBytes);
+
+  if (beforePublish) {
+    await beforePublish({sourcePath, outputPath, checkPath, pinBytes});
+  }
+  await assertOpenApiCargoLockSnapshotStable(source);
+
+  if (checkPath !== undefined) {
+    requirePinOwnerFilePath(checkPath, 'pin-owner check');
+    if (checkPath === canonicalSource) {
+      throw new Error('pin owner source and check paths must not alias');
+    }
+    const expected = await readOpenApiCargoLockStable(checkPath, {
+      label: 'tracked OpenAPI Cargo.lock V1 pin',
+      maxBytes: OPENAPI_CARGO_LOCK_PIN_MAX_BYTES,
+    });
+    parseOpenApiCargoLockPin(expected.bytes);
+    if (!expected.bytes.equals(pinBytes)) {
+      throw new Error(
+        `OpenAPI Cargo.lock V1 pin ${checkPath} is stale for explicit source ${canonicalSource}`,
+      );
+    }
+    await assertOpenApiCargoLockSnapshotStable(source);
+    await assertOpenApiCargoLockSnapshotStable(expected);
+    return pinOwnerSummary(
+      'verified',
+      canonicalSource,
+      checkPath,
+      pin,
+      pinBytes.length,
+    );
+  }
+
+  requirePinOwnerFilePath(outputPath, 'pin-owner output');
+  if (outputPath === canonicalSource) {
+    throw new Error('pin owner source and output paths must not alias');
+  }
+  if (isWithin(root, outputPath)) {
+    throw new Error(
+      'pin-owner --output must be an external staging path outside the repository',
+    );
+  }
+  await requireCanonicalDirectory(
+    path.dirname(outputPath),
+    'pin-owner output parent',
+  );
+  await writeOpenApiAtomicFile(outputPath, pinBytes, {
+    label: 'staged OpenAPI Cargo.lock V1 pin',
+  });
+  const staged = await readOpenApiCargoLockStable(outputPath, {
+    label: 'staged OpenAPI Cargo.lock V1 pin',
+    maxBytes: OPENAPI_CARGO_LOCK_PIN_MAX_BYTES,
+  });
+  if (!staged.bytes.equals(pinBytes)) {
+    throw new Error('staged OpenAPI Cargo.lock V1 pin changed during publication');
+  }
+  await assertOpenApiCargoLockSnapshotStable(source);
+  await assertOpenApiCargoLockSnapshotStable(staged);
+  return pinOwnerSummary(
+    'staged',
+    canonicalSource,
+    outputPath,
+    pin,
+    pinBytes.length,
+  );
+}
+
+function requirePinOwnerFilePath(value, label) {
+  if (
+    typeof value !== 'string' ||
+    !path.isAbsolute(value) ||
+    path.resolve(value) !== value ||
+    path.dirname(value) === value ||
+    path.dirname(value) === path.parse(value).root
+  ) {
+    throw new Error(`${label} must be an absolute normalized file path`);
+  }
+}
+
+async function requireCanonicalDirectory(directory, label) {
+  const canonical = await realpath(directory).catch((error) => {
+    throw withCode(
+      new Error(
+        `failed to resolve ${label} ${directory}: ${error?.message ?? error}`,
+        {cause: error},
+      ),
+      error?.code,
+    );
+  });
+  if (canonical !== directory) {
+    throw new Error(`${label} must not contain symbolic links`);
+  }
+  const metadata = await lstat(canonical, {bigint: true});
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error(`${label} must be a real directory`);
+  }
+  return canonical;
 }
 
 async function requireCanonicalRepoRoot(repoRoot) {
@@ -691,7 +904,7 @@ async function requireCanonicalParent(filePath, label) {
   }
 }
 
-async function assertStableSnapshot(snapshot) {
+export async function assertOpenApiCargoLockSnapshotStable(snapshot) {
   await requireCanonicalParent(snapshot.filePath, 'OpenAPI Cargo.lock');
   const current = await lstat(snapshot.filePath, {bigint: true});
   if (!sameStableState(snapshot.state, current)) {
@@ -963,14 +1176,26 @@ function decodeGitLine(bytes, label) {
   return value;
 }
 
-function provisionSummary(status, source) {
+function provisionSummary(status, source, pin) {
   return {
     schema: OPENAPI_CARGO_LOCK_PROVISION_SCHEMA,
     status,
     source,
     path: OPENAPI_CARGO_LOCK_PATH,
-    bytes: OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
-    sha256_hex: OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+    bytes: pin.bytes,
+    sha256_hex: pin.sha256Hex,
+  };
+}
+
+function pinOwnerSummary(status, source, path_, pin, pinBytes) {
+  return {
+    schema: OPENAPI_CARGO_LOCK_PIN_OWNER_SCHEMA,
+    status,
+    source,
+    path: path_,
+    cargo_lock_bytes: pin.bytes,
+    cargo_lock_sha256_hex: pin.sha256Hex,
+    pin_bytes: pinBytes,
   };
 }
 
@@ -1009,8 +1234,10 @@ function withCode(error, code) {
 }
 
 async function main() {
-  const {sourcePath} = parseArgs(process.argv.slice(2));
-  const summary = await provisionOpenApiCargoLock({sourcePath});
+  const options = parseArgs(process.argv.slice(2));
+  const summary = options.command === 'provision'
+    ? await provisionOpenApiCargoLock({sourcePath: options.sourcePath})
+    : await generateOpenApiCargoLockPin(options);
   process.stdout.write(`${JSON.stringify(summary)}\n`);
 }
 

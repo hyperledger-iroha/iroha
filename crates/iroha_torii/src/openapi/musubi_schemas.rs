@@ -357,12 +357,11 @@ fn insert_musubi_v1_schemas(schemas: &mut Map) {
 
 fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
     use iroha_data_model::musubi::{
-        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1,
-        MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_FILES_V1,
-        MUSUBI_MAX_KEYWORDS_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-        MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
+        MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1,
+        MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_CHUNKS_V1, MUSUBI_MAX_DEPENDENCIES_V1,
+        MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_FILES_V1, MUSUBI_MAX_KEYWORDS_V1,
+        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_NAMESPACE_DELEGATION_APPROVALS_V1,
         MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
-        MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1,
     };
 
     schemas.insert(
@@ -636,7 +635,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                         "type": "integer",
                         "format": "uint64",
                         "minimum": 1,
-                        "maximum": (MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1)
+                        "maximum": (MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1)
                     }),
                 ),
                 ("car_digest", schema_ref("MusubiDigest32V1")),
@@ -954,6 +953,39 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
             ],
         ),
     );
+    schemas.insert(
+        "MusubiProviderBundleAttestationKeyV1".to_owned(),
+        musubi_closed_object(
+            &["archive_id", "replication_order", "provider_id"],
+            vec![
+                ("archive_id", schema_ref("MusubiDigest32V1")),
+                ("replication_order", schema_ref("MusubiDigest32V1")),
+                ("provider_id", schema_ref("MusubiProviderIdV1")),
+            ],
+        ),
+    );
+    schemas.insert(
+        "MusubiProviderBundleAttestationRecordV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "key",
+                "attestation_digest",
+                "attestation",
+                "registered_by",
+                "registered_at_height",
+            ],
+            vec![
+                ("key", schema_ref("MusubiProviderBundleAttestationKeyV1")),
+                ("attestation_digest", schema_ref("MusubiDigest32V1")),
+                (
+                    "attestation",
+                    schema_ref("MusubiProviderBundleVerificationAttestationV1"),
+                ),
+                ("registered_by", schema_ref("MusubiAccountIdV1")),
+                ("registered_at_height", schema_ref("MusubiPositiveU64V1")),
+            ],
+        ),
+    );
 
     schemas.insert(
         "MusubiArchiveLocationStateV1".to_owned(),
@@ -1036,7 +1068,7 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                 "pin_manifest",
                 "replication_order",
                 "providers",
-                "provider_attestations",
+                "provider_attestation_set_digest",
                 "renew_after_epoch",
                 "expires_at_epoch",
                 "finalized_height",
@@ -1057,12 +1089,8 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
                     ),
                 ),
                 (
-                    "provider_attestations",
-                    musubi_array(
-                        schema_ref("MusubiProviderBundleVerificationAttestationV1"),
-                        1,
-                        MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-                    ),
+                    "provider_attestation_set_digest",
+                    schema_ref("MusubiDigest32V1"),
                 ),
                 ("renew_after_epoch", schema_ref("MusubiU64V1")),
                 ("expires_at_epoch", schema_ref("MusubiPositiveU64V1")),
@@ -1192,11 +1220,34 @@ fn insert_musubi_release_and_archive_schemas(schemas: &mut Map) {
             ],
         ),
     );
+    schemas.insert(
+        "MusubiExactReleaseSnapshotV1".to_owned(),
+        musubi_closed_object(
+            &[
+                "chain_id",
+                "genesis_hash",
+                "snapshot",
+                "home_release",
+                "universal_release",
+            ],
+            vec![
+                ("chain_id", schema_ref("MusubiChainIdV1")),
+                ("genesis_hash", schema_ref("MusubiFixed32BytesV1")),
+                ("snapshot", schema_ref("MusubiRegistrySnapshotV1")),
+                ("home_release", schema_ref("MusubiReleaseRecordV1")),
+                (
+                    "universal_release",
+                    schema_ref("MusubiResolverReleaseRowV1"),
+                ),
+            ],
+        ),
+    );
 }
 
 fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
     use iroha_data_model::musubi::{
-        MUSUBI_MAX_PACKAGE_MEMBERS_V1, MUSUBI_MAX_PACKAGE_OWNERS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
+        MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1, MUSUBI_MAX_PACKAGE_MEMBERS_V1,
+        MUSUBI_MAX_PACKAGE_OWNERS_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
     };
 
     schemas.insert(
@@ -1499,10 +1550,7 @@ fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
     );
     schemas.insert(
         "MusubiOrderedPrefixV1".to_owned(),
-        musubi_string_newtype(
-            iroha_data_model::musubi::MUSUBI_MAX_CURSOR_KEY_BYTES_V1,
-            None,
-        ),
+        musubi_string_newtype(MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1, None),
     );
     schemas.insert(
         "MusubiOrderedPackageEntryV1".to_owned(),
@@ -1609,9 +1657,7 @@ fn insert_musubi_governance_and_route_schemas(schemas: &mut Map) {
 }
 
 fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
-    use iroha_data_model::musubi::{
-        MUSUBI_MAX_LOCATION_PROVIDERS_V1, MUSUBI_MAX_PACKAGE_OWNERS_V1,
-    };
+    use iroha_data_model::musubi::MUSUBI_MAX_PACKAGE_OWNERS_V1;
 
     for (name, schema) in [
         (
@@ -1642,6 +1688,22 @@ fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
             ),
         ),
         (
+            "RegisterMusubiProviderBundleAttestationV1",
+            musubi_closed_object(
+                &["attestation", "expected_location_revision"],
+                vec![
+                    (
+                        "attestation",
+                        schema_ref("MusubiProviderBundleVerificationAttestationV1"),
+                    ),
+                    (
+                        "expected_location_revision",
+                        schema_ref("MusubiPositiveU64V1"),
+                    ),
+                ],
+            ),
+        ),
+        (
             "AddMusubiArchiveLocationV1",
             musubi_closed_object(
                 &[
@@ -1649,7 +1711,7 @@ fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
                     "location_id",
                     "pin_manifest",
                     "replication_order",
-                    "provider_attestations",
+                    "provider_attestation_set_digest",
                     "renew_after_epoch",
                     "expires_at_epoch",
                     "expected_location_revision",
@@ -1660,12 +1722,8 @@ fn insert_musubi_instruction_request_schemas(schemas: &mut Map) {
                     ("pin_manifest", schema_ref("MusubiDigest32V1")),
                     ("replication_order", schema_ref("MusubiDigest32V1")),
                     (
-                        "provider_attestations",
-                        musubi_array(
-                            schema_ref("MusubiProviderBundleVerificationAttestationV1"),
-                            1,
-                            MUSUBI_MAX_LOCATION_PROVIDERS_V1,
-                        ),
+                        "provider_attestation_set_digest",
+                        schema_ref("MusubiDigest32V1"),
                     ),
                     ("renew_after_epoch", schema_ref("MusubiU64V1")),
                     ("expires_at_epoch", schema_ref("MusubiPositiveU64V1")),
@@ -2212,7 +2270,8 @@ fn insert_musubi_instruction_envelope_schema(schemas: &mut Map) {
         AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1, AssertMusubiReleaseDigestV1,
         InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1, RecoverMusubiPackageV1,
         RegisterMusubiAliasV1, RegisterMusubiArchiveV1, RegisterMusubiNamespaceBindingV1,
-        RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+        RegisterMusubiProviderBundleAttestationV1, RemoveMusubiPackageMaintainerV1,
+        RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
         RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
         SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1, SetMusubiRegistryPolicyV1,
         SetMusubiReleaseYankV1,
@@ -2224,6 +2283,10 @@ fn insert_musubi_instruction_envelope_schema(schemas: &mut Map) {
             "RegisterMusubiNamespaceBindingV1",
         ),
         (RegisterMusubiArchiveV1::WIRE_ID, "RegisterMusubiArchiveV1"),
+        (
+            RegisterMusubiProviderBundleAttestationV1::WIRE_ID,
+            "RegisterMusubiProviderBundleAttestationV1",
+        ),
         (
             AddMusubiArchiveLocationV1::WIRE_ID,
             "AddMusubiArchiveLocationV1",

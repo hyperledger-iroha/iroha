@@ -799,7 +799,6 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::TwitterBindingRecord(_) => "TwitterBindingRecord",
         QueryOutputBatchBox::DefiOracleAttestation(_) => "DefiOracleAttestation",
         QueryOutputBatchBox::AssetEscrowRecord(_) => "AssetEscrowRecord",
-        QueryOutputBatchBox::AnonymousAssetEscrowRecord(_) => "AnonymousAssetEscrowRecord",
         QueryOutputBatchBox::FeeSponsorProgram(_) => "FeeSponsorProgram",
         QueryOutputBatchBox::FeeSponsorProgramId(_) => "FeeSponsorProgramId",
     }
@@ -1090,10 +1089,6 @@ mod tests {
         assert_eq!(
             batch_label(&QueryOutputBatchBox::AssetEscrowRecord(Vec::new())),
             "AssetEscrowRecord"
-        );
-        assert_eq!(
-            batch_label(&QueryOutputBatchBox::AnonymousAssetEscrowRecord(Vec::new())),
-            "AnonymousAssetEscrowRecord"
         );
         assert_eq!(
             batch_label(&QueryOutputBatchBox::OracleFeedConfig(Vec::new())),

@@ -3632,7 +3632,7 @@ fn default_test_execution_context(
         TransactionEntrypoint::External(tx) => Some(tx.chain()),
         TransactionEntrypoint::SealedCommitment(commitment) => Some(&commitment.payload().chain_id),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().chain()),
-        TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::Time(_) => None,
     });
     let Some(chain_id) = chain_id else {
         return BlockExecutionContextBundle::new(external);
@@ -8886,10 +8886,70 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn sumeragi_v2_raw_lane_predecessor_is_canonical(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+            ownership: &iroha_data_model::block::consensus::SumeragiLanePayloadOwnership,
+            declared_predecessor_hash: Hash,
+            validation_profile: &ConsensusValidationProfile,
+        ) -> bool {
+            let Some(context) = validation_profile.v2_context() else {
+                return false;
+            };
+            let proposal_height = block.header().height().get();
+            let previous_height = ownership.previous_lane_block_height;
+            if context.height != proposal_height
+                || ownership.proposal_height != proposal_height
+                || previous_height == 0
+                || previous_height.checked_add(1) != Some(ownership.lane_block_height)
+                || ownership.previous_lane_block_descriptor_hash != Some(declared_predecessor_hash)
+            {
+                return false;
+            }
+
+            let Some(artifact) = state
+                .kura()
+                .read_lane_block_artifact(ownership.lane_id, previous_height)
+            else {
+                return false;
+            };
+            let predecessor = &artifact.ownership;
+            if predecessor.lane_id != ownership.lane_id
+                || predecessor.dataspace_id != ownership.dataspace_id
+                || predecessor.lane_incarnation != ownership.lane_incarnation
+                || predecessor.lane_block_height != previous_height
+                || predecessor.proposal_height == 0
+                || predecessor.proposal_height >= proposal_height
+                || predecessor.lane_block_descriptor_hash != Some(declared_predecessor_hash)
+            {
+                return false;
+            }
+            let Some(predecessor_index) = predecessor
+                .proposal_height
+                .checked_sub(1)
+                .and_then(|height| usize::try_from(height).ok())
+            else {
+                return false;
+            };
+            if state.block_hashes().get(predecessor_index) != Some(&artifact.proposal_block_hash) {
+                return false;
+            }
+
+            let canonical = state
+                .kura()
+                .canonical_lane_block_artifacts_at_proposal_height_matching(
+                    predecessor.proposal_height,
+                    2,
+                    |candidate| candidate == predecessor,
+                );
+            canonical.as_slice() == [artifact]
+        }
+
         fn validate_execution_context_lane_payload_artifacts(
             block: &SignedBlock,
             state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
+            validation_profile: &ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
             let proposal_height = block.header().height().get();
             let proposal_hash = block.hash();
@@ -8956,6 +9016,15 @@ pub(crate) mod valid {
                     .kura()
                     .read_lane_block_application_receipt(ownership.lane_id, previous_height)
                 else {
+                    if Self::sumeragi_v2_raw_lane_predecessor_is_canonical(
+                        block,
+                        state,
+                        ownership,
+                        declared_predecessor_hash,
+                        validation_profile,
+                    ) {
+                        continue;
+                    }
                     return Err(Self::execution_context_error(format!(
                         "lane payload ownership {ownership_idx} has no canonical predecessor application receipt for lane {} lane-height {previous_height}",
                         ownership.lane_id.as_u32()
@@ -9693,7 +9762,12 @@ pub(crate) mod valid {
             Self::validate_execution_context_lane_payload_ownerships(
                 block, topology, state, bundle,
             )?;
-            Self::validate_execution_context_lane_payload_artifacts(block, state, bundle)?;
+            Self::validate_execution_context_lane_payload_artifacts(
+                block,
+                state,
+                bundle,
+                &validation_profile,
+            )?;
             Self::validate_execution_context_autonomous_lane_payloads(
                 block,
                 topology,
@@ -10093,9 +10167,7 @@ pub(crate) mod valid {
             match entrypoint {
                 TransactionEntrypoint::External(tx) => Some(tx),
                 TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             }
         }
 
@@ -10496,9 +10568,6 @@ pub(crate) mod valid {
                             if !seen_sealed_commitments.insert(*commitment.commitment()) {
                                 return Err(BlockValidationError::DuplicateTransactions);
                             }
-                            entrypoint_hashes.push(entrypoint.hash());
-                        }
-                        TransactionEntrypoint::PrivateKaigi(_) => {
                             entrypoint_hashes.push(entrypoint.hash());
                         }
                         TransactionEntrypoint::Time(_) => {
@@ -20823,6 +20892,49 @@ pub(crate) mod valid {
                 "unexpected unapplied-predecessor validation error: {err:?}"
             );
 
+            let v2_profile = ConsensusValidationProfile::SumeragiV2 {
+                block_cadence: Duration::from_millis(1),
+                context: SumeragiV2ValidationContext::for_body_without_context_bound_attachments(
+                    &exact_predecessor,
+                ),
+            };
+            ValidBlock::validate_execution_context_with_state(
+                &exact_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                v2_profile.clone(),
+            )
+            .expect(
+                "Sumeragi v2 accepts the exact canonical raw predecessor while its receipt catches up",
+            );
+
+            let wrong_raw_predecessor = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-wrong-raw",
+                2,
+                None,
+            );
+            let err = ValidBlock::validate_execution_context_with_state(
+                &wrong_raw_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                v2_profile,
+            )
+            .expect_err("Sumeragi v2 must not accept a differently bound raw predecessor");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("has no canonical predecessor application receipt")
+                ),
+                "unexpected wrong raw-predecessor validation error: {err:?}"
+            );
+
             kura.persist_lane_block_application_receipt(&predecessor_proposal)
                 .expect("persist first lane predecessor application receipt");
             assert!(
@@ -28323,7 +28435,6 @@ mod event {
                             reveal.signed_transaction().clone()
                         }
                         TransactionEntrypoint::SealedCommitment(_)
-                        | TransactionEntrypoint::PrivateKaigi(_)
                         | TransactionEntrypoint::Time(_) => return None,
                     };
                     let hash = tx.hash();
@@ -28999,165 +29110,7 @@ mod dsu_tests {
     }
 }
 
-#[cfg(test)]
-mod scheduler_variant_tests {
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::transaction::signed::TransactionEntrypoint;
-
-    fn make_hash(v: u8) -> HashOf<TransactionEntrypoint> {
-        let mut b = [0u8; Hash::LENGTH];
-        b[0] = v;
-        b[Hash::LENGTH - 1] |= 1; // keep LSB set as per Hash invariant
-        HashOf::from_untyped_unchecked(Hash::prehashed(b))
-    }
-
-    // Build a small CSR graph by hand for testing
-    // adj: 0 -> [2]; 1 -> [2,3]; 2 -> []; 3 -> [4]; 4 -> []
-    fn sample_graph() -> (
-        Vec<usize>,
-        Vec<usize>,
-        Vec<usize>,
-        Vec<HashOf<TransactionEntrypoint>>,
-    ) {
-        let row_offsets = vec![0, 1, 3, 3, 4, 4];
-        let cols = vec![2, 2, 3, 4];
-        let indeg = vec![0, 0, 2, 1, 1];
-        let call_hashes = vec![
-            make_hash(10),
-            make_hash(5),
-            make_hash(30),
-            make_hash(7),
-            make_hash(8),
-        ];
-        (row_offsets, cols, indeg, call_hashes)
-    }
-
-    #[test]
-    fn per_wave_scheduler_deterministic_order() {
-        let (row_offsets, cols, indeg, call_hashes) = sample_graph();
-        // Implement per-wave scheduling locally for test
-        let n = indeg.len();
-        let mut indeg_s = indeg.clone();
-        let mut ready = Vec::new();
-        for (i, &deg) in indeg_s.iter().enumerate() {
-            if deg == 0 {
-                ready.push(i);
-            }
-        }
-        let mut order = Vec::with_capacity(n);
-        while !ready.is_empty() {
-            ready.sort_unstable_by(|&a, &b| {
-                call_hashes[a].cmp(&call_hashes[b]).then_with(|| a.cmp(&b))
-            });
-            let current = ready.split_off(0);
-            for &i in &current {
-                order.push(i);
-                let (start, end) = (row_offsets[i], row_offsets[i + 1]);
-                for &v in &cols[start..end] {
-                    indeg_s[v] = indeg_s[v].saturating_sub(1);
-                    if indeg_s[v] == 0 {
-                        ready.push(v);
-                    }
-                }
-            }
-        }
-        assert_eq!(order, vec![1, 0, 3, 2, 4]);
-    }
-
-    #[test]
-    fn ready_heap_scheduler_topo_order() {
-        use std::{cmp::Reverse, collections::BinaryHeap};
-        let (row_offsets, cols, indeg, call_hashes) = sample_graph();
-        let n = indeg.len();
-        let mut indeg_s = indeg.clone();
-        let mut heap: BinaryHeap<Reverse<(HashOf<TransactionEntrypoint>, usize)>> =
-            BinaryHeap::with_capacity(n);
-        for i in 0..n {
-            if indeg_s[i] == 0 {
-                heap.push(Reverse((call_hashes[i], i)));
-            }
-        }
-        let mut order = Vec::with_capacity(n);
-        while let Some(Reverse((_h, i))) = heap.pop() {
-            order.push(i);
-            let (start, end) = (row_offsets[i], row_offsets[i + 1]);
-            for &v in &cols[start..end] {
-                indeg_s[v] = indeg_s[v].saturating_sub(1);
-                if indeg_s[v] == 0 {
-                    heap.push(Reverse((call_hashes[v], v)));
-                }
-            }
-        }
-
-        // Valid deterministic topological order
-        assert_eq!(order, vec![1, 3, 4, 0, 2]);
-    }
-
-    #[test]
-    fn component_scheduler_orders_components_contiguously() {
-        let components = vec![vec![2, 3, 4], vec![0, 1]];
-        let row_offsets = vec![0, 1, 1, 2, 3, 3];
-        let cols = vec![1, 3, 4];
-        let indeg = vec![0, 1, 0, 1, 1];
-        let call_hashes = vec![
-            make_hash(10),
-            make_hash(12),
-            make_hash(5),
-            make_hash(40),
-            make_hash(50),
-        ];
-
-        let wave = super::schedule_components_wave(&components, &row_offsets, &cols, &call_hashes)
-            .expect("component scheduling must succeed (wave)");
-        assert_eq!(wave, vec![2, 3, 4, 0, 1]);
-
-        let heap =
-            super::schedule_components_ready_heap(&components, &row_offsets, &cols, &call_hashes)
-                .expect("component scheduling must succeed (heap)");
-        assert_eq!(heap, vec![2, 3, 4, 0, 1]);
-
-        let global_wave = super::schedule_wave_global(&row_offsets, &cols, &indeg, &call_hashes);
-        assert_eq!(global_wave, vec![2, 0, 1, 3, 4]);
-
-        let global_heap =
-            super::schedule_ready_heap_global(&row_offsets, &cols, &indeg, &call_hashes);
-        assert_eq!(global_heap, vec![2, 0, 1, 3, 4]);
-    }
-
-    #[test]
-    fn conflict_free_layers_merge_singletons_into_one_wave() {
-        let components = vec![vec![3], vec![1], vec![0], vec![2]];
-        let row_offsets = vec![0, 0, 0, 0, 0];
-        let cols = Vec::new();
-        let call_hashes = vec![make_hash(40), make_hash(10), make_hash(30), make_hash(20)];
-
-        let layers =
-            super::conflict_free_component_layers(&components, &row_offsets, &cols, &call_hashes)
-                .expect("singleton components must schedule");
-
-        assert_eq!(layers, vec![vec![1, 3, 2, 0]]);
-    }
-
-    #[test]
-    fn conflict_free_layers_preserve_component_depths() {
-        let components = vec![vec![2, 0, 1], vec![4, 3]];
-        let row_offsets = vec![0, 1, 2, 2, 3, 3];
-        let cols = vec![1, 2, 4];
-        let call_hashes = vec![
-            make_hash(20),
-            make_hash(10),
-            make_hash(30),
-            make_hash(15),
-            make_hash(5),
-        ];
-
-        let layers =
-            super::conflict_free_component_layers(&components, &row_offsets, &cols, &call_hashes)
-                .expect("component-local chains must schedule");
-
-        assert_eq!(layers, vec![vec![3, 0], vec![4, 1], vec![2]]);
-    }
-}
+include!("block/scheduler_variant_tests.rs");
 
 #[cfg(test)]
 mod tests {

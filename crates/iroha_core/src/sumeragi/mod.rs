@@ -1475,7 +1475,7 @@ fn fair_v2_ingress_timeout_control_advances_owner(
         ConsensusMessageV2Payload::TimeoutVote(vote) => (
             vote.round,
             owner.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
-                && vote.round.view == owner.identity.view,
+                && v2_core::timeout_vote_view_is_admissible(owner.identity.view, vote.round.view),
         ),
         ConsensusMessageV2Payload::TimeoutCertificate(certificate) => (
             certificate.round,

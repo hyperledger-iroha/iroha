@@ -16,6 +16,10 @@ from pathlib import Path
 from scripts.tests.sorafs_hedging_billing_freshness_contract import (
     assert_shipped_hedging_billing_freshness_contract,
 )
+from scripts.tests.sorafs_proof_stream_contract_support import (
+    assert_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections,
+    assert_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection,
+)
 from scripts.tests.sorafs_rollout_gate_contract_inventory import (
     bounded_json_checkers,
     standard_json_error_checkers,
@@ -113,6 +117,10 @@ SORAFS_GATEWAY_DNS_OWNER_RUNBOOK = DOCS_SOURCE_DIR / "sorafs_gateway_dns_owner_r
 SORAFS_GOVERNANCE_DAG_PLAN = DOCS_SOURCE_DIR / "sorafs_governance_dag_plan.md"
 SORAFS_GOVERNANCE_DAG_SERVICE_RS = (
     REPO_ROOT / "crates" / "sorafs_node" / "src" / "governance_service.rs"
+)
+SORAFS_GOVERNANCE_RS = REPO_ROOT / "crates" / "sorafs_node" / "src" / "governance.rs"
+SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW = (
+    REPO_ROOT / ".github" / "workflows" / "sorafs-governance-dag-kubo.yml"
 )
 SORAFS_HEDGING_PLAN = DOCS_SOURCE_DIR / "sorafs_hedging_plan.md"
 SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.md"
@@ -21097,7 +21105,7 @@ def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> Non
     assert exposed == {}
 
 
-def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
+def test_governance_dag_publication_service_is_documented_as_shipped() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
     service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS) + read(SORAFS_GOVERNANCE_DAG_SERVICE_RS.parent / "governance_service/tests/restart_and_live_kubo.rs")
 
@@ -21117,17 +21125,17 @@ def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
     )
     normalized_source = re.sub(r"\s+", " ", source)
     assert [phrase for phrase in required_shipped if phrase not in normalized_source] == []
-    assert "unimplemented IPFS/IPNS publisher" in normalized_source
-    assert "deployment/package integration" in normalized_source
+    assert "reconciled SF-12 rollout gate" in normalized_outstanding
     assert "RocksDB/IPLD backend only if" in normalized_outstanding
-    assert "IPFS Cluster pinning and IPNS head publication" not in normalized_outstanding
+    assert "Reconcile the rollout checker" not in normalized_outstanding
 
     for marker in (
         "async fn ipfs_add_verified(",
         "async fn ipfs_pin(",
         "async fn ipfs_verify_pin(",
         "async fn ipfs_cat(",
-        "async fn publish_ipns_head(",
+        "async fn put_signed_http_head(",
+        "async fn fetch_signed_http_head(",
         "GovernanceDagSealedCheckpointStore",
         "GovernanceDagSealedStateSlot::PublishIntent",
         "GovernanceDagSealedStateSlot::IpfsRequestReplay",
@@ -21136,25 +21144,103 @@ def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
         "run_governance_dag_service",
         '"/v1/sorafs/governance/dag/checkpoint"',
         "sorafs_governance_dag_ipfs_pin_lag_seconds",
-        "real_kubo_publication_ipns_restart_and_tamper_lane",
+        "real_kubo_publication_signed_head_restart_and_tamper_lane",
     ):
         assert marker in service
+
+
+def test_governance_dag_rollout_constants_and_bindings_are_source_bound() -> None:
+    checker = read(SCRIPTS_DIR / "check_sorafs_governance_dag_rollout_evidence.py")
+    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
+    governance = read(SORAFS_GOVERNANCE_RS)
+    kubo_workflow = read(SORAFS_GOVERNANCE_DAG_KUBO_WORKFLOW)
+
+    for checker_marker, source_marker in (
+        (
+            "KUBO_UNIXFS_CHUNK_SIZE_BYTES = 1024 * 1024",
+            "const IPFS_UNIXFS_CHUNK_BYTES: usize = 1024 * 1024;",
+        ),
+        (
+            "KUBO_UNIXFS_MAX_LINKS_PER_NODE = 1024",
+            "const IPFS_UNIXFS_MAX_FILE_LINKS: usize = 1024;",
+        ),
+        (
+            "MIRROR_RETENTION_MAX_ENTRIES = 65_536",
+            "pub const GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1: usize = 65_536;",
+        ),
+        (
+            "MIRROR_RETENTION_MAX_BYTES = 512 * 1024 * 1024",
+            "pub const GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;",
+        ),
+        (
+            "STEADY_AUDIT_MAX_ENTRIES_PER_POLL = 64",
+            "const STEADY_IPFS_AUDIT_MAX_ENTRIES_PER_POLL: usize = 64;",
+        ),
+        (
+            "STEADY_AUDIT_MAX_BYTES_PER_POLL = 16 * 1024 * 1024",
+            "const STEADY_IPFS_AUDIT_MAX_BYTES_PER_POLL: u64 = 16 * 1024 * 1024;",
+        ),
+    ):
+        assert checker_marker in checker
+        assert source_marker in service
+
+    for marker in (
+        '("cid-version", "1")',
+        '("hash", "sha2-256")',
+        '("chunker", "size-1048576")',
+        '("max-file-links", "1024")',
+        '("raw-leaves", "true")',
+        'const KUBO_CONFORMANCE_VERSION_V1: &str = "0.42.0";',
+        '("below-chunk", IPFS_UNIXFS_CHUNK_BYTES - 1)',
+        '("at-chunk", IPFS_UNIXFS_CHUNK_BYTES)',
+        '("over-chunk", IPFS_UNIXFS_CHUNK_BYTES + 1)',
+        '("max-object", GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)',
+    ):
+        assert marker in service
+    for marker in (
+        "GOVERNANCE_DAG_REQUEST_INGRESS_BINDING_DOMAIN_V1",
+        "pub fn binding_digest(self) -> [u8; 32]",
+        "pub struct GovernanceDagVerifiedHttpRequestV1",
+        "pub fn verify_http_request<B: AsRef<[u8]>>",
+        "request_receiver_accepts_real_http1_host_and_blocks_boundary_bypasses",
+    ):
+        assert marker in governance
+    for marker in (
+        "state.metrics.mirror_drift = 1;",
+        "failed_object_repair_latches_mirror_drift_until_coherent_retry",
+    ):
+        assert marker in service
+    for marker in (
+        '"kubo_ingress_binding_digest_hex"',
+        '"signed_head_ingress_binding_digest_hex"',
+    ):
+        assert marker in checker
+    for marker in (
+        "KUBO_VERSION: v0.42.0",
+        "KUBO_LINUX_AMD64_SHA512:",
+        "sha512sum --check --strict",
+        "SORAFS_RUN_KUBO_INTEGRATION: \"1\"",
+        "real_kubo_publication_signed_head_restart_and_tamper_lane",
+        "-- --ignored --exact --nocapture",
+    ):
+        assert marker in kubo_workflow
 
 
 def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the runner dry-run emits the checker-backed `evidence_contract` map for selected SF-12 evidence kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
-        "Mirror datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
-        "Ingest-service artifacts also bind `source_count` to the unique canonical `payload_kinds` inventory and reject duplicate or unknown payload-kind entries before promotion can report ready",
-        "Publisher-service and IPFS/IPNS end-to-end artifacts also bind `block_count` to the unique canonical `block_refs` inventory, bind `payload_kind_count` to the unique canonical `payload_kinds` inventory, require reviewed `governance-dag-block-*` block-reference labels without non-production markers, and reject duplicate block-reference entries and duplicate or unknown payload-kind entries before promotion can report ready",
+        "Evidence payloads and nested dashboard route rows are schema-closed.",
+        "Mirror datastore, checkpoint recovery, dashboard, observability, `publication_e2e`, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
+        "governance approval artifacts must match that publisher policy digest plus its receiver-policy, replay-namespace, and replica-set qualification digests and the complete per-Kubo and per-signed- head ingress-binding digests before promotion.",
+        "Publisher evidence must prove the deterministic 1 MiB/raw-leaf/balanced Kubo UnixFS profile, locally derived CIDv1 SHA-256 roots, strong single-ETag signed-HTTP CAS and readback, and the exact exclusive receiver/shared sealed atomic replay qualification.",
+        "Mirror and governance evidence must bind the protocol-fixed 65,536-block/512 MiB suffix.",
+        "Recovery, observability, dashboard, and `publication_e2e` evidence respectively prove same-CID post-loss repair, the full-first then 64-entry/16 MiB rotating audit, fresh checkpoint-coherent reads, and reader withdrawal after service liveness ends.",
         "Dashboard API artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready",
-        "Governance DAG payload-safety artifacts must explicitly set `payload_bytes_included`, `raw_head_included`, `raw_car_included`, `mirror_drift_detected`, `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "Governance DAG aggregate promotion also rechecks the lane-proven relationships: public-head bound artifact fingerprints must match `valid_public_head_cids`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
-        "Governance DAG rollout summaries must expose exactly one active public head CID, one active publisher policy digest, and one active checkpoint digest; mixed valid public-head, policy, or checkpoint anchors fail closed before final promotion can report ready.",
-        "collection planner with dry-run evidence-contract export and schema-closed plan validation",
+        "Governance DAG rollout summaries must expose exactly one active public head CID, publisher policy digest, checkpoint digest, receiver-policy digest, replay-namespace digest, replica-set digest, Kubo ingress-binding digest, and signed-head ingress-binding digest; mixed valid anchors fail closed before final promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -21205,13 +21291,16 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     assert "value.strip() not in REQUIRED_PAYLOAD_KIND_SET" not in checker
     assert "value not in REQUIRED_PAYLOAD_KIND_SET" in checker
     assert "def require_only_required_values(" in checker
+    assert "def require_exact_fields(" in checker
+    assert "EVIDENCE_REQUIRED_FIELDS[kind.name]" in checker
+    assert "ROUTE_REQUIRED_FIELDS" in checker
     assert "BLOCK_REF_LABEL_PATTERN" in checker
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
     assert "require_scalar_inventory_labels(" in checker
     assert "pattern=BLOCK_REF_LABEL_PATTERN" in checker
     assert 'require_false(payload, "payload_bytes_included", errors)' in checker
     assert 'require_false(payload, "raw_head_included", errors)' in checker
-    assert 'require_false(payload, "raw_car_included", errors)' in checker
+    assert '"raw_car",' in checker
     assert 'require_false(payload, "mirror_drift_detected", errors)' in checker
     assert 'require_false(payload, "raw_blocks_included", errors)' in checker
     assert 'require_false(payload, "raw_checkpoint_included", errors)' in checker
@@ -21256,10 +21345,16 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
         "test_publisher_payload_kinds_must_not_include_unknown_values"
         in checker_test
     )
-    assert "test_ipfs_block_refs_must_not_duplicate" in checker_test
-    assert "test_ipfs_block_refs_must_use_production_family" in checker_test
-    assert "test_ipfs_payload_kinds_must_not_duplicate" in checker_test
-    assert "test_ipfs_payload_kinds_must_not_include_unknown_values" in checker_test
+    assert "test_publication_block_refs_must_not_duplicate" in checker_test
+    assert "test_publication_block_refs_must_use_production_family" in checker_test
+    assert "test_publication_payload_kinds_must_not_duplicate" in checker_test
+    assert "test_publication_payload_kinds_must_not_include_unknown_values" in checker_test
+    assert "test_evidence_payloads_are_schema_closed" in checker_test
+    assert "test_publisher_requires_fixed_unixfs_and_signed_http_contract" in checker_test
+    assert "test_publisher_requires_qualified_exclusive_ingress_and_shared_replay" in checker_test
+    assert "test_governance_approval_must_bind_publisher_ingress_qualification" in checker_test
+    assert "test_fixed_retention_contract_is_exact_across_mirror_and_approval" in checker_test
+    assert "test_rotating_audit_budgets_are_fixed_v1_values" in checker_test
     assert (
         "test_payload_kinds_reject_trim_normalized_and_unicode_variants"
         in checker_test
@@ -21334,7 +21429,11 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "write_payload_atomic" in builder
     assert "must not be a symlink" in builder
     assert "raw_head_included" in builder
-    assert "raw_car_included" in builder
+    assert "KUBO_UNIXFS_PROFILE" in builder
+    assert "MIRROR_RETENTION_MAX_ENTRIES" in builder
+    assert "STEADY_AUDIT_MAX_ENTRIES_PER_POLL" in builder
+    assert "INGRESS_QUALIFICATION_DIGEST_KINDS" in builder
+    assert "--receiver-policy-digest-hex" in builder
     assert "raw_checkpoint_included" in builder
     assert "response_bodies_included" in builder
     assert "test_generated_canaries_pass_full_governance_dag_gate" in builder_test
@@ -21349,11 +21448,13 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
         "test_publisher_block_ref_inventory_rejects_placeholder_marker"
         in builder_test
     )
-    assert "test_ipfs_block_ref_inventory_must_match_block_count" in builder_test
+    assert "test_publication_block_ref_inventory_must_match_block_count" in builder_test
     assert (
-        "test_ipfs_block_ref_inventory_must_use_production_family"
+        "test_publication_block_ref_inventory_must_use_production_family"
         in builder_test
     )
+    assert "test_generated_canaries_encode_fixed_first_release_constants" in builder_test
+    assert "test_ingress_qualification_digests_are_required_before_write" in builder_test
     assert "test_missing_dashboard_route_coverage_fails_closed" in builder_test
     assert "test_dashboard_canary_requires_route_body_digest" in builder_test
     assert "test_unknown_verified_claim_fails_before_write" in builder_test
@@ -21371,14 +21472,17 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind publisher_service" in publisher_example
     assert "--policy-digest-hex" in publisher_example
+    assert "--receiver-policy-digest-hex" in publisher_example
     assert "--block-ref governance-dag-block-07" in publisher_example
-    assert "--verified-claim car_segments_pinned" in publisher_example
+    assert "--verified-claim strong_single_etag_verified" in publisher_example
+    assert "--verified-claim authenticated_ingress_qualified" in publisher_example
     assert "--payload-kind orderbook-settlement-receipt" in publisher_example
     assert "--kind dashboard_api" in dashboard_example
     assert "--route checkpoint" in dashboard_example
     assert "--route-body-blake3-hex" in dashboard_example
+    assert "--verified-claim reader_withdrawal_verified" in dashboard_example
     assert "build_sorafs_governance_dag_canary.py" in docs
-    assert "payload-free Governance DAG canary builder" in docs
+    assert "payload-free canary JSON" in docs
     assert "--route-body-blake3-hex" in docs
 
 
@@ -28820,165 +28924,15 @@ def test_unshipped_sorafs_proto_release_surface_is_not_exposed() -> None:
 
 
 def test_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections() -> None:
-    api = read(TORII_SORAFS_API_RS)
-    openapi = read(TORII_OPENAPI_RS)
-
-    renderer_start = api.index("fn render_finalized_proof_stream_response(")
-    renderer_end = api.index(
-        "\npub(crate) async fn handle_post_sorafs_pdp_challenge(",
-        renderer_start,
+    assert_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections(
+        read=read,
+        api_path=TORII_SORAFS_API_RS,
+        openapi_path=TORII_OPENAPI_RS,
     )
-    renderer = re.sub(r"\s+", " ", api[renderer_start:renderer_end])
-    assert "outcome.manifest_digest.as_bytes() != &request.manifest_digest" in renderer
-    assert "outcome.provider_id.as_bytes() != &request.provider_id" in renderer
-    assert "request.challenge_id != Some(outcome.identity_digest)" in renderer
-    assert "receipt.request_id != Some(expected_job_id)" in renderer
-    assert "proof_outcome_request_mismatch_response(proof_kind_label)" in renderer
-
-    pdp_dispatch_start = api.index("ProofStreamKind::Pdp => {")
-    pdp_dispatch_end = api.index("\n    }\n}", pdp_dispatch_start)
-    pdp_dispatch = re.sub(r"\s+", " ", api[pdp_dispatch_start:pdp_dispatch_end])
-    assert ".expect(\"validation guarantees challenge id for PDP\")" in pdp_dispatch
-    assert (
-        "FindSorafsProofOutcome::new( ProofOutcomeKindV1::Pdp, challenge_id, expected_finalized_cursor, )"
-        in pdp_dispatch
-    )
-    assert "ProofOutcomeFinalizedCursorV1" in pdp_dispatch
-    assert "validated finalized cursor is complete" in pdp_dispatch
-    assert "query.execute(&state.state.query_view())" in pdp_dispatch
-    assert (
-        "render_finalized_proof_stream_response(&state, &finalized, &request)"
-        in pdp_dispatch
-    )
-    assert "challenge_status" not in pdp_dispatch
-
-    potr_dispatch_start = api.index("ProofStreamKind::Potr => {")
-    potr_dispatch_end = api.index("ProofStreamKind::Pdp => {", potr_dispatch_start)
-    potr_dispatch = re.sub(r"\s+", " ", api[potr_dispatch_start:potr_dispatch_end])
-    assert (
-        ".expect(\"validation guarantees orchestrator job id for PoTR\")"
-        in potr_dispatch
-    )
-    assert (
-        "potr_request_scope_digest_v1(request.manifest_digest, provider_id, job_id)"
-        in potr_dispatch
-    )
-    assert (
-        "FindSorafsProofOutcome::new( ProofOutcomeKindV1::Potr, identity_digest, expected_finalized_cursor, )"
-        in potr_dispatch
-    )
-    assert "ProofOutcomeFinalizedCursorV1" in potr_dispatch
-    assert "validated finalized cursor is complete" in potr_dispatch
-    assert "query.execute(&state.state.query_view())" in potr_dispatch
-    assert (
-        "render_finalized_proof_stream_response(&state, &finalized, &request)"
-        in potr_dispatch
-    )
-
-    pdp_schema_start = openapi.index('"SorafsProofStreamPdpRequestV1".to_owned()')
-    pdp_schema_end = openapi.index(
-        '"SorafsProofStreamPotrRequestV1".to_owned()',
-        pdp_schema_start,
-    )
-    pdp_schema = openapi[pdp_schema_start:pdp_schema_end]
-    pdp_required_start = pdp_schema.index('"required": [')
-    pdp_required_end = pdp_schema.index("],", pdp_required_start)
-    pdp_required = pdp_schema[pdp_required_start:pdp_required_end]
-    assert '"challenge_id_hex"' in pdp_required
-    assert '"additionalProperties": false' in pdp_schema
-
-    potr_schema_start = pdp_schema_end
-    potr_schema_end = openapi.index(
-        '"SorafsProofStreamHttpRequestV1".to_owned()',
-        potr_schema_start,
-    )
-    potr_schema = openapi[potr_schema_start:potr_schema_end]
-    potr_required_start = potr_schema.index('"required": [')
-    potr_required_end = potr_schema.index("],", potr_required_start)
-    potr_required = potr_schema[potr_required_start:potr_required_end]
-    assert '"orchestrator_job_id_hex"' in potr_required
-    assert '"additionalProperties": false' in potr_schema
-    assert (
-        "chain-authoritative request-scope identity with the manifest and provider"
-        in potr_schema
-    )
-
-    assert "`proof_kind=pdp` is reserved for future SF-13 work" not in openapi
-    assert "rejected as an unsupported proof kind" not in openapi
 
 
 def test_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection() -> None:
-    cli = read(SORAFS_CLI_RS)
-    command_start = cli.index("fn proof_stream(raw_args: Vec<String>)")
-    command_end = cli.index("\nfn write_proof_stream_evidence(", command_start)
-    command = cli[command_start:command_end]
-    endpoint_start = cli.index("fn proof_stream_endpoint(")
-    endpoint_end = cli.index("\nfn proof_stream_pin_manifest_endpoint(", endpoint_start)
-    endpoint_policy = cli[endpoint_start:endpoint_end]
-    fetch_start = cli.index("fn fetch_finalized_pin_manifest(")
-    fetch_end = cli.index("\nfn validate_finalized_pin_manifest(", fetch_start)
-    native_fetch = cli[fetch_start:fetch_end]
-    validation_start = fetch_end + 1
-    validation_end = cli.index("\nfn payload_free_proof_stream_event(", validation_start)
-    validation = cli[validation_start:validation_end]
-    event_start = validation_end + 1
-    event_end = cli.index("\nfn proof_stream(raw_args: Vec<String>)", event_start)
-    event_projection = cli[event_start:event_end]
-
-    assert 'const PROOF_STREAM_ROUTE_V1: &str = "/v1/sorafs/proof/stream";' in cli
-    assert 'const PIN_MANIFEST_ROUTE_PREFIX_V1: &str = "/v1/sorafs/pin/";' in cli
-    assert 'parsed.scheme() != "https"' in endpoint_policy
-    for rejected_component in (
-        "parsed.username().is_empty()",
-        "parsed.password().is_some()",
-        "parsed.query().is_some()",
-        "parsed.fragment().is_some()",
-    ):
-        assert rejected_component in endpoint_policy
-    assert "raw != canonical_endpoint" in endpoint_policy
-    assert "raw != canonical_origin && raw != canonical_origin_with_slash" in endpoint_policy
-    assert ".https_only(true)" in cli
-    assert ".redirect(RedirectPolicy::none())" in cli
-    assert ".no_proxy()" in cli
-    assert native_fetch.count(".bearer_auth(bearer_token)") == 1
-    assert command.count(".bearer_auth(&bearer_token)") == 1
-    assert "fetch_finalized_pin_manifest(" in command
-    assert "validate_finalized_pin_manifest(" in command
-    assert "PinStatus::Approved(_)" in validation
-    for manifest_binding in (
-        "record.digest.as_bytes() != local_manifest_digest",
-        "record.root_cid.as_bytes().as_slice() != local_manifest.root_cid.as_slice()",
-        "record.chunker != chunker_handle_from_profile(&local_manifest.chunking)",
-        "record.chunk_digest_sha3_256 != local_manifest.chunk_digest_sha3_256",
-        "record.por_root != local_manifest.por_root",
-        "record.content_length != local_manifest.content_length",
-        "record.policy != convert_pin_policy(&local_manifest.pin_policy)",
-        "finalized.finalized_cursor.height == 0",
-        ".finalized_cursor\n        .block_hash",
-    ):
-        assert manifest_binding in validation
-    assert "MAX_PROOF_STREAM_SAMPLE_COUNT" in command
-    assert "read_file_bounded(&manifest_path, manifest_byte_limit, \"manifest\")" in command
-    assert "expected_finalized_height: Some(validated_pin.finalized_height)" in command
-    assert (
-        "expected_finalized_block_hash: Some(validated_pin.finalized_block_hash)"
-        in command
+    assert_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection(
+        read=read,
+        cli_path=SORAFS_CLI_RS,
     )
-    assert "ProofStreamNdjsonReader::new(reader, &verification_context)" in command
-    assert "payload_free_proof_stream_event(&item)" in command
-    assert "item.to_json()" not in command
-    for secret_payload in (
-        '"proof"',
-        '"leaf_bytes_hex"',
-        '"receipt_b64"',
-        '"trace_id"',
-        '"nonce_b64"',
-        '"authorization"',
-        '"credential"',
-    ):
-        assert secret_payload not in event_projection
-    assert '"--stream-token" =>' not in command
-    assert '"--max-failures" =>' not in command
-    assert "sorafs_cli/stream/v2" not in command
-    assert "redacted_endpoint(&endpoint)" in command
-    assert "&manifest_bytes," in command

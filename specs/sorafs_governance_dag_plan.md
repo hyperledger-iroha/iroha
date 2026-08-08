@@ -1,6 +1,6 @@
 ---
 title: Governance DAG Publishing Pipeline
-summary: SF-12 implementation status for the always-on IPFS/IPNS publisher, authenticated recovery, bounded public mirror, and remaining deployment evidence.
+summary: SF-12 implementation status for deterministic Kubo publication, signed-HTTP head CAS, sealed recovery, a bounded authenticated mirror, and remaining deployment evidence.
 ---
 
 # Governance DAG Publishing Pipeline
@@ -17,27 +17,39 @@ signed block/head snapshots, local signed-head rebuild can recover a head
 manifest from an existing block snapshot, and local checkpoint metadata can bind
 verified heads to optional CAR and mirror-index artifacts for handoff.
 Checkpoint verification and recovery can replay those local bindings and rebuild
-a local mirror index independently of the network publisher. Torii can expose a
-read-only local dashboard/query API over a configured mirror index. Filesystem
-governance publishers maintain one authoritative
-`governance-publication-state-v1.json` envelope as runtime artifacts are
+a local mirror index independently of the network publisher. In an embedded
+node, Torii receives the supervised service's authenticated mirror-read
+capability before the first `NodeHandle` clone is shared; it does not open a
+mirror filename as a second authority. Filesystem governance publishers commit
+one canonical typed two-slot publication envelope as runtime artifacts are
 materialized. Its one-to-one `publish_index` and `car_queue` sections expose the
 deterministic publication feed and fully assembled per-publication CARv2
 segments for the canonical `.to` payload, JSON mirror, and BLAKE3 sidecars.
-Both sections become visible through one atomic rename; the retired separate
-`publish-index.json` and `car-queue.json` files are rejected. Torii exposes
-read-only publish-index, queue, and segment lookup endpoints over the same
-envelope without requiring the optional RocksDB/IPLD backend. When configured with a
+Both sections become visible in one typed-store generation. Torii obtains a
+path-free snapshot from `NodeHandle` and exposes read-only publish-index, queue,
+and segment lookup
+endpoints over that same generation without requiring the optional RocksDB/IPLD
+backend. When configured with a
 publisher peer ID, opaque signer handle, canonical Ed25519 public key, and a
 matching deployment-injected runtime signer, the filesystem publisher also
 appends supported published payloads to a local signed
 `runtime-dag/` chain with `GovernanceDagBlockV1` blocks,
 `GovernanceDagHeadV1` head bytes, and a
-`sorafs.governance_dag.runtime_signed_index.v1` lookup index. Torii exposes
-read-only runtime index/head/block/node/digest/kind queries over that local
-index. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
+`sorafs.governance_dag.runtime_signed_index.v1` lookup index. The canonical head
+and index are committed together in the authenticated runtime two-slot store;
+Torii obtains both bytes plus their sealed producer-checkpoint identity through
+`NodeHandle`, then exposes read-only runtime index/head/block/node/digest/kind
+queries. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
 full match counts visible while bounding returned `entries`, `segments`, or
 `blocks` arrays through `limit` (default 50, max 500).
+
+Every mutable-authority response identifies its opaque typed source with
+`source`, `source_generation`, and `source_record_blake3`; mirror and runtime
+responses additionally carry `source_checkpoint_generation` and
+`source_checkpoint_revision`. Host authority paths and `head_path` are not part
+of the public contract. Conditional ETags bind the complete typed-store record
+and, where present, the sealed checkpoint identity, so changed authentication
+metadata cannot be hidden by a stale `304 Not Modified` response.
 
 Filesystem publication objects are immutable and use only composite identities.
 The encoded and JSON sources live at
@@ -86,9 +98,8 @@ Proof-token issuances and transparency-ledger publications preserve matching
 provenance when admitted through an authenticated route, while their trusted
 in-process producer APIs are represented by its absence and remain attested by
 the node signer. Other internally derived records, including settlement
-receipts, reject caller provenance. The first-release schema is a hard cut:
-pre-change runtime DAG nodes must be reseeded instead of decoded through a
-compatibility heuristic.
+receipts, reject caller provenance. Only the first-release provenance-bearing
+runtime DAG schema is admitted.
 
 The node derives `publisher_account_id` from the typed canonical `AccountId`;
 it is never accepted from the request body. The manifest layer independently
@@ -111,65 +122,88 @@ and minimum are `134283264`, so a block admitted by the canonical schema cannot
 be rejected only by the service transport setting. Per-variant semantic
 collection/string ceilings are enforced before nested validation.
 
-The `sorafs_governance_dag` service implementation, exposed through the public
-`run_governance_dag_service` library launcher, is the always-on production
-service. It loads its policy from `iroha_config` and accepts a local signed DAG
-only when the producer's separate sealed checkpoint authenticates the exact
-canonical root, signer/store qualifications, block count, head, and index
-digests and no producer write-ahead intent is active. The service performs this
-check on both sides of its bounded source read so a concurrent producer cannot
-publish filesystem state before its checkpoint CAS commits. It then uploads
-and recursively pins every new block plus the signed head through a pinned IPFS
-API, verifies pin state, reads every object back, and publishes the head with
-either authenticated HTTP compare-and-swap or IPNS resolve/publish/resolve
-compare-and-swap. A service-specific authenticated checkpoint and write-ahead
-publish intent live in the same deployment-injected sealed monotonic store
-under distinct slots, making restart recovery fail closed across partial
-block, head, and mirror publication. Every outbound control-plane request is
-authenticated through a rotation-aware runtime provider selected by an opaque
-configuration handle. Signer, authenticator, and checkpoint providers must
-also return a non-zero public policy revision and digest; startup pins those
-qualifications before opening publisher/checkpoint state or resolving
-publication endpoints, and every operation rejects handle or qualification
-drift. Canonical configuration and runtime validation reject
-null/mock/test/dev/fake/placeholder handle components. The public
+The `sorafs_governance_dag` implementation, exposed through the public
+`run_governance_dag_service` launcher, is the always-on publisher. It loads
+policy from `iroha_config` and accepts a local signed DAG only when the
+producer's separate sealed checkpoint authenticates the exact canonical root,
+signer/store qualifications, block count, head, and index digests and no
+producer write-ahead intent is active. The service performs this check on both
+sides of its bounded source read so a concurrent producer cannot expose source
+state before its checkpoint CAS commits.
+
+Objects are published through one deterministic Kubo UnixFS profile. Files up
+to 1 MiB use a raw CIDv1 SHA-256 block; larger files use fixed 1 MiB raw leaves
+under one canonical DAG-PB UnixFS file root, with at most 1,024 links. The Kubo
+request fixes CID version, hash, chunker, raw leaves, link limit, directory
+wrapping, and trickle behavior. The service derives the expected root locally,
+rejects any different Kubo result, pins the object, and reads the exact bytes
+back. The public head has one transport: an authenticated signed-HTTP endpoint
+with strong-ETag compare-and-swap and readback verification.
+
+A service-specific sealed checkpoint and write-ahead publish intent occupy
+distinct slots in the deployment-injected monotonic store. The typed mirror
+candidate binds the sealed intent digest before publication; restart either
+continues that exact intent or reconstructs byte-identical mirror JSON from the
+authenticated source and checkpoint. V1 mirror retention is protocol-fixed at
+65,536 source blocks and 512 MiB of canonical source-block bytes, whichever
+limit is reached first; node-local retention knobs are rejected. Before the
+public-head CAS, the service verifies or repairs every retained block and head
+object and requires repaired uploads to produce the same locally derived CID.
+The first steady-state pass performs a full head and retained-object audit.
+Later polls revalidate the head and rotate through retained blocks under the
+64-entry/16 MiB audit budget, always checking at least the selected first block.
+If a pin or object disappears after CAS, these audits restore it from the
+authenticated bytes and require the same deterministic CID before readiness.
+
+Every outbound control-plane request is authenticated through a rotation-aware
+runtime provider selected by an opaque configuration handle. For each Kubo and
+signed-head endpoint, configuration derives an exact
+`GovernanceDagRequestIngressBindingV1` over scope, normalized endpoint digest,
+Ed25519 key, body ceiling, and timing policy. The provider's live
+`GovernanceDagRequestAuthenticator::ingress_qualification` must return a
+matching `GovernanceDagRequestIngressQualificationV1`, including provider,
+receiver-policy, replay-namespace, and replica-set identities. The only V1
+postures are
+`GovernanceDagRequestIngressEnforcementV1::ExclusiveAuthenticatedReceiver` and
+`GovernanceDagRequestReplayPostureV1::SharedSealedAtomicConsumeUntilExpiry`.
+`GovernanceDagHttpRequestReceiverV1` consumes one finalized typed HTTP request,
+requires exactly one endpoint-matching `Host` for HTTP/1.x, validates any URI
+authority against the same qualified origin, and rejects ambiguous framing or
+unsigned semantic headers. It then verifies the exact eight authentication
+headers, canonical request, freshness, signature, and one atomic nonce consume
+through `GovernanceDagRequestAuthenticationReplayStoreV1`. The resulting
+backend-dispatch capability has the authentication headers removed and its URI
+normalized to origin form, so a downstream proxy cannot reinterpret an
+absolute request target. The in-memory replay cache is an isolated-test utility
+and is not production qualification evidence.
+Immediately before signing and again after final request construction, the
+client requires the signed-head URL to equal its qualified endpoint exactly;
+Kubo requests must retain the same scheme, host, effective port, and normalized
+base-path prefix. A future caller therefore cannot reuse a qualified signer for
+a cross-origin or sibling-path request.
+
+Signer, authenticator, and checkpoint providers return non-zero public policy
+revisions and digests. Startup pins those qualifications before opening state
+or resolving endpoints, and every operation rejects identity drift. The public
 `run_governance_dag_service_with_runtime_registry` launcher resolves one exact
-set of those stable handles through a deployment-owned registry and then uses
-the same pre-state qualification path. Missing, stale, rejected, incomplete,
-substituted, or test-marked registry results fail with typed redacted errors
-before service state is opened. The same process serves a bounded public mirror,
-head, block, node, checkpoint, health, and Prometheus surface. The stock
-`irohad` launcher now resolves the embedded signer, sealed-CAS store, and
-IPFS/head request authenticators through a platform-fixed, service-UID-owned
-local broker on Linux and macOS. Its bounded canonical Norito protocol binds
-the chain, exact provider catalog, fresh session, qualification metadata,
-monotonic request identity, operation, and payload; unsupported roles and
-platforms fail closed. Request authentication is a hard cut to a signed
-canonical descriptor and envelope: configuration pins each strong Ed25519
-verification key plus bounded freshness/skew policy, every outbound operation
-requalifies the exact provider, and bearer/cookie/alias representations are
-rejected. The source also exports a transport-agnostic inbound verifier for the
-exact eight authentication headers. It binds the endpoint scope, method,
-canonical absolute URL and query, selected public headers, body length and
-BLAKE3 digest, freshness interval, nonce, and pinned Ed25519 signature before
-backend dispatch. Before any outbound IPFS or signed-head request leaves the
-standard service, its locally verified envelope consumes the nonce through an
-independent config-pinned sealed-CAS slot for that exact scope. The canonical
-Norito state is strictly nonce-sorted, retains at most 4,096 live entries,
-prunes only expired entries, advances a strict generation, and requires exact
-post-CAS readback; a concurrent replica, ambiguous CAS, corrupt state, or live
-capacity exhaustion fails closed. The deployment-owned receiver is still not
-installed in Kubo or head-service ingress, and the low-level inbound verifier's
-caller-owned replay cache remains process-local until that receiver supplies
-its own sealed cross-replica replay adapter. The source tree supplies the
-authenticated client, injected broker-server boundary, and common catalog-only
-executable shell with secure loading, readiness, signals, and redacted errors.
-SF-12 still requires a supervised concrete registry and vendor-linked broker
-executable, genuine HSM/sealed-store and authenticated Kubo/head backends,
-receiver installation with durable shared replay state, deployment/package
-integration, optional RocksDB/IPLD storage if the JSON mirror cannot meet
-deployment scale, and captured multi-instance public rollout evidence—not an
-unimplemented IPFS/IPNS publisher.
+provider set through a deployment-owned registry; missing, stale, incomplete,
+substituted, or test-marked results fail with typed redacted errors before state
+access. The stock `irohad` launcher resolves the embedded signer, sealed CAS
+store, and both request authenticators through its local broker boundary before
+Sumeragi startup.
+
+Preparation also returns a service-owned `GovernanceDagMirrorReadHandleV1`.
+Each read reopens the typed mirror and sealed checkpoint, verifies both retained
+roots and all provider bindings, and checks one shared readiness epoch before
+and after the read. Reconciliation failure and runner drop withdraw that epoch,
+so retained clones cannot serve a cached generation after service liveness is
+lost. The process also serves bounded mirror, head, block, node, checkpoint,
+health, readiness, and Prometheus routes.
+
+SF-12 deployment qualification still requires the supervised broker and
+genuine HSM, sealed-store, exclusive authenticated Kubo/head receivers with one
+shared sealed atomic replay namespace, package integration, any scale-motivated
+mirror backend, and captured multi-instance rollout evidence.
 
 Implemented foundations include:
 - `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,
@@ -206,15 +240,15 @@ Implemented foundations include:
   agreement.
   Each successful filesystem publish now atomically updates the nested
   `sorafs.governance_dag.local_publish_index.v1` and
-  `sorafs.governance_dag.local_car_queue.v1` sections of
-  `governance-publication-state-v1.json`. The index contains artifact paths,
+  `sorafs.governance_dag.local_car_queue.v1` sections of one typed two-slot
+  publication authority. The index contains root-relative artifact paths,
   BLAKE3 digests, payload-kind counts, digest lookup maps, and compact labels;
   its corresponding queue entry references a fully qualified CARv2 segment
   under its position/source-pair composite path in `car-segments/`. Sources use
   their payload-kind/source-pair composite path under `publication-sources/`.
   The complete successor state is size-checked before object creation, and the
   two sections are validated as an exact one-to-one projection before the
-  envelope is replaced. Bounded descriptor-rooted recovery removes only
+  authority generation is committed. Bounded descriptor-rooted recovery removes only
   canonical unreferenced objects and exact canonical-target atomic temporaries
   from an interrupted publication. With
   `sorafs.storage.governance_dag_publisher_peer_id`,
@@ -242,17 +276,18 @@ Implemented foundations include:
   two startup reads or around signing; invalid signatures; and signer outages
   without exposing provider diagnostics. Embedded-node startup completes both
   qualification reads and every exact comparison before opening any durable
-  worker or publisher state. No signing-key file setting or compatibility
-  loader remains. A filesystem publisher now holds an
-  exclusive lock on its root
-  for its full lifetime and serializes the immutable objects, publication
-  envelope, CAR
-  queue, and signed block/head update as one in-process publication transaction,
-  so two publishers cannot race the same mutable indexes. Atomic artifact
-  replacements fsync both the file and its parent directory before publication
-  is acknowledged. The exclusive lock and mutable publish, CAR
-  queue, and runtime-DAG JSON indexes reject symlinks and hard links; indexes
-  are bounded at 64 MiB and must remain the same file throughout each read.
+  worker or publisher state. Signing authority is supplied only through the
+  qualified runtime provider. A filesystem publisher holds an exclusive lock on its root
+  for its full lifetime and serializes immutable-object creation plus typed
+  publication and runtime-state updates as one in-process publication
+  transaction. Publication state, including its `publish_index` and `car_queue`
+  payloads, and runtime staging/committed head-index state use descriptor-rooted
+  fixed-region two-slot stores with exact root/slot identity checks and
+  trailer-last compare-and-swap commits. These names describe bounded payload
+  sections, not mutable authority filenames. Atomic immutable-artifact creation
+  synchronizes both the file and parent directory before acknowledgement; links,
+  substituted roots or slots, ambiguous lineage, and corrupt newest committed
+  records fail closed.
   Implicit signer or store rotation remains deliberately rejected. The explicit
   rotation path now appends a canonical Norito key-transition envelope
   independently signed by the outgoing and incoming runtime signers. Each
@@ -309,8 +344,8 @@ Implemented foundations include:
   The local filesystem sink also updates the Governance DAG backlog gauge from
   CAR queue pending segment counts and refreshes the local signed runtime-head
   age gauge when runtime DAG state is written or de-duplicated.
-- `scripts/check_sorafs_governance_dag_rollout_evidence.py` now provides the
-  fail-closed SF-12 rollout evidence gate for deployed Governance DAG
+- `scripts/check_sorafs_governance_dag_rollout_evidence.py` provides the
+  existing SF-12 rollout evidence checker framework for deployed Governance DAG
   promotion packets, and
   `scripts/run_sorafs_governance_dag_rollout_evidence.py` provides the matching
   reviewed evidence collection planner/runner. The checker exports its required
@@ -320,17 +355,27 @@ Implemented foundations include:
   kinds, thresholds, external evidence map, evidence contract, and command steps
   before dry-run output or verifier execution. That validation now also rejects
   non-canonical nested required-kind, threshold, external-evidence,
-  evidence-contract, and command-step shapes. Mirror
-  datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS
-  end-to-end, and governance approval artifacts must carry the same
+  evidence-contract, and command-step shapes. Evidence payloads and nested
+  dashboard route rows are schema-closed. Mirror datastore, checkpoint
+  recovery, dashboard, observability, `publication_e2e`, and
+  governance approval artifacts must carry the same
   `public_head_cid_hex` as a valid
   publisher-service artifact in the same bundle, so rollout evidence cannot mix
-  mirror, recovery, dashboard, public IPFS/IPNS, or approval records from
+  mirror, recovery, dashboard, publication, or approval records from
   different signed DAG heads. Publisher-service artifacts must also carry
   `policy_digest_hex`, and governance approval artifacts must match that
-  publisher policy digest before promotion. Public-head and policy binding
-  failures are recorded on the offending artifact before required-kind validity
-  is computed, so the JSON summary matches the fail-closed rollout decision.
+  publisher policy digest plus its receiver-policy, replay-namespace, and
+  replica-set qualification digests and the complete per-Kubo and per-signed-
+  head ingress-binding digests before promotion. Zero authority digests are
+  invalid. Every recognized bound artifact requires its publisher anchor even
+  when that artifact is optional for a custom subset gate. Publisher evidence fixes
+  the Kubo UnixFS and signed-HTTP CAS profiles; mirror/governance evidence fixes
+  the V1 retention limits; recovery, observability, and dashboard evidence bind
+  same-CID repair, rotating-audit, and fresh liveness-bound read guarantees.
+  Public-head, policy, and ingress-qualification binding failures are recorded
+  on the offending artifact before required-kind validity is computed. The
+  retired IPNS evidence kind and collection flag are rejected rather than
+  treated as compatibility aliases.
 - Typed appeal finance transparency rollups: `sorafs_manifest` validates
   `SoraFsAppealFinanceWeeklyRollupV1` payloads and can aggregate validated
   finance reports into deterministic weekly dashboard rows for the filesystem
@@ -393,22 +438,24 @@ Implemented foundations include:
   - `sorafs_cli governance dag mirror-query --index <path>` queries the local
     mirror index by head, block CID, or node CID in table or JSON form.
 - Torii local Governance DAG mirror API:
-  - `GET /v1/sorafs/governance/dag/dashboard` summarizes the configured
-    `mirror-index.json` with signed-head metadata, block counts, payload-kind
-    counts, sequence bounds, timestamp bounds, BLAKE3 digest, and ETag/cache
-    headers.
+  - `GET /v1/sorafs/governance/dag/dashboard` summarizes the service-owned
+    authenticated mirror snapshot with signed-head metadata, block counts,
+    payload-kind counts, sequence bounds, timestamp bounds, typed-store and
+    checkpoint identities, a BLAKE3 digest, and ETag/cache headers.
   - `GET /v1/sorafs/governance/dag/head` returns the signed-head portion of the
-    configured local mirror index.
+    same authenticated typed mirror snapshot.
   - `GET /v1/sorafs/governance/dag/blocks/{block_cid_hex}` and
     `/v1/sorafs/governance/dag/nodes/{node_cid_hex}` look up the indexed block
     by block CID or governance-node CID. Each block exposes nullable submission
     account/origin fields copied from the signed node; the publisher rejects a
     runtime-index copy that disagrees with those signed bytes. The API reads
-    only the node-configured governance directory and fails closed on missing,
-    malformed, or unsupported mirror indexes.
+    only the installed mirror-read capability and descriptor-rooted immutable
+    block artifacts. A configured root without that capability returns no
+    mirror; malformed, substituted, or checkpoint-incoherent snapshots fail
+    closed. The installed typed capability is the sole mirror authority.
   - `GET /v1/sorafs/governance/dag/publish-index?limit=N` returns the
-    runtime-local filesystem publication feed from the `publish_index` section
-    of `governance-publication-state-v1.json`,
+    runtime-local publication feed from the `publish_index` payload section of
+    one typed publication-authority snapshot,
     including payload-kind counts, total entry counts, and a `limit`-bounded
     embedded entry list.
   - `GET /v1/sorafs/governance/dag/publish-index/digests/{encoded_blake3_hex}`
@@ -418,7 +465,7 @@ Implemented foundations include:
     counts, bound the returned `entries` array with `limit` (default 50, max
     500), and fail closed on missing, malformed, or unsupported publish indexes.
   - `GET /v1/sorafs/governance/dag/car-queue` returns the runtime-local CAR
-    segment queue from the same envelope's `car_queue` section, including
+    segment queue from the same typed generation's `car_queue` section, including
     assembled/pending counts and the full local queue.
   - `GET /v1/sorafs/governance/dag/car-queue/digests/{encoded_blake3_hex}`,
     `/v1/sorafs/governance/dag/car-queue/kinds/{payload_kind}`, and
@@ -433,8 +480,9 @@ Implemented foundations include:
     answer either `200` or `304`; a matching stale ETag cannot mask a missing or
     substituted archive.
   - `GET /v1/sorafs/governance/dag/runtime` summarizes the local signed runtime
-    DAG index from `runtime-dag-index.json`, including publisher identity,
-    head metadata, block counts, payload-kind counts, and the full local index.
+    DAG index from one NodeHandle-authenticated head/index generation, including
+    publisher identity, head metadata, block counts, payload-kind counts, and
+    the full local index.
   - `GET /v1/sorafs/governance/dag/runtime/head` returns the latest runtime head
     metadata and latest indexed block.
   - `GET /v1/sorafs/governance/dag/runtime/blocks/{block_cid_hex}` and
@@ -450,7 +498,9 @@ Implemented foundations include:
     validation, bounded projection, and fallible serialization before matching
     `If-None-Match`. Entity-tag opaque values compare case-sensitively; weak
     tags use the exact `W/` syntax and malformed quoting never aliases a valid
-    tag. A matching representation ETag therefore cannot turn an unconditional
+    tag. The base tag commits the typed record identity and the authenticated
+    mirror/runtime checkpoint identity when applicable. A matching
+    representation ETag therefore cannot turn an unconditional
     `404`, `409`, or `500` into `304`.
 - Local publication telemetry: `sorafs_governance_dag_publish_total`,
   `sorafs_governance_dag_published_bytes_total`,
@@ -463,16 +513,14 @@ Implemented foundations include:
 Still outstanding:
 - Package and supervise `sorafs_governance_dag` in the supported deployment
   bundles, implement and provision the deployment-owned HSM signer,
-  rotation-aware IPFS/head authenticators, and sealed monotonic checkpoint-store
+  rotation-aware Kubo/head authenticators, and sealed monotonic checkpoint-store
   adapters that derive their qualification revision/digest from the external
-  control plane and reject revoked/stale policy internally, and capture
-  multi-instance rollout/rollback evidence. Install the exact inbound verifier
-  in the deployment-owned Kubo/head receivers with a receiver-side sealed
-  cross-replica replay adapter. The standard outbound path already consumes
-  verified nonces through separate sealed IPFS and signed-head slots, but that
-  does not install or qualify the external receiver. The generic packaged binary
-  now lives with `irohad`, requires a canonical public chain ID, projects only
-  the IPFS authenticator, optional signed-head authenticator, and sealed
+  control plane and reject revoked/stale policy internally. Their live
+  `ingress_qualification` probes must bind the exact configured endpoints to an
+  exclusive `GovernanceDagHttpRequestReceiverV1` ingress backed by one sealed
+  atomic replay namespace shared by the complete replica set. The generic
+  packaged binary now lives with `irohad`, requires a canonical public chain ID,
+  projects only the Kubo authenticator, signed-head authenticator, and sealed
   checkpoint-store roles, and resolves them through the stock fixed local
   runtime-provider broker. Missing, substituted, stale, revoked, test-marked,
   or incomplete broker providers fail before state access. Deployment packages
@@ -488,16 +536,18 @@ Still outstanding:
   deployment profile requires it.
 - Publish operator-facing live-head/checkpoint convenience commands over the
   already shipped service API where they materially improve operations.
-- Capture public IPFS/IPNS, dashboard, alert-routing, and disaster-recovery
-  evidence that passes the SF-12 rollout gate.
+- Capture Kubo, signed-head CAS, dashboard, alert-routing, and disaster-recovery
+  evidence that passes the reconciled SF-12 rollout gate. The checked-in
+  checker, planner, canary builder, examples, and tests already enforce the
+  signed-HTTP-only head and exact ingress-qualification contract.
 
 ## Goals & Scope
 - Capture governance artifacts such as adverts, replication orders, PoR events, repairs, settlements, reputation snapshots, verdicts, and reports in append-only evidence.
 - Preserve deterministic validation through Norito payloads and publisher signatures.
 - Provide a verifiable public DAG head so operators, SDKs, and auditors can retrieve current governance state.
-- Keep local filesystem evidence byte-compatible with the shipped IPFS/IPNS
-  publisher while treating authenticated public checkpoints as the durable
-  cross-operator recovery boundary.
+- Keep local filesystem evidence byte-identical to objects admitted by the
+  fixed Kubo UnixFS profile while treating authenticated signed-HTTP heads and
+  sealed checkpoints as the durable cross-operator recovery boundary.
 
 ## Current Data Model
 The shipped canonical governance log node is `GovernanceLogNodeV1`. Its fields
@@ -590,7 +640,8 @@ archive or ingest:
 
 These filesystem publishers are local materialization hooks. The separate
 `sorafs_governance_dag` service consumes their verified signed runtime chain,
-pins content to IPFS, publishes a signed HTTP or IPNS head, and exposes bounded
+publishes content through the fixed Kubo UnixFS profile, updates the signed-HTTP
+head through strong-ETag CAS, and exposes bounded
 historical queries. The optional runtime DAG signer writes local signed
 block/head bytes only for payload variants already represented by
 `GovernanceLogPayloadV1`.
@@ -600,8 +651,8 @@ block/head bytes only for payload variants already represented by
 |-----------|----------------|--------------------------|
 | Ingest service | Subscribe to Torii/governance evidence, load full payloads, and verify signatures. | Shipped: filesystem publishers materialize typed payloads and a signed runtime chain; `sorafs_governance_dag` revalidates the bounded source snapshot and rejects rollback, forks, unsupported payload kinds, or signature drift before publication. |
 | DAG builder | Wrap validated payloads into DAG blocks, compute parent linkage, and assemble CAR segments. | Shipped: local builders, CARv2 segments, signed runtime blocks/heads, source-chain validation, and deterministic replay are implemented. |
-| Publisher | Pin CAR/block data to IPFS and publish a signed public head. | Shipped: verified IPFS add/pin/list/cat plus signed-HTTP or IPNS compare-and-swap publication, with SSRF controls, bounded responses, and authenticated restart intent recovery. |
-| Mirror datastore | Maintain queryable block and payload indexes. | Shipped as a bounded authenticated JSON mirror and runtime indexes. RocksDB/IPLD remains an optional scale backend rather than a prerequisite for protocol correctness. |
+| Publisher | Publish canonical blocks and a signed public head. | Shipped: locally derived fixed-profile Kubo CIDs, verified add/pin/list/cat, pre-CAS object repair, and signed-HTTP strong-ETag compare-and-swap with SSRF controls, bounded responses, and sealed intent/checkpoint recovery. |
+| Mirror datastore | Maintain queryable block and payload indexes. | Shipped as a protocol-retained authenticated typed JSON mirror derived from the sealed checkpoint and source. RocksDB/IPLD remains an optional scale backend rather than a prerequisite for protocol correctness. |
 | Dashboard/API backend | Serve governance history, block lookup, snapshots, and proof queries. | Shipped: the always-on service exposes bounded mirror/head/block/node/checkpoint, health, and metrics routes; Torii also exposes local pre-publication indexes. |
 | Operator CLI | Inspect heads, list/fetch blocks, export snapshots, verify chains, and rebuild heads. | Local archive list/show/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query is shipped for `.to` governance nodes and block/head snapshots. Direct convenience wrappers for the public service can be added without changing the protocol boundary. |
 
@@ -609,7 +660,8 @@ block/head bytes only for payload variants already represented by
 1. Ingest validates a Norito payload and deduplicates it by digest.
 2. The builder links the payload to the current head, computes a deterministic block CID, and writes a CAR segment.
 3. A validator re-derives the CID, checks parent availability, verifies the payload and publisher signature, and quarantines invalid blocks.
-4. The publisher pins the CAR/block data to IPFS Cluster and updates a signed head manifest/IPNS record.
+4. The publisher verifies or repairs every fixed-profile Kubo object, then
+   updates the signed-HTTP head through strong-ETag compare-and-swap.
 5. Torii or the dashboard backend announces the new head for subscribers.
 6. Clients resolve the head, verify signatures and digests, and replay blocks back to a trusted checkpoint.
 
@@ -632,8 +684,22 @@ has to prove this workflow against the governed public deployment.
   `iroha_config`. Their non-zero qualification revisions/digests are pinned
   before mutable state or endpoint access and rechecked for every authenticated
   request and sealed-state operation; exact record revisions and canonical
-  payload digests remain enforced by the CAS layer. Removed key/token path
-  fields are rejected as unknown V1 configuration.
+  payload digests remain enforced by the CAS layer. Configuration carries only
+  opaque handles and public policy identities, never key or token paths.
+- Both public control-plane endpoints must return a live
+  `GovernanceDagRequestIngressQualificationV1` matching the configured
+  `GovernanceDagRequestIngressBindingV1`. Qualification requires the exact
+  endpoint, Ed25519 key, body and timing limits, an exclusive authenticated
+  receiver, and one shared sealed atomic replay namespace covering every
+  ingress replica through envelope expiry.
+- Mirror retention is the fixed V1 suffix of at most 65,536 blocks and 512 MiB
+  of canonical source bytes. Each checkpoint generation must pass a full first
+  audit before readiness; steady polls recheck the signed head and rotate
+  through the retained object set.
+- Mirror reads use the installed liveness-bound capability and authenticate the
+  typed mirror plus sealed checkpoint on every read. A failed reconciliation,
+  changed readiness epoch, or stopped runner must return unavailable rather
+  than serve the last cached snapshot.
 - Consumers must verify payload validation status, publisher signature, parent linkage, and head signature before trusting a block.
 - Public rollout must not persist runtime secrets such as publisher private keys or bearer tokens in repo files.
 
@@ -654,21 +720,25 @@ materialization:
 - `sorafs_governance_dag_head_age_seconds{sink}` reports the signed
   runtime DAG head age for the filesystem sink when runtime DAG state is
   written or refreshed.
-- The always-on service exports IPFS publish success/failure and byte counters,
-  backlog, head age, IPFS pin lag, IPNS update success/failure, last successful
-  IPNS update time, and mirror drift.
+- The always-on service exports Kubo publish success/failure and byte counters,
+  backlog, signed-head age, Kubo pin lag, last successful public-head update
+  time, validation failures, and mirror coherence. Any failed reconciliation
+  latches the drift gauge and withdraws public readiness; only a complete
+  checkpoint-coherent reconciliation clears it.
 - `dashboards/grafana/sorafs_governance_dag.json` visualizes local publication
   outcomes, published bytes, backlog, head age, and publish age.
-- `dashboards/alerts/sorafs_governance_dag_rules.yml` alerts on local
-  publication failures, backlog, stale heads, and missing recent publications.
+- `dashboards/alerts/sorafs_governance_dag_rules.yml` alerts on publication and
+  validation failures, Kubo pin lag, mirror drift, backlog, stale heads, and
+  missing recent publications. Its publication-failure annotation is valid for
+  both service-level and payload-kind-labelled series.
 
 Still-required rollout evidence must demonstrate block count by payload kind,
 publish duration/SLOs, validation failures, and alert delivery alongside the
-already exported IPNS/head, queue, pin-lag, mirror-drift, and public-head
+already exported signed-head, queue, pin-lag, mirror-drift, and public-head
 signals.
 
 Required live alerts include no new public block for the configured SLA,
-validation failure, pin lag, IPNS/head update failure, and mirror/index drift.
+validation failure, pin lag, signed-head update failure, and mirror/index drift.
 
 ## Testing Strategy
 Implemented coverage exists for governance log validation and signature
@@ -686,11 +756,22 @@ manifests with explicit recovered-artifact paths, and rejects tampered CAR
 artifact drift. Recovery coverage verifies mirror-index rebuild from a
 checkpoint after the original mirror index is removed and refuses to write a
 recovered index when the CAR binding is tampered. Focused Torii unit coverage
-verifies the local Governance DAG dashboard/head/block/node handlers, ETag
-revalidation, malformed CID rejection, and missing CID rejection over a
-configured local mirror index. Focused `sorafs_node` unit coverage verifies that
-filesystem governance publishers atomically update the `publish_index` and
-`car_queue` sections of `governance-publication-state-v1.json`, populate
+verifies mirror parsing and response projection, typed source/checkpoint
+metadata, ETag revalidation, malformed and missing CID rejection through real
+handlers, and fail-closed behavior when no mirror capability is installed. A
+source regression also runs the publisher, installs its checkpoint-coherent
+capability, exercises real Torii head/block `200` responses, removes committed
+Kubo objects and observes deterministic repair, then verifies `503` after the
+runner exits; executing that regression remains part of the outstanding focused
+validation work. Focused `sorafs_node` coverage
+verifies successful real-reader installation, visibility from clones created
+before installation in both bootstrap and checkpoint-coherent states,
+duplicate rejection, and wrong-root rejection without slot consumption. It
+also verifies that an existing empty typed mirror is
+install-ready at genesis and that a removed typed store fails readiness. The
+same coverage verifies that filesystem governance
+publishers atomically update the `publish_index` and `car_queue` sections of one
+typed publication authority, populate
 canonical lookup maps, derive source and CAR paths from the full composite
 identity, and leave the authority bytes and generation unchanged when the exact
 same artifact is republished. The same coverage verifies deterministic CAR
@@ -707,21 +788,24 @@ publication. Focused Torii coverage verifies publish-index reads, digest
 lookups, payload-kind lookups, `limit`-bounded returned entries, ETag
 revalidation without cross-route/key cache collisions, malformed lookup
 rejection, and missing lookup rejection over a
-configured local publish index. Torii CAR queue coverage verifies local queue
+typed publication snapshot. Torii CAR queue coverage verifies local queue
 reads, digest lookups, payload-kind lookups, `limit`-bounded returned segments,
 CAR archive digest lookups, ETag revalidation only after actual archive
 verification, malformed lookup rejection, and missing lookup rejection over a
-configured local CAR queue. Torii runtime DAG
-coverage verifies local runtime-index reads, runtime head reads, block/node/
+typed publication snapshot. Torii runtime DAG
+coverage verifies authenticated typed runtime-index reads, runtime head reads, block/node/
 digest/payload-kind lookups, `limit`-bounded returned blocks, ETag
-revalidation, malformed lookup rejection, missing lookup rejection, and
-unsupported runtime index schema rejection. Focused `sorafs_node` helper
+revalidation bound to checkpoint identity, malformed lookup rejection, missing
+lookup rejection, and unsupported runtime index schema rejection. Focused `sorafs_node` helper
 coverage verifies local CAR queue backlog counting and signed runtime-head age
 saturation.
 
 Required before rollout:
-- Run the opt-in real-Kubo IPNS restart/tamper lane in the governed release
-  environment and archive its output.
+- Run the checked-in real-Kubo signed-head restart/tamper lane and archive its
+  output. `.github/workflows/sorafs-governance-dag-kubo.yml` downloads the
+  checksum-pinned Kubo `v0.42.0` release, rejects any runtime version mismatch,
+  and compares Iroha's local CID derivation against Kubo at 1 MiB minus one,
+  exactly 1 MiB, 1 MiB plus one, and the maximum admitted object size.
 - End-to-end replay of fixtures from `fixtures/sorafs_manifest/governance/`, PoR, repair, settlement, and reputation evidence.
 - Snapshot/export/import tests that preserve block hashes.
 - Failure tests for pinning outage, publisher key failure, invalid parent, duplicate payload, and mirror recovery.
@@ -729,16 +813,22 @@ Required before rollout:
 Implemented local unit tests now cover DAG block creation, CID derivation,
 signature-payload stability, parent linkage, missing-parent failure, signed head
 manifest validation, and head block-count mismatch rejection. The always-on
-service additionally has mock-IPFS/IPNS adversarial coverage for pin/readback,
+service source additionally has mock-Kubo/signed-HTTP adversarial coverage for pin/readback,
 CAS conflicts, response bounds, SSRF policy, checkpoint/intent corruption,
 restart recovery, mirror tamper, rollback, replay/deletion, provider
-missing/mismatch/outage, per-request credential rotation, legacy secret-path
-rejection without following symlinks, and fork rejection. Embedded signer
+missing/mismatch/outage, per-request credential rotation, forbidden secret-path
+rejection without following symlinks, and fork rejection. It also includes
+focused regressions for the fixed UnixFS chunk-boundary vectors, protocol-fixed
+mirror retention, deterministic mirror reconstruction, liveness-bound reader
+withdrawal, exact ingress qualification, and repair of a crash-resumed intent's
+objects before public-head CAS. Embedded signer
 coverage rejects malformed/weak keys, mismatched or drifting identities,
-invalid signatures, and secret-bearing provider failures. Its opt-in Kubo lane
-covers real IPNS restart and tamper behavior. Remaining work is governed
-release-environment execution with real deployment providers and captured
-deployment evidence.
+invalid signatures, and secret-bearing provider failures. The opt-in Kubo lane
+exercises fixed-profile boundary conformance, signed-head restart, and tamper
+behavior against the exact checksum-pinned release used by its dedicated CI
+workflow. Cargo execution of these source tests remains pending, followed by
+governed release-environment execution with real deployment providers and
+captured deployment evidence.
 
 The rollout evidence scripts have focused Python coverage in:
 
@@ -752,7 +842,7 @@ The rollout evidence scripts have focused Python coverage in:
   `GovernanceDagBlockV1` and signed-head chain verification.
 - Use `sorafs_cli governance dag list|show|verify|export` for offline local
   archive inspection and evidence handoff. Treat exported snapshots as local
-  verification bundles, not public IPNS heads.
+  verification bundles, not the authenticated public head.
 - Use `sorafs_cli governance dag build` when an offline archive needs a signed
   `GovernanceDagBlockV1`/`GovernanceDagHeadV1` snapshot independent of the
   always-on publisher. Keep `--key-hex` and `--key` inputs runtime-only. Add
@@ -782,14 +872,13 @@ The rollout evidence scripts have focused Python coverage in:
   contacting the shipped runtime mirror service.
 - Use Torii `GET /v1/sorafs/governance/dag/dashboard`, `/head`,
   `/blocks/{block_cid_hex}`, and `/nodes/{node_cid_hex}` when an enabled SoraFS
-  node has `sorafs.storage.governance_dag_dir` pointing at a local
-  `mirror-index.json` and operators need a read-only dashboard/query surface
-  over the pre-publication local mirror.
-- Use the `publish_index` section of
-  `governance-publication-state-v1.json` in the configured governance directory
-  as the runtime-local feed of filesystem-published governance artifacts. The
-  envelope is an operator handoff and dashboard source, not a public IPNS head
-  or a replacement for the shipped bounded authenticated public mirror.
+  node has a configured Governance DAG root and irohad has installed the
+  supervised service's mirror-read capability. That capability is the route's
+  sole mirror authority.
+- Use the `publish_index` section of the NodeHandle-authenticated typed
+  publication snapshot as the runtime-local feed of filesystem-published
+  governance artifacts. The envelope is a dashboard source, not the public
+  signed head or a replacement for the bounded authenticated public mirror.
 - Use Torii `GET /v1/sorafs/governance/dag/publish-index?limit=N`,
   `/publish-index/digests/{encoded_blake3_hex}`, and
   `/publish-index/kinds/{payload_kind}` to query that runtime-local feed through
@@ -806,21 +895,22 @@ The rollout evidence scripts have focused Python coverage in:
 - Use Torii `GET /v1/sorafs/governance/dag/runtime`, `/runtime/head`,
   `/runtime/blocks/{block_cid_hex}`, `/runtime/nodes/{node_cid_hex}`,
   `/runtime/digests/{encoded_blake3_hex}`, and `/runtime/kinds/{payload_kind}`
-  to inspect the local signed runtime DAG index independently of the public
-  IPFS/IPNS head. Digest/kind lookup block arrays are bounded by
-  `limit` while total match counts remain visible.
+  to inspect the authenticated typed runtime DAG head/index generation
+  independently of the public signed-HTTP head. Digest/kind lookup block arrays
+  are bounded by `limit` while total match counts remain visible.
 - Use `scripts/build_sorafs_governance_dag_canary.py` to turn reviewed SF-12
   deployment facts into payload-free canary JSON before running the rollout
-  gate. The payload-free Governance DAG canary builder covers ingest service,
-  publisher service, mirror datastore, operator recovery, dashboard API,
-  observability, IPFS/IPNS end-to-end, and governance approval artifacts. It
+  gate. The canary builder covers ingest service, publisher service, mirror
+  datastore, operator recovery, dashboard API, observability,
+  `publication_e2e`, and governance approval artifacts. It
   requires every positive proof claim explicitly, requires complete closed-set
   verified-claim, payload-kind, dashboard-route, or metric coverage where
   applicable, rejects duplicate or unknown closed-set values before writing,
-  requires reviewed publisher/IPFS `governance-dag-block-*` block-reference
+  requires reviewed publisher/publication `governance-dag-block-*` block-reference
   inventories whose unique rows match `--block-count`, rejects non-production
-  block-reference markers before writing, forces raw block/head/CAR/checkpoint/
-  response inclusion flags to `false`, requires an explicit
+  block-reference markers before writing, forces the schema-supported raw
+  block/head/checkpoint/response inclusion flags to `false`, rejects CAR or
+  other payload-bearing fields through the closed schema, requires an explicit
   `--route-body-blake3-hex` digest for dashboard canaries, validates the
   generated artifact through the SF-12 checker, and writes atomically without
   following output symlinks.
@@ -830,10 +920,23 @@ The rollout evidence scripts have focused Python coverage in:
 
 ## Rollout Evidence Gate
 
-Use the rollout gate after the deployed ingest service, IPFS/IPNS publisher,
-bounded authenticated mirror datastore, public checkpoint recovery workflow,
-runtime/IPFS-backed dashboard API, live observability, IPFS/IPNS end-to-end
-tests, and governance packet have produced reviewed, payload-free JSON evidence.
+Use the rollout gate when the deployed ingest service, fixed-profile Kubo
+publisher, signed-HTTP head service, bounded authenticated mirror, checkpoint
+recovery workflow, liveness-bound Torii reads, live observability, end-to-end
+tests, and governance packet have produced reviewed, payload-free JSON
+evidence. The V1 evidence objects and dashboard route rows are schema-closed.
+Publisher evidence must prove the deterministic 1 MiB/raw-leaf/balanced Kubo
+UnixFS profile, locally derived CIDv1 SHA-256 roots, strong single-ETag
+signed-HTTP CAS and readback, and the exact exclusive receiver/shared sealed
+atomic replay qualification. It exports non-zero digests of the complete Kubo
+and signed-head ingress bindings; governance approval must match both, as well
+as the receiver-policy, replay-namespace, replica-set, and publisher-policy
+identities. Optional recognized bound evidence is rejected when its publisher
+anchor is absent. Mirror and governance evidence must bind the
+protocol-fixed 65,536-block/512 MiB suffix. Recovery, observability, dashboard,
+and `publication_e2e` evidence respectively prove same-CID post-loss repair,
+the full-first then 64-entry/16 MiB rotating audit, fresh checkpoint-coherent
+reads, and reader withdrawal after service liveness ends.
 RocksDB/IPLD is required only if the governed SF-12 capacity measurement rejects
 the shipped bounded JSON mirror:
 
@@ -863,8 +966,9 @@ python3 scripts/build_sorafs_governance_dag_canary.py \
 
 The checker recognizes `sorafs.governance_dag.*` SF-12 rollout schemas for
 ingest service, publisher service, mirror datastore, operator recovery,
-dashboard API, observability, IPFS/IPNS end-to-end tests, and governance
-approval evidence. It reports `ready` only when every required kind is present,
+dashboard API, observability, `publication_e2e`, and governance approval
+evidence. The retired IPNS kind and flag are not aliases. It reports `ready`
+only when every required kind is present,
 every recognized artifact is valid, raw DAG blocks, raw heads, CAR payloads,
 node payloads, response bodies, private keys, bearer tokens, signed
 transactions, and ledgers are absent, route latency, IPFS pin lag, and public
@@ -873,7 +977,7 @@ non-negative integer-unit evidence, enough public blocks and payload kinds are
 covered, and governance is bound to `iroha_config`. Ingest-service
 artifacts also bind `source_count` to the unique canonical `payload_kinds`
 inventory and reject duplicate or unknown payload-kind entries before promotion
-can report ready. Publisher-service and IPFS/IPNS end-to-end artifacts also bind
+can report ready. Publisher-service and `publication_e2e` artifacts also bind
 `block_count` to the unique canonical `block_refs` inventory, bind
 `payload_kind_count` to the unique canonical `payload_kinds` inventory, require
 reviewed `governance-dag-block-*` block-reference labels without non-production
@@ -890,14 +994,21 @@ artifact fingerprint before final promotion can report ready. Governance DAG
 aggregate promotion also rechecks the lane-proven relationships: public-head
 bound artifact fingerprints must match `valid_public_head_cids`, and
 policy-bound artifact fingerprints must match `valid_policy_digests` before
-final promotion can report ready. Governance DAG rollout summaries must expose
-exactly one active public head CID, one active publisher policy digest, and one
-active checkpoint digest; mixed valid public-head, policy, or checkpoint
-anchors fail closed before final promotion can report ready. Governance DAG
+final promotion can report ready. Governance approval must additionally carry
+the same receiver-policy, replay-namespace, and replica-set digests as its
+publisher-service evidence, plus the same complete Kubo and signed-head ingress-
+binding digests. The aggregate gate independently rechecks all five ingress
+metadata anchors against the governance-approval fingerprint. Governance DAG
+rollout summaries must expose exactly one active public head CID, publisher
+policy digest, checkpoint digest, receiver-policy digest, replay-namespace
+digest, replica-set digest, Kubo ingress-binding digest, and signed-head
+ingress-binding digest; mixed valid anchors fail closed before final promotion
+can report ready. Governance DAG
 payload-safety artifacts must explicitly set `payload_bytes_included`,
-`raw_head_included`, `raw_car_included`, `mirror_drift_detected`,
+`raw_head_included`, `mirror_drift_detected`,
 `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`,
-and `critical_alerts_firing` to `false` before promotion can report ready. Valid
+and `critical_alerts_firing` to `false` before promotion can report ready; raw
+CAR and other undeclared payload fields are rejected by the closed schema. Valid
 operator-recovery artifacts now publish their reviewed `checkpoint_digest_hex`
 values as `valid_checkpoint_digests`, and the aggregate production-readiness
 gate accepts those digests only as payload-free lowercase-hex metadata tethered
@@ -916,19 +1027,20 @@ rollout gate. This evidence must be collected from the shipped always-on
 publisher rather than synthesized from the pre-publication filesystem hooks.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with one atomic `governance-publication-state-v1.json` containing one-to-one publish-index and CAR-queue sections, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, deterministic CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export and schema-closed plan validation, payload-free canary builder for all SF-12 evidence kinds, operator argfile templates, and focused tests.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with one typed atomic publication authority containing one-to-one publish-index and CAR-queue sections, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, deterministic CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, path-free typed NodeHandle snapshots for Torii publish-index, CAR queue, runtime signed-DAG, and supervised mirror query APIs with checkpoint-bound ETags and `limit`-bounded top-level/lookup arrays, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, a rollout evidence checker/planner framework, payload-free canary builder, operator argfile templates, and focused source tests.
 - Done addendum: valid SF-12 operator-recovery evidence now surfaces
   `valid_checkpoint_digests`, and aggregate readiness validates those checkpoint
   digests as payload-free metadata tied to recognized artifact fingerprints.
 - Done addendum: `sorafs_governance_dag` provides the always-on validated source
-  ingest, verified IPFS add/pin/readback, signed-HTTP/IPNS CAS head publication,
-  sealed checkpoint and publish-intent recovery, runtime-authenticated outbound
-  requests, bounded public mirror, health/checkpoint APIs, and IPFS/IPNS/mirror
-  metrics with mock-adversarial and opt-in real-Kubo coverage. The production
-  boundary is a public library launcher with opaque signer/authenticator/store
-  traits; all former service key/token paths and the embedded signer-key path
-  are removed.
-- Done addendum: the embedded producer has an explicit old/new dual-signed,
+  ingest, locally derived fixed-profile Kubo CIDs with verified
+  add/pin/readback, signed-HTTP CAS head publication, sealed intent/checkpoint
+  recovery, pre-CAS object repair, protocol-fixed mirror retention, full-first
+  and rotating steady audits, runtime-authenticated outbound requests, and a
+  liveness-bound public mirror. Both control-plane providers must attest the
+  exact exclusive receiver and shared sealed atomic replay namespace. The
+  public library boundary accepts only opaque signer/authenticator/store traits
+  and public policy identities.
+- Done addendum: the embedded producer has explicit joint outgoing/incoming signatures on its
   predecessor/head/index-bound signer/store qualification journal, independent
   sealed transition/archive generations, and bounded signed archive compaction
   with durable archive/checkpoint readback before prune and restart-safe staged
@@ -937,6 +1049,9 @@ publisher rather than synthesized from the pre-publication filesystem hooks.
 - Remaining: implement the deployment-owned provider adapters, package and
   supervise two service instances, decide whether production scale requires the
   optional RocksDB/IPLD mirror, add any operator convenience commands required
-  by deployment practice, and capture staged/live publication, provider
-  rotation/outage, recovery, dashboard, and alert evidence that passes the
-  SF-12 gate.
+  by deployment practice, run the alert fixture with `promtool` on a host that
+  ships it, and capture staged/live publication, provider rotation/outage,
+  recovery, dashboard, and alert evidence that passes the updated SF-12 gate.
+  The checked-in rollout builder, checker, runner, examples, and closed evidence
+  schemas already enforce the current transport, ingress, retention, recovery,
+  audit, and fresh-read contracts.

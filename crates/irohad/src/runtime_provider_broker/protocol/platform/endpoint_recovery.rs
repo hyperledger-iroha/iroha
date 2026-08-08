@@ -298,7 +298,7 @@ fn create_lock_exclusively(parent_directory: &fs::File) -> rustix::io::Result<fs
             | rustix::fs::OFlags::EXCL
             | rustix::fs::OFlags::CLOEXEC
             | rustix::fs::OFlags::NOFOLLOW,
-        rustix::fs::Mode::from_raw_mode(INSTANCE_LOCK_MODE),
+        rustix::fs::Mode::from_raw_mode(INSTANCE_LOCK_MODE as _),
     )
     .map(fs::File::from)
 }
@@ -460,7 +460,7 @@ fn verify_lock_entry(
 fn lock_metadata_is_exact(metadata: &rustix::fs::Stat, expected_service_uid: u32) -> bool {
     rustix::fs::FileType::from_raw_mode(metadata.st_mode) == rustix::fs::FileType::RegularFile
         && metadata.st_uid == expected_service_uid
-        && metadata.st_mode & 0o7777 == INSTANCE_LOCK_MODE
+        && u32::from(metadata.st_mode & 0o7777) == INSTANCE_LOCK_MODE
         && metadata.st_nlink == 1
 }
 
@@ -471,6 +471,6 @@ pub(super) fn socket_metadata_is_exact(
 ) -> bool {
     rustix::fs::FileType::from_raw_mode(metadata.st_mode) == rustix::fs::FileType::Socket
         && metadata.st_uid == expected_service_uid
-        && metadata.st_mode & 0o7777 == socket_mode
+        && u32::from(metadata.st_mode & 0o7777) == socket_mode
         && metadata.st_nlink == 1
 }

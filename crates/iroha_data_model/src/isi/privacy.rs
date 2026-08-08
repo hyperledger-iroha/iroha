@@ -1003,6 +1003,7 @@ mod tests {
     use crate::{
         AssetDefinitionId, ChainId,
         account::AccountId,
+        asset::AssetBalanceScope,
         domain::DomainId,
         name::Name,
         privacy::{
@@ -1083,6 +1084,7 @@ mod tests {
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("orchard").expect("asset name"),
             ),
+            AssetBalanceScope::Global,
             account(24),
         )
         .expect("canonical Orchard bootstrap")

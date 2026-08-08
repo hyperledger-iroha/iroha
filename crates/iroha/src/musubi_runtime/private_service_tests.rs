@@ -10,7 +10,7 @@ fn authorization_is_domain_bound_and_verifiable() {
     let operation_id = [0x44; 32];
     let digest = [0x55; 32];
     let authorization = runtime
-        .authorization(
+        .authorization_at(
             MusubiPublicationRuntimeOperationV1::StorageCoordination,
             operation_id,
             digest,
@@ -64,7 +64,7 @@ fn authorization_verifier_enforces_fixed_clock_skew_bound() {
     let current_time_ms = 1_000;
     let issued_at_ms = current_time_ms + MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1;
     let authorization = runtime
-        .authorization(operation, operation_id, digest, issued_at_ms)
+        .authorization_at(operation, operation_id, digest, issued_at_ms)
         .expect("future-skew authorization");
 
     authorization
@@ -102,13 +102,62 @@ fn authorization_verifier_enforces_fixed_clock_skew_bound() {
 }
 
 #[test]
+fn publisher_authorization_resamples_clock_after_signing() {
+    let operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
+    let operation_id = [0x48; 32];
+    let digest = [0x59; 32];
+
+    let (slow_client, _) = client();
+    let slow_runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
+        &slow_client,
+        Duration::from_secs(5),
+    )
+    .expect("runtime client");
+    let mut slow_samples = [1_000, 31_001].into_iter();
+    let error = slow_runtime
+        .authorization_with_clock(operation, operation_id, digest, || {
+            Ok(slow_samples.next().expect("two clock samples"))
+        })
+        .expect_err("authorization expired during signing");
+    assert_eq!(
+        error.code(),
+        "MUSUBI_RUNTIME_AUTHORIZATION_SIGNER_UNAVAILABLE"
+    );
+    assert_eq!(
+        error.class(),
+        MusubiPublicationRuntimeTransportFailureClassV1::Retryable
+    );
+
+    let (regressing_client, _) = client();
+    let regressing_runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
+        &regressing_client,
+        Duration::from_secs(5),
+    )
+    .expect("runtime client");
+    let mut regressing_samples = [2_000, 1_999].into_iter();
+    let error = regressing_runtime
+        .authorization_with_clock(operation, operation_id, digest, || {
+            Ok(regressing_samples.next().expect("two clock samples"))
+        })
+        .expect_err("authorization clock regression");
+    assert_eq!(
+        error.code(),
+        "MUSUBI_RUNTIME_AUTHORIZATION_CLOCK_UNAVAILABLE"
+    );
+    assert_eq!(
+        error.class(),
+        MusubiPublicationRuntimeTransportFailureClassV1::Retryable
+    );
+}
+
+#[test]
 fn publisher_authorization_accepts_exact_multisig_quorum_and_rejects_bad_sets() {
     let operation = MusubiPublicationRuntimeOperationV1::StorageCoordination;
     let operation_id = [0x45; 32];
     let digest = [0x56; 32];
     let runtime = threshold_authorization_runtime(ThresholdAuthorizationSigningBehavior::Correct);
     let authorization = runtime
-        .authorization(operation, operation_id, digest, 1_000)
+        .authorization_at(operation, operation_id, digest, 1_000)
         .expect("2-of-3 publisher authorization");
     assert_eq!(authorization.approvals.len(), 2);
     authorization
@@ -153,7 +202,7 @@ fn publisher_authorization_accepts_exact_multisig_quorum_and_rejects_bad_sets() 
         ),
     ] {
         let error = threshold_authorization_runtime(behavior)
-            .authorization(operation, operation_id, digest, 1_000)
+            .authorization_at(operation, operation_id, digest, 1_000)
             .expect_err("invalid approval set must fail before transport");
         assert_eq!(error.code(), code);
         assert_eq!(error.class(), class);
@@ -326,7 +375,77 @@ fn request_digest_binds_operation_length_and_body() {
 }
 
 #[test]
-fn seed_ingress_carries_exact_metadata_and_authorization_with_raw_car_body() {
+fn remote_error_retryability_uses_canonical_service_response() {
+    for (retryable, expected_class) in [
+        (
+            true,
+            MusubiPublicationRuntimeTransportFailureClassV1::Retryable,
+        ),
+        (
+            false,
+            MusubiPublicationRuntimeTransportFailureClassV1::Permanent,
+        ),
+    ] {
+        let body = norito::encode_canonical(&MusubiPublicationServiceErrorResponseV1 {
+            version: 1,
+            code: MusubiPublicationServiceErrorCodeV1::AuthorizationExpired,
+            retryable,
+        })
+        .expect("canonical service error");
+        let error = remote_transport_error(StatusCode::UNAUTHORIZED, &body);
+        assert_eq!(error.class(), expected_class);
+        assert_eq!(
+            error.code(),
+            MusubiPublicationServiceErrorCodeV1::AuthorizationExpired.as_str()
+        );
+    }
+
+    let fallback = remote_transport_error(StatusCode::SERVICE_UNAVAILABLE, b"not-norito");
+    assert_eq!(
+        fallback.class(),
+        MusubiPublicationRuntimeTransportFailureClassV1::Retryable
+    );
+    assert_eq!(fallback.code(), "MUSUBI_RUNTIME_REMOTE_RETRYABLE");
+}
+
+#[test]
+fn receipt_verification_accepts_only_bounded_service_clock_lead() {
+    let fixture = control_service_fixture(false, false);
+    let broker_key = KeyPair::try_from_seed(
+        b"musubi-publication-control-broker".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("broker key");
+    let current_time_ms = 1;
+    let mut at_limit = fixture.storage_request.staging_receipt.clone();
+    at_limit.payload.issued_at_ms =
+        current_time_ms + MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1;
+    at_limit.payload.expires_at_ms = at_limit.payload.issued_at_ms + 60_000;
+    at_limit.approvals[0].signature =
+        SignatureOf::try_from_hash(broker_key.private_key(), at_limit.payload.signing_hash())
+            .expect("bounded-lead receipt signature");
+    verify_seed_ingress_receipt(&at_limit, &at_limit.payload.binding, current_time_ms)
+        .expect("bounded service clock lead");
+
+    let mut too_far_ahead = at_limit;
+    too_far_ahead.payload.issued_at_ms += 1;
+    too_far_ahead.payload.expires_at_ms += 1;
+    too_far_ahead.approvals[0].signature = SignatureOf::try_from_hash(
+        broker_key.private_key(),
+        too_far_ahead.payload.signing_hash(),
+    )
+    .expect("excessive-lead receipt signature");
+    let error = verify_seed_ingress_receipt(
+        &too_far_ahead,
+        &too_far_ahead.payload.binding,
+        current_time_ms,
+    )
+    .expect_err("service clock lead exceeds the fixed bound");
+    assert_eq!(error.code(), "MUSUBI_SEED_INGRESS_RECEIPT_INVALID");
+}
+
+#[test]
+fn seed_ingress_carries_exact_metadata_and_authorization_with_framed_plan_body() {
     let (mut client, _) = client();
     client.headers.insert(
         "Authorization".to_owned(),
@@ -341,30 +460,16 @@ fn seed_ingress_carries_exact_metadata_and_authorization_with_raw_car_body() {
         Duration::from_secs(5),
     )
     .expect("runtime client");
-    let car = b"raw canonical SoraFS CAR bytes".to_vec();
-    let operation_id = [0x31; 32];
-    let stage_request = MusubiSeedIngressStageRequestV1 {
-        version: 1,
-        operation_id,
-        binding: MusubiSeedIngressReceiptBindingV1 {
-            chain_id: client.chain.clone(),
-            genesis_block_hash: [0x32; 32],
-            publisher: client.account.clone(),
-            ingress_broker: client.account.clone(),
-            seed_provider: ProviderId::new([0x33; 32]),
-            semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new([0x34; 32]),
-            archive_id: ArchiveId::new([0x35; 32]),
-            car_body_digest: MusubiContentDigestV1::new(*blake3::hash(&car).as_bytes()),
-            car_body_length: u64::try_from(car.len()).expect("fixture CAR length fits u64"),
-            nonce: [0x36; 32],
-        },
-    };
+    let fixture = private_service_fixture(false);
+    let car = fixture.car;
+    let stage_request = fixture.request;
+    let operation_id = stage_request.operation_id;
     stage_request.validate().expect("valid stage metadata");
     let metadata = norito::encode_canonical(&stage_request).expect("encode stage metadata");
     let digest = request_digest(MusubiPublicationRuntimeOperationV1::SeedIngress, &metadata)
         .expect("bounded metadata digest");
     let authorization = runtime
-        .authorization(
+        .authorization_at(
             MusubiPublicationRuntimeOperationV1::SeedIngress,
             operation_id,
             digest,
@@ -379,7 +484,7 @@ fn seed_ingress_carries_exact_metadata_and_authorization_with_raw_car_body() {
     let prepared = runtime
         .prepare_request(
             endpoint,
-            APPLICATION_SORAFS_CAR,
+            APPLICATION_MUSUBI_SEED_ENVELOPE,
             &authorization,
             Some(&metadata),
             car.clone(),
@@ -446,6 +551,502 @@ fn seed_ingress_carries_exact_metadata_and_authorization_with_raw_car_body() {
             1_001,
         )
         .expect("authorization binds exact metadata");
+}
+
+#[test]
+fn seed_ingress_plan_witness_round_trips_only_the_exact_commitment_chunker() {
+    let fixture = private_service_fixture(false);
+    let witness =
+        MusubiSeedIngressCarPlanV1::from_car_build_plan(&fixture.plan, &fixture.request.commitment)
+            .expect("wire plan");
+    let canonical = witness.canonical_bytes().expect("canonical wire plan");
+    let decoded: MusubiSeedIngressCarPlanV1 =
+        norito::decode_canonical_with_limits(&canonical, SEED_INGRESS_PLAN_DECODE_LIMITS)
+            .expect("decode canonical wire plan");
+    assert_eq!(decoded, witness);
+    assert_eq!(
+        decoded
+            .to_car_build_plan(&fixture.request.commitment)
+            .expect("reconstruct exact plan"),
+        fixture.plan
+    );
+
+    let mut substituted = fixture.request.commitment;
+    substituted.chunker.name = "sf2".to_owned();
+    assert!(decoded.to_car_build_plan(&substituted).is_err());
+}
+
+#[test]
+fn seed_ingress_plan_witness_reports_portable_path_failures_as_source_tree() {
+    let fixture = private_service_fixture(false);
+    let mut witness =
+        MusubiSeedIngressCarPlanV1::from_car_build_plan(&fixture.plan, &fixture.request.commitment)
+            .expect("wire plan");
+    let source = witness
+        .files
+        .iter_mut()
+        .find(|file| !file.path.join("/").starts_with(".musubi/"))
+        .expect("fixture source file");
+    source.path = vec!["bad?.ko".to_owned()];
+    let canonical = norito::encode_canonical(&witness).expect("invalid-path wire plan");
+
+    let error = decode_seed_ingress_plan_witness(&canonical)
+        .expect_err("nonportable source path must fail before archive verification");
+    assert_eq!(
+        error.code,
+        MusubiPublicationServiceErrorCodeV1::CarBodyMismatch
+    );
+    assert!(!error.retryable);
+    assert_eq!(
+        error.telemetry,
+        Some(MusubiPublicationServiceTelemetryEventV1::IntegrityFailure(
+            MusubiIntegritySurfaceV1::SourceTree,
+        ))
+    );
+}
+
+#[test]
+fn seed_ingress_and_provider_bundle_verifier_have_evidence_and_error_parity() {
+    let fixture = private_service_fixture(false);
+    let seed_evidence = verify_seed_ingress_body(&fixture.request, &fixture.car)
+        .expect("seed ingress accepts the complete fixture bundle");
+    assert_eq!(&seed_evidence.plan, &fixture.plan);
+    assert_eq!(seed_evidence.car, fixture.raw_car.as_slice());
+
+    let provider_evidence = MusubiBundleVerifierV1::verify(
+        &fixture.plan,
+        &fixture.raw_car,
+        &fixture.request.commitment,
+    )
+    .expect("provider-grade verifier accepts the same fixture");
+    assert_eq!(
+        provider_evidence.semantic_release().semantic_digest(),
+        fixture.request.binding.semantic_release_manifest_digest
+    );
+    assert_eq!(
+        provider_evidence.descriptor().verification_lock_digest,
+        provider_evidence.verification_lock().digest()
+    );
+
+    for (shared, service) in [
+        (
+            MusubiBundleIntegritySurfaceV1::ArchiveCommitment,
+            MusubiIntegritySurfaceV1::ArchiveCommitment,
+        ),
+        (
+            MusubiBundleIntegritySurfaceV1::Bundle,
+            MusubiIntegritySurfaceV1::Bundle,
+        ),
+        (
+            MusubiBundleIntegritySurfaceV1::Descriptor,
+            MusubiIntegritySurfaceV1::Descriptor,
+        ),
+        (
+            MusubiBundleIntegritySurfaceV1::SourceTree,
+            MusubiIntegritySurfaceV1::SourceTree,
+        ),
+        (
+            MusubiBundleIntegritySurfaceV1::VerificationLock,
+            MusubiIntegritySurfaceV1::VerificationLock,
+        ),
+    ] {
+        let mapped = seed_ingress_bundle_integrity_failure(shared);
+        assert_eq!(
+            mapped.code,
+            MusubiPublicationServiceErrorCodeV1::CarBodyMismatch
+        );
+        assert!(!mapped.retryable);
+        assert_eq!(
+            mapped.telemetry,
+            Some(MusubiPublicationServiceTelemetryEventV1::IntegrityFailure(
+                service
+            ))
+        );
+    }
+}
+
+#[test]
+fn seed_ingress_wire_accepts_valid_high_path_heap_geometry() {
+    let fixture = private_service_fixture(false);
+    let source_file_count =
+        usize::try_from(MUSUBI_MAX_FILES_V1).expect("public file bound fits usize");
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(source_file_count + 3)
+        .expect("bounded high-geometry fixture allocation");
+    for file_index in 0..source_file_count {
+        let path = (0..64)
+            .map(|component_index| {
+                format!("f{file_index:04}c{component_index:02}{}", "x".repeat(55))
+            })
+            .collect();
+        entries.push(FileEntry {
+            path,
+            data: vec![u8::try_from(file_index % 251).expect("fixture byte")],
+        });
+    }
+    for (path, byte) in [
+        (BUNDLE_RELEASE_PATH_V1, 0xa1),
+        (BUNDLE_DESCRIPTOR_PATH_V1, 0xa2),
+        (BUNDLE_VERIFICATION_LOCK_PATH_V1, 0xa3),
+    ] {
+        entries.push(FileEntry {
+            path: path.split('/').map(str::to_owned).collect(),
+            data: vec![byte],
+        });
+    }
+    let (plan, _) = CarBuildPlan::from_files(entries).expect("high-path canonical plan");
+    let validation = plan.validate().expect("high-path geometry validates");
+    assert!(
+        validation.estimated_ingest_heap_bytes() > 24 * 1024 * 1024,
+        "fixture must exercise geometry above the retired 24 MiB heap cap"
+    );
+    assert!(
+        validation.estimated_ingest_heap_bytes() <= DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES
+    );
+
+    let mut commitment = fixture.request.commitment;
+    commitment.content_length = plan.content_length;
+    commitment.chunk_plan_digest =
+        MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(&plan.chunks));
+    commitment.file_count = u32::try_from(source_file_count).expect("public file bound fits u32");
+    commitment.chunk_count = u32::try_from(plan.chunks.len()).expect("chunk count fits u32");
+    commitment.validate().expect("high-path commitment shape");
+    let witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment)
+        .expect("public-max path geometry is admitted");
+    assert!(
+        witness.canonical_bytes().expect("bounded wire").len()
+            <= MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1
+    );
+    assert_eq!(
+        witness
+            .to_car_build_plan(&commitment)
+            .expect("high-path witness round-trip"),
+        plan
+    );
+}
+
+#[test]
+fn seed_ingress_rejects_portable_unicode_aliases_before_backend() {
+    for (collision_path, case) in [
+        (
+            vec![".muſubi".to_owned(), "semantic-release.norito".to_owned()],
+            "whole-path collision",
+        ),
+        (
+            vec![".muſubi".to_owned()],
+            "file/directory prefix collision",
+        ),
+    ] {
+        let mut fixture = private_service_fixture(false);
+        let source_index = fixture
+            .plan
+            .files
+            .iter()
+            .position(|file| !file.path.join("/").starts_with(".musubi/"))
+            .expect("fixture source file");
+
+        let mut forged_plan = fixture.plan.clone();
+        forged_plan.files[source_index].path = collision_path.clone();
+        forged_plan
+            .validate()
+            .expect("the lower-level SoraFS plan permits the portable Unicode alias");
+        assert!(
+            validate_musubi_portable_path_set_v1(
+                forged_plan.files.iter().map(|file| file.path.as_slice())
+            )
+            .is_err(),
+            "the long-s spelling must reject the mandatory .musubi {case}"
+        );
+
+        let mut witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(
+            &fixture.plan,
+            &fixture.request.commitment,
+        )
+        .expect("valid fixture witness");
+        witness.files[source_index].path = collision_path;
+        assert!(
+            witness
+                .to_car_build_plan(&fixture.request.commitment)
+                .is_err(),
+            "the public wire conversion must reject the {case}"
+        );
+        assert!(witness.canonical_bytes().is_err(), "{case}");
+        assert!(witness.canonical_digest().is_err(), "{case}");
+        assert!(witness.canonical_len().is_err(), "{case}");
+        let canonical_plan =
+            norito::encode_canonical(&witness).expect("test-only forged canonical wire witness");
+        let mut request = fixture.request.clone();
+        request.plan_digest =
+            seed_ingress_plan_digest(&canonical_plan).expect("forged plan digest");
+        request.plan_length = u64::try_from(canonical_plan.len()).expect("forged plan length");
+        let metadata = norito::encode_canonical(&request).expect("forged plan metadata");
+        let authorization = authorization_header(&fixture.runtime, &request, &metadata, 8_300);
+        let body = encode_seed_ingress_body(&canonical_plan, &fixture.raw_car)
+            .expect("framed forged plan witness");
+        let response = seed_http_response(&mut fixture, &authorization, &metadata, &body, 8_301);
+        assert_eq!(response.status, 422, "{case}");
+        assert_eq!(
+            decode_service_error(&response).code,
+            MusubiPublicationServiceErrorCodeV1::CarBodyMismatch,
+            "{case}"
+        );
+        assert_eq!(*fixture.calls.lock().expect("seed calls"), 0, "{case}");
+    }
+}
+
+#[test]
+fn seed_ingress_source_transcript_uses_joined_path_byte_order() {
+    let a_dash_digest = *blake3::hash(b"dash").as_bytes();
+    let a_slash_z_digest = *blake3::hash(b"slash-z").as_bytes();
+    // Structural component ordering places ["a", "z"] before ["a-"], but package
+    // commitment semantics compare the joined strings and therefore require `a-` first.
+    let structural_order = vec![
+        ("a/z".to_owned(), 7, a_slash_z_digest),
+        ("a-".to_owned(), 4, a_dash_digest),
+    ];
+    let mut expected = Vec::new();
+    seed_ingress_append_frame(&mut expected, SOURCE_TREE_DOMAIN_V1).expect("source domain frame");
+    expected.extend_from_slice(&2_u32.to_be_bytes());
+    for (path, size, digest) in [
+        ("a-", 4_u64, a_dash_digest),
+        ("a/z", 7_u64, a_slash_z_digest),
+    ] {
+        seed_ingress_append_frame(&mut expected, path.as_bytes()).expect("source path frame");
+        expected.extend_from_slice(&size.to_be_bytes());
+        expected.extend_from_slice(&digest);
+    }
+    assert_eq!(
+        seed_ingress_source_material(structural_order, expected.len())
+            .expect("joined-path source material"),
+        expected
+    );
+}
+
+#[test]
+fn private_service_accepts_plan_witness_larger_than_metadata_header() {
+    let mut fixture = private_service_fixture(false);
+    let retained =
+        CarVerifier::verify_canonical_car_with_plan_retained(&fixture.plan, &fixture.raw_car)
+            .expect("verify compact fixture CAR");
+    let mut payload = Vec::new();
+    retained
+        .payload_reader()
+        .read_to_end(&mut payload)
+        .expect("read authenticated fixture payload");
+
+    let mut source_entries = Vec::new();
+    let mut source_transcript = Vec::new();
+    let mut semantic_release_bytes = None;
+    let mut verification_lock_bytes = None;
+    let mut payload_offset = 0_usize;
+    for file in &fixture.plan.files {
+        let file_size = usize::try_from(file.size).expect("fixture file size fits usize");
+        let file_end = payload_offset + file_size;
+        let bytes = payload[payload_offset..file_end].to_vec();
+        let path = file.path.join("/");
+        match path.as_str() {
+            BUNDLE_RELEASE_PATH_V1 => semantic_release_bytes = Some(bytes),
+            BUNDLE_DESCRIPTOR_PATH_V1 => {}
+            BUNDLE_VERIFICATION_LOCK_PATH_V1 => verification_lock_bytes = Some(bytes),
+            _ => {
+                source_transcript.push((path, file.size, *blake3::hash(&bytes).as_bytes()));
+                source_entries.push(FileEntry {
+                    path: file.path.clone(),
+                    data: bytes,
+                });
+            }
+        }
+        payload_offset = file_end;
+    }
+    assert_eq!(payload_offset, payload.len());
+
+    // Empty files need no undersized chunks, yet each contributes a bounded portable file
+    // witness. This grows the canonical plan beyond the 64 KiB metadata-header ceiling while
+    // retaining the exact registered SF1 profile and all package bundle commitments.
+    for index in 0..2_048_u16 {
+        let path = vec!["generated".to_owned(), format!("empty-{index:04}.ko")];
+        source_transcript.push((path.join("/"), 0, *blake3::hash(&[]).as_bytes()));
+        source_entries.push(FileEntry {
+            path,
+            data: Vec::new(),
+        });
+    }
+    let source_file_count = u32::try_from(source_entries.len()).expect("source file count");
+    let source_bytes = source_entries
+        .iter()
+        .try_fold(0_u64, |total, entry| {
+            total.checked_add(u64::try_from(entry.data.len()).ok()?)
+        })
+        .expect("bounded source byte count");
+    let source_material_length = source_transcript.iter().fold(
+        8 + SOURCE_TREE_DOMAIN_V1.len() + 4,
+        |total, (path, _, _)| total + 8 + path.len() + 8 + 32,
+    );
+    let source_material = seed_ingress_source_material(source_transcript, source_material_length)
+        .expect("large fixture source transcript");
+    let source_tree_digest = seed_ingress_domain_digest(SOURCE_TREE_DOMAIN_V1, &source_material)
+        .expect("large fixture source-tree digest");
+    let semantic_release_bytes = semantic_release_bytes.expect("fixture semantic release");
+    let verification_lock_bytes = verification_lock_bytes.expect("fixture verification lock");
+    let verification_lock: MusubiVerificationLockV1 =
+        norito::decode_canonical(&verification_lock_bytes).expect("fixture verification lock");
+    let descriptor = MusubiArtifactDescriptorV1::new(
+        fixture.request.binding.semantic_release_manifest_digest,
+        source_tree_digest,
+        verification_lock.digest(),
+        source_bytes,
+        source_file_count,
+    )
+    .expect("large fixture descriptor");
+    let descriptor_bytes = descriptor.encode();
+    let mut descriptor_material = Vec::new();
+    seed_ingress_append_frame(&mut descriptor_material, ARTIFACT_DESCRIPTOR_DOMAIN_V1)
+        .expect("large fixture descriptor domain");
+    seed_ingress_append_frame(&mut descriptor_material, &descriptor_bytes)
+        .expect("large fixture descriptor");
+    let descriptor_digest =
+        seed_ingress_domain_digest(ARTIFACT_DESCRIPTOR_DOMAIN_V1, &descriptor_material)
+            .expect("large fixture descriptor digest");
+    let mut bundle_material = Vec::new();
+    for bytes in [
+        BUNDLE_DOMAIN_V1,
+        semantic_release_bytes.as_slice(),
+        descriptor_material.as_slice(),
+        source_material.as_slice(),
+        verification_lock_bytes.as_slice(),
+    ] {
+        seed_ingress_append_frame(&mut bundle_material, bytes)
+            .expect("large fixture bundle material");
+    }
+    let bundle_digest = seed_ingress_domain_digest(BUNDLE_DOMAIN_V1, &bundle_material)
+        .expect("large fixture bundle digest");
+    source_entries.extend([
+        FileEntry {
+            path: BUNDLE_RELEASE_PATH_V1
+                .split('/')
+                .map(str::to_owned)
+                .collect(),
+            data: semantic_release_bytes,
+        },
+        FileEntry {
+            path: BUNDLE_DESCRIPTOR_PATH_V1
+                .split('/')
+                .map(str::to_owned)
+                .collect(),
+            data: descriptor_bytes,
+        },
+        FileEntry {
+            path: BUNDLE_VERIFICATION_LOCK_PATH_V1
+                .split('/')
+                .map(str::to_owned)
+                .collect(),
+            data: verification_lock_bytes,
+        },
+    ]);
+    let (large_plan, payload) =
+        CarBuildPlan::from_files(source_entries).expect("large canonical file plan");
+    large_plan.validate().expect("profile-valid large plan");
+    let mut raw_car = Vec::new();
+    let stats = CarWriter::new(&large_plan, &payload)
+        .expect("large-plan CAR writer")
+        .write_to(&mut raw_car)
+        .expect("large-plan canonical CAR");
+    let mut commitment = fixture.request.commitment.clone();
+    commitment.root_cid =
+        ManifestRootCid::try_from(stats.root_cids[0].clone()).expect("large-plan canonical root");
+    commitment.chunk_plan_digest =
+        MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(&large_plan.chunks));
+    commitment.por_root = MusubiContentDigestV1::new(
+        compute_por_root(&payload, &large_plan).expect("large-plan PoR"),
+    );
+    commitment.content_length = large_plan.content_length;
+    commitment.car_digest = MusubiContentDigestV1::new(*stats.car_archive_digest.as_bytes());
+    commitment.car_size = stats.car_size;
+    commitment.bundle_digest = bundle_digest;
+    commitment.source_tree_digest = source_tree_digest;
+    commitment.descriptor_digest = descriptor_digest;
+    commitment.file_count = source_file_count;
+    commitment.chunk_count =
+        u32::try_from(large_plan.chunks.len()).expect("large plan chunk count fits u32");
+    commitment.validate().expect("large-plan commitment");
+    let witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(&large_plan, &commitment)
+        .expect("large wire plan");
+    let canonical_plan = witness
+        .canonical_bytes()
+        .expect("large canonical wire plan");
+    assert!(
+        canonical_plan.len() > MAX_SEED_INGRESS_METADATA_BYTES,
+        "plan witness must prove it cannot fit in the authenticated metadata header"
+    );
+
+    let mut request = fixture.request.clone();
+    request.commitment = commitment;
+    request.binding.archive_id = request.commitment.archive_id();
+    request.binding.car_body_digest = request.commitment.car_digest;
+    request.binding.car_body_length = request.commitment.car_size;
+    request.plan_digest = witness.canonical_digest().expect("large plan digest");
+    request.plan_length = witness.canonical_len().expect("large plan length");
+    let metadata = norito::encode_canonical(&request).expect("large-plan metadata");
+    assert!(metadata.len() <= MAX_SEED_INGRESS_METADATA_BYTES);
+    let authorization = authorization_header(&fixture.runtime, &request, &metadata, 7_000);
+    let body = encode_seed_ingress_body(&canonical_plan, &raw_car).expect("large-plan envelope");
+    let response = seed_http_response(&mut fixture, &authorization, &metadata, &body, 7_001);
+    assert_eq!(response.status, 200);
+    assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
+}
+
+#[test]
+fn private_service_rejects_frame_plan_and_commitment_substitution_before_backend() {
+    {
+        let mut fixture = private_service_fixture(false);
+        let metadata = fixture.metadata.clone();
+        let authorization =
+            authorization_header(&fixture.runtime, &fixture.request, &metadata, 8_000);
+        let mut malformed = fixture.car.clone();
+        malformed[0] ^= 0x01;
+        let response =
+            seed_http_response(&mut fixture, &authorization, &metadata, &malformed, 8_001);
+        assert_eq!(response.status, 422);
+        assert_eq!(
+            decode_service_error(&response).code,
+            MusubiPublicationServiceErrorCodeV1::CarBodyMismatch
+        );
+        assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
+    }
+
+    {
+        let mut fixture = private_service_fixture(false);
+        let mut request = fixture.request.clone();
+        request.plan_digest = MusubiContentDigestV1::new([0xa1; 32]);
+        let metadata = norito::encode_canonical(&request).expect("substituted plan metadata");
+        let authorization = authorization_header(&fixture.runtime, &request, &metadata, 8_100);
+        let body = fixture.car.clone();
+        let response = seed_http_response(&mut fixture, &authorization, &metadata, &body, 8_101);
+        assert_eq!(response.status, 422);
+        assert_eq!(
+            decode_service_error(&response).code,
+            MusubiPublicationServiceErrorCodeV1::CarBodyMismatch
+        );
+        assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
+    }
+
+    {
+        let mut fixture = private_service_fixture(false);
+        let mut request = fixture.request.clone();
+        request.commitment.por_root = MusubiContentDigestV1::new([0xa2; 32]);
+        request.binding.archive_id = request.commitment.archive_id();
+        let metadata = norito::encode_canonical(&request).expect("substituted commitment metadata");
+        let authorization = authorization_header(&fixture.runtime, &request, &metadata, 8_200);
+        let body = fixture.car.clone();
+        let response = seed_http_response(&mut fixture, &authorization, &metadata, &body, 8_201);
+        assert_eq!(response.status, 422);
+        assert_eq!(
+            decode_service_error(&response).code,
+            MusubiPublicationServiceErrorCodeV1::CarBodyMismatch
+        );
+        assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
+    }
 }
 
 #[test]
@@ -839,7 +1440,6 @@ fn private_service_returns_one_broker_receipt_and_reuses_exact_completed_operati
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
 
     let mut substituted = fixture.request.clone();
-    substituted.binding.archive_id = ArchiveId::new([0x7a; 32]);
     substituted.binding.nonce = [0x7b; 32];
     let substituted_metadata =
         norito::encode_canonical(&substituted).expect("substituted metadata");
@@ -896,10 +1496,12 @@ fn private_service_rejects_consumed_authorization_but_accepts_fresh_retry() {
 
     let replay = seed_http_response(&mut fixture, &authorization, &metadata, &car, 2_002);
     assert_eq!(replay.status, 401);
+    let replay_error = decode_service_error(&replay);
     assert_eq!(
-        decode_service_error(&replay).code,
+        replay_error.code,
         MusubiPublicationServiceErrorCodeV1::AuthorizationReplay
     );
+    assert!(replay_error.retryable);
     assert_eq!(*fixture.calls.lock().expect("seed calls"), 1);
 
     let mut substituted = fixture.request.clone();
@@ -943,18 +1545,22 @@ fn private_service_rejects_expiry_signer_metadata_and_car_substitution() {
         &car,
         33_001,
     );
+    let expired_error = decode_service_error(&expired);
     assert_eq!(
-        decode_service_error(&expired).code,
+        expired_error.code,
         MusubiPublicationServiceErrorCodeV1::AuthorizationExpired
     );
+    assert!(expired_error.retryable);
 
     let future_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 50_000);
     let future = seed_http_response(&mut fixture, &future_authorization, &metadata, &car, 33_002);
+    let future_error = decode_service_error(&future);
     assert_eq!(
-        decode_service_error(&future).code,
+        future_error.code,
         MusubiPublicationServiceErrorCodeV1::AuthorizationExpired
     );
+    assert!(future_error.retryable);
 
     let valid_authorization =
         authorization_header(&fixture.runtime, &fixture.request, &metadata, 33_003);
@@ -1028,7 +1634,7 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         .handle(MusubiPublicationPrivateHttpRequestV1 {
             method: "POST",
             path: "/v1/musubi/publication/seed-ingress/extra",
-            content_type: APPLICATION_SORAFS_CAR,
+            content_type: APPLICATION_MUSUBI_SEED_ENVELOPE,
             authorization: Some(&authorization),
             seed_ingress_metadata: Some(&encoded_metadata),
             body: &car,
@@ -1044,7 +1650,7 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         .handle(MusubiPublicationPrivateHttpRequestV1 {
             method: "GET",
             path: MUSUBI_PUBLICATION_SEED_INGRESS_PATH_V1,
-            content_type: APPLICATION_SORAFS_CAR,
+            content_type: APPLICATION_MUSUBI_SEED_ENVELOPE,
             authorization: Some(&authorization),
             seed_ingress_metadata: Some(&encoded_metadata),
             body: &car,
@@ -1055,13 +1661,30 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
         MusubiPublicationServiceErrorCodeV1::MethodInvalid
     );
 
+    let legacy_raw_car = fixture
+        .service
+        .handle(MusubiPublicationPrivateHttpRequestV1 {
+            method: "POST",
+            path: MUSUBI_PUBLICATION_SEED_INGRESS_PATH_V1,
+            content_type: "application/vnd.sorafs.car",
+            authorization: Some(&authorization),
+            seed_ingress_metadata: Some(&encoded_metadata),
+            body: &fixture.raw_car,
+        });
+    assert_eq!(legacy_raw_car.status, 415);
+    assert_eq!(
+        decode_service_error(&legacy_raw_car).code,
+        MusubiPublicationServiceErrorCodeV1::MediaTypeInvalid
+    );
+    assert_eq!(*fixture.calls.lock().expect("seed calls"), 0);
+
     let padded_authorization = format!("{authorization}=");
     let noncanonical = fixture
         .service
         .handle(MusubiPublicationPrivateHttpRequestV1 {
             method: "POST",
             path: MUSUBI_PUBLICATION_SEED_INGRESS_PATH_V1,
-            content_type: APPLICATION_SORAFS_CAR,
+            content_type: APPLICATION_MUSUBI_SEED_ENVELOPE,
             authorization: Some(&padded_authorization),
             seed_ingress_metadata: Some(&encoded_metadata),
             body: &car,
@@ -1090,7 +1713,7 @@ fn private_service_rejects_noncanonical_headers_and_nonexact_routes() {
 }
 
 #[test]
-fn private_service_authenticates_control_requests_before_embedded_signatures() {
+fn private_service_authenticates_control_requests_before_embedded_evidence() {
     let mut fixture = control_service_fixture(false, false);
     let attacker = KeyPair::try_from_seed(
         b"musubi-publication-control-signature-attacker".to_vec(),
@@ -1167,11 +1790,7 @@ fn private_service_authenticates_control_requests_before_embedded_signatures() {
     assert_eq!(valid_storage.status, 200);
 
     let mut readback_request = fixture.readback_request.clone();
-    let attestation = &mut readback_request.location.provider_attestations[0];
-    let attestation_hash = attestation.payload.signing_hash();
-    attestation.approvals[0].signature =
-        SignatureOf::try_from_hash(attacker.private_key(), attestation_hash)
-            .expect("mismatched provider signature");
+    readback_request.location.archive_id = ArchiveId::new([0xee; 32]);
     let readback_body =
         norito::encode_canonical(&readback_request).expect("readback request bytes");
     fixture.clock.store(3_001, Ordering::SeqCst);
@@ -1665,9 +2284,7 @@ fn storage_request_binds_immutable_registration_without_freezing_location_state(
 
     let mut later_current_archive = fixture.storage_response;
     later_current_archive.archive.location_revision = 2;
-    later_current_archive.archive.location_ids = vec![MusubiArchiveLocationIdV1::new([
-        0xdd; 32,
-    ])];
+    later_current_archive.archive.location_ids = vec![MusubiArchiveLocationIdV1::new([0xdd; 32])];
     let MusubiStorageLocationDispositionV1::NeedsRegistration {
         expected_location_revision,
         ..

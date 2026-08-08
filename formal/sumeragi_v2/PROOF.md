@@ -818,7 +818,8 @@ representative roster of at least four voting peers, a responsive dual quorum,
 deterministic terminating validation/fsync/application, and a representable
 service bound that some view-indexed timeout can exceed, deterministic
 consensus cannot guarantee progress. The paper argument derives
-height progress under those premises, including a valid empty heartbeat; it
+height progress under those premises, including a valid internal or
+recovery-heartbeat carrier when that work is armed; it
 does not prove transaction inclusion or censorship fairness. It is not a
 machine-checked liveness completion while the ledger reports
 `machine_checked_completion: false` and retains downstream asynchronous and
@@ -1390,7 +1391,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 834 tests across thirty-nine Rust
+The current pre-network release inventory names 835 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1489,7 +1490,7 @@ checkpoint. Five admission/coalescing, Busy pre-runtime ownership, and
 reconstructed-chunk terminality regressions yield the 818-test checkpoint.
 Thirteen exact admission, retry, tombstone, and high-water regressions yield the
 831-test checkpoint. Retiring five obsolete peer-genesis protocol regressions
-yields the current 834-test,
+yields the current 835-test,
 39-module inventory. The complete source-sealed
 pre-network corridor
 contains 86 legs. Six source-sealed command legs and the G-SCALE
@@ -1561,10 +1562,10 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`2f818f6a1174b77a9078b9e80b000671a44d045f23088fdf0da271b91ff2ea12`.
-The separate source-sealed G-UNIT inventory contains 474 focused tests,
-including 268 `iroha_core` tests. Its 475-line canonical TSV has SHA-256
-`e74381ab01530611cb6ae2c7c8080af4a60024bf2b090e073a0d5c00b84d2989`;
+`3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb`.
+The separate source-sealed G-UNIT inventory contains 524 focused tests,
+including 318 `iroha_core` tests. Its 525-line canonical TSV has SHA-256
+`de9ab0da201d361e912b935d1349c584ba78fb52f70acd3c91e8d4a7c76fab24`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through

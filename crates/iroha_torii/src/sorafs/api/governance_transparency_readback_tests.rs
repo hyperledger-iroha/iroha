@@ -1,4 +1,4 @@
-// Governance DAG and transparency readback endpoint regressions.
+// Governance DAG, transparency, and proof-token readback regressions.
 
 #[test]
 fn governance_dag_source_payload_bytes_uses_external_inner_payload() {
@@ -36,7 +36,7 @@ fn governance_dag_raw_ipfs_cid_commits_exact_bytes() {
 
 #[test]
 fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
-    let source = include_str!("../api.rs");
+    let source = include_str!("api.rs");
     for handler_name in [
         "handle_get_sorafs_governance_dag_dashboard",
         "handle_get_sorafs_governance_dag_head",
@@ -92,7 +92,7 @@ fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
 
 #[test]
 fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
-    let source = include_str!("../api.rs");
+    let source = include_str!("api.rs");
     let start = source
         .find("fn load_governance_dag_mirror_index")
         .expect("governance DAG loader region");
@@ -117,7 +117,7 @@ fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
         );
     }
 
-    let producer = include_str!("../../../../sorafs_node/src/governance.rs");
+    let producer = include_str!("../../../sorafs_node/src/governance.rs");
     assert!(producer.contains("const GOVERNANCE_DAG_LOGICAL_ROOT: &str = \".\";"));
     assert!(
         !producer.contains("JsonValue::from(root.display().to_string())"),
@@ -132,7 +132,7 @@ fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
     assert_eq!(MAX_CAR_RANGE_PAYLOAD_BYTES, 8 * 1024 * 1024);
     assert_eq!(MAX_CAR_RANGE_RESPONSE_BYTES, 16 * 1024 * 1024);
 
-    let source = include_str!("../api.rs");
+    let source = include_str!("api.rs");
     for (start_marker, end_marker, io_marker) in [
         (
             "pub(crate) async fn handle_get_sorafs_storage_manifest(",
@@ -222,46 +222,30 @@ fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
 async fn governance_dag_indexes_reject_unknown_host_path_fields() {
     const FORBIDDEN_PATH: &str = "/private/retained/governance/state";
 
-    let (mirror_app, _mirror_temp, _block_cid, _node_cid, _head_cid) =
-        sorafs_app_state_with_governance_mirror();
-    let mirror_path = mirror_app
-        .sorafs_node
-        .config()
-        .governance_dir()
-        .expect("configured mirror governance dir")
-        .join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-    let mut mirror: Value =
-        norito::json::from_slice(&fs::read(&mirror_path).expect("read governance mirror fixture"))
-            .expect("decode governance mirror fixture");
+    let (runtime_app, _temp, mut mirror, metadata, ..) = governance_mirror_fixture();
     mirror
         .as_object_mut()
         .expect("mirror index object")
         .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
-    fs::write(
-        &mirror_path,
-        norito::json::to_vec(&mirror).expect("encode mirror with unknown field"),
-    )
-    .expect("write mirror with unknown field");
-    let response =
-        handle_get_sorafs_governance_dag_dashboard(State(mirror_app), HeaderMap::new()).await;
+    let canonical = json::to_json_pretty(&mirror)
+        .expect("encode mirror with unknown field")
+        .into_bytes();
+    let response = parse_governance_dag_mirror_index(&canonical, metadata)
+        .expect_err("unknown mirror field must fail")
+        .into_response();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect rejected mirror response");
     assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
 
-    let (runtime_app, _runtime_temp, _digest, _block_cid, _node_cid) =
-        sorafs_app_state_with_governance_runtime_index();
-    let runtime_path = runtime_app
+    let runtime_snapshot = runtime_app
         .sorafs_node
-        .config()
-        .governance_dir()
-        .expect("configured runtime governance dir")
-        .join(GOVERNANCE_DAG_RUNTIME_INDEX_FILE);
-    let mut runtime: Value = norito::json::from_slice(
-        &fs::read(&runtime_path).expect("read governance runtime fixture"),
-    )
-    .expect("decode governance runtime fixture");
+        .governance_dag_runtime_snapshot()
+        .expect("read typed runtime fixture")
+        .expect("published runtime fixture");
+    let mut runtime: Value =
+        json::from_slice(runtime_snapshot.index_bytes()).expect("decode typed runtime fixture");
     runtime
         .get_mut("blocks")
         .and_then(Value::as_array_mut)
@@ -269,23 +253,22 @@ async fn governance_dag_indexes_reject_unknown_host_path_fields() {
         .and_then(Value::as_object_mut)
         .expect("first runtime block")
         .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
-    fs::write(
-        &runtime_path,
-        norito::json::to_vec(&runtime).expect("encode runtime with unknown field"),
-    )
-    .expect("write runtime with unknown field");
-    let response =
-        handle_get_sorafs_governance_dag_runtime(State(runtime_app), HeaderMap::new()).await;
+    let response = match verify_and_bind_governance_dag_runtime_index(
+        &runtime_app,
+        &mut runtime,
+        runtime_snapshot.head_bytes(),
+    ) {
+        Err(response) => response,
+        Ok(_) => panic!("unknown runtime field must fail"),
+    };
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect rejected runtime response");
     assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
 
-    let (car_app, car_temp, _digest, _archive_digest) =
-        sorafs_app_state_with_governance_car_queue();
-    let governance_dir = car_temp.path().join("governance");
-    let mut state = read_publication_state_fixture(&governance_dir);
+    let (publication_app, _temp, _digest, _archive) = sorafs_app_state_with_governance_car_queue();
+    let mut state = read_publication_state_fixture(&publication_app);
     publication_state_section_mut(&mut state, "car_queue")
         .get_mut("segments")
         .and_then(Value::as_array_mut)
@@ -293,9 +276,19 @@ async fn governance_dag_indexes_reject_unknown_host_path_fields() {
         .and_then(Value::as_object_mut)
         .expect("first CAR queue segment")
         .insert("host_path".into(), Value::from(FORBIDDEN_PATH));
-    write_publication_state_value(&governance_dir, &state);
-    let response =
-        handle_get_sorafs_governance_dag_car_queue(State(car_app), HeaderMap::new()).await;
+    let canonical = json::to_json_pretty(&state)
+        .expect("encode publication state with unknown field")
+        .into_bytes();
+    let metadata = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_PUBLICATION_SOURCE_V1,
+        (9, [0xC9; 32]),
+        &canonical,
+        None,
+    );
+    let response = match parse_governance_publication_state(&canonical, metadata) {
+        Err(response) => response,
+        Ok(_) => panic!("unknown CAR field must fail"),
+    };
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -303,14 +296,11 @@ async fn governance_dag_indexes_reject_unknown_host_path_fields() {
     assert!(!String::from_utf8_lossy(&body_bytes).contains(FORBIDDEN_PATH));
 }
 
-#[tokio::test]
-async fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
-    let (app, temp_dir, _digest, car_archive_digest) = sorafs_app_state_with_governance_car_queue();
-    let governance_dir = temp_dir.path().join("governance");
-    let mut state = read_publication_state_fixture(&governance_dir);
-    let queue_object = publication_state_section_mut(&mut state, "car_queue")
-        .as_object_mut()
-        .expect("CAR queue object");
+#[test]
+fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
+    let (app, _temp, _digest, car_archive_digest) = sorafs_app_state_with_governance_car_queue();
+    let mut queue = read_publication_section_fixture(&app, "car_queue");
+    let queue_object = queue.as_object_mut().expect("CAR queue object");
     let segment = queue_object
         .get_mut("segments")
         .and_then(Value::as_array_mut)
@@ -346,9 +336,9 @@ async fn governance_dag_pending_car_segment_cannot_hide_an_artifact_path() {
         .and_then(Value::as_object_mut)
         .expect("CAR archive lookup")
         .remove(&car_archive_digest);
-    write_publication_state_value(&governance_dir, &state);
 
-    let response = handle_get_sorafs_governance_dag_car_queue(State(app), HeaderMap::new()).await;
+    let response = validate_governance_dag_car_queue(&queue)
+        .expect_err("pending segment cannot smuggle an artifact path");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
@@ -386,10 +376,72 @@ fn public_conditional_etags_use_case_sensitive_http_entity_tags() {
     }
 }
 
+#[test]
+fn governance_source_etag_commits_record_and_checkpoint_identity() {
+    let canonical_bytes = br#"{"schema":"fixture"}"#;
+    let base = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+        (7, [0x31; 32]),
+        canonical_bytes,
+        Some((11, [0x41; 32])),
+    );
+    let changed_record_generation = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+        (8, [0x31; 32]),
+        canonical_bytes,
+        Some((11, [0x41; 32])),
+    );
+    let changed_record_digest = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+        (7, [0x32; 32]),
+        canonical_bytes,
+        Some((11, [0x41; 32])),
+    );
+    let changed_checkpoint_generation = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+        (7, [0x31; 32]),
+        canonical_bytes,
+        Some((12, [0x41; 32])),
+    );
+    let changed_checkpoint_revision = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+        (7, [0x31; 32]),
+        canonical_bytes,
+        Some((11, [0x42; 32])),
+    );
+    let without_checkpoint = GovernanceDagSourceMetadata::new(
+        GOVERNANCE_DAG_RUNTIME_SOURCE_V1,
+        (7, [0x31; 32]),
+        canonical_bytes,
+        None,
+    );
+
+    for changed in [
+        &changed_record_generation,
+        &changed_record_digest,
+        &changed_checkpoint_generation,
+        &changed_checkpoint_revision,
+        &without_checkpoint,
+    ] {
+        assert_ne!(base.etag, changed.etag);
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        IF_NONE_MATCH,
+        HeaderValue::from_str(&base.etag).expect("valid typed-source entity tag"),
+    );
+    assert!(if_none_match_matches(&headers, &base.etag));
+    assert!(
+        !if_none_match_matches(&headers, &changed_checkpoint_revision.etag),
+        "a stale conditional tag must not conceal changed checkpoint authentication metadata"
+    );
+}
+
 #[tokio::test]
-async fn governance_dag_dashboard_head_and_lookups_read_local_mirror() {
-    let (app, _temp_dir, block_cid_hex, node_cid_hex, head_block_cid_hex) =
-        sorafs_app_state_with_governance_mirror();
+async fn governance_dag_dashboard_head_and_lookups_project_validated_mirror() {
+    let (_app, _temp, index, metadata, block_cid_hex, node_cid_hex, head_block_cid_hex) =
+        governance_mirror_fixture();
     let publisher_key = KeyPair::try_from_seed(
         b"torii-governance-runtime-provenance".to_vec(),
         Algorithm::Ed25519,
@@ -399,64 +451,51 @@ async fn governance_dag_dashboard_head_and_lookups_read_local_mirror() {
     let publisher_digest_hex =
         encode(sorafs_manifest::governance_dag_submission_account_digest_v1(&publisher.encode()));
 
-    let response =
-        handle_get_sorafs_governance_dag_dashboard(State(app.clone()), HeaderMap::new()).await;
+    let response = governance_dag_dashboard_response_from_index(
+        index.clone(),
+        metadata.clone(),
+        HeaderMap::new(),
+    );
     assert_eq!(response.status(), StatusCode::OK);
     let dashboard_etag = response
         .headers()
         .get(ETAG)
         .cloned()
         .expect("dashboard etag");
-    assert_eq!(
-        response
-            .headers()
-            .get(CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok()),
-        Some(GOVERNANCE_DAG_CACHE_CONTROL)
-    );
     let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect dashboard body");
-    let value: Value = norito::json::from_slice(&body_bytes).expect("decode dashboard JSON");
+    let value: Value = json::from_slice(&body_bytes).expect("decode dashboard JSON");
     assert_eq!(
         value.get("schema").and_then(Value::as_str),
         Some("sorafs.governance_dag.dashboard.v1")
     );
-    assert_eq!(
-        value.get("source_path").and_then(Value::as_str),
-        Some(GOVERNANCE_DAG_MIRROR_INDEX_FILE)
-    );
+    assert_governance_source_metadata(&value, GOVERNANCE_DAG_MIRROR_SOURCE_V1, true);
     assert_eq!(value.get("block_count").and_then(Value::as_u64), Some(2));
     assert_eq!(value.get("first_sequence").and_then(Value::as_u64), Some(0));
     assert_eq!(
         value.get("last_timestamp").and_then(Value::as_u64),
         Some(1_800_000_100)
     );
-    assert_eq!(
-        value
-            .get("payload_kind_counts")
-            .and_then(Value::as_object)
-            .and_then(|counts| counts.get(APPEAL_FINANCE_REPORT_KIND))
-            .and_then(Value::as_u64),
-        Some(1)
-    );
 
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
-    let response = handle_get_sorafs_governance_dag_dashboard(State(app.clone()), headers).await;
+    let response =
+        governance_dag_dashboard_response_from_index(index.clone(), metadata.clone(), headers);
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-    assert_eq!(response.headers().get(ETAG), Some(&dashboard_etag));
 
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, dashboard_etag.clone());
-    let response = handle_get_sorafs_governance_dag_head(State(app.clone()), headers).await;
+    let response =
+        governance_dag_head_response_from_index(index.clone(), metadata.clone(), headers);
     assert_eq!(response.status(), StatusCode::OK);
     let head_etag = response.headers().get(ETAG).cloned().expect("head etag");
     assert_ne!(head_etag, dashboard_etag);
     let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect head body");
-    let value: Value = norito::json::from_slice(&body_bytes).expect("decode head JSON");
+    let value: Value = json::from_slice(&body_bytes).expect("decode head JSON");
+    assert_governance_source_metadata(&value, GOVERNANCE_DAG_MIRROR_SOURCE_V1, true);
     assert_eq!(
         value
             .get("head")
@@ -465,34 +504,22 @@ async fn governance_dag_dashboard_head_and_lookups_read_local_mirror() {
         Some(head_block_cid_hex.as_str())
     );
 
-    let response = handle_get_sorafs_governance_dag_block(
-        State(app.clone()),
+    let response = governance_dag_lookup_response_from_index(
+        index.clone(),
+        metadata.clone(),
         HeaderMap::new(),
-        Path(block_cid_hex.clone()),
-    )
-    .await;
+        "block",
+        "by_block_cid_hex",
+        "sorafs.governance_dag.block.lookup.v1",
+        block_cid_hex.clone(),
+    );
     assert_eq!(response.status(), StatusCode::OK);
-    let block_etag = response
-        .headers()
-        .get(ETAG)
-        .cloned()
-        .expect("block lookup etag");
+    let block_etag = response.headers().get(ETAG).cloned().expect("block etag");
     let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect block lookup body");
-    let value: Value = norito::json::from_slice(&body_bytes).expect("decode block JSON");
-    assert_eq!(
-        value.get("schema").and_then(Value::as_str),
-        Some("sorafs.governance_dag.block.lookup.v1")
-    );
-    assert_eq!(value.get("found").and_then(Value::as_bool), Some(true));
-    assert_eq!(
-        value
-            .get("block")
-            .and_then(|block| block.get("block_cid_hex"))
-            .and_then(Value::as_str),
-        Some(block_cid_hex.as_str())
-    );
+    let value: Value = json::from_slice(&body_bytes).expect("decode block JSON");
+    assert_governance_source_metadata(&value, GOVERNANCE_DAG_MIRROR_SOURCE_V1, true);
     assert_eq!(
         value
             .get("block")
@@ -503,26 +530,31 @@ async fn governance_dag_dashboard_head_and_lookups_read_local_mirror() {
 
     let mut headers = HeaderMap::new();
     headers.insert(IF_NONE_MATCH, block_etag);
-    let response =
-        handle_get_sorafs_governance_dag_block(State(app.clone()), headers, Path("ff".repeat(32)))
-            .await;
+    let response = governance_dag_lookup_response_from_index(
+        index.clone(),
+        metadata.clone(),
+        headers,
+        "block",
+        "by_block_cid_hex",
+        "sorafs.governance_dag.block.lookup.v1",
+        "ff".repeat(32),
+    );
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    let response = handle_get_sorafs_governance_dag_node(
-        State(app.clone()),
+    let response = governance_dag_lookup_response_from_index(
+        index,
+        metadata,
         HeaderMap::new(),
-        Path(format!("hex:{node_cid_hex}")),
-    )
-    .await;
+        "node",
+        "by_node_cid_hex",
+        "sorafs.governance_dag.node.lookup.v1",
+        node_cid_hex.clone(),
+    );
     assert_eq!(response.status(), StatusCode::OK);
     let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("collect node lookup body");
-    let value: Value = norito::json::from_slice(&body_bytes).expect("decode node JSON");
-    assert_eq!(
-        value.get("schema").and_then(Value::as_str),
-        Some("sorafs.governance_dag.node.lookup.v1")
-    );
+    let value: Value = json::from_slice(&body_bytes).expect("decode node JSON");
     assert_eq!(
         value
             .get("block")
@@ -530,126 +562,55 @@ async fn governance_dag_dashboard_head_and_lookups_read_local_mirror() {
             .and_then(Value::as_str),
         Some(node_cid_hex.as_str())
     );
-    assert_eq!(
-        value
-            .get("block")
-            .and_then(|block| block.get("submission_origin"))
-            .and_then(Value::as_str),
-        Some("appeal_finance_report")
-    );
 }
 
-#[tokio::test]
-async fn governance_dag_mirror_rejects_unsigned_provenance_substitution() {
-    let (app, _temp_dir, block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-        sorafs_app_state_with_governance_mirror();
-    let governance_dir = app
-        .sorafs_node
-        .config()
-        .governance_dir()
-        .expect("configured governance dir");
-    let mirror_path = governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-    let mut mirror: Value =
-        norito::json::from_slice(&fs::read(&mirror_path).expect("read governance mirror index"))
-            .expect("decode governance mirror index");
-    mirror
+#[test]
+fn governance_dag_mirror_rejects_history_not_ending_at_head() {
+    let (_app, _temp, mut index, _metadata, ..) = governance_mirror_fixture();
+    index
         .get_mut("blocks")
         .and_then(Value::as_array_mut)
-        .and_then(|blocks| blocks.first_mut())
-        .and_then(Value::as_object_mut)
-        .expect("first governance mirror block")
-        .insert(
-            "submission_publisher_account_digest_hex".into(),
-            Value::from("00".repeat(32)),
-        );
-    fs::write(
-        &mirror_path,
-        norito::json::to_vec(&mirror).expect("encode tampered governance mirror index"),
-    )
-    .expect("write tampered governance mirror index");
-
-    let response =
-        handle_get_sorafs_governance_dag_block(State(app), HeaderMap::new(), Path(block_cid_hex))
-            .await;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[tokio::test]
-async fn governance_dag_mirror_rejects_ipfs_cid_substitution() {
-    let (app, _temp_dir, block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-        sorafs_app_state_with_governance_mirror();
-    let governance_dir = app
-        .sorafs_node
-        .config()
-        .governance_dir()
-        .expect("configured governance dir");
-    let mirror_path = governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-    let mut mirror: Value =
-        norito::json::from_slice(&fs::read(&mirror_path).expect("read governance mirror index"))
-            .expect("decode governance mirror index");
-    mirror
-        .get_mut("blocks")
-        .and_then(Value::as_array_mut)
-        .and_then(|blocks| blocks.first_mut())
-        .and_then(Value::as_object_mut)
-        .expect("first governance mirror block")
-        .insert(
-            "ipfs_cid".into(),
-            Value::from(governance_dag_raw_ipfs_cid(b"substituted block")),
-        );
-    fs::write(
-        &mirror_path,
-        norito::json::to_vec(&mirror).expect("encode tampered governance mirror index"),
-    )
-    .expect("write tampered governance mirror index");
-
-    let response =
-        handle_get_sorafs_governance_dag_block(State(app), HeaderMap::new(), Path(block_cid_hex))
-            .await;
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[tokio::test]
-async fn governance_dag_mirror_rejects_history_not_ending_at_signed_head() {
-    let (app, _temp_dir, _block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-        sorafs_app_state_with_governance_mirror();
-    let governance_dir = app
-        .sorafs_node
-        .config()
-        .governance_dir()
-        .expect("configured governance dir");
-    let mirror_path = governance_dir.join(GOVERNANCE_DAG_MIRROR_INDEX_FILE);
-    let mut mirror: Value =
-        norito::json::from_slice(&fs::read(&mirror_path).expect("read governance mirror index"))
-            .expect("decode governance mirror index");
-    mirror
-        .get_mut("blocks")
-        .and_then(Value::as_array_mut)
-        .expect("governance mirror blocks")
+        .expect("mirror blocks")
         .truncate(1);
-    mirror
+    index
         .as_object_mut()
-        .expect("governance mirror root")
+        .expect("mirror root")
         .insert("indexed_block_count".into(), Value::from(1_u64));
-    fs::write(
-        &mirror_path,
-        norito::json::to_vec(&mirror).expect("encode truncated governance mirror index"),
-    )
-    .expect("write truncated governance mirror index");
 
-    let response = handle_get_sorafs_governance_dag_dashboard(State(app), HeaderMap::new()).await;
+    let response = validate_governance_dag_mirror_index(&index)
+        .expect_err("truncated mirror history must fail");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[test]
+fn governance_dag_mirror_rejects_sequence_overflow() {
+    let (_app, _temp, mut index, _metadata, ..) = governance_mirror_fixture();
+    let blocks = index
+        .get_mut("blocks")
+        .and_then(Value::as_array_mut)
+        .expect("mirror blocks");
+    blocks[0]
+        .as_object_mut()
+        .expect("first mirror block")
+        .insert("sequence".into(), Value::from(u64::MAX));
+    blocks[1]
+        .as_object_mut()
+        .expect("second mirror block")
+        .insert("sequence".into(), Value::from(0_u64));
+
+    let response = validate_governance_dag_mirror_index(&index)
+        .expect_err("overflowing mirror sequence continuity must fail closed");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
-async fn governance_dag_lookup_rejects_malformed_and_missing_cids() {
-    let (app, _temp_dir, _block_cid_hex, _node_cid_hex, _head_block_cid_hex) =
-        sorafs_app_state_with_governance_mirror();
+async fn governance_dag_lookup_rejects_malformed_and_absent_capability() {
+    let (app, _temp, index, metadata, ..) = governance_mirror_fixture();
 
     let response = handle_get_sorafs_governance_dag_block(
         State(app.clone()),
         HeaderMap::new(),
-        Path("not-hex".to_string()),
+        Path("not-hex".to_owned()),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -657,7 +618,7 @@ async fn governance_dag_lookup_rejects_malformed_and_missing_cids() {
     let response = handle_get_sorafs_governance_dag_block(
         State(app.clone()),
         HeaderMap::new(),
-        Path("ff".to_string()),
+        Path("ff".to_owned()),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -665,7 +626,394 @@ async fn governance_dag_lookup_rejects_malformed_and_missing_cids() {
     let response =
         handle_get_sorafs_governance_dag_block(State(app), HeaderMap::new(), Path("ff".repeat(32)))
             .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "a node without an installed mirror capability must fail closed"
+    );
+
+    let response = governance_dag_lookup_response_from_index(
+        index,
+        metadata,
+        HeaderMap::new(),
+        "block",
+        "by_block_cid_hex",
+        "sorafs.governance_dag.block.lookup.v1",
+        "ff".repeat(32),
+    );
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+fn api_test_governance_request_public_key(seed: u8) -> [u8; 32] {
+    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("derive Governance DAG request-auth public key");
+    let (algorithm, bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .expect("serialize Governance DAG request-auth public key");
+    assert_eq!(algorithm, Algorithm::Ed25519);
+    bytes.try_into().expect("Ed25519 public key width")
+}
+
+fn api_test_governance_ingress_qualification(
+    scope: sorafs_node::GovernanceDagAuthenticationScope,
+    endpoint: &str,
+    seed: u8,
+    provider: GovernanceDagRuntimeProviderQualificationV1,
+    max_body_bytes: u64,
+) -> GovernanceDagRequestIngressQualificationV1 {
+    let binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+        scope,
+        sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
+            .expect("derive canonical test request-ingress endpoint binding"),
+        api_test_governance_request_public_key(seed),
+        max_body_bytes,
+        30,
+        5,
+    )
+    .expect("construct canonical test request-ingress binding");
+    let scope_tag = match scope {
+        sorafs_node::GovernanceDagAuthenticationScope::Ipfs => 0x91,
+        sorafs_node::GovernanceDagAuthenticationScope::SignedHead => 0x92,
+    };
+    GovernanceDagRequestIngressQualificationV1::try_new(
+        provider,
+        binding,
+        [scope_tag; 32],
+        [scope_tag.wrapping_add(1); 32],
+        [scope_tag.wrapping_add(2); 32],
+    )
+    .expect("construct live test request-ingress qualification")
+}
+
+#[tokio::test]
+async fn running_governance_dag_service_installs_authenticated_mirror_for_torii() {
+    const IPFS_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-ipfs-ingress";
+    const HEAD_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-head-ingress";
+    const IPFS_AUTH_SEED: u8 = 0x61;
+    const HEAD_AUTH_SEED: u8 = 0x62;
+
+    let temp_dir = tempfile::tempdir().expect("create Governance DAG service temp dir");
+    let temp_root = temp_dir
+        .path()
+        .canonicalize()
+        .expect("canonicalize Governance DAG service temp dir");
+    let governance_dir = temp_root.join("governance");
+    let (mut node, signer, checkpoint_store) = node_with_test_governance_publisher_and_store(
+        StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_root.join("storage"))
+            .governance_dir(Some(governance_dir.clone())),
+        NodeRuntimeDeps::default(),
+    );
+    let publisher_key = KeyPair::try_from_seed(
+        b"torii-running-governance-service-provenance".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("derive Governance DAG publication provenance account");
+    let publisher = AccountId::new(publisher_key.public_key().clone());
+    node.publish_authenticated_appeal_finance_report(appeal_finance_report_fixture(), publisher)
+        .expect("publish signed Governance DAG source block");
+
+    let runtime_snapshot = node
+        .governance_dag_runtime_snapshot()
+        .expect("read signed local Governance DAG")
+        .expect("signed local Governance DAG exists");
+    let source_index: Value = json::from_slice(runtime_snapshot.index_bytes())
+        .expect("decode signed local Governance DAG index");
+    let expected_block_cid_hex = source_index
+        .get("blocks")
+        .and_then(Value::as_array)
+        .and_then(|blocks| blocks.first())
+        .and_then(|block| block.get("block_cid_hex"))
+        .and_then(Value::as_str)
+        .expect("signed local Governance DAG block CID")
+        .to_owned();
+    let expected_head: GovernanceDagHeadV1 = decode_canonical_governance_dag_value(
+        runtime_snapshot.head_bytes(),
+        "signed local Governance DAG head",
+    )
+    .expect("decode signed local Governance DAG head");
+    let expected_head_cid_hex = encode(expected_head.head_block_cid);
+
+    let (publication_base, publication_state, publication_shutdown, publication_task) =
+        spawn_api_test_governance_publication_http().await;
+    let signed_head_url = format!("{publication_base}/head");
+    let mut service = SorafsGovernanceDagService::default();
+    service.enabled = true;
+    service.state_dir = Some(temp_root.join("governance-service-state"));
+    service.ipfs_api_url = Some(publication_base.clone());
+    service.signed_head_url = Some(signed_head_url.clone());
+    service.ipfs_authenticator_handle = Some(IPFS_AUTH_HANDLE.to_owned());
+    service.ipfs_authenticator_revision = Some(1);
+    service.ipfs_authenticator_policy_digest = Some([0xA1; 32]);
+    service.ipfs_request_auth_public_key =
+        Some(api_test_governance_request_public_key(IPFS_AUTH_SEED));
+    service.head_authenticator_handle = Some(HEAD_AUTH_HANDLE.to_owned());
+    service.head_authenticator_revision = Some(1);
+    service.head_authenticator_policy_digest = Some([0xA2; 32]);
+    service.head_request_auth_public_key =
+        Some(api_test_governance_request_public_key(HEAD_AUTH_SEED));
+    service.request_auth_max_envelope_lifetime_secs = 30;
+    service.request_auth_max_future_skew_secs = 5;
+    service.checkpoint_store_handle = Some(ApiTestGovernanceDagCheckpointStore::HANDLE.into());
+    service.checkpoint_store_revision =
+        Some(ApiTestGovernanceDagCheckpointStore::expected_qualification().revision);
+    service.checkpoint_store_policy_digest =
+        Some(ApiTestGovernanceDagCheckpointStore::expected_qualification().policy_digest);
+    service.publisher_public_key_hex = Some(hex::encode(signer.public_key()));
+    service.poll_interval = Duration::from_millis(10);
+    service.max_future_skew_secs = 100_000_000;
+    service.allow_insecure_http = true;
+    service.allow_private_ipfs_endpoint = true;
+    service.allow_private_head_endpoint = true;
+    service.allow_head_bootstrap = true;
+    service.listen_addr = "127.0.0.1:0".to_owned();
+
+    let ipfs_provider_qualification =
+        GovernanceDagRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
+    let head_provider_qualification =
+        GovernanceDagRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
+    let ipfs_authenticator = ApiTestGovernanceRequestAuthenticator::new(
+        IPFS_AUTH_HANDLE,
+        IPFS_AUTH_SEED,
+        api_test_governance_ingress_qualification(
+            sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
+            &publication_base,
+            IPFS_AUTH_SEED,
+            ipfs_provider_qualification,
+            sorafs_node::governance_service::authenticated_ipfs_wire_body_max_bytes(
+                service.max_request_bytes.0,
+            )
+            .expect("derive authenticated IPFS wire-body ceiling"),
+        ),
+    );
+    let head_authenticator = ApiTestGovernanceRequestAuthenticator::new(
+        HEAD_AUTH_HANDLE,
+        HEAD_AUTH_SEED,
+        api_test_governance_ingress_qualification(
+            sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+            &signed_head_url,
+            HEAD_AUTH_SEED,
+            head_provider_qualification,
+            service.max_request_bytes.0,
+        ),
+    );
+    let view = SorafsGovernanceDagServiceView {
+        source_dir: Some(governance_dir),
+        producer_publisher_peer_id: Some(
+            String::from_utf8(ApiTestGovernanceDagSigner::PEER_ID.to_vec())
+                .expect("Governance DAG producer peer id is UTF-8"),
+        ),
+        producer_signer_handle: Some(ApiTestGovernanceDagSigner::HANDLE.to_owned()),
+        producer_signer_revision: Some(
+            ApiTestGovernanceDagSigner::expected_qualification().revision,
+        ),
+        producer_signer_policy_digest: Some(
+            ApiTestGovernanceDagSigner::expected_qualification().policy_digest,
+        ),
+        producer_publisher_public_key_hex: Some(hex::encode(signer.public_key())),
+        service,
+    };
+    let runner = prepare_governance_dag_service_from_view(
+        view,
+        GovernanceDagServiceRuntimeProviders::default()
+            .with_ipfs_authenticator(ipfs_authenticator)
+            .with_head_authenticator(head_authenticator)
+            .with_checkpoint_store(checkpoint_store),
+    )
+    .await
+    .expect("prepare real Governance DAG service");
+    let mirror_reader = runner.mirror_read_handle();
+    let (service_shutdown, service_shutdown_rx) = tokio::sync::oneshot::channel();
+    let service_task = tokio::spawn(async move {
+        runner
+            .run_until(async move {
+                let _ = service_shutdown_rx.await;
+            })
+            .await
+    });
+
+    let mirror_snapshot = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if service_task.is_finished() {
+                panic!("Governance DAG service exited before publishing its mirror");
+            }
+            match mirror_reader.read() {
+                Ok(Some(snapshot)) => break snapshot,
+                Ok(None) | Err(GovernanceDagServiceError::Unavailable(_)) => {}
+                Err(GovernanceDagServiceError::State(message))
+                    if message.contains("active sealed publish intent") => {}
+                Err(error) => panic!("Governance DAG mirror failed authentication: {error}"),
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Governance DAG service publishes an authenticated mirror");
+    let mirror_store_identity = mirror_snapshot.mirror_store_identity();
+    let checkpoint_identity = mirror_snapshot.checkpoint_identity();
+    let mirror: Value = json::from_slice(mirror_snapshot.canonical_bytes())
+        .expect("decode service-owned Governance DAG mirror");
+    assert_eq!(
+        mirror
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(expected_head_cid_hex.as_str())
+    );
+    let head_ipfs_cid = mirror
+        .get("head")
+        .and_then(|head| head.get("ipfs_cid"))
+        .and_then(Value::as_str)
+        .expect("authenticated mirror head IPFS CID")
+        .to_owned();
+    let block_ipfs_cid = mirror
+        .get("blocks")
+        .and_then(Value::as_array)
+        .and_then(|blocks| blocks.first())
+        .and_then(|block| block.get("ipfs_cid"))
+        .and_then(Value::as_str)
+        .expect("authenticated mirror block IPFS CID")
+        .to_owned();
+    assert!(
+        publication_state
+            .0
+            .lock()
+            .expect("lock Governance DAG publication state")
+            .head
+            .is_some(),
+        "the running service must commit the public head before exposing the mirror"
+    );
+
+    node.install_governance_dag_mirror_read_handle(mirror_reader)
+        .expect("install the real service-owned mirror capability into NodeHandle");
+    let mut app = mk_app_state_for_tests();
+    Arc::get_mut(&mut app)
+        .expect("unique Torii app state")
+        .sorafs_node = node;
+
+    let response =
+        handle_get_sorafs_governance_dag_head(State(app.clone()), HeaderMap::new()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read Torii Governance DAG head response");
+    let response: Value =
+        json::from_slice(&body_bytes).expect("decode Torii Governance DAG head response");
+    assert_eq!(
+        response.get("source").and_then(Value::as_str),
+        Some(GOVERNANCE_DAG_MIRROR_SOURCE_V1)
+    );
+    assert_eq!(
+        response.get("source_generation").and_then(Value::as_u64),
+        Some(mirror_store_identity.0)
+    );
+    assert_eq!(
+        response.get("source_record_blake3").and_then(Value::as_str),
+        Some(encode(mirror_store_identity.1).as_str())
+    );
+    assert_eq!(
+        response
+            .get("source_checkpoint_generation")
+            .and_then(Value::as_u64),
+        Some(checkpoint_identity.generation())
+    );
+    assert_eq!(
+        response
+            .get("source_checkpoint_revision")
+            .and_then(Value::as_str),
+        Some(encode(checkpoint_identity.revision()).as_str())
+    );
+    assert_eq!(
+        response
+            .get("head")
+            .and_then(|head| head.get("head_block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(expected_head_cid_hex.as_str())
+    );
+
+    let response = handle_get_sorafs_governance_dag_block(
+        State(app.clone()),
+        HeaderMap::new(),
+        Path(expected_block_cid_hex.clone()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read Torii Governance DAG block response");
+    let response: Value =
+        json::from_slice(&body_bytes).expect("decode Torii Governance DAG block response");
+    assert_eq!(
+        response
+            .get("block")
+            .and_then(|block| block.get("block_cid_hex"))
+            .and_then(Value::as_str),
+        Some(expected_block_cid_hex.as_str())
+    );
+    assert_eq!(
+        response
+            .get("source_checkpoint_revision")
+            .and_then(Value::as_str),
+        Some(encode(checkpoint_identity.revision()).as_str())
+    );
+
+    {
+        let mut state = publication_state
+            .0
+            .lock()
+            .expect("lock Governance DAG publication state for pin loss");
+        assert!(state.objects.remove(&head_ipfs_cid).is_some());
+        assert!(state.objects.remove(&block_ipfs_cid).is_some());
+        assert!(
+            state.head.is_some(),
+            "the public head remains committed while derived IPFS state is repaired"
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let repaired = {
+                let state = publication_state
+                    .0
+                    .lock()
+                    .expect("lock Governance DAG publication repair state");
+                state.objects.contains_key(&head_ipfs_cid)
+                    && state.objects.contains_key(&block_ipfs_cid)
+            };
+            if repaired {
+                break;
+            }
+            if service_task.is_finished() {
+                panic!("Governance DAG service exited before repairing lost IPFS objects");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("steady reconciliation repairs post-commit IPFS loss");
+
+    service_shutdown
+        .send(())
+        .expect("request Governance DAG service shutdown");
+    tokio::time::timeout(Duration::from_secs(5), service_task)
+        .await
+        .expect("Governance DAG service shuts down")
+        .expect("join Governance DAG service")
+        .expect("Governance DAG service exits cleanly");
+    let response = handle_get_sorafs_governance_dag_head(State(app), HeaderMap::new()).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Torii must withdraw a retained mirror capability when its supervising service exits"
+    );
+    publication_shutdown
+        .send(())
+        .expect("request Governance DAG publication fixture shutdown");
+    tokio::time::timeout(Duration::from_secs(5), publication_task)
+        .await
+        .expect("Governance DAG publication fixture shuts down")
+        .expect("join Governance DAG publication fixture");
 }
 
 #[tokio::test]
@@ -695,10 +1043,7 @@ async fn governance_dag_publish_index_and_lookups_read_local_index() {
         value.get("schema").and_then(Value::as_str),
         Some("sorafs.governance_dag.publish_index.v1")
     );
-    assert_eq!(
-        value.get("source_path").and_then(Value::as_str),
-        Some(GOVERNANCE_DAG_PUBLICATION_STATE_FILE)
-    );
+    assert_governance_source_metadata(&value, GOVERNANCE_DAG_PUBLICATION_SOURCE_V1, false);
     assert_eq!(
         value
             .get("index")
@@ -1150,7 +1495,7 @@ async fn transparency_proof_token_issuance_endpoint_requires_source_publisher_ro
 
 #[tokio::test]
 async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
-    let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+    let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let request = transparency_proof_token_issuance_request(0xAE);
     let signer_key_hex = request.signer_key_hex.clone();
 
@@ -1188,7 +1533,7 @@ async fn transparency_proof_token_issuance_endpoint_publishes_signed_frame() {
         Some("torii")
     );
     assert_governance_publish_provenance(
-        &temp_dir.path().join("governance"),
+        &app,
         PROOF_TOKEN_ISSUANCE_KIND,
         &auth.provider.account,
         "transparency_token_issuance",
@@ -1450,7 +1795,7 @@ async fn transparency_cycle_api_rejects_bad_ids_missing_entries_and_path_escape(
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     let governance_dir = temp_dir.path().join("governance");
-    let mut index = read_publication_section_fixture(&governance_dir, "publish_index");
+    let mut index = read_publication_section_fixture(&app, "publish_index");
     let response = handle_get_sorafs_transparency_cycles(
         State(app.clone()),
         HeaderMap::new(),
@@ -1489,14 +1834,7 @@ async fn transparency_cycle_api_rejects_bad_ids_missing_entries_and_path_escape(
         .expect("entries");
     let entry = entries[0].as_object_mut().expect("entry object");
     entry.insert("encoded_path".into(), Value::from("../escape.to"));
-    write_publish_index_fixture(&governance_dir, index);
-
-    let response = handle_get_sorafs_transparency_cycle(
-        State(app),
-        HeaderMap::new(),
-        Path(cycle_id_hex),
-        axum::extract::RawQuery(None),
-    )
-    .await;
+    let response = validate_governance_dag_publish_index(&index)
+        .expect_err("escaping typed publication path must fail");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

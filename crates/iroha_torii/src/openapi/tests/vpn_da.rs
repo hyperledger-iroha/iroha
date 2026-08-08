@@ -1,9 +1,3 @@
-//! OpenAPI contract tests for VPN, local signing, and data-availability proofs.
-
-use std::collections::BTreeSet;
-
-use super::*;
-
 #[test]
 fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
     let document = generate_spec();
@@ -814,6 +808,669 @@ fn retired_server_contract_deployment_paths_are_absent() {
         assert!(
             !paths.contains_key(retired_path),
             "retired server-side contract deployment path leaked into OpenAPI: {retired_path}"
+        );
+    }
+}
+
+#[test]
+fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
+    let document = generate_spec();
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .expect("OpenAPI paths");
+    let schemas = document
+        .get("components")
+        .and_then(Value::as_object)
+        .and_then(|components| components.get("schemas"))
+        .and_then(Value::as_object)
+        .expect("OpenAPI schemas");
+
+    assert!(
+        !paths.contains_key("/v1/gov/ballots/zk"),
+        "the legacy ZK ballot route must not enter the first-release OpenAPI"
+    );
+    assert!(
+        !schemas.contains_key("GovernanceZkBallotRequestV1")
+            && !schemas.contains_key("GovernanceZkPublicInputsV1"),
+        "legacy ZK ballot schemas must not enter the first-release OpenAPI"
+    );
+
+    let cases: [(&str, &str, &[&str]); 9] = [
+        (
+            "/v1/ministry/agenda/proposals/draft",
+            "MinistryAgendaProposalDraftRequestV1",
+            &["authority", "proposal"],
+        ),
+        (
+            "/v1/gov/proposals/deploy-contract",
+            "GovernanceProposeDeployContractRequestV1",
+            &[
+                "abi_hash",
+                "abi_version",
+                "code_hash",
+                "contract_address",
+                "contract_alias",
+                "manifest_provenance",
+                "mode",
+                "window",
+            ],
+        ),
+        (
+            "/v1/gov/ballots/zk-v1",
+            "GovernanceZkBallotEnvelopeRequestV1",
+            &[
+                "amount",
+                "authority",
+                "backend",
+                "chain_id",
+                "direction",
+                "duration_blocks",
+                "election_id",
+                "envelope_b64",
+                "nullifier",
+                "owner",
+                "root_hint",
+            ],
+        ),
+        (
+            "/v1/gov/ballots/zk-v1/ballot-proof",
+            "GovernanceZkBallotProofRequestV1",
+            &["authority", "ballot", "chain_id", "election_id"],
+        ),
+        (
+            "/v1/gov/ballots/plain",
+            "GovernancePlainBallotRequestV1",
+            &[
+                "amount",
+                "authority",
+                "chain_id",
+                "direction",
+                "duration_blocks",
+                "owner",
+                "referendum_id",
+            ],
+        ),
+        (
+            "/v1/gov/parliament/ballots",
+            "GovernanceParliamentBallotRequestV1",
+            &["authority", "body", "chain_id", "decision", "proposal_id"],
+        ),
+        (
+            "/v1/gov/finalize",
+            "GovernanceFinalizeRequestV1",
+            &["proposal_id", "referendum_id"],
+        ),
+        (
+            "/v1/gov/enact",
+            "GovernanceEnactRequestV1",
+            &["proposal_id"],
+        ),
+        (
+            "/v1/gov/protected-namespaces",
+            "GovernanceProtectedNamespacesRequestV1",
+            &["authority", "namespaces"],
+        ),
+    ];
+
+    for (path, schema_name, expected_properties) in cases {
+        let request_ref = paths
+            .get(path)
+            .and_then(Value::as_object)
+            .and_then(|item| item.get("post"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("requestBody"))
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("missing governance request schema for `{path}`"));
+        assert_eq!(
+            request_ref,
+            format!("#/components/schemas/{schema_name}"),
+            "{path}"
+        );
+
+        let schema = schemas
+            .get(schema_name)
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("missing `{schema_name}`"));
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false)),
+            "{schema_name}"
+        );
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("missing `{schema_name}` properties"));
+        let mut actual_properties = properties.keys().map(String::as_str).collect::<Vec<_>>();
+        actual_properties.sort_unstable();
+        assert_eq!(actual_properties, expected_properties, "{schema_name}");
+    }
+
+    for (schema_name, expected_required) in [
+        (
+            "GovernanceProposeDeployContractRequestV1",
+            &["abi_hash", "abi_version", "code_hash"][..],
+        ),
+        (
+            "GovernanceZkBallotEnvelopeRequestV1",
+            &[
+                "authority",
+                "backend",
+                "chain_id",
+                "election_id",
+                "envelope_b64",
+            ][..],
+        ),
+        (
+            "GovernanceZkBallotProofRequestV1",
+            &["authority", "ballot", "chain_id", "election_id"][..],
+        ),
+        (
+            "GovernancePlainBallotRequestV1",
+            &[
+                "amount",
+                "authority",
+                "chain_id",
+                "direction",
+                "duration_blocks",
+                "owner",
+                "referendum_id",
+            ][..],
+        ),
+        (
+            "GovernanceParliamentBallotRequestV1",
+            &["authority", "body", "chain_id", "decision", "proposal_id"][..],
+        ),
+        (
+            "GovernanceFinalizeRequestV1",
+            &["proposal_id", "referendum_id"][..],
+        ),
+        ("GovernanceEnactRequestV1", &["proposal_id"][..]),
+        (
+            "GovernanceProtectedNamespacesRequestV1",
+            &["namespaces"][..],
+        ),
+        (
+            "MinistryAgendaProposalDraftRequestV1",
+            &["authority", "proposal"][..],
+        ),
+    ] {
+        let schema = schemas
+            .get(schema_name)
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("missing `{schema_name}`"));
+        let mut actual_required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("missing `{schema_name}` required set"))
+            .iter()
+            .map(|value| value.as_str().expect("required field is a string"))
+            .collect::<Vec<_>>();
+        actual_required.sort_unstable();
+        assert_eq!(actual_required, expected_required, "{schema_name}");
+    }
+
+    let deploy = schemas
+        .get("GovernanceProposeDeployContractRequestV1")
+        .and_then(Value::as_object)
+        .expect("deploy request schema");
+    assert_eq!(
+        deploy.get("oneOf").and_then(Value::as_array).map(Vec::len),
+        Some(2),
+        "deploy target must be exactly one address or alias"
+    );
+    for target_case in deploy
+        .get("oneOf")
+        .and_then(Value::as_array)
+        .expect("deploy target variants")
+    {
+        let target_case = target_case.as_object().expect("deploy target variant");
+        let required = target_case
+            .get("required")
+            .and_then(Value::as_array)
+            .and_then(|required| required.first())
+            .and_then(Value::as_str)
+            .expect("selected deploy target");
+        assert_eq!(
+            target_case
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(required))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minLength"))
+                .and_then(Value::as_u64),
+            Some(1),
+            "selected deploy target `{required}` must be nonempty"
+        );
+    }
+    let deploy_properties = deploy
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("deploy request properties");
+    assert_eq!(
+        deploy_properties
+            .get("abi_version")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("const"))
+            .and_then(Value::as_str),
+        Some("1"),
+        "first-release deploy requests must advertise exactly ABI V1"
+    );
+    assert_eq!(
+        deploy_properties
+            .get("mode")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum")),
+        Some(&norito::json!(["Zk", "Plain", null])),
+        "deploy voting mode must use the closed canonical wire labels"
+    );
+    for field in ["code_hash", "abi_hash"] {
+        assert_eq!(
+            deploy_properties
+                .get(field)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some(GOVERNANCE_HASH_LITERAL_PATTERN),
+            "deploy `{field}` must document every accepted canonicalizable hash form"
+        );
+    }
+    let ballot = schemas
+        .get("GovernanceBallotProofV1")
+        .and_then(Value::as_object)
+        .expect("GovernanceBallotProofV1 schema");
+    assert_eq!(
+        ballot.get("additionalProperties"),
+        Some(&Value::Bool(false))
+    );
+    let mut ballot_properties = ballot
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("GovernanceBallotProofV1 properties")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    ballot_properties.sort_unstable();
+    assert_eq!(
+        ballot_properties,
+        [
+            "amount",
+            "backend",
+            "direction",
+            "duration_blocks",
+            "envelope_bytes",
+            "nullifier",
+            "owner",
+            "root_hint",
+        ]
+    );
+
+    let u64_maximum = Value::from(u64::MAX);
+    let governance_window = schemas
+        .get("GovernanceAtWindowV1")
+        .and_then(Value::as_object)
+        .expect("GovernanceAtWindowV1 schema");
+    assert!(
+        governance_window
+            .get("description")
+            .and_then(Value::as_str)
+            .is_some_and(
+                |description| description.contains("upper") && description.contains("lower")
+            ),
+        "window ordering must be explicit"
+    );
+    for field in ["lower", "upper"] {
+        assert_eq!(
+            governance_window
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maximum")),
+            Some(&u64_maximum),
+            "window `{field}` must publish the exact u64 maximum"
+        );
+    }
+    for (schema_name, field) in [
+        ("GovernanceBallotProofV1", "duration_blocks"),
+        ("GovernanceZkBallotEnvelopeRequestV1", "duration_blocks"),
+    ] {
+        assert_eq!(
+            schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maximum")),
+            Some(&u64_maximum),
+            "{schema_name}.{field} must publish the exact u64 maximum"
+        );
+    }
+    assert_eq!(
+        schemas
+            .get("GovernancePlainBallotRequestV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("duration_blocks"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("pattern"))
+            .and_then(Value::as_str),
+        Some(GOVERNANCE_U64_DECIMAL_PATTERN),
+        "plain-ballot duration must publish the exact canonical u64 grammar"
+    );
+
+    for schema_name in [
+        "GovernanceBallotProofV1",
+        "GovernanceZkBallotEnvelopeRequestV1",
+    ] {
+        assert_eq!(
+            schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("backend"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some(GOVERNANCE_EXACT_TOKEN_PATTERN),
+            "{schema_name}.backend must be an exact nonempty token"
+        );
+    }
+
+    for (schema_name, fields) in [
+        ("GovernanceZkBallotEnvelopeRequestV1", &["chain_id"][..]),
+        ("GovernanceZkBallotProofRequestV1", &["chain_id"][..]),
+        ("GovernancePlainBallotRequestV1", &["chain_id"][..]),
+        ("GovernanceParliamentBallotRequestV1", &["chain_id"][..]),
+    ] {
+        for field in fields {
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(*field))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some(GOVERNANCE_EXACT_TOKEN_PATTERN),
+                "{schema_name}.{field} must publish the runtime's exact token grammar"
+            );
+        }
+    }
+
+    for (schema_name, field) in [
+        ("GovernanceZkBallotEnvelopeRequestV1", "election_id"),
+        ("GovernanceZkBallotProofRequestV1", "election_id"),
+        ("GovernancePlainBallotRequestV1", "referendum_id"),
+    ] {
+        assert_eq!(
+            schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some(GOVERNANCE_SELECTOR_V1_PATTERN),
+            "{schema_name}.{field} must publish the canonical V1 selector grammar"
+        );
+        assert_eq!(
+            schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxLength"))
+                .and_then(Value::as_u64),
+            Some(iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64),
+            "{schema_name}.{field} must publish the selector byte ceiling"
+        );
+    }
+
+    assert_eq!(
+        schemas
+            .get("GovernanceParliamentBallotRequestV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("decision"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum")),
+        Some(&norito::json!(["approve", "reject", "abstain"])),
+        "Parliament decisions must expose only the exact lowercase wire labels"
+    );
+
+    assert_eq!(
+        schemas
+            .get("GovernanceEnactRequestV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("proposal_id"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("pattern"))
+            .and_then(Value::as_str),
+        Some(GOVERNANCE_LOWER_HEX32_PATTERN),
+        "enactment must accept only the exact committed proposal-key grammar"
+    );
+    for field in ["referendum_id", "proposal_id"] {
+        let finalization_id = schemas
+            .get("GovernanceFinalizeRequestV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get(field))
+            .and_then(Value::as_object)
+            .expect("finalization identifier schema");
+        assert_eq!(
+            finalization_id.get("pattern").and_then(Value::as_str),
+            Some(GOVERNANCE_LOWER_HEX32_PATTERN),
+            "finalization {field} must use the exact committed proposal-key grammar"
+        );
+        assert_eq!(
+            finalization_id.get("minLength").and_then(Value::as_u64),
+            Some(64),
+            "finalization {field} must publish the exact digest length"
+        );
+        assert_eq!(
+            finalization_id.get("maxLength").and_then(Value::as_u64),
+            Some(64),
+            "finalization {field} must publish the exact digest length"
+        );
+    }
+
+    let provenance_properties = schemas
+        .get("GovernanceManifestProvenanceV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .expect("manifest provenance properties");
+    for field in ["signer", "signature"] {
+        assert_eq!(
+            provenance_properties
+                .get(field)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("type"))
+                .and_then(Value::as_str),
+            Some("string"),
+            "manifest provenance `{field}` must be a typed public string"
+        );
+    }
+    assert_eq!(
+        schemas
+            .get("GovernancePlainBallotRequestV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("duration_blocks"))
+            .and_then(Value::as_object)
+            .and_then(|duration| duration.get("type"))
+            .and_then(Value::as_str),
+        Some("string")
+    );
+    assert_eq!(
+        schemas
+            .get("GovernanceZkBallotEnvelopeRequestV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("direction"))
+            .and_then(Value::as_object)
+            .and_then(|direction| direction.get("enum")),
+        Some(&norito::json!(["Aye", "Nay", "Abstain", null])),
+        "ZK-v1 direction must match the closed runtime ballot enum"
+    );
+
+    for schema_name in [
+        "GovernanceProposeDeployContractRequestV1",
+        "GovernanceZkBallotEnvelopeRequestV1",
+        "GovernanceZkBallotProofRequestV1",
+        "GovernanceBallotProofV1",
+        "GovernancePlainBallotRequestV1",
+        "GovernanceParliamentBallotRequestV1",
+        "GovernanceFinalizeRequestV1",
+        "GovernanceEnactRequestV1",
+        "GovernanceProtectedNamespacesRequestV1",
+        "MinistryAgendaProposalDraftRequestV1",
+        "MinistryAgendaProposalV1",
+        "MinistryAgendaProposalSummaryV1",
+        "MinistryAgendaProposalTargetV1",
+        "MinistryAgendaEvidenceAttachmentV1",
+        "MinistryAgendaProposalSubmitterV1",
+    ] {
+        let encoded = norito::json::to_json(
+            schemas
+                .get(schema_name)
+                .unwrap_or_else(|| panic!("missing `{schema_name}`")),
+        )
+        .expect("schema JSON");
+        for forbidden in [
+            "private_key",
+            "privateKey",
+            "private_key_hex",
+            "privateKeyHex",
+            "private_key_bytes",
+            "privateKeyBytes",
+            "private_key_seed",
+            "privateKeySeed",
+            "private_key_multihash",
+            "privateKeyMultihash",
+            "private_key_algorithm",
+            "privateKeyAlgorithm",
+        ] {
+            assert!(
+                !encoded.contains(forbidden),
+                "`{schema_name}` leaked retired signing field `{forbidden}`"
+            );
+        }
+    }
+    for schema_name in [
+        "GovernanceProposeDeployContractRequestV1",
+        "GovernanceFinalizeRequestV1",
+        "GovernanceEnactRequestV1",
+    ] {
+        assert!(
+            !schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key("authority")),
+            "`{schema_name}` must not restore retired server-side authority"
+        );
+    }
+}
+
+#[test]
+fn governance_read_path_parameters_publish_exact_runtime_grammars() {
+    let document = generate_spec();
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .expect("OpenAPI paths");
+
+    for (path, method, parameter_name, expected_pattern) in [
+        (
+            "/v1/ministry/agenda/proposals/{proposal_id}",
+            "get",
+            "proposal_id",
+            "^AC-[0-9]{4}-[0-9]{3}$",
+        ),
+        (
+            "/v1/gov/proposals/{id}",
+            "get",
+            "id",
+            GOVERNANCE_LOWER_HEX32_PATTERN,
+        ),
+        (
+            "/v1/validation-fee/proposals/{proposal_id}",
+            "get",
+            "proposal_id",
+            GOVERNANCE_LOWER_HEX32_PATTERN,
+        ),
+        (
+            "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft",
+            "post",
+            "proposal_id",
+            GOVERNANCE_LOWER_HEX32_PATTERN,
+        ),
+        (
+            "/v1/gov/locks/{rid}",
+            "get",
+            "rid",
+            GOVERNANCE_SELECTOR_V1_PATTERN,
+        ),
+        (
+            "/v1/gov/referenda/{id}",
+            "get",
+            "id",
+            GOVERNANCE_SELECTOR_V1_PATTERN,
+        ),
+        (
+            "/v1/gov/tally/{id}",
+            "get",
+            "id",
+            GOVERNANCE_SELECTOR_V1_PATTERN,
+        ),
+    ] {
+        let parameters = paths
+            .get(path)
+            .and_then(Value::as_object)
+            .and_then(|item| item.get(method))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("parameters"))
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("missing {method} parameters for `{path}`"));
+        let pattern = parameters
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(parameter_name))
+            .and_then(|parameter| parameter.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("pattern"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            pattern,
+            Some(expected_pattern),
+            "`{path}` must publish the exact runtime selector grammar"
         );
     }
 }

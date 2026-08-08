@@ -50,11 +50,16 @@ pub use governance::{
     GovernanceDagCanonicalRequestV1, GovernanceDagHttpRequestReceiverV1,
     GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticationErrorV1,
     GovernanceDagRequestAuthenticationPolicyV1, GovernanceDagRequestAuthenticationReplayCacheV1,
-    GovernanceDagRequestAuthenticator, GovernanceDagRuntimeProviderQualificationV1,
+    GovernanceDagRequestAuthenticationReplayStoreV1, GovernanceDagRequestAuthenticator,
+    GovernanceDagRequestIngressBindingV1, GovernanceDagRequestIngressEnforcementV1,
+    GovernanceDagRequestIngressQualificationErrorV1, GovernanceDagRequestIngressQualificationV1,
+    GovernanceDagRequestReplayPostureV1, GovernanceDagRuntimeProviderQualificationV1,
     GovernanceDagRuntimeSigner, GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-    GovernanceDagSealedStateSlot, QualifiedFencedTransparencyHeadReaderV1,
-    QualifiedFencedTransparencyPublisherV1, canonicalize_governance_dag_outbound_http_request_v1,
+    GovernanceDagSealedStateSlot, GovernanceDagVerifiedHttpRequestV1,
+    QualifiedFencedTransparencyHeadReaderV1, QualifiedFencedTransparencyPublisherV1,
+    canonicalize_governance_dag_outbound_http_request_v1,
     governance_dag_request_authentication_headers_v1,
+    governance_dag_request_ingress_endpoint_binding_v1,
     governance_dag_sealed_state_payload_max_bytes_v1, governance_dag_sealed_state_revision,
     parse_governance_dag_request_authentication_headers_v1,
     verify_governance_dag_request_authentication_v1,
@@ -66,9 +71,9 @@ use governance::{
     qualify_governance_dag_runtime_signer_provider,
 };
 pub use governance_service::{
-    GovernanceDagSealedHttpRequestReceiverV1, GovernanceDagServiceError,
-    GovernanceDagServiceLauncherError, GovernanceDagServiceRunner,
-    GovernanceDagServiceRuntimeProviderBindingsV1,
+    GovernanceDagMirrorReadBindingV1, GovernanceDagMirrorReadHandleV1,
+    GovernanceDagMirrorSnapshotV1, GovernanceDagServiceError, GovernanceDagServiceLauncherError,
+    GovernanceDagServiceRunner, GovernanceDagServiceRuntimeProviderBindingsV1,
     GovernanceDagServiceRuntimeProviderRegistryErrorV1,
     GovernanceDagServiceRuntimeProviderRegistryV1, GovernanceDagServiceRuntimeProviders,
     prepare_governance_dag_service_from_view, run_governance_dag_service,
@@ -353,7 +358,7 @@ use std::{
     fs,
     io::{self, ErrorKind, Read, Write},
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, OnceLock, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -2800,6 +2805,67 @@ pub enum GovernancePublishError {
     Other(String),
 }
 
+/// One canonical publication-authority generation read through the retained
+/// Governance DAG root.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GovernanceDagPublicationSnapshotV1 {
+    canonical_bytes: Vec<u8>,
+    store_generation: u64,
+    store_record_digest: [u8; 32],
+}
+
+impl GovernanceDagPublicationSnapshotV1 {
+    /// Borrow the canonical publication-envelope JSON bytes.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    /// Return the typed two-slot store generation and complete record digest.
+    #[must_use]
+    pub const fn store_identity(&self) -> (u64, [u8; 32]) {
+        (self.store_generation, self.store_record_digest)
+    }
+}
+
+/// One canonical runtime-DAG generation authenticated by the exact sealed
+/// producer checkpoint retained by this node.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GovernanceDagRuntimeSnapshotV1 {
+    head_bytes: Vec<u8>,
+    index_bytes: Vec<u8>,
+    store_generation: u64,
+    store_record_digest: [u8; 32],
+    checkpoint_generation: u64,
+    checkpoint_revision: [u8; 32],
+}
+
+impl GovernanceDagRuntimeSnapshotV1 {
+    /// Borrow the canonical signed-head bytes.
+    #[must_use]
+    pub fn head_bytes(&self) -> &[u8] {
+        &self.head_bytes
+    }
+
+    /// Borrow the canonical runtime-index JSON bytes committed with the head.
+    #[must_use]
+    pub fn index_bytes(&self) -> &[u8] {
+        &self.index_bytes
+    }
+
+    /// Return the typed two-slot store generation and complete record digest.
+    #[must_use]
+    pub const fn store_identity(&self) -> (u64, [u8; 32]) {
+        (self.store_generation, self.store_record_digest)
+    }
+
+    /// Return the exact sealed producer-checkpoint generation and revision.
+    #[must_use]
+    pub const fn checkpoint_identity(&self) -> (u64, [u8; 32]) {
+        (self.checkpoint_generation, self.checkpoint_revision)
+    }
+}
+
 impl GovernancePublishError {
     /// Construct a generic publish failure.
     #[must_use]
@@ -3604,9 +3670,11 @@ pub struct NodeHandle {
     startup_governance_publisher: Option<Arc<dyn GovernancePublisher>>,
     governance_publication_lock: Option<Arc<Mutex<()>>>,
     governance_runtime_root: Option<PathBuf>,
-    governance_runtime_root_guard: Option<GovernanceFilesystemRootGuard>,
+    governance_runtime_writer_root_guard: Option<GovernanceFilesystemRootGuard>,
+    governance_runtime_read_root_guard: Option<GovernanceFilesystemRootGuard>,
     governance_dag_runtime_signer: Option<GovernanceRuntimeDagSigner>,
     governance_dag_runtime_checkpoint_store: Option<GovernanceRuntimeDagCheckpointStore>,
+    governance_dag_mirror_reader: Arc<OnceLock<GovernanceDagMirrorReadHandleV1>>,
     governance_outbox: Arc<RwLock<GovernanceOutboxRuntime>>,
     governance_outbox_drain_lock: Arc<Mutex<()>>,
     runtime_mutation_lock: Arc<Mutex<()>>,
@@ -6245,10 +6313,12 @@ impl NodeHandle {
             startup_governance_publisher: None,
             governance_publication_lock: governance_publication_lock.clone(),
             governance_runtime_root: None,
-            governance_runtime_root_guard: None,
+            governance_runtime_writer_root_guard: None,
+            governance_runtime_read_root_guard: None,
             governance_dag_runtime_signer: governance_dag_runtime_binding.clone(),
             governance_dag_runtime_checkpoint_store: governance_dag_checkpoint_store_binding
                 .clone(),
+            governance_dag_mirror_reader: Arc::new(OnceLock::new()),
             governance_outbox: Arc::new(RwLock::new(GovernanceOutboxRuntime::default())),
             governance_outbox_drain_lock: Arc::new(Mutex::new(())),
             runtime_mutation_lock: Arc::new(Mutex::new(())),
@@ -6419,8 +6489,37 @@ impl NodeHandle {
                 publisher = publisher
                     .with_qualified_runtime_dag_providers(signer, checkpoint_store)
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
+                let writer_root_guard = publisher.root_guard().clone();
+                let read_root_guard = GovernanceFilesystemRootGuard::capture_source(
+                    publisher.root(),
+                )
+                .map_err(|error| {
+                    NodeInitError::GovernancePublisher(format!(
+                        "failed to retain read-only Governance DAG root: {error}"
+                    ))
+                })?;
+                let writer_root_identity =
+                    writer_root_guard.identity_digest().map_err(|error| {
+                        NodeInitError::GovernancePublisher(format!(
+                            "failed to bind writable Governance DAG root identity: {error}"
+                        ))
+                    })?;
+                let read_root_identity = read_root_guard.identity_digest().map_err(|error| {
+                    NodeInitError::GovernancePublisher(format!(
+                        "failed to bind read-only Governance DAG root identity: {error}"
+                    ))
+                })?;
+                if writer_root_guard.root() != read_root_guard.root()
+                    || writer_root_identity != read_root_identity
+                {
+                    return Err(NodeInitError::GovernancePublisher(
+                        "writable and read-only Governance DAG roots do not retain the same physical directory"
+                            .to_owned(),
+                    ));
+                }
                 node.governance_runtime_root = Some(publisher.root().to_path_buf());
-                node.governance_runtime_root_guard = Some(publisher.root_guard().clone());
+                node.governance_runtime_writer_root_guard = Some(writer_root_guard);
+                node.governance_runtime_read_root_guard = Some(read_root_guard);
                 if let Some((fenced_publisher, fenced_head_reader)) =
                     qualified_fenced_privacy_runtime
                 {
@@ -6467,6 +6566,277 @@ impl NodeHandle {
         self.governance_runtime_root.as_deref()
     }
 
+    /// Read one canonical typed publication-authority generation.
+    ///
+    /// This boundary never initializes, repairs, or reconciles mutable state.
+    /// An entirely pristine root is returned as `None`; an initialized empty
+    /// authority remains an authenticated `Some` snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Governance DAG storage is not configured or the
+    /// retained root or typed two-slot authority fails validation.
+    pub fn governance_dag_publication_snapshot(
+        &self,
+    ) -> Result<Option<GovernanceDagPublicationSnapshotV1>, GovernancePublishError> {
+        let root_guard = self
+            .governance_runtime_read_root_guard
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG runtime root has no retained read-only filesystem identity",
+                )
+            })?;
+        governance::load_governance_publication_snapshot_v1(root_guard).map(|snapshot| {
+            snapshot.map(|snapshot| {
+                let (canonical_bytes, store_generation, store_record_digest) =
+                    snapshot.into_parts();
+                GovernanceDagPublicationSnapshotV1 {
+                    canonical_bytes,
+                    store_generation,
+                    store_record_digest,
+                }
+            })
+        })
+    }
+
+    /// Read one typed runtime-DAG generation authenticated by the exact sealed
+    /// producer checkpoint retained by this node.
+    ///
+    /// This boundary is read-only: it brackets the typed head/index read with
+    /// sealed checkpoint and intent checks, but never performs recovery or
+    /// producer reconciliation. An authenticated genesis checkpoint returns
+    /// `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured root or runtime providers are
+    /// absent, substituted, unqualified, or disagree with the typed committed
+    /// generation and sealed producer checkpoint.
+    pub fn governance_dag_runtime_snapshot(
+        &self,
+    ) -> Result<Option<GovernanceDagRuntimeSnapshotV1>, GovernancePublishError> {
+        let root_guard = self
+            .governance_runtime_read_root_guard
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG runtime root has no retained read-only filesystem identity",
+                )
+            })?;
+        let signer = self.governance_dag_runtime_signer.as_ref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "Governance DAG runtime signer was not retained by this node",
+            )
+        })?;
+        let checkpoint_store = self
+            .governance_dag_runtime_checkpoint_store
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG checkpoint store was not retained by this node",
+                )
+            })?;
+        governance::load_authenticated_runtime_dag_snapshot_v1(root_guard, signer, checkpoint_store)
+            .map(|snapshot| {
+                snapshot.map(|snapshot| {
+                    let (
+                        head_bytes,
+                        index_bytes,
+                        store_generation,
+                        store_record_digest,
+                        checkpoint_generation,
+                        checkpoint_revision,
+                    ) = snapshot.into_parts();
+                    GovernanceDagRuntimeSnapshotV1 {
+                        head_bytes,
+                        index_bytes,
+                        store_generation,
+                        store_record_digest,
+                        checkpoint_generation,
+                        checkpoint_revision,
+                    }
+                })
+            })
+    }
+
+    /// Install the service-owned authenticated mirror-read capability exactly
+    /// once across this node handle and every clone sharing its installation
+    /// slot.
+    ///
+    /// The path-free capability binding must match this node's logical and
+    /// physical producer root plus every retained signer and checkpoint-store
+    /// identity. A failed validation does not consume the installation slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a second installation, incomplete retained runtime
+    /// bindings, provider substitution, or any mismatched capability binding.
+    pub fn install_governance_dag_mirror_read_handle(
+        &mut self,
+        reader: GovernanceDagMirrorReadHandleV1,
+    ) -> Result<(), GovernancePublishError> {
+        if self.governance_dag_mirror_reader.get().is_some() {
+            return Err(GovernancePublishError::other(
+                "Governance DAG mirror read capability is already installed",
+            ));
+        }
+        let root = self.governance_runtime_root.as_deref().ok_or_else(|| {
+            GovernancePublishError::other("Governance DAG runtime root is not configured")
+        })?;
+        let root_guard = self
+            .governance_runtime_read_root_guard
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG runtime root has no retained read-only filesystem identity",
+                )
+            })?;
+        if root != root_guard.root() {
+            return Err(GovernancePublishError::other(
+                "Governance DAG logical and physical retained roots disagree",
+            ));
+        }
+        let signer = self.governance_dag_runtime_signer.as_ref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "Governance DAG runtime signer was not retained by this node",
+            )
+        })?;
+        let checkpoint_store = self
+            .governance_dag_runtime_checkpoint_store
+            .as_ref()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG checkpoint store was not retained by this node",
+                )
+            })?;
+        root_guard.revalidate()?;
+        signer.assert_qualification()?;
+        checkpoint_store.assert_qualification()?;
+
+        let expected_root_digest = governance::runtime_dag_producer_root_digest(root)?;
+        let expected_root_identity_digest = root_guard.identity_digest()?;
+        let expected_signer_handle =
+            self.config.governance_dag_signer_handle().ok_or_else(|| {
+                GovernancePublishError::other("Governance DAG signer handle is not configured")
+            })?;
+        let expected_signer_qualification = self
+            .config
+            .governance_dag_signer_qualification()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG signer qualification is not configured",
+                )
+            })?;
+        let expected_peer_id = self
+            .config
+            .governance_dag_publisher_peer_id()
+            .ok_or_else(|| {
+                GovernancePublishError::other("Governance DAG publisher peer id is not configured")
+            })?;
+        let expected_public_key_hex = self
+            .config
+            .governance_dag_publisher_public_key_hex()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG publisher public key is not configured",
+                )
+            })?;
+        if expected_public_key_hex.len() != 64
+            || !expected_public_key_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(GovernancePublishError::other(
+                "configured Governance DAG publisher public key is not canonical lowercase hex",
+            ));
+        }
+        let expected_public_key: [u8; 32] = hex::decode(expected_public_key_hex)
+            .map_err(|_| {
+                GovernancePublishError::other(
+                    "configured Governance DAG publisher public key is not canonical hex",
+                )
+            })?
+            .try_into()
+            .map_err(|_| {
+                GovernancePublishError::other(
+                    "configured Governance DAG publisher public key is not 32 bytes",
+                )
+            })?;
+        let expected_checkpoint_handle = self
+            .config
+            .governance_dag_checkpoint_store_handle()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG checkpoint-store handle is not configured",
+                )
+            })?;
+        let expected_checkpoint_qualification = self
+            .config
+            .governance_dag_checkpoint_store_qualification()
+            .ok_or_else(|| {
+                GovernancePublishError::other(
+                    "Governance DAG checkpoint-store qualification is not configured",
+                )
+            })?;
+        let (
+            retained_signer_handle,
+            retained_signer_qualification,
+            retained_peer_id,
+            retained_public_key,
+        ) = signer.binding();
+        let binding = reader.binding();
+        if binding.source_root_digest() != expected_root_digest
+            || binding.source_root_identity_digest() != expected_root_identity_digest
+            || binding.producer_signer_handle() != expected_signer_handle.as_str()
+            || binding.producer_signer_qualification() != expected_signer_qualification
+            || binding.producer_publisher_peer_id() != expected_peer_id.as_bytes()
+            || binding.producer_public_key() != expected_public_key
+            || binding.producer_signer_handle() != retained_signer_handle
+            || binding.producer_signer_qualification() != retained_signer_qualification
+            || binding.producer_publisher_peer_id() != retained_peer_id
+            || binding.producer_public_key() != retained_public_key
+            || binding.checkpoint_store_handle() != expected_checkpoint_handle.as_str()
+            || binding.checkpoint_store_qualification() != expected_checkpoint_qualification
+            || binding.checkpoint_store_handle() != checkpoint_store.handle()
+            || binding.checkpoint_store_qualification() != checkpoint_store.qualification()
+        {
+            return Err(GovernancePublishError::other(
+                "Governance DAG mirror read capability does not match this node's retained producer binding",
+            ));
+        }
+        root_guard.revalidate()?;
+        signer.assert_qualification()?;
+        checkpoint_store.assert_qualification()?;
+        reader.assert_install_ready().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "Governance DAG mirror read capability failed installation revalidation: {error}"
+            ))
+        })?;
+        self.governance_dag_mirror_reader.set(reader).map_err(|_| {
+            GovernancePublishError::other(
+                "Governance DAG mirror read capability is already installed",
+            )
+        })
+    }
+
+    /// Read the installed service-owned mirror snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(None)` when no mirror capability was installed or when the
+    /// installed capability authenticates the empty pre-checkpoint bootstrap
+    /// state. Returns an error when its retained roots, typed store, sealed
+    /// intent/checkpoint, or provider binding changed.
+    pub fn governance_dag_mirror_snapshot(
+        &self,
+    ) -> Result<Option<GovernanceDagMirrorSnapshotV1>, GovernanceDagServiceError> {
+        let Some(reader) = self.governance_dag_mirror_reader.get() else {
+            return Ok(None);
+        };
+        reader.read()
+    }
+
     /// Read one Governance DAG file through the node's retained filesystem root.
     ///
     /// Every path component is resolved relative to the descriptor-pinned
@@ -6498,9 +6868,14 @@ impl NodeHandle {
                 "Governance DAG runtime root is not configured",
             )
         })?;
-        let root_guard = self.governance_runtime_root_guard.as_ref().ok_or_else(|| {
-            io::Error::other("Governance DAG runtime root has no retained filesystem identity")
-        })?;
+        let root_guard = self
+            .governance_runtime_read_root_guard
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::other(
+                    "Governance DAG runtime root has no retained read-only filesystem identity",
+                )
+            })?;
         governance::read_rooted_governance_state_file(
             root_guard,
             &root.join(relative_path),
@@ -7499,19 +7874,6 @@ impl NodeHandle {
         payload_bytes: Vec<u8>,
     ) -> Result<u64, GovernancePublishError> {
         self.enqueue_governance_outbox_with_optional_provenance(kind, payload_bytes, None)
-    }
-
-    fn enqueue_governance_outbox_with_provenance(
-        &self,
-        kind: GovernanceOutboxKindV1,
-        payload_bytes: Vec<u8>,
-        provenance: GovernanceSubmissionProvenanceV1,
-    ) -> Result<u64, GovernancePublishError> {
-        self.enqueue_governance_outbox_with_optional_provenance(
-            kind,
-            payload_bytes,
-            Some(provenance),
-        )
     }
 
     fn enqueue_governance_outbox_with_optional_provenance(
@@ -8635,6 +8997,7 @@ impl NodeHandle {
     }
 
     /// Record one source event for later SFM-4c privacy aggregate publication.
+    #[cfg(test)]
     pub(crate) fn record_privacy_aggregate_source_event(
         &self,
         event: PrivacyAggregateSourceEvent,
@@ -9269,6 +9632,7 @@ impl NodeHandle {
     /// Window selection depends only on the governed activation/cadence and the
     /// durable release cursor. Source-event presence never affects which cycle
     /// is selected.
+    #[cfg(test)]
     fn publish_due_privacy_aggregate_cycle_from_source_events(
         &self,
         now_unix: u64,
@@ -10607,17 +10971,19 @@ impl NodeHandle {
             self.startup_governance_publisher.as_ref(),
             self.governance_publication_lock.as_ref(),
             self.governance_runtime_root.as_deref(),
-            self.governance_runtime_root_guard.as_ref(),
+            self.governance_runtime_writer_root_guard.as_ref(),
+            self.governance_runtime_read_root_guard.as_ref(),
             self.governance_dag_runtime_signer.as_ref(),
             self.governance_dag_runtime_checkpoint_store.as_ref(),
         ) {
-            (None, None, None, None, None, None, None) => {}
+            (None, None, None, None, None, None, None, None) => {}
             (
                 Some(_),
                 Some(pinned),
                 Some(publication_lock),
                 Some(root),
-                Some(root_guard),
+                Some(writer_root_guard),
+                Some(read_root_guard),
                 Some(signer),
                 Some(store),
             ) => {
@@ -10640,15 +11006,30 @@ impl NodeHandle {
                         "filesystem governance publisher transaction lock is poisoned",
                     )
                 })?;
-                root_guard.revalidate()?;
-                governance::revalidate_runtime_dag_producer_state(root, root_guard, signer, store)?;
-                root_guard.revalidate()?;
+                writer_root_guard.revalidate()?;
+                read_root_guard.revalidate()?;
+                if writer_root_guard.root() != root
+                    || read_root_guard.root() != root
+                    || writer_root_guard.identity_digest()? != read_root_guard.identity_digest()?
+                {
+                    return Err(GovernancePublishError::other(
+                        "writable and read-only Governance DAG root capabilities diverged",
+                    ));
+                }
+                governance::revalidate_runtime_dag_producer_state(
+                    root,
+                    writer_root_guard,
+                    signer,
+                    store,
+                )?;
+                writer_root_guard.revalidate()?;
+                read_root_guard.revalidate()?;
                 signer.assert_qualification()?;
                 store.assert_qualification()?;
             }
             _ => {
                 return Err(GovernancePublishError::other(
-                    "configured signed Governance publication did not retain its exact publisher, transaction fence, runtime signer, and sealed producer checkpoint store",
+                    "configured signed Governance publication did not retain its exact publisher, transaction fence, writer/reader root capabilities, runtime signer, and sealed producer checkpoint store",
                 ));
             }
         }
@@ -14527,11 +14908,15 @@ impl NodeHandle {
                 "configured governance directory has no pinned runtime root".to_string(),
             )
         })?;
-        let root_guard = self.governance_runtime_root_guard.as_ref().ok_or_else(|| {
-            ReconciliationError::AppealFinance(
-                "configured governance directory has no filesystem identity fence".to_string(),
-            )
-        })?;
+        let root_guard = self
+            .governance_runtime_writer_root_guard
+            .as_ref()
+            .ok_or_else(|| {
+                ReconciliationError::AppealFinance(
+                    "configured governance directory has no writable filesystem identity fence"
+                        .to_string(),
+                )
+            })?;
         let signer = self.governance_dag_runtime_signer.as_ref().ok_or_else(|| {
             ReconciliationError::AppealFinance(
                 "configured governance directory has no qualified runtime signer".to_string(),
@@ -14798,7 +15183,8 @@ impl NodeHandle {
         self.schedulers.clone()
     }
 
-    /// Compatibility-only internal wrapper that discards the authority delta.
+    /// Test helper that discards the authority delta.
+    #[cfg(test)]
     pub(crate) fn record_por_challenge(
         &self,
         challenge: &PorChallengeV1,
@@ -14818,17 +15204,6 @@ impl NodeHandle {
             .as_ref()
             .map(|archive| archive.0.as_ref());
         self.record_por_challenge_with_optional_replay_archive(challenge, replay_archive)
-    }
-
-    /// Record or replay a challenge using the checkpoint-pinned archive.
-    pub(crate) fn record_por_challenge_with_replay_archive(
-        &self,
-        challenge: &PorChallengeV1,
-        replay_archive: &dyn PorFinalizedReplayArchiveV1,
-    ) -> Result<(), PorTrackerError> {
-        self.record_por_challenge_with_optional_replay_archive(challenge, Some(replay_archive))
-            .map(drop)
-            .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     fn record_por_challenge_with_optional_replay_archive(
@@ -14958,6 +15333,7 @@ impl NodeHandle {
     }
 
     /// Record a provider PoR proof response bound to its admitted provider key.
+    #[cfg(test)]
     pub(crate) fn record_por_proof(
         &self,
         proof: &PorProofV1,
@@ -15353,6 +15729,7 @@ impl NodeHandle {
     }
 
     /// Record an audit verdict and update telemetry counters accordingly.
+    #[cfg(test)]
     pub(crate) fn record_por_verdict(
         &self,
         verdict: &AuditVerdictV1,
@@ -15385,24 +15762,6 @@ impl NodeHandle {
             auditor_threshold,
             replay_archive,
         )
-    }
-
-    /// Record or exactly replay a verdict using the checkpoint-pinned archive.
-    pub(crate) fn record_por_verdict_with_replay_archive(
-        &self,
-        verdict: &AuditVerdictV1,
-        trusted_auditor_keys: &[Vec<u8>],
-        auditor_threshold: usize,
-        replay_archive: &dyn PorFinalizedReplayArchiveV1,
-    ) -> Result<PorVerdictOutcome, PorTrackerError> {
-        self.record_por_verdict_with_optional_replay_archive(
-            verdict,
-            trusted_auditor_keys,
-            auditor_threshold,
-            Some(replay_archive),
-        )
-        .map(|(outcome, _update)| outcome)
-        .map_err(PorMutationFailureV1::into_tracker_error)
     }
 
     fn record_por_verdict_with_optional_replay_archive(
@@ -25589,6 +25948,103 @@ mod tests {
     }
 
     #[test]
+    fn node_handle_exposes_only_typed_governance_authority_snapshots() {
+        let temp = tempfile::tempdir().expect("typed authority temp dir");
+        let root = temp.path().canonicalize().expect("canonical temp root");
+        let config = with_test_signed_governance_config(
+            StorageConfig::builder()
+                .enabled(true)
+                .data_dir(root.join("storage")),
+            &root,
+        )
+        .build();
+        let node = NodeHandle::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default()
+                .with_governance_dag_signer(Arc::new(TestGovernanceDagSigner::new()))
+                .with_governance_dag_checkpoint_store(Arc::new(
+                    TestGovernanceDagCheckpointStore::default(),
+                )),
+        )
+        .expect("start typed Governance DAG producer");
+        let clone_before_mirror_install = node.clone();
+        assert!(
+            Arc::ptr_eq(
+                &node.governance_dag_mirror_reader,
+                &clone_before_mirror_install.governance_dag_mirror_reader,
+            ),
+            "clones created before service preparation must share the exact installation slot"
+        );
+
+        let empty_publication = node
+            .governance_dag_publication_snapshot()
+            .expect("read empty typed publication authority")
+            .expect("initialized empty publication authority is authenticated");
+        assert!(empty_publication.store_identity().0 > 0);
+        assert_ne!(empty_publication.store_identity().1, [0; 32]);
+        let empty_value: norito::json::Value =
+            norito::json::from_slice(empty_publication.canonical_bytes())
+                .expect("decode empty publication authority");
+        assert_eq!(
+            empty_value
+                .get("publish_index")
+                .and_then(|index| index.get("entry_count"))
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            node.governance_dag_runtime_snapshot()
+                .expect("read authenticated genesis runtime authority")
+                .is_none()
+        );
+        assert!(
+            node.governance_dag_mirror_snapshot()
+                .expect("an absent mirror capability is not an error")
+                .is_none()
+        );
+        assert!(
+            clone_before_mirror_install
+                .governance_dag_mirror_snapshot()
+                .expect("a clone observes the same absent capability")
+                .is_none()
+        );
+
+        node.publish_authenticated_appeal_finance_weekly_rollup(
+            appeal_finance_weekly_rollup_fixture(),
+            governance_submission_account(0xB6),
+        )
+        .expect("publish one typed Governance DAG entry");
+
+        let publication = node
+            .governance_dag_publication_snapshot()
+            .expect("read typed publication authority")
+            .expect("published authority is present");
+        assert!(!publication.canonical_bytes().is_empty());
+        assert!(publication.store_identity().0 > 0);
+        assert_ne!(publication.store_identity().1, [0; 32]);
+        let publication_value: norito::json::Value =
+            norito::json::from_slice(publication.canonical_bytes())
+                .expect("decode canonical publication authority");
+        assert_eq!(
+            publication_value
+                .get("root")
+                .and_then(norito::json::Value::as_str),
+            Some(".")
+        );
+
+        let runtime = node
+            .governance_dag_runtime_snapshot()
+            .expect("read authenticated runtime authority")
+            .expect("published runtime authority is present");
+        assert!(!runtime.head_bytes().is_empty());
+        assert!(!runtime.index_bytes().is_empty());
+        assert!(runtime.store_identity().0 > 0);
+        assert_ne!(runtime.store_identity().1, [0; 32]);
+        assert!(runtime.checkpoint_identity().0 > 0);
+        assert_ne!(runtime.checkpoint_identity().1, [0; 32]);
+    }
+
+    #[test]
     fn configured_governance_dir_requires_complete_runtime_signing_identity() {
         let missing_identity_dir = tempfile::tempdir().expect("missing identity temp dir");
         let missing_identity_root = missing_identity_dir
@@ -27525,504 +27981,5 @@ mod tests {
 
     include!("lib/storage_disabled_test.rs");
 
-    #[derive(Debug)]
-    struct TestGovernanceDagSigner {
-        handle: String,
-        publisher_peer_id: Vec<u8>,
-        key_pair: KeyPair,
-        qualification_refuse: AtomicBool,
-        qualification_reads: AtomicU64,
-        drift_on_second_qualification_read: AtomicBool,
-    }
-
-    impl TestGovernanceDagSigner {
-        fn new() -> Self {
-            Self {
-                handle: "pkcs11:governance-dag:node-primary".to_owned(),
-                publisher_peer_id: b"12D3KooWNodeTestGovernancePublisher".to_vec(),
-                key_pair: KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519)
-                    .expect("derive test Governance DAG key"),
-                qualification_refuse: AtomicBool::new(false),
-                qualification_reads: AtomicU64::new(0),
-                drift_on_second_qualification_read: AtomicBool::new(false),
-            }
-        }
-
-        fn public_key_bytes(&self) -> [u8; 32] {
-            let (algorithm, bytes) = self
-                .key_pair
-                .public_key()
-                .try_to_bytes()
-                .expect("serialize test Governance DAG public key");
-            assert_eq!(algorithm, Algorithm::Ed25519);
-            bytes.try_into().expect("Ed25519 public key width")
-        }
-
-        fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
-            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x84; 32])
-        }
-    }
-
-    impl GovernanceDagRuntimeSigner for TestGovernanceDagSigner {
-        fn handle(&self) -> &str {
-            &self.handle
-        }
-
-        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            if self.qualification_refuse.load(Ordering::SeqCst) {
-                return Err("hsm_credential=must-never-escape".to_owned());
-            }
-            let read_index = self.qualification_reads.fetch_add(1, Ordering::SeqCst);
-            if self
-                .drift_on_second_qualification_read
-                .load(Ordering::SeqCst)
-                && read_index == 1
-            {
-                return Ok(GovernanceDagRuntimeProviderQualificationV1::new(
-                    2, [0x84; 32],
-                ));
-            }
-            Ok(Self::expected_qualification())
-        }
-
-        fn publisher_peer_id(&self) -> &[u8] {
-            &self.publisher_peer_id
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            self.public_key_bytes()
-        }
-
-        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
-            IrohaSignature::try_new(self.key_pair.private_key(), payload)
-                .map_err(|_| "test Governance DAG signer refused request".to_owned())?
-                .payload()
-                .try_into()
-                .map_err(|_| "test Governance DAG signature width changed".to_owned())
-        }
-    }
-
-    #[derive(Debug)]
-    struct TestGovernanceDagCheckpointStoreState {
-        records: [Option<GovernanceDagSealedStateRecord>; 6],
-        generation_floors: [u64; 6],
-    }
-
-    impl Default for TestGovernanceDagCheckpointStoreState {
-        fn default() -> Self {
-            Self {
-                records: std::array::from_fn(|_| None),
-                generation_floors: [0; 6],
-            }
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct TestGovernanceDagCheckpointStore {
-        state: Mutex<TestGovernanceDagCheckpointStoreState>,
-        qualification_refuse: AtomicBool,
-        fail_after_next_checkpoint_cas: AtomicBool,
-    }
-
-    impl TestGovernanceDagCheckpointStore {
-        const HANDLE: &'static str = "kms:governance-dag:node-producer-checkpoint";
-
-        const fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
-            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x94; 32])
-        }
-
-        const fn slot_index(slot: GovernanceDagSealedStateSlot) -> usize {
-            match slot {
-                GovernanceDagSealedStateSlot::Checkpoint => 0,
-                GovernanceDagSealedStateSlot::PublishIntent => 1,
-                GovernanceDagSealedStateSlot::ProducerCheckpoint => 2,
-                GovernanceDagSealedStateSlot::ProducerPublishIntent => 3,
-                GovernanceDagSealedStateSlot::IpfsRequestReplay => 4,
-                GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 5,
-            }
-        }
-    }
-
-    impl GovernanceDagSealedCheckpointStore for TestGovernanceDagCheckpointStore {
-        fn handle(&self) -> &str {
-            Self::HANDLE
-        }
-
-        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            if self.qualification_refuse.load(Ordering::SeqCst) {
-                return Err("checkpoint_credential=must-never-escape".to_owned());
-            }
-            Ok(Self::expected_qualification())
-        }
-
-        fn load(
-            &self,
-            slot: GovernanceDagSealedStateSlot,
-        ) -> Result<Option<GovernanceDagSealedStateRecord>, String> {
-            let state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
-            Ok(state.records[Self::slot_index(slot)].clone())
-        }
-
-        fn compare_and_swap(
-            &self,
-            slot: GovernanceDagSealedStateSlot,
-            expected_revision: Option<[u8; 32]>,
-            next: GovernanceDagSealedStateRecord,
-        ) -> Result<(), String> {
-            let index = Self::slot_index(slot);
-            let mut state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
-            if state.records[index].as_ref().map(|record| record.revision) != expected_revision {
-                return Err("compare-and-swap conflict".to_owned());
-            }
-            if next.generation <= state.generation_floors[index]
-                || next.payload.is_empty()
-                || !next.has_valid_revision(slot)
-            {
-                return Err("invalid or non-monotonic record".to_owned());
-            }
-            state.generation_floors[index] = next.generation;
-            state.records[index] = Some(next);
-            drop(state);
-            if slot == GovernanceDagSealedStateSlot::ProducerCheckpoint
-                && self
-                    .fail_after_next_checkpoint_cas
-                    .swap(false, Ordering::SeqCst)
-            {
-                return Err("ambiguous checkpoint CAS response".to_owned());
-            }
-            Ok(())
-        }
-
-        fn delete(
-            &self,
-            slot: GovernanceDagSealedStateSlot,
-            expected_revision: [u8; 32],
-        ) -> Result<(), String> {
-            let index = Self::slot_index(slot);
-            let mut state = self.state.lock().map_err(|_| "poisoned".to_owned())?;
-            if state.records[index].as_ref().map(|record| record.revision)
-                != Some(expected_revision)
-            {
-                return Err("delete conflict".to_owned());
-            }
-            state.records[index] = None;
-            Ok(())
-        }
-    }
-
-    #[derive(Debug)]
-    struct FailingRepairOrchestrator {
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl RepairOrchestrator for FailingRepairOrchestrator {
-        fn rehydrate_missing_chunks(
-            &self,
-            _context: &native_repair_worker::NativeRepairExecutionContextV1,
-            _manifest: &StoredManifest,
-            _missing_chunks: &[ChunkFileRecord],
-        ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError> {
-            self.calls.fetch_add(1, Ordering::Relaxed);
-            Err(RepairOrchestratorError::other(
-                "simulated transient remote provider outage",
-            ))
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct RecordingPublisher {
-        payloads: Mutex<Vec<Vec<u8>>>,
-    }
-
-    impl RecordingPublisher {
-        fn take(&self) -> Vec<Vec<u8>> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.drain(..).collect()
-        }
-    }
-
-    impl GovernancePublisher for RecordingPublisher {
-        fn publish_deal_settlement(
-            &self,
-            _settlement: &DealSettlementV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_pdp_archive(
-            &self,
-            _archive: &PdpGovernanceArchiveV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_por_challenge_publication(
-            &self,
-            _publication: &PorChallengePublicationV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_por_weekly_report(
-            &self,
-            _report: &PorWeeklyReportV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_gc_audit_event(
-            &self,
-            _event: &GcAuditEventV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_reconciliation_report(
-            &self,
-            _report: &SorafsReconciliationReportV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_reputation_snapshot(
-            &self,
-            _snapshot: &SignedReputationSnapshotV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_moderation_ballot_event(
-            &self,
-            _event: &SoraFsModerationBallotGovernanceEventV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_transparency_ledger_publication(
-            &self,
-            _publication: &ModerationLedgerCyclePublicationV1,
-            encoded: &[u8],
-            _authorization: Option<&PrivacyPublicationAuthorizationV1>,
-            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_proof_token_issuance(
-            &self,
-            _issuance: &ProofTokenIssuanceV1,
-            encoded: &[u8],
-            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_appeal_finance_report(
-            &self,
-            _report: &SoraFsAppealFinanceReportV1,
-            encoded: &[u8],
-            _provenance: &GovernanceSubmissionProvenanceV1,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_appeal_finance_weekly_rollup(
-            &self,
-            _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
-            encoded: &[u8],
-            _provenance: &GovernanceSubmissionProvenanceV1,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_appeal_finance_settlement_receipt(
-            &self,
-            _receipt: &SoraFsAppealFinanceSettlementReceiptV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct FailingPublisher {
-        attempts: Mutex<usize>,
-    }
-
-    impl FailingPublisher {
-        fn attempts(&self) -> usize {
-            *self.attempts.lock().expect("publisher lock poisoned")
-        }
-    }
-
-    impl GovernancePublisher for FailingPublisher {
-        fn publish_deal_settlement(
-            &self,
-            _settlement: &DealSettlementV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_pdp_archive(
-            &self,
-            _archive: &PdpGovernanceArchiveV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_por_challenge_publication(
-            &self,
-            _publication: &PorChallengePublicationV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_por_weekly_report(
-            &self,
-            _report: &PorWeeklyReportV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_gc_audit_event(
-            &self,
-            _event: &GcAuditEventV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_reconciliation_report(
-            &self,
-            _report: &SorafsReconciliationReportV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_reputation_snapshot(
-            &self,
-            _snapshot: &SignedReputationSnapshotV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_moderation_ballot_event(
-            &self,
-            _event: &SoraFsModerationBallotGovernanceEventV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_transparency_ledger_publication(
-            &self,
-            _publication: &ModerationLedgerCyclePublicationV1,
-            _encoded: &[u8],
-            _authorization: Option<&PrivacyPublicationAuthorizationV1>,
-            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_proof_token_issuance(
-            &self,
-            _issuance: &ProofTokenIssuanceV1,
-            _encoded: &[u8],
-            _provenance: Option<&GovernanceSubmissionProvenanceV1>,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_appeal_finance_report(
-            &self,
-            _report: &SoraFsAppealFinanceReportV1,
-            _encoded: &[u8],
-            _provenance: &GovernanceSubmissionProvenanceV1,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_appeal_finance_weekly_rollup(
-            &self,
-            _rollup: &SoraFsAppealFinanceWeeklyRollupV1,
-            _encoded: &[u8],
-            _provenance: &GovernanceSubmissionProvenanceV1,
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_appeal_finance_settlement_receipt(
-            &self,
-            _receipt: &SoraFsAppealFinanceSettlementReceiptV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-    }
+    include!("lib/governance_dag_test_support.rs");
 }

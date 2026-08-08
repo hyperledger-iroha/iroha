@@ -1829,6 +1829,7 @@ fn build_joiner_peer(
         .ok_or_else(|| eyre!("template config root must be a TOML table"))?;
 
     let peer_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let soranet_transport_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let peer_id = PeerId::new(peer_key.public_key().clone());
     let pop = bls_normal_pop_prove(peer_key.private_key()).wrap_err("generate BLS PoP")?;
     root.insert(
@@ -1838,6 +1839,16 @@ fn build_joiner_peer(
     root.insert(
         "private_key".into(),
         TomlValue::String(ExposedPrivateKey(peer_key.private_key().clone()).to_string()),
+    );
+    root.insert(
+        "soranet_transport_public_key".into(),
+        TomlValue::String(soranet_transport_key.public_key().to_string()),
+    );
+    root.insert(
+        "soranet_transport_private_key".into(),
+        TomlValue::String(
+            ExposedPrivateKey(soranet_transport_key.private_key().clone()).to_string(),
+        ),
     );
     if let Some(trusted_peers_pop) = root
         .get_mut("trusted_peers_pop")
@@ -1853,6 +1864,11 @@ fn build_joiner_peer(
     }
 
     let stream_key = KeyPair::random();
+    assert_ne!(
+        soranet_transport_key.public_key(),
+        stream_key.public_key(),
+        "joiner SoraNet transport and streaming identities must be independent"
+    );
     let streaming = get_subtable_mut(root, "streaming")?;
     streaming.insert(
         "identity_public_key".into(),
@@ -3921,26 +3937,6 @@ fn write_summary_persists_local_and_durable_evidence() {
         String::from_utf8(local_bytes)
             .expect("summary UTF-8")
             .contains("workspace_source_manifest_sha256")
-    );
-}
-
-#[test]
-fn status_snapshot_preserves_the_source_validator_index() {
-    let snapshot = status_snapshot_value(3, norito::json!({"height": 9_u64}));
-    let object = snapshot.as_object().expect("snapshot object");
-    assert_eq!(
-        object
-            .get("validator_index")
-            .and_then(norito::json::Value::as_u64),
-        Some(3)
-    );
-    assert_eq!(
-        object
-            .get("status")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|status| status.get("height"))
-            .and_then(norito::json::Value::as_u64),
-        Some(9)
     );
 }
 

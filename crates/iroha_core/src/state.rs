@@ -72,7 +72,7 @@ use iroha_data_model::{
         types::{BlobDigest, StorageTicketId},
     },
     error::ParseError,
-    escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
+    escrow::{AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     events::{
         EventBox, SharedDataEvent,
         data::{
@@ -113,9 +113,12 @@ use iroha_data_model::{
         MusubiNamespaceV1, MusubiOrderedPackageEntryV1, MusubiPackageIdV1,
         MusubiPackageMemberKeyV1, MusubiPackageMemberV1, MusubiPackageMetadataRecordV1,
         MusubiPackageRecordV1, MusubiPackageRoleV1, MusubiPackageSelectorV1,
-        MusubiPinLocationReferenceV1, MusubiProviderLocationKeyV1, MusubiRegistryPolicyV1,
+        MusubiPinLocationReferenceV1, MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1, MusubiProviderBundleAttestationRefV1,
+        MusubiProviderLocationKeyV1, MusubiRegistryPolicyV1, MusubiRegistrySnapshotV1,
         MusubiReleaseIdV1, MusubiReleaseRecordV1, MusubiReplicationOrderLocationReferenceV1,
         MusubiResolverReleaseRowV1, MusubiStorageAvailabilityV1,
+        musubi_provider_bundle_attestation_set_digest_v1,
     },
     name::Name,
     nexus::{
@@ -669,10 +672,6 @@ macro_rules! with_world_overlay_fields {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller,
-            anonymous_asset_escrows_by_buyer,
-            anonymous_asset_escrows_by_status,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -731,6 +730,7 @@ macro_rules! with_world_overlay_fields {
             musubi_package_invitations,
             musubi_releases,
             musubi_archives,
+            musubi_provider_bundle_attestations,
             musubi_archive_locations,
             musubi_archive_availability,
             musubi_archive_reverse_references,
@@ -742,6 +742,7 @@ macro_rules! with_world_overlay_fields {
             musubi_aliases,
             musubi_alias_history,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_resolver_index_revision,
             musubi_domain_ownership_generations,
             musubi_registry_policy,
@@ -3716,6 +3717,26 @@ impl Default for MusubiResolverIndexRevisionV1 {
     }
 }
 
+impl mv::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(&self.0.to_string(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let revision = encoded.parse::<u64>().map_err(|error| {
+            json::Error::Message(format!(
+                "invalid Musubi resolver-index revision key `{encoded}`: {error}"
+            ))
+        })?;
+        if revision.to_string() != encoded {
+            return Err(json::Error::Message(format!(
+                "noncanonical Musubi resolver-index revision key `{encoded}`"
+            )));
+        }
+        Self::new(revision).map_err(|error| json::Error::Message(error.to_string()))
+    }
+}
+
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
 #[derive(Default, JsonSerialize)]
@@ -3889,17 +3910,6 @@ pub struct World {
     /// Native asset escrows grouped by lifecycle status.
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows: Storage<EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_seller: Storage<AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_buyer: Storage<AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: Storage<[u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
@@ -4094,6 +4104,9 @@ pub struct World {
     pub(crate) musubi_releases: Storage<MusubiReleaseIdV1, MusubiReleaseRecordV1>,
     /// Canonical source archive commitments keyed by ArchiveId.
     pub(crate) musubi_archives: Storage<ArchiveId, MusubiArchiveRecordV1>,
+    /// Immutable provider bundle attestations keyed by archive, order, and provider.
+    pub(crate) musubi_provider_bundle_attestations:
+        Storage<MusubiProviderBundleAttestationKeyV1, MusubiProviderBundleAttestationRecordV1>,
     /// Renewable archive locations ordered by archive and location identity.
     pub(crate) musubi_archive_locations:
         Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
@@ -4111,6 +4124,9 @@ pub struct World {
         Storage<ArchiveId, MusubiArchiveReverseReferencesV1>,
     /// Compact universal exact-resolution index keyed by exact release.
     pub(crate) musubi_resolver_index: Storage<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final activation anchors for every historical resolver-index revision.
+    pub(crate) musubi_resolver_index_checkpoints:
+        Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered directory keyed by canonical structural or paid-alias selector.
     pub(crate) musubi_public_directory:
         Storage<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -4441,7 +4457,8 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical contract address.
     pub(crate) contract_alias_bindings:
         StorageBlock<'world, ContractAddress, ContractAliasBindingRecord>,
-    /// Authoritative domain ownership context for canonical asset definition ids.
+    /// Derived index of explicit asset-definition owning domains.
+    #[norito(skip)]
     pub(crate) asset_definition_domains: StorageBlock<'world, AssetDefinitionId, DomainId>,
     /// Asset-definition index keyed by definition domain.
     #[norito(skip)]
@@ -4553,20 +4570,6 @@ pub struct WorldBlock<'world> {
     /// Native asset escrows grouped by lifecycle status.
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows: StorageBlock<'world, EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_seller:
-        StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_buyer:
-        StorageBlock<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    #[norito(skip)]
-    pub(crate) anonymous_asset_escrows_by_status:
-        StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: StorageBlock<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
@@ -4767,6 +4770,12 @@ pub struct WorldBlock<'world> {
     pub(crate) musubi_releases: StorageBlock<'world, MusubiReleaseIdV1, MusubiReleaseRecordV1>,
     /// Canonical source archive commitments.
     pub(crate) musubi_archives: StorageBlock<'world, ArchiveId, MusubiArchiveRecordV1>,
+    /// Immutable provider bundle attestations.
+    pub(crate) musubi_provider_bundle_attestations: StorageBlock<
+        'world,
+        MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1,
+    >,
     /// Renewable archive locations.
     pub(crate) musubi_archive_locations:
         StorageBlock<'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
@@ -4787,6 +4796,9 @@ pub struct WorldBlock<'world> {
     /// Compact universal exact-resolution index.
     pub(crate) musubi_resolver_index:
         StorageBlock<'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final resolver-index revision activation anchors.
+    pub(crate) musubi_resolver_index_checkpoints:
+        StorageBlock<'world, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered package directory.
     pub(crate) musubi_public_directory:
         StorageBlock<'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -5053,6 +5065,7 @@ pub struct WorldBlock<'world> {
 }
 
 impl<'world> WorldBlock<'world> {
+    #[cfg(test)]
     fn put_governance_locks(&mut self, referendum_id: String, locks: GovernanceLocksForReferendum) {
         if let Some(previous) = self.governance_locks.get(&referendum_id).cloned() {
             for (owner, lock) in previous.locks {
@@ -5405,10 +5418,6 @@ impl<'world> WorldBlock<'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller,
-            anonymous_asset_escrows_by_buyer,
-            anonymous_asset_escrows_by_status,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -5459,6 +5468,7 @@ impl<'world> WorldBlock<'world> {
             musubi_maintainer_directory,
             musubi_releases,
             musubi_archives,
+            musubi_provider_bundle_attestations,
             musubi_archive_locations,
             musubi_locations_by_pin,
             musubi_locations_by_replication_order,
@@ -5466,6 +5476,7 @@ impl<'world> WorldBlock<'world> {
             musubi_archive_availability,
             musubi_archive_reverse_references,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_public_directory,
             musubi_aliases,
             musubi_alias_history,
@@ -5763,18 +5774,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status:
         StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows:
-        StorageTransaction<'block, 'world, EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    pub(crate) anonymous_asset_escrows_by_seller:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    pub(crate) anonymous_asset_escrows_by_buyer:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    pub(crate) anonymous_asset_escrows_by_status:
-        StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: StorageTransaction<'block, 'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
@@ -6006,6 +6005,13 @@ pub struct WorldTransaction<'block, 'world> {
     /// Canonical source archive commitments.
     pub(crate) musubi_archives:
         StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveRecordV1>,
+    /// Immutable provider bundle attestations.
+    pub(crate) musubi_provider_bundle_attestations: StorageTransaction<
+        'block,
+        'world,
+        MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1,
+    >,
     /// Renewable archive locations.
     pub(crate) musubi_archive_locations:
         StorageTransaction<'block, 'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
@@ -6031,6 +6037,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Compact universal exact-resolution index.
     pub(crate) musubi_resolver_index:
         StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final resolver-index revision activation anchors.
+    pub(crate) musubi_resolver_index_checkpoints:
+        StorageTransaction<'block, 'world, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered package directory.
     pub(crate) musubi_public_directory:
         StorageTransaction<'block, 'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -6502,6 +6511,18 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveRecordV1> {
         &mut self.musubi_archives
+    }
+
+    /// Mutable access to the immutable provider-attestation registry during admission.
+    pub fn musubi_provider_bundle_attestations_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1,
+    > {
+        &mut self.musubi_provider_bundle_attestations
     }
 
     /// Mutable Musubi archive-location storage.
@@ -7301,65 +7322,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         previous
     }
 
-    /// Record an anonymous native asset escrow in all read-side indexes.
-    pub(crate) fn track_anonymous_asset_escrow_indexes(
-        &mut self,
-        record: &AnonymousAssetEscrowRecord,
-    ) {
-        Self::track_escrow_index(
-            &mut self.anonymous_asset_escrows_by_seller,
-            &record.seller,
-            record.id,
-        );
-        if let Some(buyer) = record.buyer.as_ref() {
-            Self::track_escrow_index(&mut self.anonymous_asset_escrows_by_buyer, buyer, record.id);
-        }
-        Self::track_escrow_index(
-            &mut self.anonymous_asset_escrows_by_status,
-            &record.status,
-            record.id,
-        );
-    }
-
-    /// Drop an anonymous native asset escrow from all read-side indexes.
-    pub(crate) fn untrack_anonymous_asset_escrow_indexes(
-        &mut self,
-        record: &AnonymousAssetEscrowRecord,
-    ) {
-        Self::untrack_escrow_index(
-            &mut self.anonymous_asset_escrows_by_seller,
-            &record.seller,
-            &record.id,
-        );
-        if let Some(buyer) = record.buyer.as_ref() {
-            Self::untrack_escrow_index(
-                &mut self.anonymous_asset_escrows_by_buyer,
-                buyer,
-                &record.id,
-            );
-        }
-        Self::untrack_escrow_index(
-            &mut self.anonymous_asset_escrows_by_status,
-            &record.status,
-            &record.id,
-        );
-    }
-
-    /// Insert an anonymous native asset escrow and keep derived indexes consistent.
-    pub(crate) fn insert_anonymous_asset_escrow_entry(
-        &mut self,
-        record: AnonymousAssetEscrowRecord,
-    ) -> Option<AnonymousAssetEscrowRecord> {
-        let previous = self
-            .anonymous_asset_escrows
-            .insert(record.id, record.clone());
-        if let Some(previous) = previous.as_ref() {
-            self.untrack_anonymous_asset_escrow_indexes(previous);
-        }
-        self.track_anonymous_asset_escrow_indexes(&record);
-        previous
-    }
-
     fn settled_vpn_lease_key(record: &VpnLeaseRecordV1) -> Option<(u64, [u8; 32])> {
         (record.status == VpnLeaseStatusV1::Settled)
             .then_some(record.settled_at_ms)
@@ -7945,16 +7907,6 @@ pub struct WorldView<'world> {
     pub(crate) asset_escrows_by_buyer: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status: StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows keyed by escrow identifier.
-    pub(crate) anonymous_asset_escrows: StorageView<'world, EscrowId, AnonymousAssetEscrowRecord>,
-    /// Native anonymous asset escrows grouped by seller account.
-    pub(crate) anonymous_asset_escrows_by_seller:
-        StorageView<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by buyer account.
-    pub(crate) anonymous_asset_escrows_by_buyer: StorageView<'world, AccountId, BTreeSet<EscrowId>>,
-    /// Native anonymous asset escrows grouped by lifecycle status.
-    pub(crate) anonymous_asset_escrows_by_status:
-        StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
     pub(crate) vpn_leases: StorageView<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
@@ -8129,6 +8081,12 @@ pub struct WorldView<'world> {
     pub(crate) musubi_releases: StorageView<'world, MusubiReleaseIdV1, MusubiReleaseRecordV1>,
     /// Canonical source archive commitments.
     pub(crate) musubi_archives: StorageView<'world, ArchiveId, MusubiArchiveRecordV1>,
+    /// Immutable provider bundle attestations.
+    pub(crate) musubi_provider_bundle_attestations: StorageView<
+        'world,
+        MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1,
+    >,
     /// Renewable archive locations.
     pub(crate) musubi_archive_locations:
         StorageView<'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
@@ -8149,6 +8107,9 @@ pub struct WorldView<'world> {
     /// Compact universal exact-resolution index.
     pub(crate) musubi_resolver_index:
         StorageView<'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    /// Block-final resolver-index revision activation anchors.
+    pub(crate) musubi_resolver_index_checkpoints:
+        StorageView<'world, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered package directory.
     pub(crate) musubi_public_directory:
         StorageView<'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
@@ -8482,270 +8443,7 @@ impl ConfidentialTreeProfile {
     }
 }
 
-/// Policy and state for a shielded asset.
-#[derive(
-    Copy, Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
-)]
-pub struct FrontierCheckpoint {
-    /// Block height when the checkpoint was recorded.
-    pub height: u64,
-    /// Number of commitments present when the checkpoint was recorded.
-    pub commitment_count: u64,
-    /// Merkle root associated with the checkpoint.
-    pub root: [u8; 32],
-}
-
-/// Summary of how a frontier checkpoint update changed the rolling history.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct FrontierCheckpointUpdate {
-    /// Whether a new checkpoint was recorded.
-    pub recorded: bool,
-    /// How many checkpoints were evicted to satisfy depth/interval constraints.
-    pub evicted: u64,
-}
-
-/// Canonical shielded asset ledger snapshot persisted within the world state.
-#[derive(Clone, Debug, JsonSerialize, NoritoSerialize, NoritoDeserialize)]
-pub struct ZkAssetState {
-    /// Authenticated commitment-tree construction for this asset.
-    pub tree_profile: ConfidentialTreeProfile,
-    /// Shielded asset policy: `ZkNative` mints/burns via ZK only; Hybrid allows public+shielded.
-    pub mode: iroha_data_model::isi::zk::ZkAssetMode,
-    /// Whether Shield operations are permitted for this asset definition.
-    pub allow_shield: bool,
-    /// Whether Unshield operations are permitted for this asset definition.
-    pub allow_unshield: bool,
-    /// Append‑only list of note commitments (leaves of the Merkle tree).
-    pub commitments: Vec<[u8; 32]>,
-    /// Historical Merkle roots for recent states (for light clients/proofs).
-    pub root_history: Vec<[u8; 32]>,
-    /// Set of consumed nullifiers to prevent double spends.
-    pub nullifiers: std::collections::BTreeSet<[u8; 32]>,
-    /// Required verifying key for shielded transfers (if configured).
-    pub vk_transfer: Option<ZkAssetVerifierBinding>,
-    /// Required verifying key for unshield proofs (if configured).
-    pub vk_unshield: Option<ZkAssetVerifierBinding>,
-    /// Required verifying key for shield proofs (if configured).
-    pub vk_shield: Option<ZkAssetVerifierBinding>,
-    /// Rolling set of frontier checkpoints (height, commitment count, root).
-    pub frontier_checkpoints: Vec<FrontierCheckpoint>,
-}
-
-impl Default for ZkAssetState {
-    fn default() -> Self {
-        Self {
-            tree_profile: ConfidentialTreeProfile::default(),
-            mode: iroha_data_model::isi::zk::ZkAssetMode::ZkNative,
-            allow_shield: false,
-            allow_unshield: false,
-            commitments: Vec::new(),
-            root_history: Vec::new(),
-            nullifiers: std::collections::BTreeSet::new(),
-            vk_transfer: None,
-            vk_unshield: None,
-            vk_shield: None,
-            frontier_checkpoints: Vec::new(),
-        }
-    }
-}
-
-impl ZkAssetState {
-    /// Compute the current canonical root, including the profile-defined empty root.
-    pub fn current_root(&self) -> Result<[u8; 32], String> {
-        self.tree_profile.compute_root(&self.commitments)
-    }
-
-    /// Validate persisted roots and checkpoints against the authenticated profile.
-    pub fn validate_tree_integrity(&self) -> Result<(), String> {
-        let prefix_roots = self.tree_profile.compute_prefix_roots(&self.commitments)?;
-        if self.commitments.is_empty() {
-            if !self.root_history.is_empty() {
-                return Err(
-                    "empty confidential tree must not contain commitment root history".to_owned(),
-                );
-            }
-        } else if self.root_history.is_empty() {
-            return Err("non-empty confidential tree must retain its current root".to_owned());
-        } else if self.root_history.len() > self.commitments.len() {
-            return Err("confidential root history cannot exceed the commitment count".to_owned());
-        } else {
-            let retained_start = self.commitments.len() - self.root_history.len();
-            let expected_history = prefix_roots
-                .get(retained_start..)
-                .ok_or_else(|| "confidential prefix-root computation truncated state".to_owned())?;
-            if self.root_history.as_slice() != expected_history {
-                return Err(
-                    "confidential root history does not match the persisted tree profile"
-                        .to_owned(),
-                );
-            }
-        }
-        for checkpoint in &self.frontier_checkpoints {
-            let commitment_count = usize::try_from(checkpoint.commitment_count).map_err(|_| {
-                "frontier checkpoint commitment count does not fit usize".to_owned()
-            })?;
-            if commitment_count > self.commitments.len() {
-                return Err("frontier checkpoint exceeds the persisted commitment count".to_owned());
-            }
-            let expected = if commitment_count == 0 {
-                self.tree_profile.empty_root()
-            } else {
-                *prefix_roots.get(commitment_count - 1).ok_or_else(|| {
-                    "confidential prefix-root computation truncated checkpoint state".to_owned()
-                })?
-            };
-            if checkpoint.root != expected {
-                return Err(
-                    "frontier checkpoint root does not match the persisted tree profile".to_owned(),
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Append a 32-byte note commitment to the shielded ledger and update the root.
-    /// Enforces a cap on the number of recent roots kept (`cap`, minimum 1).
-    /// Returns the new Merkle root.
-    pub fn push_commitment(&mut self, c: [u8; 32], cap: NonZeroUsize) -> Result<[u8; 32], String> {
-        self.push_commitments(&[c], cap)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| "single commitment append produced no root".to_owned())
-    }
-
-    /// Atomically append an ordered commitment batch and return each resulting root.
-    ///
-    /// The complete batch is validated before either commitments or retained roots
-    /// are changed, so a malformed leaf or capacity overflow leaves state byte-for-byte
-    /// unchanged.
-    pub fn push_commitments(
-        &mut self,
-        commitments: &[[u8; 32]],
-        cap: NonZeroUsize,
-    ) -> Result<Vec<[u8; 32]>, String> {
-        if commitments.is_empty() {
-            self.validate_tree_integrity()?;
-            return Ok(Vec::new());
-        }
-        let previous_len = self.commitments.len();
-        let next_len = previous_len
-            .checked_add(commitments.len())
-            .ok_or_else(|| "confidential commitment count overflow".to_owned())?;
-        if next_len > self.tree_profile.capacity() {
-            return Err(format!(
-                "confidential tree capacity {} exceeded by {next_len} commitments",
-                self.tree_profile.capacity(),
-            ));
-        }
-        self.validate_tree_integrity()?;
-        let mut next_commitments = self.commitments.clone();
-        next_commitments.extend_from_slice(commitments);
-        let prefix_roots = self.tree_profile.compute_prefix_roots(&next_commitments)?;
-        let appended_roots = prefix_roots
-            .get(previous_len..)
-            .ok_or_else(|| "confidential prefix-root computation truncated state".to_owned())?
-            .to_vec();
-        let mut next_root_history = self.root_history.clone();
-        next_root_history.extend_from_slice(&appended_roots);
-        // Bound retained roots by the sole confidential tree-history policy.
-        let max_keep = cap.get();
-        let len = next_root_history.len();
-        if len > max_keep {
-            let surplus = len - max_keep;
-            next_root_history.drain(0..surplus);
-        }
-        self.commitments = next_commitments;
-        self.root_history = next_root_history;
-        Ok(appended_roots)
-    }
-
-    /// Record a frontier checkpoint for reorg recovery, enforcing interval and depth bounds.
-    pub fn record_frontier_checkpoint(
-        &mut self,
-        height: u64,
-        interval: u64,
-        depth_bound: u64,
-    ) -> Result<FrontierCheckpointUpdate, String> {
-        self.validate_tree_integrity()?;
-        let mut update = FrontierCheckpointUpdate::default();
-        if interval == 0 {
-            return Ok(update);
-        }
-
-        let should_record = self
-            .frontier_checkpoints
-            .last()
-            .is_none_or(|last| height.saturating_sub(last.height) >= interval);
-        if should_record {
-            let root = self.current_root()?;
-            self.frontier_checkpoints.push(FrontierCheckpoint {
-                height,
-                commitment_count: self.commitments.len() as u64,
-                root,
-            });
-            update.recorded = true;
-        }
-
-        if depth_bound == 0 {
-            if self.frontier_checkpoints.len() > 1 {
-                let evicted = (self.frontier_checkpoints.len() - 1) as u64;
-                let keep = self.frontier_checkpoints.pop();
-                self.frontier_checkpoints.clear();
-                if let Some(last) = keep {
-                    self.frontier_checkpoints.push(last);
-                }
-                update.evicted += evicted;
-            }
-            return Ok(update);
-        }
-
-        while self.frontier_checkpoints.len() > 1 {
-            let oldest_height = match self.frontier_checkpoints.first() {
-                Some(cp) => cp.height,
-                None => break,
-            };
-            if height.saturating_sub(oldest_height) > depth_bound {
-                self.frontier_checkpoints.remove(0);
-                update.evicted += 1;
-            } else {
-                break;
-            }
-        }
-        Ok(update)
-    }
-}
-
-#[cfg(feature = "telemetry")]
-impl ZkAssetState {
-    /// Build [`ConfidentialTreeStats`] for the current tree snapshot.
-    pub fn telemetry_stats(
-        &self,
-        root_evictions: u64,
-        frontier_evictions: u64,
-    ) -> ConfidentialTreeStats {
-        let last_checkpoint = self.frontier_checkpoints.last().copied();
-        let tree_depth = if self.commitments.is_empty() {
-            0
-        } else {
-            u64::try_from(self.tree_profile.depth()).unwrap_or(u64::MAX)
-        };
-        ConfidentialTreeStats {
-            commitments: saturating_len_to_u64(self.commitments.len()),
-            tree_depth,
-            root_history: saturating_len_to_u64(self.root_history.len()),
-            frontier_checkpoints: saturating_len_to_u64(self.frontier_checkpoints.len()),
-            last_checkpoint_height: last_checkpoint.as_ref().map_or(0, |cp| cp.height),
-            last_checkpoint_commitments: last_checkpoint.map_or(0, |cp| cp.commitment_count),
-            root_evictions,
-            frontier_evictions,
-        }
-    }
-}
-
-#[cfg(feature = "telemetry")]
-fn saturating_len_to_u64(len: usize) -> u64 {
-    u64::try_from(len).unwrap_or(u64::MAX)
-}
+include!("state/zk_asset_state.rs");
 
 #[cfg(test)]
 mod zk_asset_state_tests;
@@ -8754,13 +8452,14 @@ impl json::JsonDeserialize for ZkAssetState {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let mut visitor = json::MapVisitor::new(parser)?;
         let mut tree_profile = None;
+        let mut tree_frontier = None;
+        let mut persisted_root = None;
         let mut mode = None;
         let mut allow_shield = None;
         let mut allow_unshield = None;
         let mut commitments = None;
         let mut root_history = None;
         let mut nullifiers = None;
-        let mut vk_transfer = None;
         let mut vk_unshield = None;
         let mut vk_shield = None;
         let mut frontier_checkpoints = None;
@@ -8768,13 +8467,24 @@ impl json::JsonDeserialize for ZkAssetState {
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
                 "tree_profile" => tree_profile = Some(visitor.parse_value()?),
+                "tree_frontier" => {
+                    let values: Vec<Option<[u8; 32]>> = visitor.parse_value()?;
+                    tree_frontier =
+                        Some(values.try_into().map_err(|values: Vec<Option<[u8; 32]>>| {
+                            json::Error::Message(format!(
+                                "expected exactly {} confidential tree frontier entries, got {}",
+                                crate::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2,
+                                values.len()
+                            ))
+                        })?);
+                }
+                "persisted_root" => persisted_root = Some(visitor.parse_value()?),
                 "mode" => mode = Some(visitor.parse_value()?),
                 "allow_shield" => allow_shield = Some(visitor.parse_value()?),
                 "allow_unshield" => allow_unshield = Some(visitor.parse_value()?),
                 "commitments" => commitments = Some(visitor.parse_value()?),
                 "root_history" => root_history = Some(visitor.parse_value()?),
                 "nullifiers" => nullifiers = Some(visitor.parse_value()?),
-                "vk_transfer" => vk_transfer = Some(visitor.parse_value()?),
                 "vk_unshield" => vk_unshield = Some(visitor.parse_value()?),
                 "vk_shield" => vk_shield = Some(visitor.parse_value()?),
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
@@ -8789,6 +8499,10 @@ impl json::JsonDeserialize for ZkAssetState {
         let state = Self {
             tree_profile: tree_profile
                 .ok_or_else(|| json::MapVisitor::missing_field("tree_profile"))?,
+            tree_frontier: tree_frontier
+                .ok_or_else(|| json::MapVisitor::missing_field("tree_frontier"))?,
+            persisted_root: persisted_root
+                .ok_or_else(|| json::MapVisitor::missing_field("persisted_root"))?,
             mode: mode.ok_or_else(|| json::MapVisitor::missing_field("mode"))?,
             allow_shield: allow_shield
                 .ok_or_else(|| json::MapVisitor::missing_field("allow_shield"))?,
@@ -8798,7 +8512,6 @@ impl json::JsonDeserialize for ZkAssetState {
             root_history: root_history
                 .ok_or_else(|| json::MapVisitor::missing_field("root_history"))?,
             nullifiers: nullifiers.ok_or_else(|| json::MapVisitor::missing_field("nullifiers"))?,
-            vk_transfer: vk_transfer.unwrap_or(None),
             vk_unshield: vk_unshield.unwrap_or(None),
             vk_shield: vk_shield.unwrap_or(None),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
@@ -13063,8 +12776,6 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_nullifiers_in_tx: u32,
     /// Total confidential commitments created so far in this transaction.
     pub zk_commitments_in_tx: u32,
-    /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
-    pub(crate) native_anonymous_escrow_transfer_depth: u32,
     /// Number of synchronously nested trigger entrypoints currently executing.
     ///
     /// This counter is deliberately wider than the `u8` on-chain limit so the
@@ -13370,8 +13081,9 @@ pub struct StateView<'state> {
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
 /// Compared with [`StateView`], this snapshot avoids taking transaction-index
-/// views and the state-view generation retry loop, while still providing the
-/// [`StateReadOnly`] surface required by IVM/query execution.
+/// views and other full-snapshot components. It still uses the state-view
+/// generation retry to bind its world and block-hash journal atomically while
+/// providing the [`StateReadOnly`] surface required by IVM/query execution.
 pub struct StateQueryView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
@@ -20040,29 +19752,6 @@ impl World {
         self.asset_escrows_by_seller = public_by_seller.into_iter().collect();
         self.asset_escrows_by_buyer = public_by_buyer.into_iter().collect();
         self.asset_escrows_by_status = public_by_status.into_iter().collect();
-
-        let mut anonymous_by_seller = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
-        let mut anonymous_by_buyer = BTreeMap::<AccountId, BTreeSet<EscrowId>>::new();
-        let mut anonymous_by_status = BTreeMap::<AssetEscrowStatus, BTreeSet<EscrowId>>::new();
-        for (escrow_id, record) in self.anonymous_asset_escrows.view().iter() {
-            anonymous_by_seller
-                .entry(record.seller.clone())
-                .or_default()
-                .insert(*escrow_id);
-            if let Some(buyer) = record.buyer.as_ref() {
-                anonymous_by_buyer
-                    .entry(buyer.clone())
-                    .or_default()
-                    .insert(*escrow_id);
-            }
-            anonymous_by_status
-                .entry(record.status)
-                .or_default()
-                .insert(*escrow_id);
-        }
-        self.anonymous_asset_escrows_by_seller = anonymous_by_seller.into_iter().collect();
-        self.anonymous_asset_escrows_by_buyer = anonymous_by_buyer.into_iter().collect();
-        self.anonymous_asset_escrows_by_status = anonymous_by_status.into_iter().collect();
     }
 
     fn rebuild_vpn_lease_indexes(&mut self) -> Result<(), String> {
@@ -20625,22 +20314,6 @@ pub trait WorldReadOnly {
     fn asset_escrows_by_status(
         &self,
     ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>>;
-    /// Native anonymous asset escrow records keyed by escrow identifier.
-    fn anonymous_asset_escrows(
-        &self,
-    ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord>;
-    /// Native anonymous asset escrow ids grouped by seller account.
-    fn anonymous_asset_escrows_by_seller(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
-    /// Native anonymous asset escrow ids grouped by buyer account.
-    fn anonymous_asset_escrows_by_buyer(
-        &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>>;
-    /// Native anonymous asset escrow ids grouped by lifecycle status.
-    fn anonymous_asset_escrows_by_status(
-        &self,
-    ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>>;
     /// Native SoraNet VPN lease escrow records keyed by lease identifier.
     fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1>;
     /// Active VPN lease id claimed by each client account.
@@ -20941,6 +20614,13 @@ pub trait WorldReadOnly {
     fn musubi_releases(&self) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiReleaseRecordV1>;
     /// Canonical Musubi source archive commitments.
     fn musubi_archives(&self) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveRecordV1>;
+    /// Immutable provider bundle attestations keyed by archive, order, and provider.
+    fn musubi_provider_bundle_attestations(
+        &self,
+    ) -> &impl StorageReadOnly<
+        MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1,
+    >;
     /// Renewable Musubi archive locations.
     fn musubi_archive_locations(
         &self,
@@ -20969,6 +20649,10 @@ pub trait WorldReadOnly {
     fn musubi_resolver_index(
         &self,
     ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>;
+    /// Historical block-final activation anchors for Musubi resolver-index revisions.
+    fn musubi_resolver_index_checkpoints(
+        &self,
+    ) -> &impl StorageReadOnly<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>;
     /// Public ordered package directory.
     fn musubi_public_directory(
         &self,
@@ -22291,26 +21975,6 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>> {
                 &self.asset_escrows_by_status
             }
-            fn anonymous_asset_escrows(
-                &self,
-            ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord> {
-                &self.anonymous_asset_escrows
-            }
-            fn anonymous_asset_escrows_by_seller(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
-                &self.anonymous_asset_escrows_by_seller
-            }
-            fn anonymous_asset_escrows_by_buyer(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<EscrowId>> {
-                &self.anonymous_asset_escrows_by_buyer
-            }
-            fn anonymous_asset_escrows_by_status(
-                &self,
-            ) -> &impl StorageReadOnly<AssetEscrowStatus, BTreeSet<EscrowId>> {
-                &self.anonymous_asset_escrows_by_status
-            }
             fn vpn_leases(&self) -> &impl StorageReadOnly<[u8; 32], VpnLeaseRecordV1> {
                 &self.vpn_leases
             }
@@ -22553,6 +22217,14 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<ArchiveId, MusubiArchiveRecordV1> {
                 &self.musubi_archives
             }
+            fn musubi_provider_bundle_attestations(
+                &self,
+            ) -> &impl StorageReadOnly<
+                MusubiProviderBundleAttestationKeyV1,
+                MusubiProviderBundleAttestationRecordV1,
+            > {
+                &self.musubi_provider_bundle_attestations
+            }
             fn musubi_archive_locations(
                 &self,
             ) -> &impl StorageReadOnly<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1> {
@@ -22590,6 +22262,12 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<MusubiReleaseIdV1, MusubiResolverReleaseRowV1> {
                 &self.musubi_resolver_index
+            }
+            fn musubi_resolver_index_checkpoints(
+                &self,
+            ) -> &impl StorageReadOnly<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>
+            {
+                &self.musubi_resolver_index_checkpoints
             }
             fn musubi_public_directory(
                 &self,
@@ -23412,10 +23090,6 @@ impl<'world> WorldBlock<'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller,
-            anonymous_asset_escrows_by_buyer,
-            anonymous_asset_escrows_by_status,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -23474,6 +23148,7 @@ impl<'world> WorldBlock<'world> {
             musubi_maintainer_directory,
             musubi_releases,
             musubi_archives,
+            musubi_provider_bundle_attestations,
             musubi_archive_locations,
             musubi_locations_by_pin,
             musubi_locations_by_replication_order,
@@ -23481,6 +23156,7 @@ impl<'world> WorldBlock<'world> {
             musubi_archive_availability,
             musubi_archive_reverse_references,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_public_directory,
             musubi_aliases,
             musubi_alias_history,
@@ -23620,6 +23296,7 @@ impl<'world> WorldBlock<'world> {
         musubi_maintainer_directory.commit();
         musubi_releases.commit();
         musubi_archives.commit();
+        musubi_provider_bundle_attestations.commit();
         musubi_archive_locations.commit();
         musubi_locations_by_pin.commit();
         musubi_locations_by_replication_order.commit();
@@ -23627,6 +23304,7 @@ impl<'world> WorldBlock<'world> {
         musubi_archive_availability.commit();
         musubi_archive_reverse_references.commit();
         musubi_resolver_index.commit();
+        musubi_resolver_index_checkpoints.commit();
         musubi_public_directory.commit();
         musubi_aliases.commit();
         musubi_alias_history.commit();
@@ -23740,10 +23418,6 @@ impl<'world> WorldBlock<'world> {
         asset_escrows_by_seller.commit();
         asset_escrows_by_buyer.commit();
         asset_escrows_by_status.commit();
-        anonymous_asset_escrows.commit();
-        anonymous_asset_escrows_by_seller.commit();
-        anonymous_asset_escrows_by_buyer.commit();
-        anonymous_asset_escrows_by_status.commit();
         vpn_leases.commit();
         vpn_active_lease_by_account.commit();
         vpn_active_lease_by_address_slot.commit();
@@ -25001,10 +24675,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
-            anonymous_asset_escrows,
-            anonymous_asset_escrows_by_seller,
-            anonymous_asset_escrows_by_buyer,
-            anonymous_asset_escrows_by_status,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -25062,6 +24732,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             musubi_maintainer_directory,
             musubi_releases,
             musubi_archives,
+            musubi_provider_bundle_attestations,
             musubi_archive_locations,
             musubi_locations_by_pin,
             musubi_locations_by_replication_order,
@@ -25069,6 +24740,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             musubi_archive_availability,
             musubi_archive_reverse_references,
             musubi_resolver_index,
+            musubi_resolver_index_checkpoints,
             musubi_public_directory,
             musubi_aliases,
             musubi_alias_history,
@@ -25220,6 +24892,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         musubi_maintainer_directory.apply();
         musubi_releases.apply();
         musubi_archives.apply();
+        musubi_provider_bundle_attestations.apply();
         musubi_archive_locations.apply();
         musubi_locations_by_pin.apply();
         musubi_locations_by_replication_order.apply();
@@ -25227,6 +24900,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         musubi_archive_availability.apply();
         musubi_archive_reverse_references.apply();
         musubi_resolver_index.apply();
+        musubi_resolver_index_checkpoints.apply();
         musubi_public_directory.apply();
         musubi_aliases.apply();
         musubi_alias_history.apply();
@@ -25339,10 +25013,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         asset_escrows_by_seller.apply();
         asset_escrows_by_buyer.apply();
         asset_escrows_by_status.apply();
-        anonymous_asset_escrows.apply();
-        anonymous_asset_escrows_by_seller.apply();
-        anonymous_asset_escrows_by_buyer.apply();
-        anonymous_asset_escrows_by_status.apply();
         vpn_leases.apply();
         vpn_active_lease_by_account.apply();
         vpn_active_lease_by_address_slot.apply();
@@ -31060,34 +30730,40 @@ impl State {
 
     /// Create a point-in-time snapshot tuned for query/IVM execution.
     ///
-    /// This avoids taking the transactions index view and generation-retry loop
-    /// used by [`State::view`] while still exposing the full
-    /// [`StateReadOnly`] interface needed by query paths.
+    /// This avoids taking the transactions index view and other full-snapshot
+    /// components used by [`State::view`]. Its generation retry still captures
+    /// the world and block-hash journal atomically because query cursors and
+    /// finalized registry proofs bind both.
     #[track_caller]
     pub fn query_view(&self) -> StateQueryView<'_> {
         const STATE_QUERY_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
         let caller = core::panic::Location::caller();
         let total_start = Instant::now();
 
-        let block_hashes_start = Instant::now();
-        let block_hashes: Vec<HashOf<BlockHeader>> =
-            self.block_hashes.view().iter().copied().collect();
-        let block_hashes_wait = block_hashes_start.elapsed();
-
-        let (world, world_wait, sccp_registry) = loop {
+        let (world, block_hashes, block_hashes_wait, world_wait, sccp_registry) = loop {
             let generation_before = self.state_view_generation();
             if generation_before % 2 != 0 {
                 self.note_view_generation_contention(caller);
                 std::thread::yield_now();
                 continue;
             }
+            let block_hashes_start = Instant::now();
+            let block_hashes: Vec<HashOf<BlockHeader>> =
+                self.block_hashes.view().iter().copied().collect();
+            let block_hashes_wait = block_hashes_start.elapsed();
             let world_start = Instant::now();
             let world = self.world.view();
             let world_wait = world_start.elapsed();
             let sccp_registry = self.sccp_registry_snapshot_from_world(world.sccp_registry.get());
             let generation_after = self.state_view_generation();
             if is_stable_state_view_generation(generation_before, generation_after) {
-                break (world, world_wait, sccp_registry);
+                break (
+                    world,
+                    block_hashes,
+                    block_hashes_wait,
+                    world_wait,
+                    sccp_registry,
+                );
             }
             drop(world);
             self.note_view_generation_contention(caller);
@@ -31260,28 +30936,24 @@ impl State {
     /// Load the immutable Sumeragi v2 context which authenticated a historical
     /// consensus height.
     ///
-    /// The lookup is read-only and returns `None` when the deterministic
-    /// context history is absent. Consensus evidence admission treats absence
-    /// as a fail-closed validation error.
+    /// The lookup is read-only and returns `None` when cryptographically
+    /// verified finality history is absent. Consensus evidence admission
+    /// treats absence as a fail-closed validation error. The structural
+    /// context recovery store is intentionally not an authorization fallback:
+    /// its checksum cannot prove roster PoPs or committed-chain continuity.
     ///
     /// # Errors
     ///
-    /// Returns an error when the canonical finality artifact or context store
-    /// cannot be inspected, or when its immutable frame fails validation.
+    /// Returns an error when the canonical finality artifact cannot be
+    /// inspected or its immutable frame fails validation.
     pub(crate) fn sumeragi_v2_height_context(
         &self,
         height: u64,
     ) -> Result<Option<iroha_data_model::block::consensus_v2::HeightContext>> {
-        if let Some(artifact) = self.kura.v2_finality_artifact(height)? {
-            return Ok(Some(artifact.height_context));
-        }
-        let Some(store) = crate::sumeragi::v2_context_store::V2ContextStore::open_existing(
-            self.kura.sumeragi_v2_storage_root(),
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(store.load(height)?.map(|record| record.context().clone()))
+        Ok(self
+            .kura
+            .v2_finality_artifact(height)?
+            .map(|artifact| artifact.height_context))
     }
 
     /// Resolve a committed block height by block hash using Kura's index.
@@ -51907,7 +51579,6 @@ impl<'state> StateBlock<'state> {
             block_privacy_budget: &mut self.privacy_budget_in_block,
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
-            native_anonymous_escrow_transfer_depth: 0,
             active_trigger_execution_depth: 0,
             multisig_deferred_execution_stack: Vec::new(),
             implicit_account_creations_in_tx: 0,
@@ -54073,6 +53744,83 @@ impl<'state> StateBlock<'state> {
         authorization.map(|()| events)
     }
 
+    fn stage_musubi_resolver_index_checkpoint(
+        &mut self,
+        finalized_height: u64,
+        finalized_block_hash: HashOf<BlockHeader>,
+    ) {
+        let visible_height = u64::try_from(self.block_hashes.len())
+            .expect("Musubi finalized block height must fit u64");
+        assert_eq!(
+            visible_height, finalized_height,
+            "Musubi resolver checkpoint height must match the visible block-hash log"
+        );
+        assert_eq!(
+            self.block_hashes.last().copied(),
+            Some(finalized_block_hash),
+            "Musubi resolver checkpoint hash must match the canonical block-hash log"
+        );
+
+        let revision = *self.world.musubi_resolver_index_revision.get();
+        let has_future_checkpoint = self
+            .world
+            .musubi_resolver_index_checkpoints
+            .range((
+                std::ops::Bound::Excluded(revision),
+                std::ops::Bound::Unbounded,
+            ))
+            .next()
+            .is_some();
+        assert!(
+            !has_future_checkpoint,
+            "Musubi resolver checkpoint history cannot contain a future revision"
+        );
+        if let Some(existing) = self.world.musubi_resolver_index_checkpoints.get(&revision) {
+            assert_eq!(
+                existing.index_revision,
+                revision.get(),
+                "Musubi resolver checkpoint key must match its embedded revision"
+            );
+            assert!(
+                existing.finalized_height <= finalized_height,
+                "Musubi resolver checkpoint activation cannot be in the future"
+            );
+            if existing.finalized_height == finalized_height {
+                assert_eq!(
+                    existing.finalized_block_hash,
+                    *finalized_block_hash.as_ref(),
+                    "a resolver revision cannot activate at two blocks of the same height"
+                );
+            }
+            return;
+        }
+
+        let history_is_empty = self.world.musubi_resolver_index_checkpoints.is_empty();
+        if finalized_height == 1 {
+            assert!(
+                history_is_empty,
+                "Musubi resolver checkpoint history must have only one genesis activation"
+            );
+        } else {
+            assert!(
+                !history_is_empty,
+                "Musubi resolver checkpoint history must begin at genesis"
+            );
+        }
+
+        let checkpoint = MusubiRegistrySnapshotV1 {
+            finalized_height,
+            finalized_block_hash: *finalized_block_hash.as_ref(),
+            index_revision: revision.get(),
+        };
+        checkpoint
+            .validate()
+            .expect("block-final Musubi resolver checkpoint must be canonical");
+        self.world
+            .musubi_resolver_index_checkpoints
+            .insert(revision, checkpoint);
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::needless_pass_by_value)]
     #[iroha_logger::log(
@@ -54198,6 +53946,10 @@ impl<'state> StateBlock<'state> {
         }
 
         self.block_hashes.push(block_hash);
+        self.stage_musubi_resolver_index_checkpoint(
+            signed_block.header().height().get(),
+            block_hash,
+        );
         // A globally carried merge entry was staged before start-of-block
         // effects. Its metadata is already part of this overlay, while the
         // rolling State cache is intentionally published only after this
@@ -55983,9 +55735,9 @@ impl<'state> StateBlock<'state> {
             let tx = match entrypoint {
                 TransactionEntrypoint::External(tx) => tx,
                 TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => continue,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    continue;
+                }
             };
             if block.error(entrypoint_index).is_none() {
                 // Execute each transaction in its own transactional state
@@ -61148,9 +60900,7 @@ fn replay_blocks_from_kura_range_inner(
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     Some((idx, reveal.signed_transaction().clone()))
                 }
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => None,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             })
             .collect::<Vec<_>>();
         let tx_count = signed_entrypoints.len();

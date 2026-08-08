@@ -503,17 +503,13 @@ fn appeal_finance_report_body(report: SoraFsAppealFinanceReportV1) -> Bytes {
     Bytes::from(norito::json::to_vec(&report).expect("encode appeal finance report"))
 }
 
-fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
-    Bytes::from(norito::json::to_vec(&rollup).expect("encode appeal finance weekly rollup"))
-}
-
 fn assert_governance_publish_provenance(
-    governance_dir: &StdPath,
+    app: &SharedAppState,
     payload_kind: &str,
     publisher_account: &AccountId,
     origin: &str,
 ) {
-    let index = read_publication_section_fixture(governance_dir, "publish_index");
+    let index = read_publication_section_fixture(app, "publish_index");
     let labels = index
         .get("entries")
         .and_then(Value::as_array)
@@ -666,6 +662,10 @@ fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregat
     .expect("privacy API test policy")
 }
 
+fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
+    Bytes::from(norito::json::to_vec(&rollup).expect("encode appeal finance weekly rollup"))
+}
+
 fn appeal_finance_deposit_request(
     payer_account: &AccountId,
     destination_account: &AccountId,
@@ -759,17 +759,17 @@ impl crate::SoraFsAppealFinanceTransactionSigner for TestAppealFinanceRuntimeSig
         Ok(self.keypair.public_key().clone())
     }
 
-        fn qualification(
-            &self,
-        ) -> Result<
-            sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
-            crate::SoraFsAppealFinanceSigningError,
+    fn qualification(
+        &self,
+    ) -> Result<
+        sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
+        crate::SoraFsAppealFinanceSigningError,
     >{
         Ok(
-                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
-                    1, [0xA1; 32],
-                ),
-            )
+            sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                1, [0xA1; 32],
+            ),
+        )
     }
 
     fn sign(

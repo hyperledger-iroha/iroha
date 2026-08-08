@@ -50,7 +50,7 @@ use super::{
         ServicedCandidateCapacityGeometry, SignRequest, SumeragiV2Adapter,
     },
     v2_apply::{
-        LaneReservationReconciliationPlanning, V2ReservationLifecycleError,
+        LaneReservationReconciliationPlanning, V2ApplyService, V2ReservationLifecycleError,
         apply_lane_reservation_reconciliation_plan,
         persist_preflighted_historical_autonomous_lane_recoveries, plan_lane_reservation_ownership,
         preflight_historical_autonomous_lane_recovery,
@@ -961,7 +961,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         // scheduler ordinal. Its independently reconstructed receipt catalog
         // is the authority for body-backed leader-wire terminals; the gate's
         // adjacent snapshot cannot validate itself after a crash.
-        let body_store = V2BodyStore::open_with_policy(
+        let mut body_store = V2BodyStore::open_with_policy(
             storage_root.join("bodies"),
             context.clone(),
             signature_policy,
@@ -971,6 +971,30 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 error.to_string(),
             ))
         })?;
+        let recovery_validator = V2ApplyService::new(
+            Arc::clone(&state),
+            Arc::clone(&queue),
+            Arc::clone(&kura),
+            provider_ingest_finalized_archive.clone(),
+            reputation_finalized_archive.clone(),
+            context.chain_id.clone(),
+            block_cadence,
+            genesis_account.clone(),
+            events_sender.clone(),
+            validator_set_pops.clone(),
+        );
+        if let Some(decided_subject) = recovery_validator
+            .recovered_finality_subject(&context)
+            .map_err(|error| V2RunnerError::Service(error.to_string()))?
+        {
+            body_store
+                .retain_recovered_markers_for_subject(decided_subject)
+                .map_err(|error| {
+                    V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                        error.to_string(),
+                    ))
+                })?;
+        }
         let recovered_body_catalog = body_store.recovery_catalog().map_err(|error| {
             V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
                 error.to_string(),
@@ -1061,6 +1085,28 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             context.id(),
             context.height,
         )?;
+        // The body directory may retain markers from arbitrarily many past
+        // views. WAL replay is the sole authority for deciding which bounded
+        // frontier can recover vote authority; re-execute only those exact
+        // identities before constructing the live serialized runtime.
+        let recovered_validation_authority =
+            adapter.recovered_validation_authority(&startup_effects)?;
+        body_store
+            .retain_recovered_markers_for_authority(recovered_validation_authority)
+            .map_err(|error| {
+                V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                    error.to_string(),
+                ))
+            })?;
+        body_store
+            .revalidate_recovered_markers(|body| {
+                recovery_validator.revalidate_recovered_candidate(&context, body)
+            })
+            .map_err(|error| {
+                V2RunnerError::Effect(super::v2_effects::EffectExecutorError::BodyStore(
+                    error.to_string(),
+                ))
+            })?;
         adapter_construction.complete();
         let runtime_construction = output_guard
             .begin_fail_stop_operation()
@@ -1583,7 +1629,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             executor.durable_finality().is_some() && recovered_applied_height.is_some(),
             || {
                 V2LaneWorkAdapter::new_with_output_guard_and_transport(
-                    context.clone(),
+                    &verified_context,
                     local_peer.clone(),
                     common_config.key_pair.clone(),
                     config.role == NodeRole::Validator,
@@ -5003,97 +5049,7 @@ fn dispatch_lane_work_effects(
     Ok(())
 }
 
-/// Remove retired source occurrences from semantic work already owned by the
-/// lane adapter. A malformed effect which never carried its required route is
-/// left intact so normal strict validation rejects it.
-fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
-    retain_active_owned_reply_routes_with_snapshot_hook(effect, || {})
-}
-
-#[cfg(test)]
-fn retain_active_owned_reply_routes_after_snapshot<AfterSnapshot>(
-    effect: &mut V2LaneWorkEffect,
-    after_snapshot: AfterSnapshot,
-) -> bool
-where
-    AfterSnapshot: FnOnce(),
-{
-    retain_active_owned_reply_routes_with_snapshot_hook(effect, after_snapshot)
-}
-
-fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(
-    effect: &mut V2LaneWorkEffect,
-    after_snapshot: AfterSnapshot,
-) -> bool
-where
-    AfterSnapshot: FnOnce(),
-{
-    if let V2LaneWorkEffect::PostDurableLaneCertificate {
-        reply_routes,
-        ingress_ownership,
-        ..
-    } = effect
-    {
-        let Some(routes) = reply_routes.as_mut() else {
-            return true;
-        };
-        let Some(ownership) = ingress_ownership.as_mut() else {
-            return true;
-        };
-        if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
-            return true;
-        }
-        let (retained_routes, receipt) = routes.retain_active_with_receipt();
-        after_snapshot();
-        let Some(projected_routes) = ownership.project_retained_reply_routes(receipt) else {
-            // Preserve malformed pre-existing ownership for strict dispatch;
-            // ordinary retirement cannot reach this branch because the exact
-            // route snapshot is projected without another liveness read.
-            return true;
-        };
-        *routes = projected_routes;
-        return retained_routes != 0;
-    }
-    let reply_routes = match effect {
-        V2LaneWorkEffect::PostNativeAmx {
-            reply_routes,
-            message: NativeAmxMessage::PrepareVote(_) | NativeAmxMessage::CommitVote(_),
-            ..
-        } => reply_routes,
-        V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            reply_routes,
-            message,
-            ..
-        } if matches!(
-            message.as_ref(),
-            CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_)
-                | CertifiedMergeSidecarMessage::Chunk(_)
-        ) =>
-        {
-            reply_routes
-        }
-        V2LaneWorkEffect::PostLaneBlock { .. }
-        | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
-        | V2LaneWorkEffect::PostNativeAmx { .. }
-        | V2LaneWorkEffect::PostLaneDrainVote { .. }
-        | V2LaneWorkEffect::BroadcastMerge(_)
-        | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
-    };
-    let Some(routes) = reply_routes.as_mut() else {
-        return true;
-    };
-    let before = routes.clone();
-    let (retained, receipt) = routes.retain_active_with_receipt();
-    let Some(projected) = receipt.into_output(&before) else {
-        // Preserve the operation's mutated value for normal strict dispatch;
-        // this branch is unreachable for a module-minted receipt and exists
-        // only to fail closed if its exact-history contract is broken.
-        return true;
-    };
-    *routes = projected;
-    retained != 0
-}
+include!("v2_runner/reply_route_retention.rs");
 
 #[derive(Debug)]
 enum LaneWorkEffectDispatch {

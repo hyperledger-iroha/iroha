@@ -1616,9 +1616,7 @@ impl Kura {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => return,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => return,
         };
         let transaction_authority = transaction.authority();
         for instruction in transaction.instructions().explicit_instructions() {
@@ -21291,8 +21289,6 @@ impl Kura {
         Ok(())
     }
 
-    include!("kura/prune_recovery_capacity.rs");
-
     fn validate_completed_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
         let target = usize::try_from(intent.target_height)?;
         let data = self.block_data.lock();
@@ -22511,6 +22507,7 @@ impl Kura {
     }
 }
 
+include!("kura/prune_recovery_capacity.rs");
 include!("kura/block_store_definition_and_test_controls.rs");
 
 /// Read-only mirror of the block data file backed either by a memory mapping or a heap copy.
@@ -40382,6 +40379,8 @@ impl BlockStore {
             #[cfg(test)]
             fail_next_commit_marker_write: AtomicBool::new(false),
             #[cfg(test)]
+            fail_next_commit_marker_after_temp_sync: AtomicBool::new(false),
+            #[cfg(test)]
             fail_next_commit_marker_read: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_commit_marker_ack_after_persist: AtomicBool::new(false),
@@ -42256,8 +42255,8 @@ impl BlockStore {
                 path.to_path_buf(),
             ));
         }
-        let mut file = std::fs::File::open(path)
-            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let mut file =
+            std::fs::File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let opened_before = file
             .metadata()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
@@ -42359,13 +42358,7 @@ impl BlockStore {
         }
 
         if main_invalid {
-            if let Err(err) = std::fs::remove_file(&path) {
-                warn!(
-                    ?err,
-                    path = %path.display(),
-                    "failed to remove corrupted block store marker"
-                );
-            }
+            remove_commit_marker_temp_and_sync(&path)?;
         }
 
         match Self::read_bounded_commit_marker_bytes(&tmp_path)? {
@@ -42388,15 +42381,10 @@ impl BlockStore {
                         "recovered block store marker from temp file"
                     );
                     promote_commit_marker_temp_and_sync(&tmp_path, &path)?;
-                    let readback = Self::read_bounded_commit_marker_bytes(&path)?.ok_or_else(|| {
-                        Error::IO(
-                            std::io::Error::new(
-                                ErrorKind::NotFound,
-                                "recovered block commit marker disappeared before readback",
-                            ),
-                            path.clone(),
-                        )
-                    })?;
+                    let readback = Self::read_required_bounded_commit_marker_bytes(
+                        &path,
+                        "recovered block commit marker disappeared before readback",
+                    )?;
                     if readback != bytes {
                         return Err(Error::IO(
                             std::io::Error::new(
@@ -42534,6 +42522,7 @@ impl BlockStore {
             }
             Err(error) => return Err(Error::IO(error, temporary_path)),
         }
+        self.maybe_fail_commit_marker_after_temp_sync(&temporary_path)?;
         std::fs::rename(&temporary_path, &path).map_err(|error| Error::IO(error, path.clone()))?;
         let persisted = std::fs::OpenOptions::new()
             .read(true)
@@ -42743,8 +42732,10 @@ impl BlockStore {
             .ok_or_else(|| mutation(1))?;
 
         let marker_path = self.commit_marker_path();
-        let marker_bytes =
-            std::fs::read(&marker_path).map_err(|error| Error::IO(error, marker_path.clone()))?;
+        let marker_bytes = Self::read_required_bounded_commit_marker_bytes(
+            &marker_path,
+            "block commit marker is missing",
+        )?;
         let marker = norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes)
             .map_err(|_| mutation(1))?;
         if marker.version != BlockStoreCommitMarker::VERSION
@@ -44310,8 +44301,10 @@ impl BlockStore {
             });
         }
         let marker_path = self.commit_marker_path();
-        let marker_bytes =
-            std::fs::read(&marker_path).map_err(|err| Error::IO(err, marker_path.clone()))?;
+        let marker_bytes = Self::read_required_bounded_commit_marker_bytes(
+            &marker_path,
+            "rollback block marker is missing",
+        )?;
         let marker =
             norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|err| {
                 Error::RollbackIntentInvalid {
@@ -44462,6 +44455,7 @@ include!("kura/file_error_support.rs");
 #[cfg(test)]
 mod tests {
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
+    include!("kura/tests/01_prune_capacity_support.rs");
     include!("kura/tests/01a_retained_eviction_and_rewrite_tail.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
     include!("kura/tests/02a_unauthenticated_preflight.rs");

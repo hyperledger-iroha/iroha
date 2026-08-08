@@ -161,9 +161,12 @@ Run every required DA/RBC case with skips treated as failures:
 7. Require peer convergence on canonical Kura/WSV state, transaction queries,
    Native receipts, queue ownership, and all endpoint projections.
 
-### Fresh twelve-peer corridor and soak (`G-12P`)
+### Fresh 13-peer corridor and soak (`G-12P`)
 
-Provision at least three independent four-validator dataspaces. Combine grouped
+`G-12P` names the twelve lane-validator assignments retained by the release
+receipt schema; every fresh network has a valid 13-member revision-4 global
+committee plus one global-only lane observer. Provision at least three
+independent four-validator dataspaces. Combine grouped
 DvP and autonomous work with rotating outage/restart, scale-out, drain,
 scale-in, pruning, and same-ID recreation. Run **10/10 fresh deterministic
 seeds**, archiving the accepted transaction set and final identity of every

@@ -147,6 +147,10 @@ fn visit_core_box_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instruct
     true
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive privacy instruction inventory stays in one dispatch chain so new variants cannot silently become no-ops"
+)]
 fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     visit_privacy_protocol_instruction(visitor, isi)
         || visit_privacy_issuer_and_proof_instruction(visitor, isi)

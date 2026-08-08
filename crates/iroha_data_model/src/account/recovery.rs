@@ -280,10 +280,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
-    use crate::{
-        isi::{Level, Log},
-        nexus::DataSpaceId,
-    };
+    use crate::{Level, isi::Log, nexus::DataSpaceId};
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

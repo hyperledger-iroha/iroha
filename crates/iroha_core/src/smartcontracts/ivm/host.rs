@@ -59,11 +59,8 @@ use iroha_data_model::{
         RemoveSignatory, SetAccountQuorum, SetKeyValue, SetKeyValueBox, SetParameter, Transfer,
         TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister, UnregisterBox,
         escrow::{
-            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
-            CancelAssetEscrow, MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent,
-            OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute, OpenAssetEscrow,
-            OpenEscrowDispute, ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow,
-            ResolveAnonymousEscrowDispute, ResolveEscrowDispute,
+            AcceptAssetEscrow, CancelAssetEscrow, MarkEscrowPaymentSent, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAssetEscrow, ResolveEscrowDispute,
         },
         register::RegisterPeerWithPop,
         smart_contract_code as scode, zk as DMZk,
@@ -411,7 +408,7 @@ fn apply_sm_openssl_preview(enabled: bool) {
 #[cfg(not(feature = "sm-ffi-openssl"))]
 fn apply_sm_openssl_preview(_: bool) {}
 
-/// Optional observations for one V1 typed page-query execution.
+/// Optional observations for one V1 typed query execution.
 ///
 /// The host leaves collection disabled unless a benchmark explicitly enables
 /// it, so normal consensus execution does not maintain diagnostic state.
@@ -694,8 +691,6 @@ pub struct CoreHostImpl<QS> {
     transport_caps_snapshot: Option<TransportCapabilityResolutionSnapshot>,
     negotiated_caps_snapshot: Option<CapabilityFlags>,
     // ZK-proof verification state (gates ISI mutations)
-    zk_verified_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_verified_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
@@ -718,8 +713,6 @@ pub struct CoreHostImpl<QS> {
     // Non-zero retained-root bound for ZK root reads.
     zk_tree_roots_history_len: NonZeroUsize,
     // Last seen verify envelope hashes per ZK op type (from pointer‑ABI TLVs)
-    zk_last_env_hash_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_last_env_hash_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
     // Cached AXT policy snapshot (if available) for telemetry and richer errors.
@@ -2343,12 +2336,8 @@ struct NestedContractCallHostSnapshot {
     durable_read_paths_complete: bool,
     axt_state: Option<Arc<axt::HostAxtState>>,
     completed_axt_len: usize,
-    zk_verified_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_verified_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_verified_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
-    zk_last_env_hash_transfer: Arc<VecDeque<[u8; 32]>>,
-    zk_last_env_hash_unshield: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_ballot: Arc<VecDeque<[u8; 32]>>,
     zk_last_env_hash_tally: Arc<VecDeque<[u8; 32]>>,
     axt_replay_ledger: Arc<BTreeMap<AxtHandleReplayKey, AxtReplayRecord>>,
@@ -2846,8 +2835,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: Arc::new(VecDeque::new()),
-            zk_verified_unshield: Arc::new(VecDeque::new()),
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
@@ -2862,8 +2849,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_manifest_id: None,
             zk_tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
-            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
@@ -2879,21 +2864,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    /// Enable and reset typed page-query performance counters.
+    /// Enable and reset typed-query performance counters.
     ///
     /// Counters are disabled by default and do not affect consensus execution.
     pub fn enable_core_query_page_metrics(&mut self) {
         self.core_query_page_metrics = Some(CoreQueryPageMetrics::default());
     }
 
-    /// Reset enabled typed page-query performance counters.
+    /// Reset enabled typed-query performance counters.
     pub fn reset_core_query_page_metrics(&mut self) {
         if let Some(metrics) = &mut self.core_query_page_metrics {
             *metrics = CoreQueryPageMetrics::default();
         }
     }
 
-    /// Return enabled typed page-query performance counters.
+    /// Return enabled typed-query performance counters.
     #[must_use]
     pub const fn core_query_page_metrics(&self) -> Option<CoreQueryPageMetrics> {
         self.core_query_page_metrics
@@ -2978,8 +2963,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: Arc::new(VecDeque::new()),
-            zk_verified_unshield: Arc::new(VecDeque::new()),
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
@@ -2994,8 +2977,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_manifest_id: None,
             zk_tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
-            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_policy_snapshot: None,
@@ -3063,8 +3044,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             completed_axt: Vec::new(),
             transport_caps_snapshot: None,
             negotiated_caps_snapshot: None,
-            zk_verified_transfer: Arc::new(VecDeque::new()),
-            zk_verified_unshield: Arc::new(VecDeque::new()),
             zk_verified_ballot: Arc::new(VecDeque::new()),
             zk_verified_tally: Arc::new(VecDeque::new()),
             zk_roots: BTreeMap::new(),
@@ -3079,8 +3058,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             current_manifest_id: None,
             zk_tree_roots_history_len:
                 iroha_config::parameters::defaults::confidential::TREE_ROOTS_HISTORY_LEN,
-            zk_last_env_hash_transfer: Arc::new(VecDeque::new()),
-            zk_last_env_hash_unshield: Arc::new(VecDeque::new()),
             zk_last_env_hash_ballot: Arc::new(VecDeque::new()),
             zk_last_env_hash_tally: Arc::new(VecDeque::new()),
             axt_replay_ledger: Arc::new(BTreeMap::new()),
@@ -4232,7 +4209,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let mut roots = BTreeMap::new();
         for (asset_id, state) in map {
             state
-                .validate_tree_integrity()
+                .validate_tree_metadata()
                 .map_err(|_| ivm::VMError::NoritoInvalid)?;
             roots.insert(
                 asset_id,
@@ -4861,7 +4838,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn validate_zk_elections_snapshot(
         map: &BTreeMap<String, (u32, bool, Vec<u64>)>,
     ) -> Result<(), ivm::VMError> {
-        for (options, _, tally) in map.values() {
+        for (election_id, (options, _, tally)) in map {
+            if !iroha_data_model::governance::is_valid_governance_selector_v1(election_id) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
                 .map_err(|_| ivm::VMError::NoritoInvalid)?;
         }
@@ -5085,20 +5065,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         mem::take(&mut self.completed_axt)
     }
 
-    /// Test helper: seed the transfer verification latch with a known envelope hash.
-    #[cfg(test)]
-    pub fn __test_seed_transfer_latch(&mut self, hash: [u8; 32]) {
-        Arc::make_mut(&mut self.zk_verified_transfer).push_back(hash);
-        Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(hash);
-    }
-
-    /// Test helper: seed the unshield verification latch with a known envelope hash.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn __test_seed_unshield_latch(&mut self, hash: [u8; 32]) {
-        Arc::make_mut(&mut self.zk_verified_unshield).push_back(hash);
-        Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(hash);
-    }
-
     /// Test helper: seed the ballot verification latch with a known envelope hash.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_seed_ballot_latch(&mut self, hash: [u8; 32]) {
@@ -5113,16 +5079,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(hash);
     }
 
-    /// Test-only: replace the pending transfer envelope hash queue with a single entry.
-    #[cfg(test)]
-    pub fn __test_set_last_env_hash_transfer(&mut self, h: [u8; 32]) {
-        *Arc::make_mut(&mut self.zk_last_env_hash_transfer) = VecDeque::from([h]);
-    }
-    /// Test helper: replace the pending unshield envelope hash queue with a single entry.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
-    pub fn __test_set_last_env_hash_unshield(&mut self, h: [u8; 32]) {
-        *Arc::make_mut(&mut self.zk_last_env_hash_unshield) = VecDeque::from([h]);
-    }
     /// Test-only: replace the pending ballot envelope hash queue with a single entry.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_set_last_env_hash_ballot(&mut self, h: [u8; 32]) {
@@ -5138,42 +5094,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         for instr in queued {
             let any: &dyn iroha_data_model::isi::Instruction = &**instr;
             let any_ref = any.as_any();
-            if let Some(z) = any_ref.downcast_ref::<DMZk::ZkTransfer>() {
-                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_transfer).pop_front()
-                else {
-                    return Err(ValidationFail::NotPermitted(
-                        "missing ZK_VERIFY_TRANSFER prior to ZkTransfer".to_owned(),
-                    ));
-                };
-                let actual_hash = z.proof.envelope_hash.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "ZkTransfer missing envelope_hash after verification".to_owned(),
-                    )
-                })?;
-                if actual_hash != expected_hash {
-                    return Err(ValidationFail::NotPermitted(
-                        "ZkTransfer envelope hash mismatch; requires fresh verification".to_owned(),
-                    ));
-                }
-            }
-            if let Some(u) = any_ref.downcast_ref::<DMZk::Unshield>() {
-                let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_unshield).pop_front()
-                else {
-                    return Err(ValidationFail::NotPermitted(
-                        "missing ZK_VERIFY_UNSHIELD prior to Unshield".to_owned(),
-                    ));
-                };
-                let actual_hash = u.proof.envelope_hash.ok_or_else(|| {
-                    ValidationFail::NotPermitted(
-                        "Unshield missing envelope_hash after verification".to_owned(),
-                    )
-                })?;
-                if actual_hash != expected_hash {
-                    return Err(ValidationFail::NotPermitted(
-                        "Unshield envelope hash mismatch; requires fresh verification".to_owned(),
-                    ));
-                }
-            }
             if let Some(sb) = any_ref.downcast_ref::<DMZk::SubmitBallot>() {
                 let Some(expected_hash) = Arc::make_mut(&mut self.zk_verified_ballot).pop_front()
                 else {
@@ -5712,6 +5632,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &self,
         request: &ivm::zk_verify::VoteGetTallyRequest,
     ) -> Result<ivm::zk_verify::VoteGetTallyResponse, ivm::VMError> {
+        if !request.is_valid_v1() {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
         let Some((options, finalized, tally)) = self.zk_elections.get(&request.election_id) else {
             return Ok(ivm::zk_verify::VoteGetTallyResponse {
                 finalized: false,
@@ -6810,12 +6733,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_read_paths_complete: self.state_access_log.durable_read_paths_complete,
             axt_state: self.axt_state.clone(),
             completed_axt_len: self.completed_axt.len(),
-            zk_verified_transfer: self.zk_verified_transfer.clone(),
-            zk_verified_unshield: self.zk_verified_unshield.clone(),
             zk_verified_ballot: self.zk_verified_ballot.clone(),
             zk_verified_tally: self.zk_verified_tally.clone(),
-            zk_last_env_hash_transfer: self.zk_last_env_hash_transfer.clone(),
-            zk_last_env_hash_unshield: self.zk_last_env_hash_unshield.clone(),
             zk_last_env_hash_ballot: self.zk_last_env_hash_ballot.clone(),
             zk_last_env_hash_tally: self.zk_last_env_hash_tally.clone(),
             axt_replay_ledger: self.axt_replay_ledger.clone(),
@@ -6851,12 +6770,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             durable_read_paths_complete,
             axt_state,
             completed_axt_len,
-            zk_verified_transfer,
-            zk_verified_unshield,
             zk_verified_ballot,
             zk_verified_tally,
-            zk_last_env_hash_transfer,
-            zk_last_env_hash_unshield,
             zk_last_env_hash_ballot,
             zk_last_env_hash_tally,
             axt_replay_ledger,
@@ -6967,12 +6882,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         self.axt_state = axt_state;
         self.completed_axt.truncate(completed_axt_len);
-        self.zk_verified_transfer = zk_verified_transfer;
-        self.zk_verified_unshield = zk_verified_unshield;
         self.zk_verified_ballot = zk_verified_ballot;
         self.zk_verified_tally = zk_verified_tally;
-        self.zk_last_env_hash_transfer = zk_last_env_hash_transfer;
-        self.zk_last_env_hash_unshield = zk_last_env_hash_unshield;
         self.zk_last_env_hash_ballot = zk_last_env_hash_ballot;
         self.zk_last_env_hash_tally = zk_last_env_hash_tally;
         self.axt_replay_ledger = axt_replay_ledger;
@@ -8551,6 +8462,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn finish_and_materialize_core_query_option<T>(
+        &mut self,
         vm: &mut IVM,
         gas_remaining: u64,
         gas_ctx: &QueryGasContext,
@@ -8563,6 +8475,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     where
         T: NoritoSerialize + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
     {
+        if let Some(metrics) = &mut self.core_query_page_metrics {
+            metrics.projection_decodes = metrics.projection_decodes.saturating_add(1);
+            metrics.projection_payload_bytes = u64::try_from(payload.len()).unwrap_or(u64::MAX);
+        }
         let decoded: Option<T> =
             decode_canonical_norito(payload).map_err(|_| ivm::VMError::DecodeError)?;
         let prepared = decoded.map(prepare).transpose()?;
@@ -8575,6 +8491,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let leaf_tlv_bytes = prepared.as_ref().map_or(0, |words| {
             Self::prepared_query_leaf_bytes(std::slice::from_ref(words))
         });
+        if let Some(metrics) = &mut self.core_query_page_metrics {
+            metrics.leaf_tlv_bytes = leaf_tlv_bytes;
+        }
         let encoded_bytes = u64::try_from(payload.len())
             .unwrap_or(u64::MAX)
             .saturating_add(leaf_tlv_bytes);
@@ -8766,11 +8685,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let Some(state_ref) = self.query_state.get() else {
             return Err(ivm::VMError::NotImplemented { syscall });
         };
+        if let Some(metrics) = &mut self.core_query_page_metrics {
+            metrics.host_queries = metrics.host_queries.saturating_add(1);
+        }
         let (output, stats) =
             state_ref.execute_optional_singular_query(&self.authority, request, Some(budget))?;
         let projected = output.map(project).transpose()?;
         let payload = Self::encode_norito_payload(&projected)?;
-        Self::finish_and_materialize_core_query_option(
+        self.finish_and_materialize_core_query_option(
             vm,
             gas_remaining,
             &gas_ctx,
@@ -10380,7 +10302,6 @@ impl<QS> CoreHostImpl<QS> {
         matches!(
             number,
             ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
-                | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
                 | ivm::syscalls::SYSCALL_STATE_PATH_FROM_NAME
                 | ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE
@@ -10393,38 +10314,24 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_JSON_OBJECT
                 | ivm::syscalls::SYSCALL_JSON_BUILD
                 | ivm::syscalls::SYSCALL_JSON_SET_I64
-                | ivm::syscalls::SYSCALL_JSON_SET_I64_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
-                | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
                 | ivm::syscalls::SYSCALL_TLV_LEN
                 | ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
                 | ivm::syscalls::SYSCALL_JSON_GET_JSON
-                | ivm::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_NAME
-                | ivm::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
-                | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID
-                | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX
-                | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
-                | ivm::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_INT
-                | ivm::syscalls::SYSCALL_JSON_GET_INT_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_DECIMAL
-                | ivm::syscalls::SYSCALL_JSON_GET_DECIMAL_DIRECT
                 | ivm::syscalls::SYSCALL_JSON_GET_QUANTITY
-                | ivm::syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT
                 | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
-                | ivm::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
                 | ivm::syscalls::SYSCALL_SCHEMA_DECODE
-                | ivm::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
                 | ivm::syscalls::SYSCALL_POINTER_TO_NORITO
                 | ivm::syscalls::SYSCALL_POINTER_FROM_NORITO
                 | ivm::syscalls::SYSCALL_TLV_EQ
                 | ivm::syscalls::SYSCALL_SCHEMA_INFO
-                | ivm::syscalls::SYSCALL_SCHEMA_INFO_DIRECT
                 | ivm::syscalls::SYSCALL_NAME_DECODE
         )
     }
@@ -10630,9 +10537,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
-            ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
-            | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
-            | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
+            ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
             | ivm::syscalls::SYSCALL_VERIFY_PROOF => {
                 Some(ivm::host::quote_zk_single_at(vm, vm.register(10), self.zk_gas_schedule)?.1)
@@ -10653,14 +10558,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-            | ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
+            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
@@ -11073,53 +10971,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => {
                     self.apply_fastpq_batch_from_tlv(vm)
                 }
-                // ----------------- Native anonymous asset escrow ISIs via pointer-ABI -----------------
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => {
-                    let request: OpenAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(AcceptAnonymousAssetEscrow { escrow_id }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(MarkAnonymousEscrowPaymentSent { escrow_id }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE => {
-                    let request: ReleaseAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL => {
-                    let request: CancelAnonymousAssetEscrow =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => {
-                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                    let evidence_hashes =
-                        Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
-                    self.queue_instruction_after_preflight(
-                        vm,
-                        InstructionBox::from(OpenAnonymousEscrowDispute {
-                            escrow_id,
-                            evidence_hashes,
-                        }),
-                    )
-                }
-                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
-                    let request: ResolveAnonymousEscrowDispute =
-                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-                }
                 // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
                 ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
                     let escrow_ptr = vm.register(10);
@@ -11521,39 +11372,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             debug_assert_eq!(queued_gas, gas);
                             Ok(gas)
                         }
-                        ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD => {
-                            let unshield = any_ref
-                                .downcast_ref::<DMZk::Unshield>()
-                                .ok_or(ivm::VMError::PermissionDenied)?;
-                            let mut proof = unshield.proof.clone();
-                            let pending_hash = if proof.envelope_hash.is_none() {
-                                self.zk_last_env_hash_unshield.front().copied()
-                            } else {
-                                None
-                            };
-                            if let Some(hash) = pending_hash {
-                                proof.envelope_hash = Some(hash);
-                            }
-                            let instruction = InstructionBox::from(DMZk::Unshield {
-                                asset: unshield.asset.clone(),
-                                to: unshield.to.clone(),
-                                public_amount: unshield.public_amount().clone(),
-                                inputs: unshield.inputs.clone(),
-                                proof,
-                                root_hint: unshield.root_hint,
-                            });
-                            let gas = crate::gas::meter_instruction(&instruction);
-                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                            if pending_hash.is_some() {
-                                debug_assert_eq!(
-                                    Arc::make_mut(&mut self.zk_last_env_hash_unshield).pop_front(),
-                                    pending_hash
-                                );
-                            }
-                            let queued_gas = self.queue_instruction(instruction);
-                            debug_assert_eq!(queued_gas, gas);
-                            Ok(gas)
-                        }
                         ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE => {
                             any_ref
                                 .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
@@ -11747,71 +11565,6 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 // ZK verify syscalls are handled here so CoreHost can enforce VK binding
                 // and run full backend verification before arming ISI latches.
-                ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
-                    // Capture TLV payload hash (envelope hash) and verify the bound proof.
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
-                    if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
-                    }
-                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                    let envelope = match envelope {
-                        Ok(envelope) => envelope,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "transfer") {
-                        Ok(ok) => ok,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    vm.set_register(10, u64::from(ok));
-                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                    if ok {
-                        Arc::make_mut(&mut self.zk_verified_transfer).push_back(env_hash);
-                        Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(env_hash);
-                    }
-                    Ok(gas)
-                }
-                ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
-                    let ptr = vm.register(10);
-                    let tlv = vm.validate_tlv(ptr)?;
-                    if tlv.type_id != PointerType::NoritoBytes {
-                        return Err(ivm::VMError::NoritoInvalid);
-                    }
-                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                    let envelope = match envelope {
-                        Ok(envelope) => envelope,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "unshield") {
-                        Ok(ok) => ok,
-                        Err(code) => {
-                            vm.set_register(10, 0);
-                            vm.set_register(11, code);
-                            return Ok(gas);
-                        }
-                    };
-                    vm.set_register(10, u64::from(ok));
-                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                    if ok {
-                        Arc::make_mut(&mut self.zk_verified_unshield).push_back(env_hash);
-                        Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(env_hash);
-                    }
-                    Ok(gas)
-                }
                 ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
                     let ptr = vm.register(10);
                     let tlv = vm.validate_tlv(ptr)?;
@@ -12563,7 +12316,7 @@ mod pointer_abi_tests {
     };
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
     use iroha_data_model::{
-        events::execute_trigger::ExecuteTriggerEventFilter, proof::ProofAttachment,
+        events::execute_trigger::ExecuteTriggerEventFilter,
         smart_contract::manifest::ContractManifest,
     };
     use iroha_primitives::json::Json;
@@ -15916,138 +15669,6 @@ seiyaku PrivilegedBinding {
     }
 
     #[test]
-    fn native_anonymous_escrow_syscalls_queue_expected_instructions() {
-        fn proof_attachment(tag: &str) -> ProofAttachment {
-            let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
-            ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend.clone(), tag.as_bytes().to_vec()),
-                VerifyingKeyId::new(backend.as_str(), tag),
-            )
-        }
-
-        let mut vm = ivm::IVM::new(2_000);
-        let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority);
-
-        let escrow_name = Name::from_str("anonymous_aitai_offer").expect("fixture escrow name");
-        let escrow_id = CoreHost::escrow_id_from_name(&escrow_name);
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "xor".parse().unwrap(),
-        );
-        let evidence_hashes = vec![Hash::new("receipt"), Hash::new("judgement")];
-        let escrow_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&escrow_name));
-        let evidence_ptr = store_tlv(
-            &mut vm,
-            PointerType::NoritoBytes,
-            &norito_blob(&evidence_hashes),
-        );
-
-        let open = OpenAnonymousAssetEscrow::with_evidence_hashes(
-            escrow_id.clone(),
-            asset_definition,
-            vec![[0x11; 32]],
-            [0x22; 32],
-            proof_attachment("open"),
-            Some([0x33; 32]),
-            evidence_hashes.clone(),
-        );
-        let release = ReleaseAnonymousAssetEscrow::new(
-            escrow_id.clone(),
-            vec![[0x44; 32]],
-            vec![[0x55; 32]],
-            proof_attachment("release"),
-            Some([0x66; 32]),
-        );
-        let cancel = CancelAnonymousAssetEscrow::new(
-            escrow_id.clone(),
-            vec![[0x77; 32]],
-            vec![[0x88; 32]],
-            proof_attachment("cancel"),
-            None,
-        );
-        let resolve = ResolveAnonymousEscrowDispute::with_evidence_hashes(
-            escrow_id.clone(),
-            vec![[0x99; 32]],
-            vec![[0xAA; 32]],
-            vec![[0xBB; 32]],
-            proof_attachment("resolve"),
-            Some([0xCC; 32]),
-            evidence_hashes.clone(),
-        );
-
-        let open_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&open));
-        let release_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&release));
-        let cancel_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&cancel));
-        let resolve_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&resolve));
-
-        let assert_queued = |host: &mut CoreHost, res, expected: InstructionBox| {
-            let expected_gas = crate::gas::meter_instruction(&expected);
-            assert_eq!(res, Ok(expected_gas));
-            assert_eq!(host.queued, vec![expected]);
-            host.queued.clear();
-        };
-
-        vm.set_register(10, open_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(open));
-
-        vm.set_register(10, escrow_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT, &mut vm);
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(AcceptAnonymousAssetEscrow {
-                escrow_id: escrow_id.clone(),
-            }),
-        );
-
-        vm.set_register(10, escrow_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
-            &mut vm,
-        );
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(MarkAnonymousEscrowPaymentSent {
-                escrow_id: escrow_id.clone(),
-            }),
-        );
-
-        vm.set_register(10, release_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(release));
-
-        vm.set_register(10, cancel_ptr);
-        let res = host.syscall(ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL, &mut vm);
-        assert_queued(&mut host, res, InstructionBox::from(cancel));
-
-        vm.set_register(10, escrow_ptr);
-        vm.set_register(11, evidence_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
-            &mut vm,
-        );
-        assert_queued(
-            &mut host,
-            res,
-            InstructionBox::from(OpenAnonymousEscrowDispute {
-                escrow_id: escrow_id.clone(),
-                evidence_hashes,
-            }),
-        );
-
-        vm.set_register(10, resolve_ptr);
-        let res = host.syscall(
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
-            &mut vm,
-        );
-        assert_queued(&mut host, res, InstructionBox::from(resolve));
-    }
-
-    #[test]
     fn register_peer_syscall_queues_instruction() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
@@ -18160,13 +17781,30 @@ seiyaku DedicatedQueryContract {
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
+        host.enable_core_query_page_metrics();
         let mut vm = IVM::new(1_000_000);
+        macro_rules! assert_single_projection {
+            ($tag:expr) => {{
+                let metrics = host
+                    .core_query_page_metrics()
+                    .expect("typed query metrics enabled");
+                assert_eq!(metrics.host_queries, 1, "{:?}", $tag);
+                assert_eq!(metrics.projection_decodes, 1, "{:?}", $tag);
+                assert!(
+                    metrics.projection_payload_bytes > 0 && metrics.leaf_tlv_bytes > 0,
+                    "{:?} must execute one host query and decode one non-empty typed projection",
+                    $tag
+                );
+            }};
+        }
 
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
         vm.set_register(11, account_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get account");
+        assert_single_projection!(CoreQueryEntityTagV1::Account);
         let (is_some, account_words) =
             read_option_words(&vm, vm.register(10), CoreHost::ACCOUNT_VIEW_WORDS);
         assert!(is_some);
@@ -18177,10 +17815,12 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, account_words[1], PointerType::Json);
 
         let asset_ptr = store_tlv(&mut vm, PointerType::AssetId, &norito_blob(&asset_id));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Asset.as_u64());
         vm.set_register(11, asset_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get asset");
+        assert_single_projection!(CoreQueryEntityTagV1::Asset);
         let (is_some, asset_words) =
             read_option_words(&vm, vm.register(10), CoreHost::ASSET_VIEW_WORDS);
         assert!(is_some);
@@ -18194,10 +17834,12 @@ seiyaku DedicatedQueryContract {
             PointerType::AssetDefinitionId,
             &norito_blob(&asset_def_id),
         );
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::AssetDefinition.as_u64());
         vm.set_register(11, asset_def_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get asset definition");
+        assert_single_projection!(CoreQueryEntityTagV1::AssetDefinition);
         let (is_some, definition_words) =
             read_option_words(&vm, vm.register(10), CoreHost::ASSET_DEFINITION_VIEW_WORDS);
         assert!(is_some);
@@ -18221,10 +17863,12 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, definition_words[5], PointerType::Json);
 
         let domain_ptr = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&domain_id));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Domain.as_u64());
         vm.set_register(11, domain_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get domain");
+        assert_single_projection!(CoreQueryEntityTagV1::Domain);
         let (is_some, domain_words) =
             read_option_words(&vm, vm.register(10), CoreHost::DOMAIN_VIEW_WORDS);
         assert!(is_some);
@@ -18234,10 +17878,12 @@ seiyaku DedicatedQueryContract {
         let _: Json = decode_typed_leaf(&vm, domain_words[2], PointerType::Json);
 
         let nft_ptr = store_tlv(&mut vm, PointerType::NftId, &norito_blob(&nft_id));
+        host.reset_core_query_page_metrics();
         vm.set_register(10, CoreQueryEntityTagV1::Nft.as_u64());
         vm.set_register(11, nft_ptr);
         host.syscall(ivm_sys::SYSCALL_CORE_QUERY_GET, &mut vm)
             .expect("get nft");
+        assert_single_projection!(CoreQueryEntityTagV1::Nft);
         let (is_some, nft_words) =
             read_option_words(&vm, vm.register(10), CoreHost::NFT_VIEW_WORDS);
         assert!(is_some);
@@ -20349,7 +19995,6 @@ seiyaku DedicatedQueryContract {
         for operation_tag in [
             0,
             ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
-            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
             u64::MAX,
         ] {
             let mut host = local_contract_host(authority.clone());
@@ -20464,61 +20109,6 @@ seiyaku DedicatedQueryContract {
             "failed affordability must not consume the proof latch"
         );
         assert_eq!(vm.register(10), instruction_ptr);
-
-        let escrow_name = Name::from_str("extreme_gas_escrow").expect("escrow name");
-        let escrow = OpenAnonymousAssetEscrow::with_evidence_hashes(
-            CoreHost::escrow_id_from_name(&escrow_name),
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").expect("domain"),
-                "xor".parse().expect("asset name"),
-            ),
-            vec![[0x51; 32]],
-            [0x52; 32],
-            ProofAttachment::new_ref(
-                backend.clone(),
-                ProofBox::new(backend.clone(), vec![0x53]),
-                VerifyingKeyId::new(backend.as_str(), "extreme-gas-escrow"),
-            ),
-            Some([0x54; 32]),
-            Vec::new(),
-        );
-        let escrow_payload = norito::to_bytes(&escrow).expect("encode anonymous escrow");
-        let escrow_code = [
-            ivm::encoding::wide::encode_sys(
-                ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER).expect("syscall fits"),
-            )
-            .to_le_bytes(),
-            ivm::encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat();
-        let mut escrow_vm = IVM::new(10_000);
-        escrow_vm
-            .load_program(&build_authenticated_test_contract_program(
-                &escrow_code,
-                0,
-                true,
-            ))
-            .expect("load anonymous escrow program");
-        let escrow_ptr = store_tlv(&mut escrow_vm, PointerType::NoritoBytes, &escrow_payload);
-        escrow_vm.set_register(10, escrow_ptr);
-        let mut escrow_host = local_contract_host((*ALICE_ID).clone());
-
-        let error = escrow_vm
-            .run_with_host(&mut escrow_host)
-            .expect_err("extreme proof gas exceeds the escrow reserve");
-
-        assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(
-            escrow_vm.remaining_gas(),
-            0,
-            "a state-dependent escrow failure consumes its fail-closed reserve"
-        );
-        assert!(
-            escrow_host.queued.is_empty(),
-            "unaffordable native proof instruction must not be queued"
-        );
-        assert_eq!(escrow_vm.register(10), escrow_ptr);
     }
 
     #[test]
@@ -22892,29 +22482,26 @@ seiyaku Callee {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority);
-        let verified_transfer = Arc::clone(&host.zk_verified_transfer);
+        let verified_ballot = Arc::clone(&host.zk_verified_ballot);
         let replay_ledger = Arc::clone(&host.axt_replay_ledger);
         let proof_cache = Arc::clone(&host.axt_proof_cache);
         host.fastpq_batch_entries = Some(Vec::new());
 
         let snapshot = host.snapshot_nested_contract_call();
-        assert!(Arc::ptr_eq(
-            &snapshot.zk_verified_transfer,
-            &verified_transfer
-        ));
+        assert!(Arc::ptr_eq(&snapshot.zk_verified_ballot, &verified_ballot));
         assert!(Arc::ptr_eq(&snapshot.axt_replay_ledger, &replay_ledger));
         assert!(Arc::ptr_eq(&snapshot.axt_proof_cache, &proof_cache));
         assert!(
             host.fastpq_batch_entries.is_none(),
             "frame-local batch storage must be moved, not cloned"
         );
-        Arc::make_mut(&mut host.zk_verified_transfer).push_back([7; 32]);
-        assert!(!Arc::ptr_eq(&host.zk_verified_transfer, &verified_transfer));
+        Arc::make_mut(&mut host.zk_verified_ballot).push_back([7; 32]);
+        assert!(!Arc::ptr_eq(&host.zk_verified_ballot, &verified_ballot));
 
         host.finish_nested_contract_call(snapshot, NestedContractCallOutcome::Rollback)
             .expect("restore shared rollback state");
-        assert!(Arc::ptr_eq(&host.zk_verified_transfer, &verified_transfer));
-        assert!(host.zk_verified_transfer.is_empty());
+        assert!(Arc::ptr_eq(&host.zk_verified_ballot, &verified_ballot));
+        assert!(host.zk_verified_ballot.is_empty());
         assert!(host.fastpq_batch_entries.is_some());
     }
 
@@ -30004,6 +29591,29 @@ seiyaku DurableOwner {
     }
 
     #[test]
+    fn zk_vote_tally_syscall_rejects_noncanonical_selector_without_publishing_response() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let mut vm = IVM::new(10_000);
+        let request = ivm::zk_verify::VoteGetTallyRequest {
+            election_id: "election/alias".to_owned(),
+        };
+        let payload = norito::to_bytes(&request).expect("encode request");
+        let request_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, request_ptr);
+
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            vm.register(10),
+            request_ptr,
+            "failed tally queries must not publish a response pointer"
+        );
+    }
+
+    #[test]
     fn zk_election_snapshot_rejects_invalid_shapes_without_replacement() {
         crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
@@ -30011,6 +29621,17 @@ seiyaku DurableOwner {
         valid.insert("valid".to_string(), (1, false, vec![0]));
         host.set_zk_elections_snapshot(valid)
             .expect("one-option election is valid");
+
+        let mut invalid_selector = BTreeMap::new();
+        invalid_selector.insert("invalid/election".to_owned(), (1, false, vec![0]));
+        assert_eq!(
+            host.set_zk_elections_snapshot(invalid_selector),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert!(
+            host.zk_elections.contains_key("valid"),
+            "a noncanonical snapshot key must not replace the prior snapshot"
+        );
 
         for (id, options, tally) in [
             ("zero-options", 0, Vec::new()),
@@ -30041,6 +29662,14 @@ seiyaku DurableOwner {
             .expect("bounded response");
         assert!(response.finalized);
         assert_eq!(response.tally.len(), 64);
+
+        assert_eq!(
+            host.vote_get_tally_response(&ivm::zk_verify::VoteGetTallyRequest {
+                election_id: ".maximum".to_owned(),
+            }),
+            Err(ivm::VMError::NoritoInvalid),
+            "noncanonical requests must fail before lookup or response construction"
+        );
 
         for (id, options, tally) in [
             ("response-zero-options", 0, Vec::new()),
@@ -30114,6 +29743,37 @@ seiyaku DurableOwner {
                 assert!(!host.zk_elections.contains_key("candidate"));
             }
         }
+
+        let mut world = World::new();
+        world.elections.insert(
+            "candidate/alias".to_owned(),
+            ElectionState {
+                options: 1,
+                tally: vec![0],
+                ..ElectionState::default()
+            },
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        let mut prior = BTreeMap::new();
+        prior.insert("prior".to_owned(), (1, true, vec![9]));
+        host.set_zk_elections_snapshot(prior)
+            .expect("seed prior snapshot");
+        assert_eq!(
+            host.set_zk_snapshots_from_world(view.world(), &view.zk),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            host.zk_elections.get("prior").cloned(),
+            Some((1, true, vec![9])),
+            "failed hydration must preserve the prior snapshot"
+        );
+        assert!(!host.zk_elections.contains_key("candidate/alias"));
     }
 
     #[test]
@@ -30133,10 +29793,11 @@ seiyaku DurableOwner {
                 "zcoin".parse().unwrap(),
             );
         let mut zk_state = ZkAssetState::default();
-        zk_state.commitments = vec![[1u8; 32], [2u8; 32]];
-        zk_state.root_history = zk_state
-            .tree_profile
-            .compute_prefix_roots(&zk_state.commitments)
+        zk_state
+            .push_commitments(
+                &[[1u8; 32], [2u8; 32]],
+                NonZeroUsize::new(64).expect("non-zero root history cap"),
+            )
             .expect("canonical confidential tree roots");
         let expected_roots = zk_state.root_history.clone();
         world.zk_assets.insert(asset_def_id.clone(), zk_state);
@@ -30851,7 +30512,7 @@ seiyaku DurableOwner {
         let code = [
             ivm::encoding::wide::encode_sys(
                 ivm::instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_ZK_VERIFY_TRANSFER).expect("syscall fits"),
+                u8::try_from(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT).expect("syscall fits"),
             )
             .to_le_bytes(),
             ivm::encoding::wide::encode_halt().to_le_bytes(),
@@ -30880,8 +30541,8 @@ seiyaku DurableOwner {
         );
         assert_eq!(vm.register(10), payload_ptr);
         assert_eq!(vm.register(11), 0xfeed);
-        assert!(host.zk_verified_transfer.is_empty());
-        assert!(host.zk_last_env_hash_transfer.is_empty());
+        assert!(host.zk_verified_ballot.is_empty());
+        assert!(host.zk_last_env_hash_ballot.is_empty());
     }
 
     #[test]

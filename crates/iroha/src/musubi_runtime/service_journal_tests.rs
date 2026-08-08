@@ -11,14 +11,21 @@ use iroha_crypto::{Algorithm, HashOf};
 use iroha_data_model::{
     account::{MultisigMember, MultisigPolicy},
     musubi::{
-        ArchiveId, MusubiContentDigestV1, MusubiProviderBundleVerificationApprovalV1,
-        MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
+        ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArtifactDescriptorV1,
+        MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+        MusubiProviderBundleVerificationApprovalV1, MusubiProviderBundleVerificationBindingV1,
+        MusubiProviderBundleVerificationPayloadV1, MusubiReleaseIdV1, MusubiReleaseMetadataV1,
+        MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
+        musubi_provider_bundle_attestation_set_digest_v1,
     },
+    nexus::DataSpaceId,
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
         ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     },
 };
+use norito::codec::{Decode as _, Encode as _};
+use sorafs_car::{CarVerifier, CarWriter, FileEntry, compute_por_root};
 
 #[derive(Clone)]
 struct TestPublicationClock {
@@ -44,6 +51,28 @@ impl MusubiPublicationServiceClockV1 for TestPublicationClock {
 }
 
 #[test]
+fn private_http_request_debug_redacts_authorization_metadata_and_body() {
+    let request = MusubiPublicationPrivateHttpRequestV1 {
+        method: "POST",
+        path: MUSUBI_PUBLICATION_SEED_INGRESS_PATH_V1,
+        content_type: MUSUBI_PUBLICATION_SEED_ENVELOPE_MEDIA_TYPE_V1,
+        authorization: Some("live-authorization-sentinel"),
+        seed_ingress_metadata: Some("metadata-sentinel"),
+        body: b"package-body-sentinel",
+    };
+    let debug = format!("{request:?}");
+    for secret in [
+        "live-authorization-sentinel",
+        "metadata-sentinel",
+        "package-body-sentinel",
+    ] {
+        assert!(!debug.contains(secret), "debug output exposed {secret}");
+    }
+    assert!(debug.contains("authorization_present: true"));
+    assert!(debug.contains("body_length: 21"));
+}
+
+#[test]
 fn publication_service_telemetry_annotations_are_closed_and_terminal() {
     let conflict = seed_ingress_journal_error(MusubiPublicationServiceJournalErrorV1::Conflict);
     assert_eq!(
@@ -55,6 +84,7 @@ fn publication_service_telemetry_annotations_are_closed_and_terminal() {
 
     let authorization_replay =
         seed_ingress_journal_error(MusubiPublicationServiceJournalErrorV1::Replay);
+    assert!(authorization_replay.retryable);
     assert_eq!(authorization_replay.telemetry, None);
 
     let retryable_storage =
@@ -101,6 +131,8 @@ impl MusubiSeedIngressBackendV1 for RecordingSeedIngress {
         &mut self,
         _operation_id: [u8; 32],
         _binding: &MusubiSeedIngressReceiptBindingV1,
+        _commitment: &MusubiArchiveCommitmentV1,
+        _plan: &CarBuildPlan,
         _car: &[u8],
     ) -> Result<(), MusubiPublicationServiceBackendErrorV1> {
         let mut calls = self.calls.lock().expect("seed call counter");
@@ -618,6 +650,8 @@ struct PrivateServiceFixture {
     runtime: AuthenticatedMusubiPublicationRuntimeClientV1,
     request: MusubiSeedIngressStageRequestV1,
     metadata: Vec<u8>,
+    plan: CarBuildPlan,
+    raw_car: Vec<u8>,
     car: Vec<u8>,
     calls: Arc<Mutex<usize>>,
     clock: Arc<AtomicU64>,
@@ -729,6 +763,16 @@ fn control_service_fixture(
         })
         .collect::<Vec<_>>();
     let provider = provider_attestations[0].payload.binding.provider_id;
+    let provider_attestation_references = provider_attestations
+        .iter()
+        .map(MusubiProviderBundleVerificationAttestationV1::reference)
+        .collect::<Vec<_>>();
+    let provider_attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+        commitment.archive_id(),
+        replication_order,
+        &provider_attestation_references,
+    )
+    .expect("canonical provider attestation set");
     let binding = MusubiSeedIngressReceiptBindingV1 {
         chain_id: client.chain.clone(),
         genesis_block_hash,
@@ -817,7 +861,7 @@ fn control_service_fixture(
             .iter()
             .map(|attestation| attestation.payload.binding.provider_id)
             .collect(),
-        provider_attestations,
+        provider_attestation_set_digest,
         renew_after_epoch: 10,
         expires_at_epoch: 20,
         finalized_height: 70,
@@ -901,9 +945,9 @@ fn control_service_fixture(
 }
 
 fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
-    let (client, _) = client();
+    let (regressing_client, _) = client();
     let runtime = AuthenticatedMusubiPublicationRuntimeClientV1::from_iroha_client(
-        &client,
+        &regressing_client,
         Duration::from_secs(5),
     )
     .expect("runtime client");
@@ -913,27 +957,174 @@ fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
     )
     .expect("derive broker key");
     let broker = AccountId::new(broker_key.public_key().clone());
-    let car = b"canonical private-service CAR".to_vec();
+    let package = MusubiPackageIdV1::new(
+        DataSpaceId::new(7),
+        MusubiPackageScopeV1::DataspaceRoot,
+        "runtime-fixture".parse().expect("fixture package name"),
+    );
+    let release =
+        MusubiReleaseIdV1::new(package, "1.0.0".parse().expect("fixture package version"));
+    let verification_lock = MusubiVerificationLockV1 {
+        schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+        version: MUSUBI_REGISTRY_VERSION_V1,
+        root: release.clone(),
+        root_dependencies: Vec::new(),
+        nodes: Vec::new(),
+    };
+    let semantic_release = MusubiSemanticReleaseManifestV1 {
+        release,
+        edition: MusubiKotodamaEditionV1::V1,
+        abi: MusubiAbiBindingV1::new([0x70; 32]).expect("fixture ABI"),
+        dependencies: Vec::new(),
+        exports: Vec::new(),
+        interface_digest: MusubiContentDigestV1::new([0x71; 32]),
+        metadata: MusubiReleaseMetadataV1::default(),
+        verification_lock_digest: verification_lock.digest(),
+    };
+    semantic_release
+        .validate()
+        .expect("fixture semantic release");
+    verification_lock
+        .validate()
+        .expect("fixture verification lock");
+    let source_path = "Musubi.toml";
+    let source_data = vec![b'm'; 4 * 1024];
+    let mut source_material = Vec::new();
+    seed_ingress_append_frame(&mut source_material, SOURCE_TREE_DOMAIN_V1)
+        .expect("frame fixture source domain");
+    source_material.extend_from_slice(&1_u32.to_be_bytes());
+    seed_ingress_append_frame(&mut source_material, source_path.as_bytes())
+        .expect("frame fixture source path");
+    source_material.extend_from_slice(
+        &u64::try_from(source_data.len())
+            .expect("fixture source length")
+            .to_be_bytes(),
+    );
+    source_material.extend_from_slice(blake3::hash(&source_data).as_bytes());
+    let source_tree_digest = seed_ingress_domain_digest(SOURCE_TREE_DOMAIN_V1, &source_material)
+        .expect("fixture source-tree digest");
+    let artifact_descriptor = MusubiArtifactDescriptorV1::new(
+        semantic_release.semantic_digest(),
+        source_tree_digest,
+        verification_lock.digest(),
+        u64::try_from(source_data.len()).expect("fixture source byte count"),
+        1,
+    )
+    .expect("fixture artifact descriptor");
+    let semantic_release_bytes = semantic_release.encode();
+    let descriptor_bytes = artifact_descriptor.encode();
+    let verification_lock_bytes = verification_lock.encode();
+    let mut descriptor_material = Vec::new();
+    seed_ingress_append_frame(&mut descriptor_material, ARTIFACT_DESCRIPTOR_DOMAIN_V1)
+        .expect("frame fixture descriptor domain");
+    seed_ingress_append_frame(&mut descriptor_material, &descriptor_bytes)
+        .expect("frame fixture descriptor");
+    let descriptor_digest =
+        seed_ingress_domain_digest(ARTIFACT_DESCRIPTOR_DOMAIN_V1, &descriptor_material)
+            .expect("fixture descriptor digest");
+    let mut bundle_material = Vec::new();
+    for bytes in [
+        BUNDLE_DOMAIN_V1,
+        semantic_release_bytes.as_slice(),
+        descriptor_material.as_slice(),
+        source_material.as_slice(),
+        verification_lock_bytes.as_slice(),
+    ] {
+        seed_ingress_append_frame(&mut bundle_material, bytes)
+            .expect("frame fixture bundle material");
+    }
+    let bundle_digest = seed_ingress_domain_digest(BUNDLE_DOMAIN_V1, &bundle_material)
+        .expect("fixture bundle digest");
+    let entries = vec![
+        FileEntry {
+            path: vec![source_path.to_owned()],
+            data: source_data,
+        },
+        FileEntry {
+            path: BUNDLE_RELEASE_PATH_V1
+                .split('/')
+                .map(str::to_owned)
+                .collect(),
+            data: semantic_release_bytes,
+        },
+        FileEntry {
+            path: BUNDLE_DESCRIPTOR_PATH_V1
+                .split('/')
+                .map(str::to_owned)
+                .collect(),
+            data: descriptor_bytes,
+        },
+        FileEntry {
+            path: BUNDLE_VERIFICATION_LOCK_PATH_V1
+                .split('/')
+                .map(str::to_owned)
+                .collect(),
+            data: verification_lock_bytes,
+        },
+    ];
+    let (plan, payload) =
+        CarBuildPlan::from_files(entries).expect("build canonical seed fixture plan");
+    let mut raw_car = Vec::new();
+    let stats = CarWriter::new(&plan, &payload)
+        .expect("construct canonical seed fixture writer")
+        .write_to(&mut raw_car)
+        .expect("write canonical seed fixture CAR");
+    let descriptor = sorafs_car::chunker_registry::default_descriptor();
+    let commitment = MusubiArchiveCommitmentV1 {
+        root_cid: ManifestRootCid::try_from(stats.root_cids[0].clone())
+            .expect("canonical seed fixture root"),
+        chunker: ChunkerProfileHandle {
+            profile_id: descriptor.id.0,
+            namespace: descriptor.namespace.to_owned(),
+            name: descriptor.name.to_owned(),
+            semver: descriptor.semver.to_owned(),
+            multihash_code: descriptor.multihash_code,
+        },
+        chunk_plan_digest: MusubiContentDigestV1::new(compute_chunk_plan_digest_sha3(&plan.chunks)),
+        por_root: MusubiContentDigestV1::new(
+            compute_por_root(&payload, &plan).expect("seed fixture PoR"),
+        ),
+        content_length: plan.content_length,
+        car_digest: MusubiContentDigestV1::new(*stats.car_archive_digest.as_bytes()),
+        car_size: stats.car_size,
+        bundle_digest,
+        source_tree_digest,
+        descriptor_digest,
+        file_count: 1,
+        chunk_count: u32::try_from(plan.chunks.len()).expect("fixture chunk count fits u32"),
+    };
+    let witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(&plan, &commitment)
+        .expect("canonical seed fixture witness");
+    let canonical_plan = witness
+        .canonical_bytes()
+        .expect("canonical seed fixture plan");
+    let car = encode_seed_ingress_body(&canonical_plan, &raw_car)
+        .expect("canonical seed fixture envelope");
     let request = MusubiSeedIngressStageRequestV1 {
         version: 1,
         operation_id: [0x61; 32],
         binding: MusubiSeedIngressReceiptBindingV1 {
-            chain_id: client.chain.clone(),
+            chain_id: regressing_client.chain.clone(),
             genesis_block_hash: [0x62; 32],
-            publisher: client.account.clone(),
+            publisher: regressing_client.account.clone(),
             ingress_broker: broker.clone(),
             seed_provider: ProviderId::new([0x63; 32]),
-            semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new([0x64; 32]),
-            archive_id: ArchiveId::new([0x65; 32]),
-            car_body_digest: MusubiContentDigestV1::new(*blake3::hash(&car).as_bytes()),
-            car_body_length: u64::try_from(car.len()).expect("fixture length"),
+            semantic_release_manifest_digest: semantic_release.semantic_digest(),
+            archive_id: commitment.archive_id(),
+            car_body_digest: commitment.car_digest,
+            car_body_length: commitment.car_size,
             nonce: [0x66; 32],
         },
+        commitment,
+        plan_digest: witness
+            .canonical_digest()
+            .expect("seed fixture plan digest"),
+        plan_length: witness.canonical_len().expect("seed fixture plan length"),
     };
     let metadata = norito::encode_canonical(&request).expect("canonical metadata");
     let calls = Arc::new(Mutex::new(0));
     let config = MusubiPublicationServiceConfigurationV1 {
-        chain_id: client.chain,
+        chain_id: regressing_client.chain,
         genesis_block_hash: request.binding.genesis_block_hash,
         ingress_broker: broker.clone(),
         seed_provider: request.binding.seed_provider,
@@ -967,6 +1158,8 @@ fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
         runtime,
         request,
         metadata,
+        plan,
+        raw_car,
         car,
         calls,
         clock,
@@ -1046,7 +1239,7 @@ fn authorization_header(
     let digest = request_digest(MusubiPublicationRuntimeOperationV1::SeedIngress, metadata)
         .expect("request digest");
     let authorization = runtime
-        .authorization(
+        .authorization_at(
             MusubiPublicationRuntimeOperationV1::SeedIngress,
             request.operation_id,
             digest,
@@ -1066,7 +1259,7 @@ fn control_authorization_header(
 ) -> String {
     let digest = request_digest(operation, body).expect("request digest");
     let authorization = runtime
-        .authorization(operation, operation_id, digest, issued_at_ms)
+        .authorization_at(operation, operation_id, digest, issued_at_ms)
         .expect("authorization");
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(norito::encode_canonical(&authorization).expect("canonical authorization"))
@@ -1114,7 +1307,7 @@ fn seed_http_response(
         .handle(MusubiPublicationPrivateHttpRequestV1 {
             method: "POST",
             path: MUSUBI_PUBLICATION_SEED_INGRESS_PATH_V1,
-            content_type: APPLICATION_SORAFS_CAR,
+            content_type: APPLICATION_MUSUBI_SEED_ENVELOPE,
             authorization: Some(authorization),
             seed_ingress_metadata: Some(&metadata),
             body,

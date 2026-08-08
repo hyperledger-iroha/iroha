@@ -4,11 +4,12 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     errors: list[str] = []
 
     def load(relative: str) -> tuple[Path, str]:
-        path = repo_root / relative
-        if not path.is_file():
-            errors.append(f"{path}: missing production successor-refinement source")
-            return path, ""
-        return path, path.read_text(encoding="utf-8")
+        return _read_reviewed_rust_source(
+            repo_root,
+            relative,
+            errors,
+            "production successor-refinement source",
+        )
 
     def region(
         path: Path,
@@ -152,12 +153,32 @@ let (
     recovered_successor_activation,
     mut staged_genesis_nexus_amx_context,
 ) = recovered.into_parts();
+""",
+            "durable recovered ownership must retain the recovered successor owners",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runner_path,
+            run_inner_item,
+            """
 let mut eager_block_sync =
     recovered_successor_activation.is_some() || pending_kura_apply.is_some();
 """,
             "durable recovered ownership must initialize eager block-sync",
             errors,
         )
+        if run_inner_item is not None:
+            require_order(
+                runner_path,
+                "durable recovered ownership eager block-sync initialization",
+                run_inner_item.source,
+                (
+                    "let mut pending_kura_apply = recovered.pending_kura_apply();",
+                    ") = recovered.into_parts();",
+                    "let mut eager_block_sync =",
+                    "recovered_successor_activation.is_some() || pending_kura_apply.is_some();",
+                ),
+            )
         _require_rust_token_sequence(
             runner_path,
             run_inner_item,
@@ -203,7 +224,7 @@ if discovery_was_outstanding && block_sync_request.is_none() {
             runner_path,
             run_inner_item,
             """
-let (receipt, artifact, exact_output_handoff) = finality;
+let (receipt, artifact, lane_work, mut finalized_services) = finality;
 eager_block_sync =
     retain_eager_block_sync(recovering_interrupted_tip, admitted_discovered_commit_qc);
 let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)?;
@@ -732,8 +753,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             ),
         )
 
-    adapter_path, adapter_source = load(
-        "crates/iroha_core/src/sumeragi/v2.rs"
+    adapter_path, adapter_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        errors,
+        "production successor-refinement source",
+        expanded_components=("tests/v2_adapter_activation_context.rs",),
     )
     if adapter_source:
         adapter_test_context = (

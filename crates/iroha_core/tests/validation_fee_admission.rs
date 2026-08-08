@@ -731,6 +731,11 @@ fn install_validation_fee_policy(
         Grant::account_permission(register_permission, authority.clone())
             .execute(authority, &mut stx)
             .expect("grant payout-contract registration authority");
+        let enact_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
+        Grant::account_permission(enact_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant exact governance enactment authority");
         let (contract_artifact, contract_manifest) = payout_contract_artifact();
         let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,

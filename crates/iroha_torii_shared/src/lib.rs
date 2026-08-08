@@ -263,8 +263,6 @@ pub mod uri {
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
     /// Draft one closed SCCP route-governance proposal.
     pub const GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE: &str = "/v1/gov/proposals/sccp-route-governance";
-    /// Governance: submit a ZK ballot (default mode)
-    pub const GOV_BALLOT_ZK: &str = "/v1/gov/ballots/zk";
     /// Governance: submit a non-ZK quadratic ballot (optional mode)
     pub const GOV_BALLOT_PLAIN: &str = "/v1/gov/ballots/plain";
     /// Governance: draft an equal signed Parliament stage ballot

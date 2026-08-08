@@ -518,9 +518,9 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => continue,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                continue;
+            }
         };
         let instructions: Vec<&InstructionBox> = match transaction.instructions() {
             Executable::Instructions(instructions) => instructions.iter().collect(),

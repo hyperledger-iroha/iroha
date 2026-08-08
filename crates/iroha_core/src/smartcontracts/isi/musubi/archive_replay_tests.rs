@@ -1,7 +1,5 @@
-// Archive and retention tests included from the parent module.
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use mv::cell::Cell;
-use mv::storage::StorageReadOnly as _;
 
 use super::*;
 use crate::{
@@ -23,7 +21,9 @@ fn location_fixture(
         pin_manifest: pin,
         replication_order: order,
         providers: Vec::new(),
-        provider_attestations: Vec::new(),
+        provider_attestation_set_digest: MusubiProviderBundleAttestationSetDigestV1::new(
+            [archive_byte.wrapping_add(1); 32],
+        ),
         renew_after_epoch: 1,
         expires_at_epoch: 2,
         finalized_height: 1,
@@ -144,6 +144,291 @@ fn publication_snapshot_rejects_future_or_noncanonical_anchors() {
     assert!(validate_publication_snapshot_anchor(&snapshot, 2, Some([0x33; 32]), 4).is_err());
     assert!(validate_publication_snapshot_anchor(&snapshot, 3, Some([0x44; 32]), 4).is_err());
     assert!(validate_publication_snapshot_anchor(&snapshot, 3, Some([0x33; 32]), 3).is_err());
+}
+
+fn canonical_block_hashes(count: u8) -> Vec<HashOf<BlockHeader>> {
+    (1..=count)
+        .map(|byte| HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; 32])))
+        .collect()
+}
+
+#[test]
+fn publication_snapshot_requires_its_exact_revision_activation_interval() {
+    let block_hashes = canonical_block_hashes(9);
+    let mut world = World::new();
+    world.musubi_resolver_index_checkpoints.insert(
+        MusubiResolverIndexRevisionV1::new(1).expect("genesis revision"),
+        MusubiRegistrySnapshotV1 {
+            finalized_height: 1,
+            finalized_block_hash: [1; 32],
+            index_revision: 1,
+        },
+    );
+    world.musubi_resolver_index_checkpoints.insert(
+        MusubiResolverIndexRevisionV1::new(7).expect("revision seven"),
+        MusubiRegistrySnapshotV1 {
+            finalized_height: 2,
+            finalized_block_hash: [2; 32],
+            index_revision: 7,
+        },
+    );
+    world.musubi_resolver_index_checkpoints.insert(
+        MusubiResolverIndexRevisionV1::new(9).expect("revision nine"),
+        MusubiRegistrySnapshotV1 {
+            finalized_height: 6,
+            finalized_block_hash: [6; 32],
+            index_revision: 9,
+        },
+    );
+    world.musubi_resolver_index_revision =
+        Cell::new(MusubiResolverIndexRevisionV1::new(9).expect("revision nine"));
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    {
+        let mut committed_hashes = state.block_hashes.block();
+        for hash in block_hashes {
+            committed_hashes.push_for_tests(hash);
+        }
+        committed_hashes.commit_for_tests();
+    }
+    let view = state.query_view();
+
+    validate_musubi_registry_snapshot_history_v1(
+        &MusubiRegistrySnapshotV1 {
+            finalized_height: 5,
+            finalized_block_hash: [5; 32],
+            index_revision: 7,
+        },
+        &view,
+    )
+    .expect("an unchanged block inside revision seven's activation interval is valid");
+
+    let wrong_hash = MusubiRegistrySnapshotV1 {
+        finalized_height: 5,
+        finalized_block_hash: [0xFF; 32],
+        index_revision: 7,
+    };
+    assert!(validate_musubi_registry_snapshot_history_v1(&wrong_hash, &view).is_err());
+
+    let future_height = MusubiRegistrySnapshotV1 {
+        finalized_height: 10,
+        finalized_block_hash: [10; 32],
+        index_revision: 7,
+    };
+    assert!(validate_musubi_registry_snapshot_history_v1(&future_height, &view).is_err());
+
+    let future_revision = MusubiRegistrySnapshotV1 {
+        finalized_height: 5,
+        finalized_block_hash: [5; 32],
+        index_revision: 10,
+    };
+    assert!(validate_musubi_registry_snapshot_history_v1(&future_revision, &view).is_err());
+
+    let predates_activation = MusubiRegistrySnapshotV1 {
+        finalized_height: 1,
+        finalized_block_hash: [1; 32],
+        index_revision: 7,
+    };
+    assert!(validate_musubi_registry_snapshot_history_v1(&predates_activation, &view).is_err());
+
+    let successor_already_active = MusubiRegistrySnapshotV1 {
+        finalized_height: 6,
+        finalized_block_hash: [6; 32],
+        index_revision: 7,
+    };
+    assert!(
+        validate_musubi_registry_snapshot_history_v1(&successor_already_active, &view).is_err()
+    );
+
+    let skipped_same_block_revision = MusubiRegistrySnapshotV1 {
+        finalized_height: 5,
+        finalized_block_hash: [5; 32],
+        index_revision: 8,
+    };
+    let error = validate_musubi_registry_snapshot_history_v1(&skipped_same_block_revision, &view)
+        .expect_err("an intra-block revision without a checkpoint cannot be claimed");
+    assert!(
+        error
+            .to_string()
+            .contains("unrecorded resolver-index revision")
+    );
+}
+
+#[test]
+fn publication_resolution_binds_rows_and_selection_state_to_snapshot() {
+    let root_release = MusubiReleaseIdV1::new(
+        package("snapshot-root"),
+        "1.0.0".parse().expect("root version"),
+    );
+    let dependency_release = MusubiReleaseIdV1::new(
+        package("snapshot-dependency"),
+        "1.2.0".parse().expect("dependency version"),
+    );
+    let requirement: MusubiVersionReqV1 = "^1.0.0".parse().expect("requirement");
+    let edge = MusubiExactDependencyEdgeV1 {
+        alias: "dependency".parse().expect("dependency alias"),
+        kind: MusubiDependencyKindV1::Normal,
+        package: dependency_release.package.clone(),
+        requirement: requirement.clone(),
+        selected: dependency_release.clone(),
+    };
+    let archive_id = ArchiveId::new([0x61; 32]);
+    let node = MusubiVerificationNodeV1 {
+        release: dependency_release.clone(),
+        release_digest: MusubiReleaseDigestV1::new([0x62; 32]),
+        archive_id,
+        source_digest: MusubiContentDigestV1::new([0x63; 32]),
+        interface_digest: MusubiContentDigestV1::new([0x64; 32]),
+        abi: MusubiAbiBindingV1::new([0x65; 32]).expect("dependency ABI"),
+        dependencies: Vec::new(),
+    };
+    let lock = MusubiVerificationLockV1 {
+        schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+        version: MUSUBI_REGISTRY_VERSION_V1,
+        root: root_release.clone(),
+        root_dependencies: vec![edge],
+        nodes: vec![node.clone()],
+    };
+    let publication = MusubiPublicationV1 {
+        manifest: MusubiReleaseManifestV1 {
+            release: root_release,
+            edition: MusubiKotodamaEditionV1::V1,
+            abi: MusubiAbiBindingV1::new([0x66; 32]).expect("root ABI"),
+            dependencies: vec![MusubiDependencyReqV1 {
+                alias: "dependency".parse().expect("dependency alias"),
+                package: dependency_release.package.clone(),
+                requirement,
+            }],
+            exports: Vec::new(),
+            interface_digest: MusubiContentDigestV1::new([0x67; 32]),
+            metadata: MusubiReleaseMetadataV1::default(),
+            archive_id: ArchiveId::new([0x68; 32]),
+            verification_lock_digest: lock.digest(),
+        },
+        resolution: MusubiResolutionProofV1 {
+            snapshot: snapshot(7),
+            lock,
+        },
+    };
+    publication.validate().expect("valid exact proof fixture");
+
+    let row = MusubiResolverReleaseRowV1 {
+        release: dependency_release.clone(),
+        release_digest: node.release_digest,
+        archive_id,
+        source_digest: node.source_digest,
+        interface_digest: node.interface_digest,
+        abi: node.abi,
+        dependencies: Vec::new(),
+        selection: MusubiReleaseSelectionStateV1 {
+            yank: MusubiReleaseYankV1 {
+                release: dependency_release.clone(),
+                yanked: false,
+                reason: "snapshot fixture".parse().expect("yank reason"),
+                changed_by: account(0x69),
+                changed_at_height: 7,
+                revision: 1,
+            },
+            storage: MusubiArchiveAvailabilityV1 {
+                archive_id,
+                availability: MusubiStorageAvailabilityV1::Selectable,
+                healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                active_locations: 1,
+                finalized_height: 7,
+                finalized_block_hash: [7; 32],
+                index_revision: 7,
+            },
+            governance: MusubiArtifactGovernanceStateV1::Available,
+        },
+        index_revision: 7,
+    };
+    row.validate().expect("matching resolver row");
+    let block_hashes = canonical_block_hashes(7);
+    let validate_row = |candidate: MusubiResolverReleaseRowV1| {
+        let mut world = World::new();
+        world
+            .musubi_resolver_index
+            .insert(dependency_release.clone(), candidate);
+        let world_view = world.view();
+        validate_resolution_proof(&publication, &world_view, &block_hashes)
+    };
+    validate_row(row.clone()).expect("a row at the claimed snapshot is admissible");
+
+    let mut storage_newer_than_row = row.clone();
+    storage_newer_than_row.selection.storage.index_revision = 8;
+    assert!(storage_newer_than_row.validate().is_err());
+    let error = validate_row(storage_newer_than_row)
+        .expect_err("availability cannot be newer than its resolver row");
+    assert!(error.to_string().contains("invalid resolver row"));
+
+    let mut newer_row = row.clone();
+    newer_row.index_revision = 8;
+    newer_row
+        .validate()
+        .expect("newer resolver row remains canonical");
+    let error =
+        validate_row(newer_row).expect_err("a newer row did not exist at the claimed snapshot");
+    assert!(error.to_string().contains("newer than the claimed"));
+
+    let mut newer_storage_revision = row.clone();
+    newer_storage_revision.index_revision = 8;
+    newer_storage_revision.selection.storage.index_revision = 8;
+    newer_storage_revision
+        .validate()
+        .expect("newer availability projection remains canonical");
+    let error = validate_row(newer_storage_revision)
+        .expect_err("a newer availability projection did not exist at the snapshot");
+    assert!(error.to_string().contains("storage revision"));
+
+    let mut newer_storage_height = row.clone();
+    newer_storage_height.selection.storage.finalized_height = 8;
+    newer_storage_height.selection.storage.finalized_block_hash = [8; 32];
+    newer_storage_height
+        .validate()
+        .expect("future-height availability projection remains canonical");
+    let error = validate_row(newer_storage_height)
+        .expect_err("future availability state did not exist at the snapshot");
+    assert!(error.to_string().contains("storage state is newer"));
+
+    let mut mismatched_storage_hash = row.clone();
+    mismatched_storage_hash
+        .selection
+        .storage
+        .finalized_block_hash = [0x6A; 32];
+    mismatched_storage_hash
+        .validate()
+        .expect("nonzero availability block hashes are structurally valid");
+    let error = validate_row(mismatched_storage_hash)
+        .expect_err("equal-height availability must bind the snapshot block");
+    assert!(error.to_string().contains("claimed finalized block"));
+
+    let mut noncanonical_older_storage = row.clone();
+    noncanonical_older_storage
+        .selection
+        .storage
+        .finalized_height = 6;
+    noncanonical_older_storage
+        .selection
+        .storage
+        .finalized_block_hash = [0x6A; 32];
+    noncanonical_older_storage
+        .validate()
+        .expect("an older availability anchor is structurally valid");
+    let error = validate_row(noncanonical_older_storage)
+        .expect_err("older availability must still bind its own canonical block");
+    assert!(error.to_string().contains("not anchored to its canonical"));
+
+    let mut newer_yank = row;
+    newer_yank.selection.yank.changed_at_height = 8;
+    newer_yank
+        .validate()
+        .expect("future-height yank projection remains canonical");
+    let error =
+        validate_row(newer_yank).expect_err("future yank state did not exist at the snapshot");
+    assert!(error.to_string().contains("yank state is newer"));
 }
 
 #[test]
@@ -520,6 +805,119 @@ fn retention_release(
     }
 }
 
+fn exact_release_query_fixture(
+    include_home: bool,
+    include_universal: bool,
+) -> (State, MusubiExactReleaseQueryV1) {
+    let header = iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(1).expect("nonzero genesis height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let genesis_hash = header.hash();
+    let archive = retention_archive(0x71);
+    let release = retention_release(
+        archive.archive_id,
+        "1.2.3",
+        false,
+        MusubiArtifactGovernanceStateV1::Available,
+    );
+    let release_id = release.manifest.release.clone();
+    let universal_release = MusubiResolverReleaseRowV1 {
+        release: release_id.clone(),
+        release_digest: release.release_digest,
+        archive_id: archive.archive_id,
+        source_digest: archive.commitment.source_tree_digest,
+        interface_digest: release.manifest.interface_digest,
+        abi: release.manifest.abi,
+        dependencies: release.manifest.dependencies.clone(),
+        selection: MusubiReleaseSelectionStateV1 {
+            yank: release.yank.clone(),
+            storage: MusubiArchiveAvailabilityV1 {
+                archive_id: archive.archive_id,
+                availability: MusubiStorageAvailabilityV1::Selectable,
+                healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                active_locations: 1,
+                finalized_height: 1,
+                finalized_block_hash: *genesis_hash.as_ref(),
+                index_revision: 1,
+            },
+            governance: release.artifact_governance.clone(),
+        },
+        index_revision: 1,
+    };
+    let mut world = World::new();
+    if include_home {
+        world.musubi_releases.insert(release_id.clone(), release);
+    }
+    if include_universal {
+        world
+            .musubi_resolver_index
+            .insert(release_id.clone(), universal_release);
+    }
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(genesis_hash);
+        block_hashes.commit_for_tests();
+    }
+    (
+        state,
+        MusubiExactReleaseQueryV1 {
+            release: release_id,
+        },
+    )
+}
+
+#[test]
+fn exact_release_query_returns_paired_projections_from_one_snapshot() {
+    let (state, request) = exact_release_query_fixture(true, true);
+    let response = ValidSingularQuery::execute(
+        &FindMusubiExactReleaseV1::new(request.clone()),
+        &state.view(),
+    )
+    .expect("paired exact release query");
+
+    response
+        .validate_for(&request)
+        .expect("paired response validates for its request");
+    assert_eq!(response.snapshot.finalized_height, 1);
+    assert_eq!(response.snapshot.index_revision, 1);
+    assert_eq!(response.chain_id, state.chain_id_ref().clone());
+    assert_eq!(response.home_release.manifest.release, request.release);
+    assert_eq!(response.universal_release.release, request.release);
+}
+
+#[test]
+fn exact_release_query_fails_closed_for_one_sided_projection() {
+    for (include_home, include_universal) in [(true, false), (false, true)] {
+        let (state, request) = exact_release_query_fixture(include_home, include_universal);
+        let error =
+            ValidSingularQuery::execute(&FindMusubiExactReleaseV1::new(request), &state.view())
+                .expect_err("one-sided exact release projection must fail closed");
+        assert!(matches!(
+            error,
+            QueryExecutionFail::Conversion(message)
+                if message.contains("home and universal projections are inconsistent")
+        ));
+    }
+}
+
+#[test]
+fn exact_release_query_reports_not_found_only_when_both_projections_are_absent() {
+    let (state, request) = exact_release_query_fixture(false, false);
+    let error = ValidSingularQuery::execute(&FindMusubiExactReleaseV1::new(request), &state.view())
+        .expect_err("absent exact release must be reported as not found");
+    assert_eq!(error, QueryExecutionFail::NotFound);
+}
+
 fn seed_retention_archive(
     world: &mut World,
     archive: MusubiArchiveRecordV1,
@@ -576,6 +974,15 @@ fn archive_location_replay_fixture(
 ) {
     let mut world = World::new();
     let mut archive = retention_archive(seed);
+    let genesis_hash = archive_location_genesis_header().hash();
+    archive.staging_receipt.payload.binding.genesis_block_hash = *genesis_hash.as_ref();
+    let broker_keypair = KeyPair::try_from_seed(vec![seed.wrapping_add(1); 32], Algorithm::Ed25519)
+        .expect("fixture ingress broker keypair");
+    archive.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
+        broker_keypair.private_key(),
+        archive.staging_receipt.payload.signing_hash(),
+    )
+    .expect("resign fixture ingress receipt");
     let authority = archive.registered_by.clone();
     let location_id = MusubiArchiveLocationIdV1::new([seed.wrapping_add(11); 32]);
     let pin =
@@ -619,7 +1026,7 @@ fn archive_location_replay_fixture(
         completion_epoch: 1,
         finalized_anchor: iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
             height: 1,
-            block_hash: [seed.wrapping_add(18); 32],
+            block_hash: *genesis_hash.as_ref(),
         },
         archive_id,
         bundle_digest: archive.commitment.bundle_digest,
@@ -650,8 +1057,17 @@ fn archive_location_replay_fixture(
     attestation
         .verify(&binding)
         .expect("fixture provider attestation is cryptographically valid");
+    let attestation_key = attestation.key();
+    let attestation_digest = attestation.digest();
+    let provider_attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+        archive_id,
+        order,
+        &[attestation.reference()],
+    )
+    .expect("fixture provider attestation set digest");
     location.providers = vec![provider_id];
-    location.provider_attestations = vec![attestation];
+    location.provider_attestation_set_digest = provider_attestation_set_digest;
+    location.finalized_height = 2;
     location
         .validate()
         .expect("fixture archive location is structurally valid");
@@ -660,7 +1076,7 @@ fn archive_location_replay_fixture(
         location_id,
         pin_manifest: location.pin_manifest,
         replication_order: location.replication_order,
-        provider_attestations: location.provider_attestations.clone(),
+        provider_attestation_set_digest,
         renew_after_epoch: location.renew_after_epoch,
         expires_at_epoch: location.expires_at_epoch,
         expected_location_revision: 1,
@@ -710,6 +1126,16 @@ fn archive_location_replay_fixture(
         },
     );
     world.provider_owners.insert(provider_id, provider_owner);
+    world.musubi_provider_bundle_attestations.insert(
+        attestation_key,
+        MusubiProviderBundleAttestationRecordV1 {
+            key: attestation_key,
+            attestation_digest,
+            attestation,
+            registered_by: authority.clone(),
+            registered_at_height: 1,
+        },
+    );
     world.musubi_locations_by_pin.insert(
         pin,
         MusubiPinLocationReferenceV1 {
@@ -734,12 +1160,141 @@ fn archive_location_replay_fixture(
     (world, authority, key, instruction)
 }
 
+#[test]
+fn archive_package_governance_replaces_the_prepublication_registrant_capability() {
+    let former_registrant = account(0x51);
+    let current_owner = account(0x52);
+    let mut archive = retention_archive(0x53);
+    archive.registered_by = former_registrant.clone();
+    let governed_package = package("archive-recovery");
+    let governed_release =
+        MusubiReleaseIdV1::new(governed_package.clone(), "1.0.0".parse().expect("version"));
+    let mut world = World::new();
+    world.musubi_packages.insert(
+        governed_package.clone(),
+        MusubiPackageRecordV1 {
+            package: governed_package.clone(),
+            claimed_namespace: "sora".parse().expect("namespace"),
+            claimed_namespace_binding: MusubiNamespaceBindingDigestV1::new([0x54; 32]),
+            owners: vec![current_owner.clone()],
+            member_accounts: vec![current_owner.clone()],
+            claimed_at_height: 1,
+            revisions: MusubiPackageRevisionsV1 {
+                governance: 2,
+                metadata: 1,
+                archive_locations: 2,
+            },
+        },
+    );
+    let owner = MusubiPackageMemberV1 {
+        package: governed_package,
+        account: current_owner.clone(),
+        role: MusubiPackageRoleV1::Owner,
+        accepted_at_height: 2,
+        governance_revision: 2,
+    };
+    world.musubi_package_members.insert(owner.key(), owner);
+
+    let mut reason = MusubiGovernanceRejectionReasonV1::Other;
+    {
+        let world_view = world.view();
+        ensure_archive_manager(&archive, &former_registrant, &world_view, &mut reason)
+            .expect("the archive registrant manages an unpublished archive");
+    }
+
+    world.musubi_archive_reverse_references.insert(
+        archive.archive_id,
+        MusubiArchiveReverseReferencesV1 {
+            archive_id: archive.archive_id,
+            releases: vec![governed_release],
+        },
+    );
+    let world_view = world.view();
+    ensure_archive_manager(&archive, &current_owner, &world_view, &mut reason)
+        .expect("the current package owner manages a published archive");
+    let error = ensure_archive_manager(&archive, &former_registrant, &world_view, &mut reason)
+        .expect_err("a removed registrant must not retain archive-location authority");
+    assert!(error.to_string().contains("lacks the required"));
+    assert_eq!(reason, MusubiGovernanceRejectionReasonV1::Unauthorized);
+}
+
+#[test]
+fn explicit_location_invalidation_preserves_a_protected_archives_replica_quorum() {
+    let (mut world, _, remaining_key, _) = archive_location_replay_fixture(0x55);
+    let archive_id = remaining_key.archive_id;
+    let remaining = world
+        .musubi_archive_locations
+        .view()
+        .get(&remaining_key)
+        .cloned()
+        .expect("fixture remaining location");
+    assert_eq!(
+        current_location_providers(&remaining, &world.view())
+            .expect("fixture evidence is current")
+            .len(),
+        1
+    );
+    assert!(!provider_count_is_healthy(2));
+    assert!(provider_count_is_healthy(3));
+
+    let invalidated_id = MusubiArchiveLocationIdV1::new([0x56; 32]);
+    let invalidated_key = MusubiArchiveLocationKeyV1::new(archive_id, invalidated_id);
+    let mut archive = world
+        .musubi_archives
+        .view()
+        .get(&archive_id)
+        .cloned()
+        .expect("fixture archive");
+    archive.location_ids.push(invalidated_id);
+    archive.location_ids.sort();
+    world.musubi_archives.insert(archive_id, archive);
+
+    let release = retention_release(
+        archive_id,
+        "1.0.0",
+        false,
+        MusubiArtifactGovernanceStateV1::Available,
+    );
+    let release_id = release.manifest.release.clone();
+    world.musubi_releases.insert(release_id.clone(), release);
+    world.musubi_archive_reverse_references.insert(
+        archive_id,
+        MusubiArchiveReverseReferencesV1 {
+            archive_id,
+            releases: vec![release_id],
+        },
+    );
+
+    let world_view = world.view();
+    let error = ensure_locations_may_be_invalidated(&[invalidated_key], &world_view)
+        .expect_err("one remaining fetchable replica is not a healthy release floor");
+    assert!(error.to_string().contains("quorum-healthy"));
+}
+
+fn archive_location_genesis_header() -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(1).expect("nonzero genesis height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    )
+}
+
 fn archive_location_replay_state(world: World) -> State {
-    State::new_for_testing(
+    let state = State::new_with_chain_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-    )
+        iroha_data_model::ChainId::from("retention-test"),
+    );
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(archive_location_genesis_header().hash());
+        block_hashes.commit_for_tests();
+    }
+    state
 }
 
 fn archive_location_replay_block(state: &State) -> crate::state::StateBlock<'_> {
@@ -752,6 +1307,251 @@ fn archive_location_replay_block(state: &State) -> crate::state::StateBlock<'_> 
         0,
     );
     state.block(header)
+}
+
+#[test]
+fn provider_attestation_audit_query_loads_one_exact_immutable_record() {
+    let (world, _, location_key, instruction) = archive_location_replay_fixture(0x40);
+    let locations = world.musubi_archive_locations.view();
+    let location = locations.get(&location_key).expect("fixture location");
+    let key = MusubiProviderBundleAttestationKeyV1 {
+        archive_id: instruction.archive_id,
+        replication_order: instruction.replication_order,
+        provider_id: location.providers[0],
+    };
+    let expected = world
+        .musubi_provider_bundle_attestations
+        .view()
+        .get(&key)
+        .cloned()
+        .expect("fixture provider attestation");
+    let state = archive_location_replay_state(world);
+
+    let actual = ValidSingularQuery::execute(
+        &FindMusubiProviderBundleAttestationV1::new(key),
+        &state.view(),
+    )
+    .expect("exact provider attestation audit query");
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn provider_attestation_registration_is_exactly_idempotent_after_cas_consumption() {
+    let (world, authority, location_key, instruction) = archive_location_replay_fixture(0x3A);
+    let provider = world
+        .musubi_archive_locations
+        .view()
+        .get(&location_key)
+        .expect("fixture location")
+        .providers[0];
+    let key = MusubiProviderBundleAttestationKeyV1 {
+        archive_id: instruction.archive_id,
+        replication_order: instruction.replication_order,
+        provider_id: provider,
+    };
+    let record = world
+        .musubi_provider_bundle_attestations
+        .view()
+        .get(&key)
+        .cloned()
+        .expect("fixture provider attestation");
+    let state = archive_location_replay_state(world);
+    let mut block = archive_location_replay_block(&state);
+    let mut transaction = block.transaction();
+
+    RegisterMusubiProviderBundleAttestationV1::new(record.attestation.clone(), 1)
+        .execute(&authority, &mut transaction)
+        .expect("exact retry ignores the consumed location CAS revision");
+    assert_eq!(
+        transaction
+            .world
+            .musubi_provider_bundle_attestations
+            .get(&key),
+        Some(&record)
+    );
+    assert!(take_musubi_events(&mut transaction).is_empty());
+}
+
+#[test]
+fn successor_archive_manager_can_replay_identical_provider_evidence_without_rewriting_audit() {
+    let (world, former_manager, location_key, instruction) = archive_location_replay_fixture(0x3E);
+    let provider = world
+        .musubi_archive_locations
+        .view()
+        .get(&location_key)
+        .expect("fixture location")
+        .providers[0];
+    let key = MusubiProviderBundleAttestationKeyV1 {
+        archive_id: instruction.archive_id,
+        replication_order: instruction.replication_order,
+        provider_id: provider,
+    };
+    let record = world
+        .musubi_provider_bundle_attestations
+        .view()
+        .get(&key)
+        .cloned()
+        .expect("fixture provider attestation");
+    let state = archive_location_replay_state(world);
+    let mut block = archive_location_replay_block(&state);
+    let mut transaction = block.transaction();
+    let successor = account(0x3F);
+    let governed_package = package("attestation-recovery");
+    seed_package_owner(&governed_package, &successor, 2, &mut transaction);
+    transaction.world.musubi_archive_reverse_references.insert(
+        instruction.archive_id,
+        MusubiArchiveReverseReferencesV1 {
+            archive_id: instruction.archive_id,
+            releases: vec![MusubiReleaseIdV1::new(
+                governed_package,
+                "1.0.0".parse().expect("version"),
+            )],
+        },
+    );
+    let replay = RegisterMusubiProviderBundleAttestationV1::new(record.attestation.clone(), 1);
+
+    replay
+        .clone()
+        .execute(&successor, &mut transaction)
+        .expect("a current successor manager may replay identical immutable evidence");
+    assert_eq!(
+        transaction
+            .world
+            .musubi_provider_bundle_attestations
+            .get(&key),
+        Some(&record),
+        "an idempotent successor replay must retain the original registrant audit"
+    );
+    assert!(take_musubi_events(&mut transaction).is_empty());
+
+    let error = replay
+        .execute(&former_manager, &mut transaction)
+        .expect_err("the removed former manager must not retain replay authority");
+    assert!(error.to_string().contains("lacks the required"));
+    assert_eq!(
+        transaction
+            .world
+            .musubi_provider_bundle_attestations
+            .get(&key),
+        Some(&record)
+    );
+    assert!(take_musubi_events(&mut transaction).is_empty());
+}
+
+#[test]
+fn new_provider_attestation_registration_requires_the_current_location_revision() {
+    let (world, authority, location_key, instruction) = archive_location_replay_fixture(0x3B);
+    let provider = world
+        .musubi_archive_locations
+        .view()
+        .get(&location_key)
+        .expect("fixture location")
+        .providers[0];
+    let key = MusubiProviderBundleAttestationKeyV1 {
+        archive_id: instruction.archive_id,
+        replication_order: instruction.replication_order,
+        provider_id: provider,
+    };
+    let record = world
+        .musubi_provider_bundle_attestations
+        .view()
+        .get(&key)
+        .cloned()
+        .expect("fixture provider attestation");
+    let mut attestations = world.musubi_provider_bundle_attestations.block();
+    let _ = attestations.remove(key);
+    attestations.commit();
+    let state = archive_location_replay_state(world);
+    let mut block = archive_location_replay_block(&state);
+    let mut transaction = block.transaction();
+
+    let error = RegisterMusubiProviderBundleAttestationV1::new(record.attestation, 1)
+        .execute(&authority, &mut transaction)
+        .expect_err("new immutable evidence must use the current location revision");
+    assert!(
+        error
+            .to_string()
+            .contains("stale Musubi archive location revision")
+    );
+    assert!(take_musubi_events(&mut transaction).is_empty());
+}
+
+#[test]
+fn archive_location_add_recomputes_the_registered_attestation_set_digest() {
+    let (world, authority, _, mut instruction) = archive_location_replay_fixture(0x3C);
+    instruction.expected_location_revision = 7;
+    instruction.provider_attestation_set_digest =
+        MusubiProviderBundleAttestationSetDigestV1::new([0xEE; 32]);
+    let state = archive_location_replay_state(world);
+    let mut block = archive_location_replay_block(&state);
+    let mut transaction = block.transaction();
+
+    let error = instruction
+        .execute(&authority, &mut transaction)
+        .expect_err("a substituted compact attestation-set digest must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("does not cover the finalized completion set")
+    );
+    assert!(take_musubi_events(&mut transaction).is_empty());
+}
+
+#[test]
+fn archive_location_add_requires_attestation_records_from_an_earlier_finalized_height() {
+    let (mut world, authority, key, mut instruction) = archive_location_replay_fixture(0x3D);
+    let provider = world
+        .musubi_archive_locations
+        .view()
+        .get(&key)
+        .expect("fixture location")
+        .providers[0];
+    let attestation_key = MusubiProviderBundleAttestationKeyV1 {
+        archive_id: key.archive_id,
+        replication_order: instruction.replication_order,
+        provider_id: provider,
+    };
+    let record = world
+        .musubi_provider_bundle_attestations
+        .view()
+        .get(&attestation_key)
+        .cloned()
+        .expect("fixture provider attestation");
+    let mut attestations = world.musubi_provider_bundle_attestations.block();
+    let _ = attestations.remove(attestation_key);
+    attestations.commit();
+    let mut archive = world
+        .musubi_archives
+        .view()
+        .get(&key.archive_id)
+        .cloned()
+        .expect("fixture archive");
+    archive.location_ids.clear();
+    world.musubi_archives.insert(key.archive_id, archive);
+    let mut locations = world.musubi_archive_locations.block();
+    let _ = locations.remove(key);
+    locations.commit();
+    instruction.expected_location_revision = 7;
+    let state = archive_location_replay_state(world);
+    let mut block = archive_location_replay_block(&state);
+    let mut transaction = block.transaction();
+
+    RegisterMusubiProviderBundleAttestationV1::new(record.attestation, 7)
+        .execute(&authority, &mut transaction)
+        .expect("current-revision provider evidence registers immutably");
+
+    let error = instruction
+        .execute(&authority, &mut transaction)
+        .expect_err("same-height provider evidence is not finalized for location admission");
+    assert!(
+        error
+            .to_string()
+            .contains("must be finalized before archive location admission")
+    );
+    assert!(matches!(
+        take_musubi_events(&mut transaction).as_slice(),
+        [MusubiEvent::ProviderBundleAttestationRegistered(_)]
+    ));
 }
 
 fn assert_exact_archive_location_replay_rejects_corruption(
@@ -892,19 +1692,30 @@ fn exact_archive_location_replay_rejects_a_future_location_revision() {
 fn exact_archive_location_replay_rejects_mismatched_immutable_attestation_evidence() {
     assert_exact_archive_location_replay_rejects_corruption(
         0x4B,
-        |world, key, instruction| {
-            let mut location = world
+        |world, key, _| {
+            let location = world
                 .musubi_archive_locations
                 .view()
                 .get(&key)
                 .cloned()
                 .expect("fixture location");
-            location.provider_attestations[0]
-                .payload
-                .binding
-                .bundle_digest = MusubiContentDigestV1::new([0xEE; 32]);
-            instruction.provider_attestations = location.provider_attestations.clone();
-            world.musubi_archive_locations.insert(key, location);
+            let attestation_key = MusubiProviderBundleAttestationKeyV1 {
+                archive_id: key.archive_id,
+                replication_order: location.replication_order,
+                provider_id: location.providers[0],
+            };
+            let mut record = world
+                .musubi_provider_bundle_attestations
+                .view()
+                .get(&attestation_key)
+                .cloned()
+                .expect("fixture provider attestation");
+            record.attestation.payload.binding.bundle_digest =
+                MusubiContentDigestV1::new([0xEE; 32]);
+            record.attestation_digest = record.attestation.digest();
+            world
+                .musubi_provider_bundle_attestations
+                .insert(attestation_key, record);
         },
         "attestation does not match its immutable archive commitments",
     );
@@ -914,19 +1725,31 @@ fn exact_archive_location_replay_rejects_mismatched_immutable_attestation_eviden
 fn exact_archive_location_replay_rejects_an_invalid_stored_attestation_signature() {
     assert_exact_archive_location_replay_rejects_corruption(
         0x4C,
-        |world, key, instruction| {
-            let mut location = world
+        |world, key, _| {
+            let location = world
                 .musubi_archive_locations
                 .view()
                 .get(&key)
                 .cloned()
                 .expect("fixture location");
+            let attestation_key = MusubiProviderBundleAttestationKeyV1 {
+                archive_id: key.archive_id,
+                replication_order: location.replication_order,
+                provider_id: location.providers[0],
+            };
+            let mut record = world
+                .musubi_provider_bundle_attestations
+                .view()
+                .get(&attestation_key)
+                .cloned()
+                .expect("fixture provider attestation");
             let foreign_keypair = KeyPair::try_from_seed(vec![0xFD; 32], Algorithm::Ed25519)
                 .expect("foreign fixture keypair");
-            location.provider_attestations[0].approvals[0].public_key =
-                foreign_keypair.public_key().clone();
-            instruction.provider_attestations = location.provider_attestations.clone();
-            world.musubi_archive_locations.insert(key, location);
+            record.attestation.approvals[0].public_key = foreign_keypair.public_key().clone();
+            record.attestation_digest = record.attestation.digest();
+            world
+                .musubi_provider_bundle_attestations
+                .insert(attestation_key, record);
         },
         "approval is not a provider-owner key",
     );
@@ -937,9 +1760,9 @@ fn exact_archive_location_replay_rejects_a_missing_pin_reverse_reference() {
     assert_exact_archive_location_replay_rejects_corruption(
         0x45,
         |world, _, instruction| {
-            let mut locations_by_pin = world.musubi_locations_by_pin.block();
-            let _ = locations_by_pin.remove(instruction.pin_manifest);
-            locations_by_pin.commit();
+            let mut block = world.musubi_locations_by_pin.block();
+            let _ = block.remove(instruction.pin_manifest);
+            block.commit();
         },
         "pin reverse index is inconsistent",
     );
@@ -969,14 +1792,16 @@ fn exact_archive_location_replay_rejects_an_inactive_order_reverse_reference() {
 fn exact_archive_location_replay_rejects_a_missing_provider_reverse_reference() {
     assert_exact_archive_location_replay_rejects_corruption(
         0x47,
-        |world, key, instruction| {
-            let provider = instruction.provider_attestations[0]
-                .payload
-                .binding
-                .provider_id;
-            let mut locations_by_provider = world.musubi_locations_by_provider.block();
-            let _ = locations_by_provider.remove(MusubiProviderLocationKeyV1::new(provider, key));
-            locations_by_provider.commit();
+        |world, key, _| {
+            let provider = world
+                .musubi_archive_locations
+                .view()
+                .get(&key)
+                .expect("fixture location")
+                .providers[0];
+            let mut block = world.musubi_locations_by_provider.block();
+            let _ = block.remove(MusubiProviderLocationKeyV1::new(provider, key));
+            block.commit();
         },
         "provider reverse index is inconsistent",
     );
@@ -1005,10 +1830,12 @@ fn exact_archive_location_replay_ignores_mutable_sorafs_degradation() {
     world
         .replication_orders
         .insert(instruction.replication_order, order);
-    let provider = instruction.provider_attestations[0]
-        .payload
-        .binding
-        .provider_id;
+    let provider = world
+        .musubi_archive_locations
+        .view()
+        .get(&key)
+        .expect("fixture location")
+        .providers[0];
     let mut provider_owners = world.provider_owners.block();
     let _ = provider_owners.remove(provider);
     provider_owners.commit();
@@ -1701,6 +2528,177 @@ fn pagination_continues_after_exact_last_key() {
     let (second, cursor) = paginate(rows, &request, hash, snapshot(1)).expect("second page");
     assert_eq!(second, vec![3]);
     assert!(cursor.is_none());
+}
+
+#[test]
+fn pagination_accepts_the_longest_canonical_semver_cursor_tail() {
+    let prerelease = vec![
+        MusubiPrereleaseIdentifierV1::AlphaNumeric(
+            "a".repeat(MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1),
+        );
+        MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1
+    ];
+    let maximum_prerelease = MusubiVersionV1::new(u64::MAX, u64::MAX, u64::MAX, prerelease)
+        .expect("maximum bounded prerelease version");
+    let stable = MusubiVersionV1::new(u64::MAX, u64::MAX, u64::MAX, Vec::new())
+        .expect("stable maximum version");
+    assert!(maximum_prerelease < stable);
+    let maximum_text = maximum_prerelease.to_string();
+    assert_eq!(maximum_text.len(), MUSUBI_MAX_VERSION_CURSOR_KEY_BYTES_V1);
+
+    let rows = vec![
+        (maximum_text.clone(), maximum_prerelease.clone()),
+        (stable.to_string(), stable.clone()),
+    ];
+    let query_hash = query_hash(b"versions", b"maximum-semver-cursor");
+    let request = MusubiPageRequestV1 {
+        limit: 1,
+        cursor: None,
+    };
+    let page_snapshot = snapshot(1);
+    let (first, cursor) = paginate(rows.clone(), &request, query_hash, page_snapshot)
+        .expect("maximum semantic version fits a finalized cursor");
+    assert_eq!(first, vec![maximum_prerelease.clone()]);
+    let cursor = cursor.expect("stable maximum remains after the prerelease");
+    assert_eq!(cursor.last_key, maximum_text);
+    cursor
+        .validate()
+        .expect("the longest canonical semantic version is a valid cursor key");
+
+    let start = package_release_page_start(
+        &package("maximum-version-cursor"),
+        &MusubiPageRequestV1 {
+            limit: 1,
+            cursor: Some(cursor.clone()),
+        },
+    )
+    .expect("version page start parses the longest canonical semantic version");
+    assert_eq!(start.version, maximum_prerelease);
+
+    let (continued, cursor) = paginate(
+        rows,
+        &MusubiPageRequestV1 {
+            limit: 1,
+            cursor: Some(cursor),
+        },
+        query_hash,
+        page_snapshot,
+    )
+    .expect("pagination resumes strictly after the longest semantic-version key");
+    assert_eq!(continued, vec![stable]);
+    assert!(cursor.is_none());
+}
+
+#[test]
+fn resolver_pagination_truncates_at_json_budget_and_continues_after_its_tail() {
+    let resolver_row = |version: &str, seed: u8| {
+        let archive = retention_archive(seed);
+        let release = retention_release(
+            archive.archive_id,
+            version,
+            false,
+            MusubiArtifactGovernanceStateV1::Available,
+        );
+        MusubiResolverReleaseRowV1 {
+            release: release.manifest.release.clone(),
+            release_digest: release.release_digest,
+            archive_id: archive.archive_id,
+            source_digest: archive.commitment.source_tree_digest,
+            interface_digest: release.manifest.interface_digest,
+            abi: release.manifest.abi,
+            dependencies: release.manifest.dependencies,
+            selection: MusubiReleaseSelectionStateV1 {
+                yank: release.yank,
+                storage: MusubiArchiveAvailabilityV1 {
+                    archive_id: archive.archive_id,
+                    availability: MusubiStorageAvailabilityV1::Selectable,
+                    healthy_replicas: MUSUBI_MIN_HEALTHY_REPLICAS_V1,
+                    active_locations: 1,
+                    finalized_height: 7,
+                    finalized_block_hash: [7; 32],
+                    index_revision: 1,
+                },
+                governance: release.artifact_governance,
+            },
+            index_revision: 1,
+        }
+    };
+    let rows = vec![
+        ("1.0.0".to_owned(), resolver_row("1.0.0", 0x81)),
+        ("2.0.0".to_owned(), resolver_row("2.0.0", 0x82)),
+        ("3.0.0".to_owned(), resolver_row("3.0.0", 0x83)),
+    ];
+    rows.iter()
+        .try_for_each(|(_, row)| row.validate())
+        .expect("resolver fixtures are canonical");
+    let two_item_budget = norito::json::to_json(&rows[0].1)
+        .expect("first resolver row encodes")
+        .len()
+        .checked_add(1)
+        .and_then(|bytes| {
+            bytes.checked_add(
+                norito::json::to_json(&rows[1].1)
+                    .expect("second resolver row encodes")
+                    .len(),
+            )
+        })
+        .expect("two bounded resolver rows fit usize");
+    let query_hash = query_hash(b"resolver-index", b"budget-test");
+    let request = MusubiPageRequestV1 {
+        limit: 3,
+        cursor: None,
+    };
+    let page_snapshot = snapshot(1);
+    let (first, next_cursor) = paginate_with_json_items_budget(
+        rows.clone(),
+        &request,
+        query_hash,
+        page_snapshot,
+        two_item_budget,
+    )
+    .expect("the first resolver page fits exactly two rows");
+    assert_eq!(first.len(), 2);
+    let next_cursor = next_cursor.expect("the byte-truncated page has a continuation");
+    assert_eq!(next_cursor.last_key, "2.0.0");
+
+    let query = MusubiResolverIndexQueryV1 {
+        package: package("retention"),
+        requirement: None,
+        page: request,
+    };
+    let response = MusubiResolverIndexPageV1 {
+        query: query.clone(),
+        chain_id: iroha_data_model::ChainId::from("resolver-budget-test"),
+        genesis_hash: [0x91; 32],
+        items: first,
+        next_cursor: Some(next_cursor.clone()),
+        snapshot: page_snapshot,
+    };
+    response
+        .validate_for(&query)
+        .expect("a nonempty short resolver page may carry its exact tail cursor");
+    assert!(
+        norito::json::to_json(&response)
+            .expect("resolver response encodes")
+            .len()
+            <= MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1
+    );
+
+    let continued_request = MusubiPageRequestV1 {
+        limit: 3,
+        cursor: Some(next_cursor),
+    };
+    let (second, next_cursor) = paginate_with_json_items_budget(
+        rows,
+        &continued_request,
+        query_hash,
+        page_snapshot,
+        two_item_budget,
+    )
+    .expect("the continuation advances after the exact byte-truncated tail");
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].release.version.to_string(), "3.0.0");
+    assert!(next_cursor.is_none());
 }
 
 #[test]

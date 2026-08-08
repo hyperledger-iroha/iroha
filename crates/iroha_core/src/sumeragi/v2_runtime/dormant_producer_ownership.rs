@@ -94,6 +94,16 @@ pub(crate) trait RuntimeDriver {
     ) -> RuntimeCommandAdmissionPreflight {
         RuntimeCommandAdmissionPreflight::Admit
     }
+    /// Prove that a current-tag monotone terminal consumes an exact async
+    /// effect owner rather than dropping an unrelated fresh lifecycle.
+    fn owned_terminal_completion_matches_effect(
+        &self,
+        _tag: EventTag,
+        _command: &Self::Command,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        false
+    }
     /// Look up a restart-dormant deterministic root by its recomputed causal
     /// lifecycle key without mutating adapter or scheduler state.
     fn dormant_producer_lifecycle(

@@ -8,7 +8,7 @@ import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 
 /**
- * X25519/XChaCha20-Poly1305 encrypted note payload carried by {@code zk::Shield}.
+ * X25519/XChaCha20-Poly1305 encrypted confidential-note payload.
  *
  * <p>Ciphertext is capped at {@link #MAX_CIPHERTEXT_BYTES} because the encrypted payload is a
  * compact note descriptor, not an arbitrary attachment channel.

@@ -126,8 +126,9 @@ use super::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LeaderWireRuntimeTerminal, NetworkIngressError, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeClockError, RuntimeEffectOwnership,
-        RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep,
-        SerializedV2Runtime, production_adapter_effect_candidate_admission_disposition,
+        RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
+        RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
+        production_adapter_effect_candidate_admission_disposition,
         production_adapter_effect_candidate_semantic_identity,
         production_adapter_effect_candidate_trace_projection,
     },
@@ -1320,6 +1321,22 @@ pub(crate) struct EffectExecutorStatus {
     pub watchdog_threshold: Duration,
 }
 
+/// Ownership disposition returned by the exact consensus-output service.
+///
+/// This is deliberately distinct from `Result`: source retention is bounded
+/// backpressure, not a service failure. The reducer must keep the semantic
+/// source which can reproduce the control message until a later occurrence is
+/// accepted by the exact-output service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConsensusBroadcastDisposition {
+    /// Every output was admitted by the network actor or its exact unadmitted
+    /// suffix was transferred into the bounded output corridor.
+    ExactServiceAccepted,
+    /// The bounded output corridor was full, so the semantic source remains
+    /// responsible for a later retransmission.
+    SourceRetained,
+}
+
 /// Production callbacks used to perform effects outside the reducer owner.
 ///
 /// Queueing methods must either retain the complete task or return an error;
@@ -1383,8 +1400,15 @@ pub(crate) trait V2EffectServices {
         decision_subject: wire::BlockSubject,
     ) -> Result<(), Self::Error>;
     /// Route one canonical v2 consensus envelope through the frozen committee.
-    fn broadcast_consensus(&mut self, message: wire::ConsensusMessageV2)
-    -> Result<(), Self::Error>;
+    ///
+    /// Returning [`ConsensusBroadcastDisposition::ExactServiceAccepted`] is
+    /// the only successful transfer of the semantic source. A
+    /// [`ConsensusBroadcastDisposition::SourceRetained`] result leaves that
+    /// source responsible for periodic retransmission.
+    fn broadcast_consensus(
+        &mut self,
+        message: wire::ConsensusMessageV2,
+    ) -> Result<ConsensusBroadcastDisposition, Self::Error>;
     /// Sign a certified-body request with the requester's transport identity.
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error>;
     /// Start or retransmit body reconstruction/fetch. Repeated tasks with the
@@ -3137,6 +3161,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 "pre-opened Sumeragi v2 body store changed its height context".to_owned(),
             ));
         }
+        body_store
+            .ensure_recovered_markers_revalidated()
+            .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
         let recovered_bodies = body_store
             .recovery_catalog()
             .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
@@ -4332,8 +4359,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// persistence continuations remain within the reducer-sized bound.
     fn retained_candidate_owners(
         &self,
-    ) -> Result<BTreeMap<Hash, RuntimeLifecycleOwner>, EffectExecutorError> {
-        let mut owners = BTreeMap::<Hash, RuntimeLifecycleOwner>::new();
+    ) -> Result<BTreeMap<Hash, RuntimeEffectOwnership>, EffectExecutorError> {
+        let mut owners = BTreeMap::<Hash, RuntimeEffectOwnership>::new();
         let mut insert = |ownership: &RuntimeEffectOwnership| {
             let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
                 EffectExecutorError::Contract(
@@ -4342,14 +4369,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
             match owners.get(&identity) {
-                Some(existing) if existing != ownership.owner() => {
-                    Err(EffectExecutorError::Contract(
-                        "one semantic candidate lifecycle had conflicting exact owners".to_owned(),
-                    ))
-                }
+                Some(existing) if existing != ownership => Err(EffectExecutorError::Contract(
+                    "one semantic candidate lifecycle had conflicting exact owners".to_owned(),
+                )),
                 Some(_) => Ok(()),
                 None => {
-                    owners.insert(identity, ownership.owner().clone());
+                    owners.insert(identity, ownership.clone());
                     Ok(())
                 }
             }
@@ -4378,7 +4403,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn retain_effect_batch(
         &mut self,
         effects: Vec<AdapterEffect>,
-        ownership: Vec<RuntimeEffectOwnership>,
+        mut ownership: Vec<RuntimeEffectOwnership>,
     ) -> Result<(), EffectExecutorError> {
         if self.retained_effect_batch.is_some() {
             return Err(EffectExecutorError::Contract(
@@ -4422,9 +4447,30 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             )
         })?;
         let mut retained_candidate_owners = self.retained_candidate_owners()?;
+        // A body acquisition has one physical owner even as authenticated
+        // consensus evidence refines it from an ordinary Proposal fetch to a
+        // Prepare- or Commit-certified fetch. The route-neutral candidate
+        // identity deliberately includes phase and execution commitment, so
+        // retain a separate, strictly narrower lineage index for that one
+        // monotonic authority transition.
+        let mut retained_fetch_lineages = BTreeMap::<
+            (EventTag, wire::ConsensusRound, wire::BlockSubject),
+            RuntimeEffectOwnership,
+        >::new();
+        for pending in self.pending_fetches.values() {
+            let key = (pending.task.tag, pending.task.round, pending.task.subject);
+            if let Some(existing) =
+                retained_fetch_lineages.insert(key, pending.task.ownership().clone())
+                && existing != *pending.task.ownership()
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one body-fetch lineage had conflicting exact owners".to_owned(),
+                ));
+            }
+        }
         let mut retain_effect = Vec::with_capacity(effects.len());
         let mut candidate_position = 0u8;
-        for (index, (effect, evidence)) in effects.iter().zip(&ownership).enumerate() {
+        for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {
             let candidate = production_adapter_effect_candidate_semantic_identity(effect);
             if candidate.is_some() {
                 candidate_position = candidate_position.checked_add(1).ok_or_else(|| {
@@ -4439,24 +4485,40 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
             let candidate_semantic_identity = evidence.candidate_semantic_identity();
-            if candidate_semantic_identity
+            let exact_incumbent = candidate_semantic_identity
                 .as_ref()
-                .is_some_and(|identity| {
-                    retained_candidate_owners
-                        .get(identity)
-                        .is_some_and(|existing| existing != evidence.owner())
-                })
+                .and_then(|identity| retained_candidate_owners.get(identity))
+                .cloned();
+            let fetch_key = match effect {
+                AdapterEffect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    ..
+                } => Some((*tag, *round, *subject)),
+                _ => None,
+            };
+            let fetch_lineage_incumbent = fetch_key
+                .as_ref()
+                .and_then(|key| retained_fetch_lineages.get(key))
+                .cloned();
+            if let (Some(exact), Some(lineage)) = (&exact_incumbent, &fetch_lineage_incumbent)
+                && exact != lineage
             {
                 return Err(EffectExecutorError::Contract(
-                    "a coalesced adapter effect changed its exact lifecycle owner".to_owned(),
+                    "one body-fetch candidate disagreed with its physical lineage owner".to_owned(),
                 ));
             }
+            let lineage_only_incumbent = exact_incumbent
+                .is_none()
+                .then_some(fetch_lineage_incumbent)
+                .flatten();
             let candidate_owner_count_before =
                 candidate_semantic_identity.as_ref().map_or(0, |identity| {
                     u8::from(retained_candidate_owners.contains_key(identity))
                 });
             let candidate_owner_count_after = u8::from(candidate.is_some());
-            let admission = production_adapter_effect_candidate_admission_disposition(
+            let mut admission = production_adapter_effect_candidate_admission_disposition(
                 effect,
                 candidate_owner_count_before,
                 candidate_owner_count_after,
@@ -4482,9 +4544,74 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?;
             let _authorized_effect_candidate = checked.into_projection();
+            if let Some(incumbent) = exact_incumbent
+                && incumbent != *evidence
+            {
+                let adopted = incumbent
+                    .adopt_incumbent_candidate_for_retry(evidence, effect)
+                    .map_err(EffectExecutorError::Contract)?;
+                let adopted_projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    &adopted,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    candidate_owner_count_before,
+                    candidate_owner_count_after,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_incumbent_retry =
+                    check_production_effect_to_candidate_transition(adopted_projection)
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "coalesced candidate retry failed its incumbent-owner refinement"
+                                    .to_owned(),
+                            )
+                        })?;
+                *evidence = adopted;
+            }
+            let mut fetch_authority_relation = None;
+            if let Some(incumbent) = lineage_only_incumbent {
+                let (adopted, relation) = incumbent
+                    .adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)
+                    .map_err(EffectExecutorError::Contract)?;
+                admission = production_adapter_effect_candidate_admission_disposition(
+                    effect,
+                    1,
+                    candidate_owner_count_after,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let adopted_projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    &adopted,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    1,
+                    candidate_owner_count_after,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_fetch_refinement =
+                    check_production_effect_to_candidate_transition(adopted_projection)
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "coalesced body-fetch authority refinement failed its incumbent-owner refinement"
+                                    .to_owned(),
+                            )
+                        })?;
+                *evidence = adopted;
+                fetch_authority_relation = Some(relation);
+                if let Some(identity) = candidate_semantic_identity {
+                    retained_candidate_owners.insert(identity, evidence.clone());
+                }
+            }
             match (admission, candidate_semantic_identity) {
                 (RuntimeCandidateAdmissionDisposition::FirstAdmission, Some(identity)) => {
-                    retained_candidate_owners.insert(identity, evidence.owner().clone());
+                    retained_candidate_owners.insert(identity, evidence.clone());
                     retain_effect.push(true);
                 }
                 (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
@@ -4496,8 +4623,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             )
                         })?;
                     // Redispatched stages reach their idempotent handler with
-                    // the incumbent owner and task ID. Signing stutters while
-                    // the already-owned signature task remains outstanding.
+                    // the incumbent owner and task ID, including an
+                    // authenticated retry whose earlier physical command has
+                    // already drained. Signing stutters while the already-owned
+                    // signature task remains outstanding.
                     retain_effect.push(redispatch);
                 }
                 (RuntimeCandidateAdmissionDisposition::NonCandidate, None) => {
@@ -4513,6 +4642,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "candidate admission disposition disagreed with its bound identity"
                             .to_owned(),
                     ));
+                }
+            }
+            if let Some(key) = fetch_key {
+                match fetch_authority_relation {
+                    Some(RuntimeFetchAuthorityRelation::Stale) => {}
+                    Some(RuntimeFetchAuthorityRelation::Same)
+                    | Some(RuntimeFetchAuthorityRelation::Upgrade)
+                    | None => {
+                        retained_fetch_lineages.insert(key, evidence.clone());
+                    }
                 }
             }
         }
@@ -6603,10 +6742,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     }
                     _ => None,
                 };
-                services
+                let disposition = services
                     .broadcast_consensus(message)
                     .map_err(service_error)?;
-                if let Some(proposal_round) = proposal_round {
+                if let Some(proposal_round) = proposal_round
+                    && disposition == ConsensusBroadcastDisposition::ExactServiceAccepted
+                {
                     self.runtime
                         .complete_active_view_producer_after_proposal_fanout(
                             proposal_round,
@@ -11235,6 +11376,8 @@ mod tests {
         retired_outbound_subjects: Vec<wire::BlockSubject>,
         retired_all_outbound: usize,
         retired_candidate_work: usize,
+        broadcast_dispositions: VecDeque<ConsensusBroadcastDisposition>,
+        broadcast_attempts: Vec<wire::ConsensusMessageV2>,
         broadcasts: Vec<wire::ConsensusMessageV2>,
         fetch_tasks: Vec<BodyFetchTask>,
         cancelled_fetches: Vec<EffectWorkId>,
@@ -11412,11 +11555,18 @@ mod tests {
         fn broadcast_consensus(
             &mut self,
             message: wire::ConsensusMessageV2,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
             self.check("broadcast")?;
             self.effect_service_order.push("broadcast");
-            self.broadcasts.push(message);
-            Ok(())
+            self.broadcast_attempts.push(message.clone());
+            let disposition = self
+                .broadcast_dispositions
+                .pop_front()
+                .unwrap_or(ConsensusBroadcastDisposition::ExactServiceAccepted);
+            if disposition == ConsensusBroadcastDisposition::ExactServiceAccepted {
+                self.broadcasts.push(message);
+            }
+            Ok(disposition)
         }
 
         fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
@@ -11605,6 +11755,7 @@ mod tests {
         requester_key: KeyPair,
         block: SignedBlock,
         body: Vec<u8>,
+        encoded_chunks: Vec<Vec<u8>>,
         manifest: wire::PayloadManifest,
     }
 
@@ -11668,14 +11819,9 @@ mod tests {
                 block_hash: block.hash(),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(body.len()).expect("body length"),
-                std::slice::from_ref(&body),
-            )
-            .expect("manifest");
+            let (manifest, encoded_chunks) = encode_payload(&context, round, subject, &body)
+                .expect("encode the complete canonical fixture payload")
+                .into_parts();
             let requester_key =
                 KeyPair::try_from_seed(vec![99; 32], Algorithm::Ed25519).expect("requester key");
             Self {
@@ -11684,6 +11830,7 @@ mod tests {
                 requester_key,
                 block,
                 body,
+                encoded_chunks,
                 manifest,
             }
         }
@@ -11818,14 +11965,7 @@ mod tests {
                 block_hash: block.hash(),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(body.len()).expect("body length"),
-                std::slice::from_ref(&body),
-            )
-            .expect("canonical production transport manifest");
+            let manifest = canonical_payload_manifest(&context, round, subject, &body);
             let durable =
                 DurableBodyReceipt::for_test(context.id(), round, subject, HashOf::new(&manifest));
             let validated = ValidatedBodyReceipt::for_test(durable.clone());
@@ -11971,14 +12111,7 @@ mod tests {
                 block_hash: HashOf::from_untyped_unchecked(Hash::new(block_preimage)),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &self.context,
-                self.round,
-                subject,
-                u64::try_from(body.len()).expect("normal saturation body length"),
-                std::slice::from_ref(&body),
-            )
-            .expect("normal saturation proposal manifest");
+            let manifest = canonical_payload_manifest(&self.context, self.round, subject, &body);
             let proposer = self.context.leader(self.round.view);
             let mut proposal = wire::Proposal {
                 round: self.round,
@@ -12186,6 +12319,38 @@ mod tests {
         }
     }
 
+    fn canonical_payload_manifest(
+        context: &wire::HeightContext,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        body: &[u8],
+    ) -> wire::PayloadManifest {
+        encode_payload(context, round, subject, body)
+            .expect("encode the complete canonical fixture payload")
+            .manifest()
+            .clone()
+    }
+
+    fn deliberately_conflicting_payload_manifest(
+        context: &wire::HeightContext,
+        round: wire::ConsensusRound,
+        original_subject: wire::BlockSubject,
+        alternate_body: &[u8],
+    ) -> wire::PayloadManifest {
+        let encoded_chunks = wire::encode_payload_chunks(context.da_layout, alternate_body)
+            .expect("encode the complete alternate RS16 fixture payload");
+        // This negative fixture deliberately binds a canonical alternate RS16
+        // codeword to the original subject so the manifest identity conflicts.
+        wire::PayloadManifest::derive(
+            context,
+            round,
+            original_subject,
+            u64::try_from(alternate_body.len()).expect("alternate body length fits u64"),
+            &encoded_chunks,
+        )
+        .expect("derive the structurally valid conflicting fixture manifest")
+    }
+
     fn fixture_execution_commitment() -> wire::ExecutionCommitment {
         wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"effects fixture parent state"),
@@ -12237,14 +12402,12 @@ mod tests {
     }
 
     fn manifest_at_view(fixture: &Fixture, view: u64) -> wire::PayloadManifest {
-        wire::PayloadManifest::derive(
+        canonical_payload_manifest(
             &fixture.context,
             round(&fixture.context, view),
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
+            &fixture.body,
         )
-        .expect("view manifest")
     }
 
     fn distinct_body(fixture: &Fixture) -> (wire::BlockSubject, Vec<u8>) {
@@ -12320,7 +12483,7 @@ mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,
-            bytes: fixture.body.clone(),
+            bytes: fixture.encoded_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };
@@ -12498,14 +12661,7 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
             payload_hash: Hash::new(&body),
         };
-        wire::PayloadManifest::derive(
-            &fixture.context,
-            fixture.manifest.round,
-            subject,
-            u64::try_from(body.len()).expect("payload length"),
-            std::slice::from_ref(&body),
-        )
-        .expect("payload manifest")
+        canonical_payload_manifest(&fixture.context, fixture.manifest.round, subject, &body)
     }
 
     fn pending_merge_validation(
@@ -12521,14 +12677,7 @@ mod tests {
             parent_block_hash: Some(parent_hash),
             ..fixture.manifest.subject
         };
-        let manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            round,
-            subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("merge carrier manifest");
+        let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
         let durable_receipt = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round,
@@ -12584,14 +12733,7 @@ mod tests {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
     ) -> BodyValidationTask {
-        let manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            round,
-            subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("reachable merge carrier manifest");
+        let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
         let durable = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round,
@@ -12920,14 +13062,7 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"Proposal A block")),
             payload_hash: Hash::new(&body_a),
         };
-        let manifest_a = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject_a,
-            u64::try_from(body_a.len()).expect("Proposal A length"),
-            std::slice::from_ref(&body_a),
-        )
-        .expect("Proposal A manifest");
+        let manifest_a = canonical_payload_manifest(&context, round, subject_a, &body_a);
         let proposer = context.leader(0);
         let mut proposal_a = wire::Proposal {
             round,
@@ -13504,6 +13639,15 @@ mod tests {
         assert_eq!(services.fetch_tasks.len(), service_tasks_before_upgrade + 1);
         assert_eq!(services.operation_calls.get("body-sign").copied(), Some(2));
         assert_eq!(
+            upgraded_b.ownership, ordinary_b.ownership,
+            "certifying an existing acquisition preserves its immutable owner"
+        );
+        assert_eq!(
+            upgraded_b.lifecycle_ordinal(),
+            ordinary_b.lifecycle_ordinal(),
+            "authority refinement cannot allocate a second Fetch lifecycle"
+        );
+        assert_eq!(
             fixture.executor.pending_fetches[&work_id_b].task,
             *upgraded_b
         );
@@ -13577,14 +13721,12 @@ mod tests {
 
         let (second_subject, second_body) = distinct_body(&fixture);
         let second_round = round(&fixture.context, 1);
-        let second_manifest = wire::PayloadManifest::derive(
+        let second_manifest = canonical_payload_manifest(
             &fixture.context,
             second_round,
             second_subject,
-            u64::try_from(second_body.len()).expect("second body length"),
-            std::slice::from_ref(&second_body),
-        )
-        .expect("second proposal manifest");
+            &second_body,
+        );
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -13717,14 +13859,7 @@ mod tests {
             )),
             payload_hash: Hash::new(&body_b),
         };
-        let manifest_b = wire::PayloadManifest::derive(
-            &fixture.context,
-            round_b,
-            subject_b,
-            u64::try_from(body_b.len()).expect("B body length"),
-            std::slice::from_ref(&body_b),
-        )
-        .expect("canonical B manifest");
+        let manifest_b = canonical_payload_manifest(&fixture.context, round_b, subject_b, &body_b);
         let durable_b = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round_b,
@@ -13893,14 +14028,12 @@ mod tests {
         for view in 0..request_capacity {
             let view = u64::try_from(view).expect("request view");
             let request_round = round(&fixture.context, view);
-            let manifest = wire::PayloadManifest::derive(
+            let manifest = canonical_payload_manifest(
                 &fixture.context,
                 request_round,
                 fixture.subject,
-                u64::try_from(fixture.body.len()).expect("certified body length"),
-                std::slice::from_ref(&fixture.body),
-            )
-            .expect("certified owner manifest");
+                &fixture.body,
+            );
             let durable = DurableBodyReceipt::for_test(
                 fixture.context.id(),
                 request_round,
@@ -14034,14 +14167,7 @@ mod tests {
             )),
             payload_hash: Hash::new(&body_b),
         };
-        let manifest_b = wire::PayloadManifest::derive(
-            &fixture.context,
-            round_b,
-            subject_b,
-            u64::try_from(body_b.len()).expect("deferred Fetch B body length"),
-            std::slice::from_ref(&body_b),
-        )
-        .expect("deferred Fetch B manifest");
+        let manifest_b = canonical_payload_manifest(&fixture.context, round_b, subject_b, &body_b);
         let durable_b = DurableBodyReceipt::for_test(
             fixture.context.id(),
             round_b,
@@ -14568,7 +14694,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_candidate_retry_coalesces_and_owner_replacement_fails_closed() {
+    fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -14591,11 +14717,9 @@ mod tests {
             vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 999)],
         )
         .expect("construct an independently owned mutation candidate");
-        assert!(matches!(
-            executor.retain_effect_batch(vec![effect.clone()], conflicting),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("changed its exact lifecycle owner")
-        ));
+        executor
+            .retain_effect_batch(vec![effect.clone()], conflicting)
+            .expect("an independently admitted exact Sign retry stutters");
         assert_eq!(executor.pending_signatures.len(), 1);
         assert_eq!(services.sign_tasks.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
@@ -14608,56 +14732,85 @@ mod tests {
             )],
         )
         .expect("construct a local-incarnation owner replacement");
-        assert!(matches!(
-            executor.retain_effect_batch(vec![effect], reincarnated),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("changed its exact lifecycle owner")
-        ));
+        executor
+            .retain_effect_batch(vec![effect], reincarnated)
+            .expect("a later-incarnation exact Sign retry keeps the incumbent owner");
         assert_eq!(executor.pending_signatures.len(), 1);
         assert_eq!(services.sign_tasks.len(), 1);
         assert!(executor.retained_effect_batch.is_none());
 
-        let mut store_executor = fixture.executor(EffectQueueConfig::default());
-        let mut store_services = fixture.services();
-        store_executor
-            .admit_local_proposal(
-                tag(0),
-                fixture.manifest.clone(),
-                fixture.body.clone(),
-                &mut store_services,
-            )
-            .expect("admit one exact Store stage owner");
-        let store_effect = AdapterEffect::StoreBody {
+        let mut fetch_executor = fixture.executor(EffectQueueConfig::default());
+        let mut fetch_services = fixture.services();
+        let fetch_effect = AdapterEffect::FetchBody {
             tag: tag(0),
             round: fixture.manifest.round,
             subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
         };
-        let incumbent = store_executor
-            .pending_stores
+        fetch_executor
+            .consume_effects(vec![fetch_effect.clone()], &mut fetch_services)
+            .expect("admit one exact Fetch stage owner");
+        let incumbent = fetch_executor
+            .pending_fetches
             .values()
             .next()
-            .expect("local proposal retained Store work")
+            .expect("ordinary acquisition retained Fetch work")
             .task
             .ownership()
             .clone();
+        let retry_effects = vec![AdapterEffect::Broadcast(proposal(&fixture)), fetch_effect];
         let foreign = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 1_001)],
+            &retry_effects,
+            vec![
+                RuntimeEffectOwnership::fresh_for_test(tag(0), 1_001),
+                RuntimeEffectOwnership::fresh_for_test(tag(0), 1_002),
+            ],
         )
-        .expect("construct a foreign owner for the same stage statement");
+        .expect("construct a two-effect retry with a foreign Fetch owner");
         assert_eq!(
-            foreign[0].candidate_semantic_identity(),
+            foreign[1].candidate_semantic_identity(),
             incumbent.candidate_semantic_identity(),
             "the stage discriminator and six-coordinate statement are identical"
         );
-        assert_ne!(foreign[0].owner(), incumbent.owner());
-        assert!(matches!(
-            store_executor.retain_effect_batch(vec![store_effect], foreign),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("changed its exact lifecycle owner")
-        ));
-        assert_eq!(store_executor.pending_stores.len(), 1);
-        assert!(store_executor.retained_effect_batch.is_none());
+        let foreign_owner = foreign[1].owner().clone();
+        assert_ne!(foreign[1].owner(), incumbent.owner());
+        fetch_executor
+            .retain_effect_batch(retry_effects, foreign)
+            .expect("foreign Fetch retry adopts the incumbent owner at position two");
+        let retained = fetch_executor
+            .retained_effect_batch
+            .as_ref()
+            .expect("Broadcast and idempotent Fetch retry are redispatched");
+        assert_eq!(retained.effects.len(), 2);
+        assert_eq!(retained.effects[1].ownership, incumbent);
+        fetch_executor
+            .drain_retained_effect_batch(&mut fetch_services)
+            .expect("adopted Fetch retry reaches the incumbent task");
+        assert_eq!(fetch_executor.pending_fetches.len(), 1);
+        let retained_fetch = fetch_executor
+            .pending_fetches
+            .values()
+            .next()
+            .expect("the incumbent Fetch task remains live");
+        assert_eq!(retained_fetch.task.ownership(), &incumbent);
+        assert!(
+            fetch_services
+                .fetch_tasks
+                .iter()
+                .all(|task| task.ownership() == &incumbent),
+            "every physical Fetch call keeps the original task owner"
+        );
+        assert!(fetch_executor.retained_effect_batch.is_none());
+        let external = fetch_executor
+            .external_lifecycle_owners()
+            .expect("inspect external lifecycle ownership after coalescing");
+        assert!(
+            external.iter().all(|owner| owner != incumbent.owner()),
+            "passive network Fetch ownership is deliberately not runnable clock work"
+        );
+        assert!(external.iter().all(|owner| owner != &foreign_owner));
 
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -16822,14 +16975,12 @@ mod tests {
         let validated_receipt =
             ValidatedBodyReceipt::for_test(pending_validation.task.durable_receipt().clone());
         certificate.execution_commitment = validated_receipt.execution_commitment();
-        let manifest = wire::PayloadManifest::derive(
+        let manifest = canonical_payload_manifest(
             &fixture.context,
             certificate.proposal_round,
             certificate.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("exact decided-body manifest");
+            &fixture.body,
+        );
         executor.recovered_bodies.insert(
             (certificate.proposal_round, certificate.subject),
             (manifest, validated_receipt.durable().clone()),
@@ -16993,14 +17144,8 @@ mod tests {
             let subject = pending.task.subject();
             let round = pending.task.round();
             let durable = pending.task.durable_receipt().clone();
-            let manifest = wire::PayloadManifest::derive(
-                &fixture.context,
-                round,
-                subject,
-                u64::try_from(fixture.body.len()).expect("body length"),
-                std::slice::from_ref(&fixture.body),
-            )
-            .expect("protected manifest");
+            let manifest =
+                canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
             executor
                 .recovered_bodies
                 .insert((round, subject), (manifest, durable.clone()));
@@ -17138,14 +17283,7 @@ mod tests {
         let round = pending.task.round();
         let subject = pending.task.subject();
         let durable = pending.task.durable_receipt().clone();
-        let manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            round,
-            subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("protected manifest");
+        let manifest = canonical_payload_manifest(&fixture.context, round, subject, &fixture.body);
         executor
             .recovered_bodies
             .insert((round, subject), (manifest.clone(), durable.clone()));
@@ -18018,14 +18156,12 @@ mod tests {
         let mut services = fixture.services();
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
         assert_ne!(alternate_manifest, fixture.manifest);
         executor
             .admit_local_proposal(
@@ -18196,14 +18332,12 @@ mod tests {
 
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
         assert_ne!(alternate_manifest, fixture.manifest);
         executor
             .admit_local_proposal(
@@ -18619,14 +18753,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let reproposal_round = round(&fixture.context, fixture.manifest.round.view + 2);
-        let reproposal_manifest = wire::PayloadManifest::derive(
+        let reproposal_manifest = canonical_payload_manifest(
             &fixture.context,
             reproposal_round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive exact same-body reproposal manifest");
+            &fixture.body,
+        );
         persist_fsynced_validation_marker(
             &mut executor,
             &mut services,
@@ -18799,7 +18931,7 @@ mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,
-            bytes: fixture.body.clone(),
+            bytes: fixture.encoded_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };
@@ -18939,14 +19071,12 @@ mod tests {
         let first_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let first_sources = certified_sources(&fixture, &first_prepare);
         let (second_subject, second_body) = distinct_body(&fixture);
-        let second_manifest = wire::PayloadManifest::derive(
+        let second_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             second_subject,
-            u64::try_from(second_body.len()).expect("second body length"),
-            std::slice::from_ref(&second_body),
-        )
-        .expect("second manifest");
+            &second_body,
+        );
         let mut second_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         second_prepare.subject = second_manifest.subject;
         let second_sources = certified_sources(&fixture, &second_prepare);
@@ -19020,7 +19150,7 @@ mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&fixture.manifest),
             index: 0,
-            bytes: fixture.body.clone(),
+            bytes: fixture.encoded_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };
@@ -19230,14 +19360,12 @@ mod tests {
         let mut services = fixture.services();
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
 
         executor
             .consume_effects(
@@ -19451,14 +19579,12 @@ mod tests {
                 .clone();
             let mut alternate_chunk = fixture.body.clone();
             alternate_chunk[0] ^= 1;
-            let alternate_manifest = wire::PayloadManifest::derive(
+            let alternate_manifest = deliberately_conflicting_payload_manifest(
                 &fixture.context,
                 fixture.manifest.round,
                 fixture.manifest.subject,
-                u64::try_from(fixture.body.len()).expect("body length"),
-                std::slice::from_ref(&alternate_chunk),
-            )
-            .expect("structurally valid alternate manifest");
+                &alternate_chunk,
+            );
             assert_ne!(alternate_manifest, fixture.manifest);
 
             let signed_response =
@@ -19560,14 +19686,12 @@ mod tests {
             .clone();
         let mut alternate_chunk = fixture.body.clone();
         alternate_chunk[0] ^= 1;
-        let alternate_manifest = wire::PayloadManifest::derive(
+        let alternate_manifest = deliberately_conflicting_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&alternate_chunk),
-        )
-        .expect("structurally valid alternate manifest");
+            &alternate_chunk,
+        );
 
         let signed_response = |manifest: wire::PayloadManifest, responder: wire::ValidatorIndex| {
             let mut response = wire::CertifiedBodyResponse {
@@ -19814,14 +19938,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 2));
         let mut services = fixture.services();
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let losing_lock = (losing_manifest.round, losing_manifest.subject);
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
@@ -20006,14 +20128,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
         let certified_sources = certified_sources(&fixture, &losing_prepare);
@@ -20073,14 +20193,12 @@ mod tests {
             )
             .expect("start exact decided local store");
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
         let certified_sources = certified_sources(&fixture, &losing_prepare);
@@ -20131,14 +20249,12 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (losing_subject, losing_body) = distinct_body(&fixture);
-        let losing_manifest = wire::PayloadManifest::derive(
+        let losing_manifest = canonical_payload_manifest(
             &fixture.context,
             fixture.manifest.round,
             losing_subject,
-            u64::try_from(losing_body.len()).expect("losing body length"),
-            std::slice::from_ref(&losing_body),
-        )
-        .expect("losing manifest");
+            &losing_body,
+        );
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
         let certified_sources = certified_sources(&fixture, &losing_prepare);
@@ -20551,14 +20667,12 @@ mod tests {
             .checked_add(2)
             .expect("fixture reproposal view increment");
         commit.proposal_round = commit.round;
-        let reproposal_manifest = wire::PayloadManifest::derive(
+        let reproposal_manifest = canonical_payload_manifest(
             &fixture.context,
             commit.round,
             fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive exact same-body reproposal manifest");
+            &fixture.body,
+        );
         assert!(executor.protected_lock.is_none());
         executor.runtime.decided_body = Some((
             commit.round,
@@ -20770,12 +20884,15 @@ mod tests {
             .expect("persist exact validation marker");
         drop(store);
 
-        let reopened = V2BodyStore::open_with_policy(
+        let mut reopened = V2BodyStore::open_with_policy(
             directory.path(),
             fixture.context.clone(),
             BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
         )
         .expect("reopen exact body store");
+        reopened
+            .revalidate_recovered_markers(|_| Ok::<_, String>(fixture_execution_commitment()))
+            .expect("semantically replay recovered validation marker");
         let recovered_bodies = reopened.recovery_catalog().expect("recovery catalog");
         let recovered_validations = reopened.validated_recovery_catalog();
         let key = (fixture.manifest.round, fixture.manifest.subject);
@@ -20822,508 +20939,7 @@ mod tests {
         assert!(!executor.status().fail_closed);
     }
 
-    #[test]
-    fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
-        let fixture = Fixture::new();
-        let directory = TempDir::new().expect("body-store directory");
-        let mut store = V2BodyStore::open_with_policy(
-            directory.path(),
-            fixture.context.clone(),
-            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-        )
-        .expect("open body store");
-        let durable = store
-            .store(fixture.manifest.clone(), fixture.body.clone())
-            .expect("persist exact body");
-        let validated = store
-            .validate(&durable, |_| {
-                Ok::<_, &'static str>(
-                    ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment(),
-                )
-            })
-            .expect("persist validation marker");
-        drop(store);
-        let reopened = V2BodyStore::open_with_policy(
-            directory.path(),
-            fixture.context.clone(),
-            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
-        )
-        .expect("reopen exact body store");
-        let recovered = reopened.recovery_catalog().expect("recovery catalog");
-        let validations = reopened.validated_recovery_catalog();
-        assert_eq!(
-            validations
-                .get(&(fixture.manifest.round, fixture.manifest.subject))
-                .map(ValidatedBodyReceipt::durable),
-            Some(&durable)
-        );
-        let expected = PendingKuraApply::for_test(
-            fixture.context.id(),
-            fixture.context.height,
-            fixture.block.hash(),
-        );
-        let decision = Some((
-            fixture.manifest.round,
-            fixture.manifest.round,
-            fixture.manifest.subject,
-            validated.execution_commitment(),
-        ));
-        let mut certificate = fixture.qc(wire::GlobalPhase::Commit);
-        certificate.execution_commitment = validated.execution_commitment();
-
-        let (authenticated_genesis_context, evidence) = verify_pending_kura_apply_parts(
-            &fixture.context,
-            decision,
-            &recovered,
-            &validations,
-            expected,
-            tag(0),
-            tag(0),
-            certificate.clone(),
-            Some(&fixture.manifest),
-        )
-        .expect("exact replay binding");
-        let authenticated_genesis_context = authenticated_genesis_context
-            .expect("height-one replay mints a genesis projection capability");
-        assert_eq!(
-            authenticated_genesis_context.hash(),
-            fixture.context.nexus_amx_context_hash
-        );
-        assert_eq!(evidence.expected(), expected);
-        assert_eq!(evidence.expected().state_height(), 0);
-        assert_eq!(evidence.frozen_context_id(), fixture.context.id());
-        assert_eq!(evidence.frozen_height(), fixture.context.height);
-        assert_eq!(evidence.replay_tag(), tag(0));
-        assert_eq!(evidence.owner_tag(), tag(0));
-        assert_eq!(evidence.replay_generation(), tag(0).generation().get());
-        assert_eq!(evidence.commit_qc(), &certificate);
-        assert_eq!(evidence.commit_round(), certificate.round);
-        assert_eq!(evidence.commit_phase(), wire::GlobalPhase::Commit);
-        assert_eq!(evidence.commit_subject(), certificate.subject);
-        assert_eq!(
-            evidence.execution_commitment(),
-            certificate.execution_commitment
-        );
-        assert_eq!(evidence.commit_signers(), certificate.signers.as_slice());
-        assert_eq!(
-            evidence.commit_aggregate_signature(),
-            certificate.aggregate_signature.as_slice()
-        );
-        assert_eq!(evidence.manifest(), &fixture.manifest);
-        assert_eq!(evidence.manifest_hash(), HashOf::new(&fixture.manifest));
-        assert_eq!(evidence.durable_receipt(), &durable);
-        assert_eq!(
-            evidence.durable_receipt().frame_hash(),
-            durable.frame_hash()
-        );
-        assert_eq!(evidence.validated_receipt(), &validated);
-        assert_eq!(
-            evidence.stage(),
-            PendingKuraApplyRecoveryStage::CertifiedFetch
-        );
-        let (_, delayed_evidence) = verify_pending_kura_apply_parts(
-            &fixture.context,
-            decision,
-            &recovered,
-            &validations,
-            expected,
-            tag(3),
-            tag(3),
-            certificate.clone(),
-            Some(&fixture.manifest),
-        )
-        .expect("historical CommitQC remains replayable by the current owner");
-        assert_eq!(delayed_evidence.replay_tag(), tag(3));
-        assert_eq!(delayed_evidence.owner_tag(), tag(3));
-
-        let mut later_certificate = certificate.clone();
-        later_certificate.round.view = fixture
-            .manifest
-            .round
-            .view
-            .checked_add(2)
-            .expect("fixture reproposal view increment");
-        later_certificate.proposal_round = later_certificate.round;
-        let later_decision = Some((
-            later_certificate.round,
-            later_certificate.proposal_round,
-            later_certificate.subject,
-            later_certificate.execution_commitment,
-        ));
-        let alias_round = wire::ConsensusRound {
-            view: fixture
-                .manifest
-                .round
-                .view
-                .checked_add(1)
-                .expect("fixture alias view increment"),
-            ..fixture.manifest.round
-        };
-        let alias_manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            alias_round,
-            fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive redundant exact-body alias");
-        let alias_durable = DurableBodyReceipt::for_test(
-            fixture.context.id(),
-            alias_round,
-            fixture.manifest.subject,
-            HashOf::new(&alias_manifest),
-        );
-        let alias_validated = ValidatedBodyReceipt::for_test_with_commitment(
-            alias_durable.clone(),
-            validated.execution_commitment(),
-        );
-        let later_manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            later_certificate.round,
-            fixture.manifest.subject,
-            u64::try_from(fixture.body.len()).expect("fixture body length"),
-            std::slice::from_ref(&fixture.body),
-        )
-        .expect("derive exact same-body reproposal manifest");
-        let later_durable = DurableBodyReceipt::for_test(
-            fixture.context.id(),
-            later_certificate.round,
-            fixture.manifest.subject,
-            HashOf::new(&later_manifest),
-        );
-        let later_validated = ValidatedBodyReceipt::for_test_with_commitment(
-            later_durable.clone(),
-            validated.execution_commitment(),
-        );
-        let mut recovered_with_alias = recovered.clone();
-        recovered_with_alias.insert(
-            (alias_round, fixture.manifest.subject),
-            (alias_manifest, alias_durable),
-        );
-        recovered_with_alias.insert(
-            (later_certificate.round, fixture.manifest.subject),
-            (later_manifest.clone(), later_durable),
-        );
-        let mut validations_with_alias = validations.clone();
-        validations_with_alias.insert((alias_round, fixture.manifest.subject), alias_validated);
-        validations_with_alias.insert(
-            (later_certificate.round, fixture.manifest.subject),
-            later_validated,
-        );
-        let (_, later_finality_evidence) = verify_pending_kura_apply_parts(
-            &fixture.context,
-            later_decision,
-            &recovered_with_alias,
-            &validations_with_alias,
-            expected,
-            tag(0),
-            tag(0),
-            later_certificate.clone(),
-            Some(&later_manifest),
-        )
-        .expect("reproposal CommitQC selects its same-round body among exact aliases");
-        assert_eq!(
-            later_finality_evidence.durable_round(),
-            later_certificate.round
-        );
-        assert_eq!(
-            later_finality_evidence.commit_round(),
-            later_certificate.round
-        );
-        assert!(later_finality_evidence.is_exact(&fixture.context));
-
-        let mut conflicting_body = fixture.body.clone();
-        let first_byte = conflicting_body
-            .first_mut()
-            .expect("fixture body is non-empty");
-        *first_byte ^= 0xff;
-        let conflicting_manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            alias_round,
-            fixture.manifest.subject,
-            u64::try_from(conflicting_body.len()).expect("fixture body length"),
-            std::slice::from_ref(&conflicting_body),
-        )
-        .expect("derive conflicting same-subject alias");
-        let conflicting_durable = DurableBodyReceipt::for_test(
-            fixture.context.id(),
-            alias_round,
-            fixture.manifest.subject,
-            HashOf::new(&conflicting_manifest),
-        );
-        let mut recovered_with_conflict = recovered_with_alias.clone();
-        recovered_with_conflict.insert(
-            (alias_round, fixture.manifest.subject),
-            (conflicting_manifest, conflicting_durable),
-        );
-        assert!(matches!(
-            verify_pending_kura_apply_parts(
-                &fixture.context,
-                later_decision,
-                &recovered_with_conflict,
-                &validations_with_alias,
-                expected,
-                tag(0),
-                tag(0),
-                later_certificate.clone(),
-                Some(&later_manifest),
-            ),
-            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-                if reason.contains("aliases conflict")
-        ));
-
-        let later_sources = certified_sources(&fixture, &later_certificate);
-        assert_eq!(
-            later_finality_evidence
-                .transition_for_effect(&AdapterEffect::FetchBody {
-                    tag: tag(0),
-                    round: later_certificate.round,
-                    subject: fixture.manifest.subject,
-                    manifest: Some(later_manifest),
-                    certified_sources: later_sources,
-                    certificate: Some(later_certificate),
-                })
-                .expect("same-round reproposal Fetch is authorized by its CommitQC"),
-            PendingKuraApplyRecoveryStage::DurableStore
-        );
-        assert!(matches!(
-            verify_pending_kura_apply_parts(
-                &fixture.context,
-                decision,
-                &recovered,
-                &validations,
-                expected,
-                tag(3),
-                tag(2),
-                certificate.clone(),
-                Some(&fixture.manifest),
-            ),
-            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-                if reason.contains("frozen reducer incarnation")
-        ));
-        let mut altered_generation = evidence.clone();
-        altered_generation.replay_generation = altered_generation
-            .replay_generation
-            .checked_add(1)
-            .expect("fixture generation increment");
-        assert!(!altered_generation.is_exact(&fixture.context));
-        let mut altered_manifest = evidence.clone();
-        altered_manifest.manifest.chunk_root = Hash::new(b"altered recovery manifest root");
-        assert!(!altered_manifest.is_exact(&fixture.context));
-        let mut altered_frame = evidence.clone();
-        altered_frame.durable_receipt = DurableBodyReceipt::for_test(
-            fixture.context.id(),
-            fixture.manifest.round,
-            fixture.manifest.subject,
-            HashOf::new(&fixture.manifest),
-        );
-        assert_ne!(
-            altered_frame.durable_receipt().frame_hash(),
-            altered_frame.durable_frame_hash()
-        );
-        assert!(!altered_frame.is_exact(&fixture.context));
-
-        let apply_effect = AdapterEffect::Apply {
-            tag: tag(0),
-            subject: fixture.manifest.subject,
-            certificate: certificate.clone(),
-        };
-        let certified_sources = certified_sources(&fixture, &certificate);
-        let recovery_sequence = [
-            AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: None,
-                certified_sources,
-                certificate: Some(certificate.clone()),
-            },
-            AdapterEffect::StoreBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            },
-            AdapterEffect::ValidateBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            },
-            apply_effect.clone(),
-        ];
-        let mut staged = evidence.clone();
-        for effect in &recovery_sequence {
-            staged.stage = staged
-                .transition_for_effect(effect)
-                .expect("exact recovery stage transition");
-        }
-        assert_eq!(
-            staged.stage(),
-            PendingKuraApplyRecoveryStage::ApplicationDispatched
-        );
-
-        let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
-        direct_apply_executor.validated_bodies = validations.clone();
-        direct_apply_executor.pending_tip_recovery = Some(evidence.clone());
-        let mut direct_apply_services = fixture.services();
-        assert!(matches!(
-            direct_apply_executor.consume_pending_tip_recovery_effects(
-                vec![apply_effect.clone()],
-                &mut direct_apply_services,
-            ),
-            Err(EffectExecutorError::Contract(reason))
-                if reason.contains("does not match its exact authenticated stage")
-        ));
-
-        let mut apply_stage = evidence.clone();
-        apply_stage.stage = PendingKuraApplyRecoveryStage::Apply;
-        assert_eq!(
-            apply_stage
-                .transition_for_effect(&apply_effect)
-                .expect("exact Apply advances the closed-ingress stage"),
-            PendingKuraApplyRecoveryStage::ApplicationDispatched
-        );
-        let mut altered_signers = certificate.clone();
-        altered_signers.signers.swap(0, 1);
-        assert!(
-            apply_stage
-                .transition_for_effect(&AdapterEffect::Apply {
-                    tag: tag(0),
-                    subject: fixture.manifest.subject,
-                    certificate: altered_signers,
-                })
-                .is_err(),
-            "recovery must compare the complete canonical signer evidence"
-        );
-        let mut altered_signature = certificate.clone();
-        altered_signature.aggregate_signature.push(0xA5);
-        assert!(
-            apply_stage
-                .transition_for_effect(&AdapterEffect::Apply {
-                    tag: tag(0),
-                    subject: fixture.manifest.subject,
-                    certificate: altered_signature,
-                })
-                .is_err(),
-            "recovery must compare the complete aggregate-signature evidence"
-        );
-
-        for effects in [Vec::new(), vec![apply_effect.clone(), apply_effect.clone()]] {
-            let mut executor = fixture.executor(EffectQueueConfig::default());
-            executor.validated_bodies = validations.clone();
-            executor.pending_tip_recovery = Some(apply_stage.clone());
-            let mut services = fixture.services();
-            assert!(matches!(
-                executor.consume_pending_tip_recovery_effects(effects, &mut services),
-                Err(EffectExecutorError::Contract(reason))
-                    if reason.contains("must emit exactly one effect")
-            ));
-        }
-
-        let mut wrong_context = fixture.context.clone();
-        wrong_context.nexus_amx_context_hash = Hash::new(b"different frozen Nexus/AMX context");
-        assert_ne!(
-            wrong_context.id(),
-            fixture.context.id(),
-            "height-context identity must bind the Nexus/AMX projection"
-        );
-        assert!(matches!(
-            verify_pending_kura_apply_parts(
-                &wrong_context,
-                decision,
-                &recovered,
-                &validations,
-                expected,
-                tag(0),
-                tag(0),
-                certificate.clone(),
-                Some(&fixture.manifest),
-            ),
-            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-                if reason.contains("different frozen height context")
-        ));
-        assert!(matches!(
-            verify_pending_kura_apply_parts(
-                &fixture.context,
-                None,
-                &recovered,
-                &validations,
-                expected,
-                tag(0),
-                tag(0),
-                certificate.clone(),
-                Some(&fixture.manifest),
-            ),
-            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-                if reason.contains("no complete durable Decision")
-        ));
-
-        let wrong_tip = PendingKuraApply::for_test(
-            fixture.context.id(),
-            fixture.context.height,
-            HashOf::from_untyped_unchecked(Hash::new(b"different Kura tip")),
-        );
-        assert!(matches!(
-            verify_pending_kura_apply_parts(
-                &fixture.context,
-                decision,
-                &recovered,
-                &validations,
-                wrong_tip,
-                tag(0),
-                tag(0),
-                certificate.clone(),
-                Some(&fixture.manifest),
-            ),
-            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-                if reason.contains("does not identify the canonical")
-        ));
-
-        assert!(matches!(
-            verify_pending_kura_apply_parts(
-                &fixture.context,
-                decision,
-                &recovered,
-                &BTreeMap::new(),
-                expected,
-                tag(0),
-                tag(0),
-                certificate.clone(),
-                Some(&fixture.manifest),
-            ),
-            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-                if reason.contains("no matching durable validation marker")
-        ));
-
-        let mismatched_execution_commitment = fixture_execution_commitment();
-        assert_ne!(
-            mismatched_execution_commitment,
-            validated.execution_commitment(),
-            "the adversarial Decision fixture must change the consensus-bound execution result"
-        );
-        let mut mismatched_certificate = certificate.clone();
-        mismatched_certificate.execution_commitment = mismatched_execution_commitment;
-        assert!(matches!(
-            verify_pending_kura_apply_parts(
-                &fixture.context,
-                Some((
-                    fixture.manifest.round,
-                    fixture.manifest.round,
-                    fixture.manifest.subject,
-                    mismatched_execution_commitment,
-                )),
-                &recovered,
-                &validations,
-                expected,
-                tag(0),
-                tag(0),
-                mismatched_certificate,
-                Some(&fixture.manifest),
-            ),
-            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
-                if reason.contains("Decision commitment differs")
-        ));
-        assert_eq!(validated.durable(), &durable);
-    }
+    include!("tests/v2_effects_kura_tip_replay.rs");
 
     #[test]
     fn mismatched_kura_completion_fails_closed_before_application_ack() {
@@ -21460,6 +21076,43 @@ mod tests {
         assert!(failed.runtime.completed_proposal_fanouts.is_empty());
         assert!(failed_services.broadcasts.is_empty());
 
+        let mut retained = fixture.executor(EffectQueueConfig::default());
+        retained.runtime.active_view_producer_retained = true;
+        let mut retained_services = fixture.services();
+        retained_services
+            .broadcast_dispositions
+            .push_back(ConsensusBroadcastDisposition::SourceRetained);
+        retained
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(message.clone())],
+                &mut retained_services,
+            )
+            .expect("corridor pressure retains the Proposal source without failing closed");
+        assert!(
+            retained.runtime.active_view_producer_retained,
+            "a source-retained Proposal must keep the active producer fence"
+        );
+        assert!(retained.runtime.completed_proposal_fanouts.is_empty());
+        assert_eq!(retained_services.broadcast_attempts, vec![message.clone()]);
+        assert!(retained_services.broadcasts.is_empty());
+        assert!(retained.retained_effect_batch.is_none());
+        assert!(!retained.status().fail_closed);
+
+        retained
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(message.clone())],
+                &mut retained_services,
+            )
+            .expect("periodic Proposal retransmission reaches exact service acceptance");
+        assert!(!retained.runtime.active_view_producer_retained);
+        assert_eq!(retained_services.broadcast_attempts.len(), 2);
+        assert_eq!(retained_services.broadcasts, vec![message.clone()]);
+        let [(round, ownership)] = retained.runtime.completed_proposal_fanouts.as_slice() else {
+            panic!("only the accepted Proposal occurrence may retire the producer")
+        };
+        assert_eq!(*round, fixture.manifest.round);
+        assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
+
         let mut accepted = fixture.executor(EffectQueueConfig::default());
         accepted.runtime.active_view_producer_retained = true;
         let mut accepted_services = fixture.services();
@@ -21476,6 +21129,43 @@ mod tests {
         };
         assert_eq!(*round, fixture.manifest.round);
         assert_ne!(ownership.owner().lifecycle_ordinal(), 0);
+    }
+
+    #[test]
+    fn source_retained_non_proposal_control_remains_retransmittable() {
+        let fixture = Fixture::new();
+        let control =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote(&fixture)));
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        services
+            .broadcast_dispositions
+            .push_back(ConsensusBroadcastDisposition::SourceRetained);
+
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(control.clone())],
+                &mut services,
+            )
+            .expect("corridor pressure is retryable for ordinary controls");
+        assert_eq!(services.broadcast_attempts, vec![control.clone()]);
+        assert!(services.broadcasts.is_empty());
+        assert!(executor.runtime.completed_proposal_fanouts.is_empty());
+        assert!(!executor.status().fail_closed);
+
+        executor
+            .consume_effects(
+                vec![AdapterEffect::Broadcast(control.clone())],
+                &mut services,
+            )
+            .expect("periodic control retransmission is accepted later");
+        assert_eq!(
+            services.broadcast_attempts,
+            vec![control.clone(), control.clone()]
+        );
+        assert_eq!(services.broadcasts, vec![control]);
+        assert!(executor.runtime.completed_proposal_fanouts.is_empty());
+        assert!(!executor.status().fail_closed);
     }
 
     fn leader_wire_runtime_terminal_fixture(

@@ -29,12 +29,12 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         nexus_amx_context_hash: Hash::new(b"serialized rebind nexus context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
+            encoding: wire::PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 1_048_576,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 1_048_576,
-            max_chunk_count: 1,
+            max_chunk_count: 2,
         },
         leader_seed: [0x44; 32],
     };
@@ -86,14 +86,7 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         block_hash: block.hash(),
         payload_hash: Hash::new(&body),
     };
-    let manifest = wire::PayloadManifest::derive(
-        &context,
-        round,
-        subject,
-        u64::try_from(body.len()).expect("body length"),
-        std::slice::from_ref(&body),
-    )
-    .expect("canonical body manifest");
+    let manifest = canonical_payload_manifest(&context, round, subject, &body);
     let execution_commitment = fixture_execution_commitment();
     let prepare_preimage = wire::Vote {
         round,

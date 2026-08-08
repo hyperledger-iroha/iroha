@@ -18,8 +18,10 @@ cuts:
    reconstructed.
 4. A certified frontier durably creates both pair and bundle capacity
    obligations; a restart reconstructs both envelopes before reopening.
-5. Complete entrypoint claim-set and canonical association-stage peaks are
-   admitted before the first mutation.
+5. Complete entrypoint claim-set, canonical association-stage, and prune
+   transaction peaks are admitted before the first mutation. The prune peak
+   includes reservation envelopes, exact intent and marker growth, a complete
+   commit-roster generation publication, and the remaining sidecar rewrite.
 6. Debug append follows durable carrier reservation and is included in
    restart disk accounting.
 
@@ -32,6 +34,9 @@ The positive config is
 - `FrontierMissingBundleEnvelope`
 - `ClaimPeakAfterMutation`
 - `AssociationPeakAfterMutation`
+- `PrunePeakAfterMutation`
+- `PrunePeakDropsRosterGeneration`
+- `PrunePeakDropsReservationEnvelope`
 - `DebugAppendBeforeCarrierReservation`
 - `DebugRestartDropsAccounting`
 
@@ -86,6 +91,18 @@ durable data/index rewrite is authenticated and promoted, and its exact live
 accounting delta is published, before optional fresh-compaction capacity is
 calculated. Only a new rewrite may return `CapacityBlocked`; malformed crash
 evidence remains fail-closed and cannot be mislabeled as capacity pressure.
+
+Prune admission is source-bound from
+`CommitRosterJournalPruneProjectionV2::allocation_peak_with_sidecar` through
+`KuraPruneCapacityAdmissionV2::required_peak_bytes`, live intent publication,
+and startup recovery. The admitted absolute peak retains pending canonical,
+post-WSV, certified-bundle, and autonomous-terminal reservation envelopes and
+adds the exact intent, marker, roster-generation/pointer, and sequential
+sidecar peaks without deletion credit. Recovery rechecks that durable
+authority before repair. `Kura::truncate_roster_for_prune` authenticates the
+remaining projection and publishes only an authorized clone, while
+`CommitRosterJournal::persist_durable` uses deterministic generation and
+pointer temporaries with namespace sync and exact readback.
 
 Canonical association-stage capacity is source-bound through the exact
 `Kura::prepare_canonical_association_stage` projection, normal and

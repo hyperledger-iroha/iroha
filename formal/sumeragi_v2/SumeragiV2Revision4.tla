@@ -6,7 +6,20 @@
 
 EXTENDS FiniteSets, Integers, Naturals, Sequences, TLC
 
-CONSTANTS Validators, Faulty, Bodies, NoBody, BaseOrder, LocalValidator
+CONSTANTS
+    Validators,
+    Faulty,
+    Bodies,
+    NoBody,
+    BaseOrder,
+    LocalValidator,
+    BaseValidator1,
+    BaseValidator2,
+    BaseValidator3,
+    BaseValidator4
+
+Revision4BaseOrder ==
+    <<BaseValidator1, BaseValidator2, BaseValidator3, BaseValidator4>>
 
 N == Cardinality(Validators)
 F == (N - 1) \div 3
@@ -33,6 +46,7 @@ ConstantOK ==
     /\ N >= 4
     /\ N <= 31
     /\ N = 3 * F + 1
+    /\ Faulty \subseteq Validators
     /\ Cardinality(Faulty) <= F
     /\ Bodies /= {}
     /\ NoBody \notin Bodies
@@ -48,6 +62,9 @@ VoteCount(votes, body) ==
 VoteSigners(votes) ==
     {validator \in Validators :
         \E body \in Bodies : <<validator, body>> \in votes}
+
+QuorumSets ==
+    {signers \in SUBSET Validators : Cardinality(signers) >= Q}
 
 RouteSources(routes) ==
     {validator \in Validators :
@@ -410,6 +427,14 @@ CommitteeGeometry ==
     /\ SetA(view) \cup SetB(view) = Validators
     /\ Leader(view) \in SetA(view)
     /\ ProxyTail(view) \in SetA(view)
+
+\* This is the finite-set safety premise used with authenticated honest
+\* non-equivocation and the retained PrepareQC lock. It is checked independently
+\* of the compact routing trace so Byzantine quorum intersection is not hidden
+\* behind a non-equivocating action schedule.
+ByzantineQuorumIntersection ==
+    \A left, right \in QuorumSets :
+        (left \cap right) \cap Honest # {}
 
 ManifestCommitteeFanout ==
     /\ (proposal = NoBody => manifestTargets = {})

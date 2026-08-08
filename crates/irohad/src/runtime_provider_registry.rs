@@ -35,9 +35,9 @@ pub use catalog::{IrohaRuntimeProviderCatalogErrorV1, RUNTIME_PROVIDER_CATALOG_M
 
 use binding_collection::{
     append_required_governance_request_auth_binding, append_required_governance_service_binding,
-    collect_configured_bindings,
+    collect_configured_bindings, governance_request_ingress_binding_from_service,
 };
-use binding_types::{EvidenceViewerWebAuthnBindingV1, PopCredentialRuntimeBindingV1};
+pub(crate) use binding_types::{EvidenceViewerWebAuthnBindingV1, PopCredentialRuntimeBindingV1};
 use dependency_scope::{dependency_is_present, has_unrequested_dependency};
 
 const MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1: u32 = 1_024;
@@ -63,7 +63,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
     FencedPrivacyHeadReader = 6,
     /// HSM/KMS signer used by the embedded Governance DAG publisher.
     GovernanceDagSigner = 7,
-    /// Authenticator used for Governance DAG Kubo/IPFS/IPNS requests.
+    /// Authenticator used for Governance DAG Kubo/IPFS requests.
     GovernanceDagIpfsAuthenticator = 8,
     /// Authenticator used for signed Governance DAG head compare-and-swap.
     GovernanceDagHeadAuthenticator = 9,
@@ -368,8 +368,7 @@ pub struct IrohaRuntimeProviderBindingV1 {
     moderation_panel_notification_archive_max_records: Option<u64>,
     governance_dag_publisher_peer_id: Option<Vec<u8>>,
     governance_dag_publisher_public_key: Option<[u8; 32]>,
-    governance_request_auth_public_key: Option<[u8; 32]>,
-    governance_request_auth_max_body_bytes: Option<u64>,
+    governance_request_ingress_binding: Option<sorafs_node::GovernanceDagRequestIngressBindingV1>,
 }
 
 /// Public resource limits for the authenticated provider-ingest source broker.
@@ -455,8 +454,7 @@ impl IrohaRuntimeProviderBindingV1 {
             moderation_panel_notification_archive_max_records: None,
             governance_dag_publisher_peer_id: None,
             governance_dag_publisher_public_key: None,
-            governance_request_auth_public_key: None,
-            governance_request_auth_max_body_bytes: None,
+            governance_request_ingress_binding: None,
         })
     }
 
@@ -809,22 +807,22 @@ impl IrohaRuntimeProviderBindingV1 {
         handle: impl Into<String>,
         revision: u64,
         policy_digest: [u8; 32],
-        public_key: [u8; 32],
-        max_body_bytes: u64,
+        ingress_binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
-        if !matches!(
-            slot,
-            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator
-                | IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator
-        ) || public_key == [0; 32]
-            || max_body_bytes == 0
-            || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
-        {
+        let expected_scope = match slot {
+            IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator => {
+                sorafs_node::GovernanceDagAuthenticationScope::Ipfs
+            }
+            IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator => {
+                sorafs_node::GovernanceDagAuthenticationScope::SignedHead
+            }
+            _ => return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot)),
+        };
+        if ingress_binding.scope() != expected_scope {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
         }
         let mut projected = Self::try_new(slot, handle, Some(revision), Some(policy_digest))?;
-        projected.governance_request_auth_public_key = Some(public_key);
-        projected.governance_request_auth_max_body_bytes = Some(max_body_bytes);
+        projected.governance_request_ingress_binding = Some(ingress_binding);
         Ok(projected)
     }
 
@@ -1408,21 +1406,18 @@ impl IrohaRuntimeProviderBindingV1 {
         self.moderation_panel_notification_archive_max_bytes
     }
 
-    /// Return the exact terminal-record bound for one moderation receipt archive artifact.
+    /// Return the terminal-record bound for one moderation receipt archive artifact.
     pub(crate) const fn moderation_panel_notification_archive_max_records(&self) -> Option<u64> {
         self.moderation_panel_notification_archive_max_records
     }
 
-    /// Return the exact Ed25519 key verifying Governance request-auth envelopes.
+    /// Return the exact endpoint, key, body, and timing policy expected from a
+    /// Governance request-ingress provider.
     #[must_use]
-    pub const fn governance_request_auth_public_key(&self) -> Option<[u8; 32]> {
-        self.governance_request_auth_public_key
-    }
-
-    /// Return the exact maximum request body bytes this authenticator may sign.
-    #[must_use]
-    pub const fn governance_request_auth_max_body_bytes(&self) -> Option<u64> {
-        self.governance_request_auth_max_body_bytes
+    pub const fn governance_request_ingress_binding(
+        &self,
+    ) -> Option<sorafs_node::GovernanceDagRequestIngressBindingV1> {
+        self.governance_request_ingress_binding
     }
 }
 
@@ -1451,14 +1446,13 @@ pub struct IrohaRuntimeProviderBindingsV1 {
 struct GovernanceDagRequestAuthBindingProjectionV1<'a> {
     handle: &'a str,
     qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1,
-    public_key: [u8; 32],
+    ingress_binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
 }
 
 #[derive(Clone, Copy)]
 struct GovernanceDagServiceBindingProjectionV1<'a> {
     ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1<'a>,
     head_authenticator: Option<GovernanceDagRequestAuthBindingProjectionV1<'a>>,
-    request_auth_max_body_bytes: u64,
     checkpoint_store_handle: &'a str,
     checkpoint_store_qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1,
 }
@@ -1518,16 +1512,18 @@ impl IrohaRuntimeProviderBindingsV1 {
             service.ipfs_authenticator_handle.as_deref(),
             service.ipfs_authenticator_revision,
             service.ipfs_authenticator_policy_digest,
-            service.ipfs_request_auth_public_key,
         ) {
-            (Some(handle), Some(revision), Some(policy_digest), Some(public_key)) => {
+            (Some(handle), Some(revision), Some(policy_digest)) => {
                 GovernanceDagRequestAuthBindingProjectionV1 {
                     handle,
                     qualification: sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
                         revision,
                         policy_digest,
                     ),
-                    public_key,
+                    ingress_binding: governance_request_ingress_binding_from_service(
+                        service,
+                        sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
+                    )?,
                 }
             }
             _ => {
@@ -1537,31 +1533,44 @@ impl IrohaRuntimeProviderBindingsV1 {
             }
         };
         let head_authenticator = match service.head_mode.as_str() {
-            "signed_http" => match (
-                service.head_authenticator_handle.as_deref(),
-                service.head_authenticator_revision,
-                service.head_authenticator_policy_digest,
-                service.head_request_auth_public_key,
-            ) {
-                (Some(handle), Some(revision), Some(policy_digest), Some(public_key)) => {
-                    Some(GovernanceDagRequestAuthBindingProjectionV1 {
-                        handle,
-                        qualification:
-                            sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
-                                revision,
-                                policy_digest,
-                            ),
-                        public_key,
-                    })
+            "signed_http" if service.ipns_name.is_none() && service.ipns_key_name.is_none() => {
+                match (
+                    service.head_authenticator_handle.as_deref(),
+                    service.head_authenticator_revision,
+                    service.head_authenticator_policy_digest,
+                ) {
+                    (Some(handle), Some(revision), Some(policy_digest)) => {
+                        Some(GovernanceDagRequestAuthBindingProjectionV1 {
+                            handle,
+                            qualification:
+                                sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                                    revision,
+                                    policy_digest,
+                                ),
+                            ingress_binding: governance_request_ingress_binding_from_service(
+                                service,
+                                sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+                            )?,
+                        })
+                    }
+                    _ => {
+                        return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+                            IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
+                        ));
+                    }
                 }
-                _ => {
-                    return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                        IrohaRuntimeProviderSlotV1::GovernanceDagHeadAuthenticator,
-                    ));
-                }
-            },
+            }
             "ipns"
-                if service.head_authenticator_handle.is_none()
+                if service.signed_head_url.is_none()
+                    && service
+                        .ipns_name
+                        .as_deref()
+                        .is_some_and(|name| !name.is_empty())
+                    && service
+                        .ipns_key_name
+                        .as_deref()
+                        .is_some_and(|name| !name.is_empty())
+                    && service.head_authenticator_handle.is_none()
                     && service.head_authenticator_revision.is_none()
                     && service.head_authenticator_policy_digest.is_none()
                     && service.head_request_auth_public_key.is_none() =>
@@ -1601,7 +1610,6 @@ impl IrohaRuntimeProviderBindingsV1 {
             GovernanceDagServiceBindingProjectionV1 {
                 ipfs_authenticator,
                 head_authenticator,
-                request_auth_max_body_bytes: service.max_request_bytes.0,
                 checkpoint_store_handle,
                 checkpoint_store_qualification,
             },
@@ -1642,8 +1650,8 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// Governance DAG service.
     ///
     /// The standalone service does not execute producer signing. This catalog
-    /// therefore contains only its IPFS authenticator, optional signed-head
-    /// authenticator, and sealed checkpoint store.
+    /// therefore always contains its IPFS authenticator and sealed checkpoint
+    /// store, plus the signed-head CAS authenticator only in signed-HTTP mode.
     ///
     /// # Errors
     ///
@@ -1657,13 +1665,13 @@ impl IrohaRuntimeProviderBindingsV1 {
         let head_authenticator = match (
             service.head_authenticator_handle(),
             service.head_authenticator_qualification(),
-            service.head_request_auth_public_key(),
+            service.head_request_ingress_binding(),
         ) {
-            (Some(handle), Some(qualification), Some(public_key)) => {
+            (Some(handle), Some(qualification), Some(ingress_binding)) => {
                 Some(GovernanceDagRequestAuthBindingProjectionV1 {
                     handle,
                     qualification,
-                    public_key,
+                    ingress_binding,
                 })
             }
             (None, None, None) => None,
@@ -1679,10 +1687,9 @@ impl IrohaRuntimeProviderBindingsV1 {
                 ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1 {
                     handle: service.ipfs_authenticator_handle(),
                     qualification: service.ipfs_authenticator_qualification(),
-                    public_key: service.ipfs_request_auth_public_key(),
+                    ingress_binding: service.ipfs_request_ingress_binding(),
                 },
                 head_authenticator,
-                request_auth_max_body_bytes: service.request_auth_max_body_bytes(),
                 checkpoint_store_handle: service.checkpoint_store_handle(),
                 checkpoint_store_qualification: service.checkpoint_store_qualification(),
             },
@@ -1700,8 +1707,7 @@ impl IrohaRuntimeProviderBindingsV1 {
             Some(service.ipfs_authenticator.handle),
             Some(service.ipfs_authenticator.qualification.revision),
             Some(service.ipfs_authenticator.qualification.policy_digest),
-            Some(service.ipfs_authenticator.public_key),
-            service.request_auth_max_body_bytes,
+            Some(service.ipfs_authenticator.ingress_binding),
         )?;
         if let Some(head_authenticator) = service.head_authenticator {
             append_required_governance_request_auth_binding(
@@ -1710,8 +1716,7 @@ impl IrohaRuntimeProviderBindingsV1 {
                 Some(head_authenticator.handle),
                 Some(head_authenticator.qualification.revision),
                 Some(head_authenticator.qualification.policy_digest),
-                Some(head_authenticator.public_key),
-                service.request_auth_max_body_bytes,
+                Some(head_authenticator.ingress_binding),
             )?;
         }
         append_required_governance_service_binding(
@@ -1902,6 +1907,28 @@ impl IrohaRuntimeProviderBindingsV1 {
         public_key: [u8; 32],
         max_body_bytes: u64,
     ) -> Self {
+        let scope = if slot == IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator {
+            sorafs_node::GovernanceDagAuthenticationScope::Ipfs
+        } else {
+            sorafs_node::GovernanceDagAuthenticationScope::SignedHead
+        };
+        let endpoint = if scope == sorafs_node::GovernanceDagAuthenticationScope::Ipfs {
+            "https://governance-ingress.invalid/ipfs/"
+        } else {
+            "https://governance-ingress.invalid/head"
+        };
+        let endpoint_binding =
+            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
+                .expect("test request-ingress endpoint must be canonical");
+        let ingress_binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+            scope,
+            endpoint_binding,
+            public_key,
+            max_body_bytes,
+            30,
+            5,
+        )
+        .expect("test request-ingress binding must be production-shaped");
         Self {
             chain_id: chain_id.into(),
             bindings: vec![
@@ -1910,8 +1937,7 @@ impl IrohaRuntimeProviderBindingsV1 {
                     handle,
                     revision,
                     policy_digest,
-                    public_key,
-                    max_body_bytes,
+                    ingress_binding,
                 )
                 .expect("test request-auth binding must be production-shaped"),
             ],
@@ -2463,26 +2489,20 @@ fn qualify_governance_request_auth_dependencies(
         let expected_policy_digest = expected
             .policy_digest()
             .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-        let expected_public_key = expected
-            .governance_request_auth_public_key()
+        let expected_ingress = expected
+            .governance_request_ingress_binding()
             .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-        if expected
-            .governance_request_auth_max_body_bytes()
-            .is_none_or(|bound| bound == 0)
-        {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
-        }
         let observe = || {
             let qualification = authenticator
-                .qualification()
+                .ingress_qualification()
                 .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
             if authenticator.handle() != expected.handle()
-                || authenticator.public_key() != expected_public_key
+                || qualification.binding() != expected_ingress
             {
                 return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
             }
-            if qualification.revision != expected_revision
-                || qualification.policy_digest != expected_policy_digest
+            if qualification.provider().revision != expected_revision
+                || qualification.provider().policy_digest != expected_policy_digest
             {
                 return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
             }
@@ -3423,6 +3443,8 @@ mod tests {
 
     const GOVERNANCE_IPFS_HANDLE: &str = "vault://governance/ipfs-primary";
     const GOVERNANCE_HEAD_HANDLE: &str = "vault://governance/head-primary";
+    const GOVERNANCE_IPFS_ENDPOINT: &str = "https://governance-ingress.invalid/ipfs/";
+    const GOVERNANCE_HEAD_ENDPOINT: &str = "https://governance-ingress.invalid/head";
     const GOVERNANCE_CHECKPOINT_HANDLE: &str = "kms://governance/checkpoint-primary";
     const GOVERNANCE_SIGNER_HANDLE: &str = "hsm://governance/producer-signer-primary";
     const GOVERNANCE_PUBLISHER_PEER_ID: &str = "12D3KooWGovernanceProducerPrimary";
@@ -4352,20 +4374,34 @@ mod tests {
     struct GovernanceAuthenticator {
         handle: &'static str,
         key_handle: &'static str,
+        ingress_binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
         nonce: AtomicU64,
     }
 
     impl GovernanceAuthenticator {
-        fn new(handle: &'static str) -> Self {
+        fn new(
+            handle: &'static str,
+            ingress_binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
+        ) -> Self {
             Self {
                 handle,
                 key_handle: handle,
+                ingress_binding,
                 nonce: AtomicU64::new(0),
             }
         }
 
         fn with_key_from(mut self, handle: &'static str) -> Self {
             self.key_handle = handle;
+            self.ingress_binding = sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+                self.ingress_binding.scope(),
+                self.ingress_binding.endpoint_binding(),
+                governance_auth_public_key(handle),
+                self.ingress_binding.max_body_bytes(),
+                self.ingress_binding.max_envelope_lifetime_secs(),
+                self.ingress_binding.max_future_skew_secs(),
+            )
+            .expect("substituted test key remains canonical Ed25519");
             self
         }
     }
@@ -4488,19 +4524,51 @@ mod tests {
         bytes
     }
 
+    fn governance_auth_ingress_binding(
+        handle: &str,
+        max_body_bytes: u64,
+    ) -> sorafs_node::GovernanceDagRequestIngressBindingV1 {
+        let (scope, endpoint) = if handle == GOVERNANCE_IPFS_HANDLE {
+            (
+                sorafs_node::GovernanceDagAuthenticationScope::Ipfs,
+                GOVERNANCE_IPFS_ENDPOINT,
+            )
+        } else {
+            (
+                sorafs_node::GovernanceDagAuthenticationScope::SignedHead,
+                GOVERNANCE_HEAD_ENDPOINT,
+            )
+        };
+        let endpoint_binding =
+            sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
+                .expect("test ingress endpoint is canonical");
+        sorafs_node::GovernanceDagRequestIngressBindingV1::try_new(
+            scope,
+            endpoint_binding,
+            governance_auth_public_key(handle),
+            max_body_bytes,
+            30,
+            5,
+        )
+        .expect("test Governance DAG request-ingress binding is valid")
+    }
+
     impl sorafs_node::GovernanceDagRequestAuthenticator for GovernanceAuthenticator {
         fn handle(&self) -> &str {
             self.handle
         }
 
-        fn qualification(
+        fn ingress_qualification(
             &self,
-        ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
-            Ok(GOVERNANCE_QUALIFICATION)
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            governance_auth_public_key(self.key_handle)
+        ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, String> {
+            sorafs_node::GovernanceDagRequestIngressQualificationV1::try_new(
+                GOVERNANCE_QUALIFICATION,
+                self.ingress_binding,
+                [0x91; 32],
+                [0x92; 32],
+                [0x93; 32],
+            )
+            .map_err(|error| error.to_string())
         }
 
         fn authenticate(
@@ -4521,7 +4589,7 @@ mod tests {
                 .ok_or_else(|| "redacted request-auth nonce exhaustion".to_owned())?;
             let mut nonce = request.request_digest();
             nonce[..8].copy_from_slice(&sequence.to_be_bytes());
-            let public_key = self.public_key();
+            let public_key = governance_auth_public_key(self.key_handle);
             let payload =
                 sorafs_node::GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
                     request,
@@ -5049,54 +5117,6 @@ mod tests {
         }
     }
 
-    fn configure_governance_service(config: &mut Config, head_mode: &str) {
-        let service = &mut config.torii.sorafs_storage.governance_dag_service;
-        service.enabled = true;
-        service.head_mode = head_mode.to_owned();
-        service.ipfs_authenticator_handle = Some(GOVERNANCE_IPFS_HANDLE.to_owned());
-        service.ipfs_authenticator_revision = Some(GOVERNANCE_QUALIFICATION.revision);
-        service.ipfs_authenticator_policy_digest = Some(GOVERNANCE_QUALIFICATION.policy_digest);
-        service.ipfs_request_auth_public_key =
-            Some(governance_auth_public_key(GOVERNANCE_IPFS_HANDLE));
-        service.checkpoint_store_handle = Some(GOVERNANCE_CHECKPOINT_HANDLE.to_owned());
-        service.checkpoint_store_revision = Some(GOVERNANCE_QUALIFICATION.revision);
-        service.checkpoint_store_policy_digest = Some(GOVERNANCE_QUALIFICATION.policy_digest);
-        if head_mode == "signed_http" {
-            service.head_authenticator_handle = Some(GOVERNANCE_HEAD_HANDLE.to_owned());
-            service.head_authenticator_revision = Some(GOVERNANCE_QUALIFICATION.revision);
-            service.head_authenticator_policy_digest = Some(GOVERNANCE_QUALIFICATION.policy_digest);
-            service.head_request_auth_public_key =
-                Some(governance_auth_public_key(GOVERNANCE_HEAD_HANDLE));
-        } else {
-            service.head_authenticator_handle = None;
-            service.head_authenticator_revision = None;
-            service.head_authenticator_policy_digest = None;
-            service.head_request_auth_public_key = None;
-        }
-    }
-
-    fn governance_service_view(
-        head_mode: &str,
-    ) -> iroha_config::parameters::actual::SorafsGovernanceDagServiceView {
-        let mut config = default_runtime_config();
-        configure_governance_service(&mut config, head_mode);
-        let mut service = config.torii.sorafs_storage.governance_dag_service;
-        service.max_request_bytes = Bytes(65_536);
-        let producer_public_key_hex = hex::encode(governance_signer_public_key(0x73));
-        iroha_config::parameters::actual::SorafsGovernanceDagServiceView {
-            source_dir: None,
-            producer_publisher_peer_id: Some(GOVERNANCE_PUBLISHER_PEER_ID.to_owned()),
-            producer_signer_handle: Some(GOVERNANCE_SIGNER_HANDLE.to_owned()),
-            producer_signer_revision: Some(GOVERNANCE_QUALIFICATION.revision),
-            producer_signer_policy_digest: Some(GOVERNANCE_QUALIFICATION.policy_digest),
-            producer_publisher_public_key_hex: Some(producer_public_key_hex.clone()),
-            service: {
-                service.publisher_public_key_hex = Some(producer_public_key_hex);
-                service
-            },
-        }
-    }
-
     fn configure_governance_producer(config: &mut Config) {
         let storage = &mut config.torii.sorafs_storage;
         storage.enabled = true;
@@ -5113,23 +5133,6 @@ mod tests {
         service.checkpoint_store_handle = Some(GOVERNANCE_CHECKPOINT_HANDLE.to_owned());
         service.checkpoint_store_revision = Some(GOVERNANCE_QUALIFICATION.revision);
         service.checkpoint_store_policy_digest = Some(GOVERNANCE_QUALIFICATION.policy_digest);
-    }
-
-    fn governance_service_dependencies(include_head: bool) -> IrohaRuntimeDeps {
-        let dependencies = IrohaRuntimeDeps::default()
-            .with_sorafs_governance_dag_ipfs_authenticator(Arc::new(GovernanceAuthenticator::new(
-                GOVERNANCE_IPFS_HANDLE,
-            )))
-            .with_sorafs_governance_dag_checkpoint_store(Arc::new(
-                GovernanceCheckpointStore::default(),
-            ));
-        if include_head {
-            dependencies.with_sorafs_governance_dag_head_authenticator(Arc::new(
-                GovernanceAuthenticator::new(GOVERNANCE_HEAD_HANDLE),
-            ))
-        } else {
-            dependencies
-        }
     }
 
     macro_rules! define_explicit_test_signer {
@@ -5916,7 +5919,7 @@ mod tests {
     fn canonical_catalog_roundtrips_every_specialized_config_projection_family() {
         let mut governance = default_runtime_config();
         configure_governance_producer(&mut governance);
-        configure_governance_service(&mut governance, "signed_http");
+        configure_governance_service(&mut governance);
         assert_canonical_config_catalog_roundtrip(
             "Governance DAG",
             &governance,

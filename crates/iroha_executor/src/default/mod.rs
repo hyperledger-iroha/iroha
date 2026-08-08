@@ -6004,6 +6004,8 @@ pub mod trigger {
 mod sorafs_permission_tests {
     use core::num::NonZeroU64;
 
+    use super::*;
+    use crate::{Iroha, prelude, tests::with_mock_permissions};
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
         account::AccountId,
@@ -6080,10 +6082,6 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
     };
-    use sorafs_manifest::capacity::ReplicationAssignmentV1;
-
-    use super::*;
-    use crate::{Iroha, prelude, tests::with_mock_permissions};
 
     const AUTHORITY_PUBLIC_KEY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
@@ -6443,11 +6441,7 @@ mod sorafs_permission_tests {
             ReplicationOrderId::new([0x11; 32]),
             1,
             2,
-            vec![ReplicationAssignmentV1 {
-                provider_id: [0x12; 32],
-                slice_gib: 1,
-                lane: None,
-            }],
+            Vec::new(),
         )
     }
 

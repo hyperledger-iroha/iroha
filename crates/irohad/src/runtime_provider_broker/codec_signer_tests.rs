@@ -493,22 +493,46 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
 
     let state = request_auth_server_test_state();
     let binding = &state.catalog[0];
+    let ingress_wire = binding
+        .governance_request_ingress_binding
+        .expect("request-auth ingress binding");
     assert_eq!(
-        binding.governance_request_auth_public_key,
-        Some(server_test_request_auth_public_key())
+        governance_request_ingress_binding_from_wire(ingress_wire),
+        Ok(server_test_request_ingress_binding(
+            server_test_request_auth_public_key()
+        ))
     );
-    assert_eq!(binding.governance_request_auth_max_body_bytes, Some(1024));
     let mut missing_key = binding.clone();
-    missing_key.governance_request_auth_public_key = None;
+    missing_key.governance_request_ingress_binding = None;
     assert_eq!(
         validate_wire_binding(&missing_key),
         Err(BrokerError::BindingMismatch)
     );
     let mut zero_bound = binding.clone();
-    zero_bound.governance_request_auth_max_body_bytes = Some(0);
+    zero_bound
+        .governance_request_ingress_binding
+        .as_mut()
+        .expect("request-auth ingress binding")
+        .max_body_bytes = 0;
     assert_eq!(
         validate_wire_binding(&zero_bound),
         Err(BrokerError::BindingMismatch)
+    );
+
+    let qualification = sorafs_node::GovernanceDagRequestAuthenticator::ingress_qualification(
+        &ServerTestGovernanceRequestAuthenticator::exact(),
+    )
+    .expect("qualify exact request ingress");
+    let qualification_wire = governance_request_ingress_qualification_to_wire(qualification);
+    assert_eq!(
+        governance_request_ingress_qualification_from_wire(qualification_wire),
+        Ok(qualification)
+    );
+    let mut zero_replay = qualification_wire;
+    zero_replay.replay_namespace_digest = [0; 32];
+    assert_eq!(
+        governance_request_ingress_qualification_from_wire(zero_replay),
+        Err(BrokerError::Protocol)
     );
 
     let request =
@@ -605,9 +629,16 @@ fn governance_request_auth_round_trips_over_the_stock_broker() {
         .sorafs_governance_dag_ipfs_authenticator
         .as_ref()
         .expect("resolved IPFS request authenticator");
+    let ingress_qualification = authenticator
+        .ingress_qualification()
+        .expect("qualify resolved IPFS request ingress");
     assert_eq!(
-        authenticator.public_key(),
+        ingress_qualification.binding().public_key(),
         server_test_request_auth_public_key()
+    );
+    assert_eq!(
+        ingress_qualification,
+        server_test_request_ingress_qualification(server_test_request_auth_public_key())
     );
     let request =
         canonical_request_auth_test_request(sorafs_node::GovernanceDagAuthenticationScope::Ipfs);

@@ -201,7 +201,7 @@ fn hash_tagged_u16(hasher: &mut blake3::Hasher, tag: u8, value: u16) {
     hasher.update(&value.to_le_bytes());
 }
 
-fn da_ingest_signing_digest(intent: DaIngestRequestIntentRefV1<'_>) -> [u8; 32] {
+fn da_ingest_signing_digest(intent: &DaIngestRequestIntentRefV1<'_>) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(DA_INGEST_REQUEST_SIGNING_DOMAIN_V1);
     hasher.update(intent.client_blob_id.as_bytes());
@@ -299,7 +299,7 @@ impl DaIngestRequestIntentV1 {
     /// Compute the domain-separated digest signed by the DA submitter.
     #[must_use]
     pub fn signing_digest(&self) -> [u8; 32] {
-        da_ingest_signing_digest(self.into())
+        da_ingest_signing_digest(&self.into())
     }
 
     /// Sign this intent and construct the corresponding ingest request.
@@ -335,7 +335,7 @@ impl DaIngestRequest {
     /// Compute the domain-separated digest covering every signable request field.
     #[must_use]
     pub fn signing_digest(&self) -> [u8; 32] {
-        da_ingest_signing_digest(self.into())
+        da_ingest_signing_digest(&self.into())
     }
 
     /// Verify the request signature against its declared submitter.

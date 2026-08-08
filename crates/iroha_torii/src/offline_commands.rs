@@ -373,7 +373,7 @@ fn validate_kagemusha_v4_topup_snapshot(
                 "Offline top-up asset has no confidential tree state.",
             )
         })?;
-    zk_state.validate_tree_integrity().map_err(|error| {
+    zk_state.validate_tree_metadata().map_err(|error| {
         validation_owned(
             "offline_confidential_state_invalid",
             format!(
@@ -1087,9 +1087,7 @@ fn signed_transaction_for_entrypoint(
     match entrypoint {
         TransactionEntrypoint::External(transaction) => Some(transaction),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 

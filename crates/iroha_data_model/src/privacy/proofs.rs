@@ -448,6 +448,9 @@ pub enum PrivacyStatementValidationError {
     /// A transparent transfer amount is zero.
     #[error("privacy statement transfer amount must be non-zero")]
     ZeroAmount,
+    /// The universal coordinator was supplied as a concrete balance partition.
+    #[error("privacy statement public balance scope cannot be the universal dataspace")]
+    UniversalPublicBalanceScope,
     /// Public value-balance direction and magnitude are inconsistent.
     #[error("privacy value balance {direction:?} has invalid amount {amount}")]
     InvalidValueBalance {
@@ -1830,6 +1833,7 @@ mod exact12_fixture {
                 source: account(13),
                 destination: account(14),
                 asset_definition_id: asset.clone(),
+                public_balance_scope: AssetBalanceScope::Global,
                 amount: 1_000,
                 authorization_epoch: 7,
                 replay_nullifier: nullifier(15),
@@ -1977,6 +1981,7 @@ mod exact12_fixture {
             PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
+                public_balance_scope: AssetBalanceScope::Global,
                 pool_id: PrivacyPoolIdV1::new(raw(81)),
                 anchor: PrivacyRootV1::new(raw(82)),
                 anchor_epoch: 13,
@@ -2004,6 +2009,7 @@ mod exact12_fixture {
                 let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
                     context: context(),
                     asset_definition_id: asset.clone(),
+                    public_balance_scope: AssetBalanceScope::Global,
                     pool_id: PrivacyPoolIdV1::new(raw(94)),
                     program_id: PrivacyProgramIdV1::new(raw(95)),
                     action_digest: PrivacyActionDigestV1::new([0; 32]),

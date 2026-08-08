@@ -830,42 +830,32 @@ fn native_amx_fault_value(revision: u64, phase: NativeAmxFaultPhase, source_id: 
     object_value([
         ("phase", Value::from(phase.as_str())),
         ("revision", Value::from(revision)),
-        ("source_id", Value::from(lowercase_hex(&source_id))),
+        ("source_id", Value::from(crate::hex_lower(&source_id))),
         ("version", Value::from(NATIVE_AMX_FAULT_FORMAT_VERSION)),
     ])
 }
 
-fn lowercase_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    encoded
-}
-
-fn decode_canonical_lower_hex_32(value: &str) -> Result<[u8; 32]> {
-    if value.len() != 64
-        || value
-            .bytes()
-            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
-    {
-        return Err(eyre!(
-            "Native AMX fault acknowledgement source is not canonical"
-        ));
+fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 64 {
+        return None;
     }
 
     let mut decoded = [0_u8; 32];
-    for (output, pair) in decoded.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
-        let nibble = |byte: u8| match byte {
-            b'0'..=b'9' => byte - b'0',
-            b'a'..=b'f' => byte - b'a' + 10,
-            _ => unreachable!("canonical lowercase hexadecimal was validated"),
-        };
-        *output = (nibble(pair[0]) << 4) | nibble(pair[1]);
+    for (output, pair) in decoded.iter_mut().zip(bytes.chunks_exact(2)) {
+        let high = decode_lower_hex_nibble(pair[0])?;
+        let low = decode_lower_hex_nibble(pair[1])?;
+        *output = (high << 4) | low;
     }
-    Ok(decoded)
+    Some(decoded)
+}
+
+const fn decode_lower_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn parse_native_amx_fault(bytes: &[u8]) -> Result<NativeAmxFaultAck> {
@@ -901,7 +891,8 @@ fn parse_native_amx_fault(bytes: &[u8]) -> Result<NativeAmxFaultAck> {
         .get("source_id")
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("Native AMX fault acknowledgement lacks `source_id`"))?;
-    let source_id = decode_canonical_lower_hex_32(source)?;
+    let source_id = decode_lower_hex_32(source)
+        .ok_or_else(|| eyre!("Native AMX fault acknowledgement source is not canonical"))?;
     Ok(NativeAmxFaultAck {
         revision,
         phase,
@@ -1966,7 +1957,7 @@ mod tests {
             .expect("fault command object")
             .insert(
                 "source_id".to_owned(),
-                Value::from(lowercase_hex(&source_id).to_ascii_uppercase()),
+                Value::from(crate::hex_lower(&source_id).to_ascii_uppercase()),
             );
         let uppercase = canonical_json(&noncanonical).expect("encode uppercase source");
         assert!(parse_native_amx_fault(&uppercase).is_err());

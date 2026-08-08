@@ -925,17 +925,15 @@ fn validate_operation_payload(
                 &request.payload,
                 MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
             )?;
-            let max_body_bytes = request
-                .binding
-                .governance_request_auth_max_body_bytes
-                .ok_or(BrokerError::BindingMismatch)?;
-            let descriptor = governance_request_auth_from_wire(&wire, max_body_bytes)?;
+            let ingress =
+                governance_request_ingress_binding_from_provider_binding(&request.binding)?;
+            let descriptor = governance_request_auth_from_wire(&wire, ingress.max_body_bytes())?;
             let expected_scope = if slot == ipfs_auth_slot {
                 sorafs_node::GovernanceDagAuthenticationScope::Ipfs
             } else {
                 sorafs_node::GovernanceDagAuthenticationScope::SignedHead
             };
-            if descriptor.scope() != expected_scope {
+            if descriptor.scope() != expected_scope || descriptor.scope() != ingress.scope() {
                 return Err(BrokerError::BindingMismatch);
             }
         }

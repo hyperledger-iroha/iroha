@@ -36,6 +36,102 @@ def load_checker():
     return module
 
 
+def copy_reviewed_rust_source_fixture(
+    tmp_path: Path, module, relative: str
+) -> Path:
+    """Copy one parent and its exact reviewed direct include closure."""
+
+    parent_relative = Path(relative)
+    parent = tmp_path / parent_relative
+    parent.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / parent_relative, parent)
+    for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS[relative]:
+        component_relative = parent_relative.parent / component
+        destination = tmp_path / component_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / component_relative, destination)
+    return parent
+
+
+def test_reviewed_rust_include_manifest_is_pinned_and_current() -> None:
+    module = load_checker()
+    errors: list[str] = []
+    module._validate_reviewed_rust_include_manifest(ROOT_DIR, errors)
+    assert errors == []
+
+
+def test_reviewed_rust_source_expands_exact_lane_work_closure(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    relative = "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    errors: list[str] = []
+    _path, source = module._read_reviewed_rust_source(
+        tmp_path, relative, "reviewed lane-work fixture", errors
+    )
+    assert errors == []
+    assert source is not None
+    assert source.count("fn durable_historical_lane_verification_pops(") == 1
+    assert (
+        source.count(
+            "fn current_height_qc_uses_frozen_context_pops_after_state_index_pruning("
+        )
+        == 1
+    )
+    expanded_paths = module._expanded_source_manifest_paths({Path(relative)})
+    assert module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE in expanded_paths
+    assert module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE in expanded_paths
+    assert (
+        Path(relative).parent
+        / "v2_lane_work/typed_finality_handoff_tests.rs"
+        in expanded_paths
+    )
+    assert (
+        Path(relative).parent / "v2_lane_work/frozen_context_pop_tests.rs"
+        in expanded_paths
+    )
+
+
+def test_reviewed_rust_source_rejects_substituted_lane_work_include(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    relative = "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    parent = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    canonical = 'include!("v2_lane_work/typed_finality_handoff_tests.rs");'
+    substitute = 'include!("v2_lane_work/substituted_handoff_tests.rs");'
+    replace_once(parent, canonical, substitute)
+    shutil.copy2(
+        parent.parent / "v2_lane_work/typed_finality_handoff_tests.rs",
+        parent.parent / "v2_lane_work/substituted_handoff_tests.rs",
+    )
+    errors: list[str] = []
+    module._read_reviewed_rust_source(
+        tmp_path, relative, "substituted lane-work fixture", errors
+    )
+    assert any("reviewed Rust include inventory must equal" in error for error in errors)
+
+
+def test_reviewed_rust_source_rejects_symlinked_lane_work_component(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    relative = "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
+    parent = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    component = parent.parent / "v2_lane_work/typed_finality_handoff_tests.rs"
+    component.unlink()
+    component.symlink_to("frozen_context_pop_tests.rs")
+    errors: list[str] = []
+    module._read_reviewed_rust_source(
+        tmp_path, relative, "symlinked lane-work fixture", errors
+    )
+    assert any(
+        str(component) in error and "regular non-symlink file" in error
+        for error in errors
+    ), errors
+
+
 def canonical_contract() -> dict:
     ledger = json.loads(BINDINGS.read_text(encoding="utf-8"))
     return copy.deepcopy(ledger["inflight_first_release_layout_contract"])

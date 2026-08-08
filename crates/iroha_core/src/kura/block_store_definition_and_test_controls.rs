@@ -752,6 +752,9 @@ pub struct BlockStore {
     /// Test hook for failing before the next atomic commit-marker write.
     #[cfg(test)]
     fail_next_commit_marker_write: AtomicBool,
+    /// Test hook for stopping after the deterministic marker temp is synced.
+    #[cfg(test)]
+    fail_next_commit_marker_after_temp_sync: AtomicBool,
     /// Test hook for failing the next commit-marker readback.
     #[cfg(test)]
     fail_next_commit_marker_read: AtomicBool,
@@ -799,5 +802,37 @@ impl Debug for BlockStore {
             .field("commit_marker_count", &self.commit_marker_count)
             .field("commit_marker_pending", &self.commit_marker_pending)
             .finish()
+    }
+}
+
+impl BlockStore {
+    fn read_required_bounded_commit_marker_bytes(
+        path: &Path,
+        missing_reason: &'static str,
+    ) -> Result<Vec<u8>> {
+        Self::read_bounded_commit_marker_bytes(path)?.ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::NotFound, missing_reason),
+                path.to_path_buf(),
+            )
+        })
+    }
+
+    fn maybe_fail_commit_marker_after_temp_sync(&self, temporary_path: &Path) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .fail_next_commit_marker_after_temp_sync
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected crash after deterministic commit-marker temp sync",
+                ),
+                temporary_path.to_path_buf(),
+            ));
+        }
+        #[cfg(not(test))]
+        let _ = temporary_path;
+        Ok(())
     }
 }

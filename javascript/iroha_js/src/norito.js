@@ -27,7 +27,9 @@ import {
   createNoritoContractCodecs,
   createNoritoProofValueCodecs,
 } from "./noritoContractCodecs.js";
+import { createNoritoGovernanceInstructionBoundary } from "./noritoGovernanceBoundary.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   LANE_PRIVACY_MERKLE_MAX_DEPTH,
   PROOF_BOX_MAX_ENCODED_BYTES,
@@ -260,9 +262,6 @@ const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha_data_model::isi::social::Clai
 const SEND_TO_TWITTER_WIRE_ID = "iroha_data_model::isi::social::SendToTwitter";
 const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha_data_model::isi::social::CancelTwitterEscrow";
 const REGISTER_ZK_ASSET_WIRE_ID = "iroha_data_model::isi::zk::RegisterZkAsset";
-const SHIELD_WIRE_ID = "iroha_data_model::isi::zk::Shield";
-const ZK_TRANSFER_WIRE_ID = "iroha_data_model::isi::zk::ZkTransfer";
-const UNSHIELD_WIRE_ID = "iroha_data_model::isi::zk::Unshield";
 const CREATE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::CreateElection";
 const SUBMIT_BALLOT_WIRE_ID = "iroha_data_model::isi::zk::SubmitBallot";
 const FINALIZE_ELECTION_WIRE_ID = "iroha_data_model::isi::zk::FinalizeElection";
@@ -313,14 +312,16 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
   "zk::CancelConfidentialPolicyTransition":
     "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
-  [SHIELD_WIRE_ID]: SHIELD_WIRE_ID,
-  [ZK_TRANSFER_WIRE_ID]: ZK_TRANSFER_WIRE_ID,
-  [UNSHIELD_WIRE_ID]: UNSHIELD_WIRE_ID,
-  [CREATE_ELECTION_WIRE_ID]: CREATE_ELECTION_WIRE_ID,
-  [SUBMIT_BALLOT_WIRE_ID]: SUBMIT_BALLOT_WIRE_ID,
-  [FINALIZE_ELECTION_WIRE_ID]: FINALIZE_ELECTION_WIRE_ID,
-  [REGISTER_VERIFYING_KEY_WIRE_ID]: REGISTER_VERIFYING_KEY_WIRE_ID,
-  [UPDATE_VERIFYING_KEY_WIRE_ID]: UPDATE_VERIFYING_KEY_WIRE_ID,
+  "iroha_data_model::isi::zk::CreateElection":
+    "iroha_data_model::isi::zk::CreateElection",
+  "iroha_data_model::isi::zk::SubmitBallot":
+    "iroha_data_model::isi::zk::SubmitBallot",
+  "iroha_data_model::isi::zk::FinalizeElection":
+    "iroha_data_model::isi::zk::FinalizeElection",
+  "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey":
+    "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+  "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey":
+    "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
 });
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   Object.fromEntries(
@@ -330,10 +331,7 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
     ]),
   ),
 );
-const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
-  [SHIELD_WIRE_ID]: 8,
-  [UNSHIELD_WIRE_ID]: 8,
-});
+const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({});
 
 const CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -519,18 +517,41 @@ function shouldUsePureJsInstructionFallback(error) {
   return isNativeBindingUnavailable(error) || isNativeBindingUnsupportedInstruction(error);
 }
 
-function encodeNormalizedInstruction(normalized) {
-  const deployProposal = normalized?.ProposeDeployContract;
-  if (
-    isPlainObject(deployProposal) &&
-    deployProposal.mode !== undefined &&
-    deployProposal.mode !== null
-  ) {
-    // Rust's JSON bridge has historically accepted case-folded enum text.
-    // Bind the public JS wire contract to the exact canonical spellings before
-    // native dispatch so non-canonical JSON cannot acquire canonical bytes.
-    encodeVotingModeValue(deployProposal.mode, "ProposeDeployContract.mode");
+const validateGovernanceInstructionBoundary =
+  /* @__PURE__ */ createNoritoGovernanceInstructionBoundary({
+    assertExactNonEmptyString,
+    assertOnlyObjectKeys,
+    decodeExactStandardBase64,
+    decodeManifestProvenanceValue: (...args) =>
+      decodeManifestProvenanceValue(...args),
+    encodeManifestProvenanceValue: (...args) =>
+      encodeManifestProvenanceValue(...args),
+    encodeVotingModeValue,
+    isPlainObject,
+  });
+
+const RETIRED_GENERIC_ZK_VARIANTS = Object.freeze([
+  ["Shi", "eld"].join(""),
+  ["Zk", "Transfer"].join(""),
+  ["Un", "shield"].join(""),
+]);
+
+function rejectRetiredGenericZkInstruction(instruction) {
+  if (!isPlainObject(instruction) || !isPlainObject(instruction.zk)) {
+    return;
   }
+  for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
+    if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
+      throw new TypeError(
+        `zk.${variant} is retired in ABI V1; use the typed Kagemusha flow`,
+      );
+    }
+  }
+}
+
+function encodeNormalizedInstruction(normalized) {
+  rejectRetiredGenericZkInstruction(normalized);
+  validateGovernanceInstructionBoundary(normalized);
   let encoded;
   try {
     const native = resolveNative("noritoEncodeInstruction");
@@ -619,7 +640,10 @@ export function noritoEncodeInstruction(instruction) {
     const trimmed = instruction.trim();
     try {
       const parsed = JSON.parse(trimmed);
-      const normalized = normalizeInstructionJsonValue(parsed);
+      const exactParsed = isStrictGovernanceInstructionCandidate(parsed)
+        ? parseStrictLosslessIntegerJson(trimmed, "governance instruction")
+        : parsed;
+      const normalized = normalizeInstructionJsonValue(exactParsed);
       return encodeNormalizedInstruction(normalized);
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -1463,25 +1487,17 @@ export function noritoDecodeInstruction(bytes, options = {}) {
 }
 
 function validateDecodedInstructionProofAttachments(instruction) {
+  rejectRetiredGenericZkInstruction(instruction);
   if (!isPlainObject(instruction) || !isPlainObject(instruction.zk)) {
     return;
   }
   for (const [variant, field] of [
-    ["ZkTransfer", "proof"],
-    ["Unshield", "proof"],
     ["SubmitBallot", "ballot_proof"],
     ["FinalizeElection", "tally_proof"],
   ]) {
     const payload = instruction.zk[variant];
     if (!isPlainObject(payload)) {
       continue;
-    }
-    if (variant === "Unshield") {
-      assertOnlyObjectKeys(
-        payload,
-        ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
-        "zk.Unshield",
-      );
     }
     if (!Object.prototype.hasOwnProperty.call(payload, field)) {
       throw new TypeError(`zk.${variant}.${field} is required`);
@@ -2880,12 +2896,9 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case REGISTER_ZK_ASSET_WIRE_ID:
     case "zk::ScheduleConfidentialPolicyTransition":
     case "zk::CancelConfidentialPolicyTransition":
-    case SHIELD_WIRE_ID:
-    case ZK_TRANSFER_WIRE_ID:
-    case UNSHIELD_WIRE_ID:
-    case CREATE_ELECTION_WIRE_ID:
-    case SUBMIT_BALLOT_WIRE_ID:
-    case FINALIZE_ELECTION_WIRE_ID:
+    case "iroha_data_model::isi::zk::CreateElection":
+    case "iroha_data_model::isi::zk::SubmitBallot":
+    case "iroha_data_model::isi::zk::FinalizeElection":
       return decodeZkInstructionPayload(wireId, payload);
     case REGISTER_VERIFYING_KEY_WIRE_ID:
     case UPDATE_VERIFYING_KEY_WIRE_ID:
@@ -3579,7 +3592,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         "abi_version",
         "window",
         "mode",
-        "limits",
+        "manifest_provenance",
       ]);
       const decoded = {
         contract_address: decodeStringValue(
@@ -3592,15 +3605,19 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
       };
       const window = decodeOptionValue(fields.window, decodeAtWindowValue, "ProposeDeployContract.window");
       const mode = decodeOptionValue(fields.mode, decodeVotingModeValue, "ProposeDeployContract.mode");
-      const limits = decodeOptionValue(fields.limits, decodeJsonValue, "ProposeDeployContract.limits");
+      const manifestProvenance = decodeOptionValue(
+        fields.manifest_provenance,
+        decodeManifestProvenanceValue,
+        "ProposeDeployContract.manifest_provenance",
+      );
       if (window !== null) {
         decoded.window = window;
       }
       if (mode !== null) {
         decoded.mode = mode;
       }
-      if (limits !== null) {
-        decoded.limits = limits;
+      if (manifestProvenance !== null) {
+        decoded.manifest_provenance = manifestProvenance;
       }
       return { ProposeDeployContract: decoded };
     }
@@ -4134,7 +4151,6 @@ function decodeZkInstructionPayload(wireId, payload) {
         "mode",
         "allow_shield",
         "allow_unshield",
-        "vk_transfer",
         "vk_unshield",
         "vk_shield",
       ]);
@@ -4150,11 +4166,6 @@ function decodeZkInstructionPayload(wireId, payload) {
             allow_unshield: decodeBoolValue(
               fields.allow_unshield,
               "zk.RegisterZkAsset.allow_unshield",
-            ),
-            vk_transfer: decodeOptionValue(
-              fields.vk_transfer,
-              decodeVerifyingKeyIdValue,
-              "zk.RegisterZkAsset.vk_transfer",
             ),
             vk_unshield: decodeOptionValue(
               fields.vk_unshield,
@@ -4226,120 +4237,7 @@ function decodeZkInstructionPayload(wireId, payload) {
         },
       };
     }
-    case SHIELD_WIRE_ID: {
-      const fields = decodeStructFields(payload, "zk.Shield", [
-        "asset",
-        "from",
-        "amount",
-        "note_commitment",
-        "enc_payload",
-      ]);
-      return {
-        zk: {
-          Shield: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Shield.asset"),
-            from: decodeAccountIdValue(fields.from, "zk.Shield.from"),
-            amount: decodeQuantityValue(fields.amount, "zk.Shield.amount"),
-            note_commitment: Array.from(
-              decodeFixedBytesValue(fields.note_commitment, 32, "zk.Shield.note_commitment"),
-            ),
-            enc_payload: decodeConfidentialEncryptedPayloadValue(
-              fields.enc_payload,
-              "zk.Shield.enc_payload",
-            ),
-          },
-        },
-      };
-    }
-    case ZK_TRANSFER_WIRE_ID: {
-      const fields = decodeStructFields(payload, "zk.ZkTransfer", [
-        "asset",
-        "inputs",
-        "outputs",
-        "proof",
-        "root_hint",
-      ]);
-      return {
-        zk: {
-          ZkTransfer: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.ZkTransfer.asset"),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.ZkTransfer.inputs[${index}]`,
-                  ),
-                ),
-              "zk.ZkTransfer.inputs",
-            ),
-            outputs: decodeNoritoVec(
-              fields.outputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.ZkTransfer.outputs[${index}]`,
-                  ),
-                ),
-              "zk.ZkTransfer.outputs",
-            ),
-            proof: decodeProofAttachmentValue(fields.proof, "zk.ZkTransfer.proof"),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.ZkTransfer.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case UNSHIELD_WIRE_ID: {
-      const fields = decodeStructFields(payload, "zk.Unshield", [
-        "asset",
-        "to",
-        "public_amount",
-        "inputs",
-        "proof",
-        "root_hint",
-      ]);
-      return {
-        zk: {
-          Unshield: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.Unshield.asset"),
-            to: decodeAccountIdValue(fields.to, "zk.Unshield.to"),
-            public_amount: decodeQuantityValue(
-              fields.public_amount,
-              "zk.Unshield.public_amount",
-            ),
-            inputs: decodeNoritoVec(
-              fields.inputs,
-              (entry, index) =>
-                Array.from(
-                  decodeFixedByteArrayArchiveValue(
-                    entry,
-                    32,
-                    `zk.Unshield.inputs[${index}]`,
-                  ),
-                ),
-              "zk.Unshield.inputs",
-            ),
-            proof: decodeProofAttachmentValue(fields.proof, "zk.Unshield.proof"),
-            root_hint: decodeOptionValue(
-              fields.root_hint,
-              (entry, context) =>
-                Array.from(decodeFixedByteArrayArchiveValue(entry, 32, context)),
-              "zk.Unshield.root_hint",
-            ),
-          },
-        },
-      };
-    }
-    case CREATE_ELECTION_WIRE_ID: {
+    case "iroha_data_model::isi::zk::CreateElection": {
       const fields = decodeStructFields(payload, "zk.CreateElection", [
         "election_id",
         "options",
@@ -6001,6 +5899,7 @@ function encodeSmartContractInstructionCompact(instruction) {
 }
 
 function encodeProposeDeployContractPayload(value) {
+  validateProposeDeployContractPayload(value);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
     [encodeNoritoStringValue(assertNonEmptyString(value.code_hash_hex, "ProposeDeployContract.code_hash_hex"))],
@@ -6008,14 +5907,19 @@ function encodeProposeDeployContractPayload(value) {
     [encodeNoritoStringValue(assertNonEmptyString(value.abi_version, "ProposeDeployContract.abi_version"))],
     [encodeOptionValue(value.window ?? null, encodeAtWindowValue, "ProposeDeployContract.window")],
     [encodeOptionValue(value.mode ?? null, encodeVotingModeValue, "ProposeDeployContract.mode")],
-    [encodeOptionValue(value.limits ?? null, encodeNoritoJsonValue, "ProposeDeployContract.limits")],
+    [encodeOptionValue(
+      value.manifest_provenance ?? null,
+      encodeManifestProvenanceValue,
+      "ProposeDeployContract.manifest_provenance",
+    )],
   ]);
 }
 
 function encodeCastZkBallotPayload(value) {
+  validateCastZkBallotPayload(value);
   return encodeStructValue([
     [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "CastZkBallot.election_id"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.proof_b64, "CastZkBallot.proof_b64"))],
+    [encodeExactBase64StringValue(value.proof_b64, "CastZkBallot.proof_b64")],
     [encodeNoritoStringValue(
       assertNonEmptyString(value.public_inputs_json ?? "{}", "CastZkBallot.public_inputs_json"),
     )],
@@ -6024,7 +5928,10 @@ function encodeCastZkBallotPayload(value) {
 
 function encodeCastPlainBallotPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.referendum_id, "CastPlainBallot.referendum_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.referendum_id,
+      "CastPlainBallot.referendum_id",
+    ))],
     [encodeAccountIdValue(value.owner, "CastPlainBallot.owner")],
     [encodeQuantityValue(value.amount, "CastPlainBallot.amount")],
     [encodeU64NumberValue(value.duration_blocks, "CastPlainBallot.duration_blocks")],
@@ -6042,7 +5949,10 @@ function encodeEnactReferendumPayload(value) {
 
 function encodeFinalizeReferendumPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.referendum_id, "FinalizeReferendum.referendum_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.referendum_id,
+      "FinalizeReferendum.referendum_id",
+    ))],
     [encodeFixedBytesValue(value.proposal_id, 32, "FinalizeReferendum.proposal_id")],
   ]);
 }
@@ -6069,8 +5979,8 @@ function encodeAtWindowValue(value, context) {
 function decodeAtWindowValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["lower", "upper"]);
   return {
-    lower: decodeU64NumberValue(fields.lower, `${context}.lower`),
-    upper: decodeU64NumberValue(fields.upper, `${context}.upper`),
+    lower: decodeU64Value(fields.lower, `${context}.lower`),
+    upper: decodeU64Value(fields.upper, `${context}.upper`),
   };
 }
 
@@ -6237,12 +6147,9 @@ function encodeZkInstruction(instruction) {
     ["RegisterZkAsset", REGISTER_ZK_ASSET_WIRE_ID, encodeRegisterZkAssetPayload],
     ["ScheduleConfidentialPolicyTransition", "zk::ScheduleConfidentialPolicyTransition", encodeScheduleConfidentialPolicyTransitionPayload],
     ["CancelConfidentialPolicyTransition", "zk::CancelConfidentialPolicyTransition", encodeCancelConfidentialPolicyTransitionPayload],
-    ["Shield", SHIELD_WIRE_ID, encodeShieldPayload],
-    ["ZkTransfer", ZK_TRANSFER_WIRE_ID, encodeZkTransferPayload],
-    ["Unshield", UNSHIELD_WIRE_ID, encodeUnshieldPayload],
-    ["CreateElection", CREATE_ELECTION_WIRE_ID, encodeCreateElectionPayload],
-    ["SubmitBallot", SUBMIT_BALLOT_WIRE_ID, encodeSubmitBallotPayload],
-    ["FinalizeElection", FINALIZE_ELECTION_WIRE_ID, encodeFinalizeElectionPayload],
+    ["CreateElection", "iroha_data_model::isi::zk::CreateElection", encodeCreateElectionPayload],
+    ["SubmitBallot", "iroha_data_model::isi::zk::SubmitBallot", encodeSubmitBallotPayload],
+    ["FinalizeElection", "iroha_data_model::isi::zk::FinalizeElection", encodeFinalizeElectionPayload],
   ];
   for (const [key, wireId, encode] of entries) {
     if (isPlainObject(instruction[key])) {
@@ -6260,7 +6167,6 @@ function encodeRegisterZkAssetPayload(value) {
     [encodeZkAssetModeValue(value.mode, "zk.RegisterZkAsset.mode")],
     [encodeBoolValue(value.allow_shield, "zk.RegisterZkAsset.allow_shield")],
     [encodeBoolValue(value.allow_unshield, "zk.RegisterZkAsset.allow_unshield")],
-    [encodeOptionValue(value.vk_transfer, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_transfer")],
     [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
     [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
   ]);
@@ -6283,63 +6189,12 @@ function encodeCancelConfidentialPolicyTransitionPayload(value) {
   ]);
 }
 
-function encodeShieldPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.Shield.asset")],
-    [encodeAccountIdValue(value.from, "zk.Shield.from")],
-    [encodeQuantityValue(value.amount, "zk.Shield.amount")],
-    [encodeFixedBytesValue(value.note_commitment, 32, "zk.Shield.note_commitment")],
-    [encodeConfidentialEncryptedPayloadValue(value.enc_payload, "zk.Shield.enc_payload")],
-  ]);
-}
-
-function encodeZkTransferPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.ZkTransfer.asset")],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.ZkTransfer.inputs[${index}]`),
-    )],
-    [encodeNoritoVec(value.outputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.ZkTransfer.outputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.ZkTransfer.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.ZkTransfer.root_hint",
-      ),
-    ],
-  ]);
-}
-
-function encodeUnshieldPayload(value) {
-  assertOnlyObjectKeys(
-    value,
-    ["asset", "to", "public_amount", "inputs", "proof", "root_hint"],
-    "zk.Unshield",
-  );
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.Unshield.asset")],
-    [encodeAccountIdValue(value.to, "zk.Unshield.to")],
-    [encodeQuantityValue(value.public_amount, "zk.Unshield.public_amount")],
-    [encodeNoritoVec(value.inputs ?? [], (entry, index) =>
-      encodeFixedByteArrayArchiveValue(entry, 32, `zk.Unshield.inputs[${index}]`),
-    )],
-    [encodeProofAttachmentValue(value.proof, "zk.Unshield.proof")],
-    [
-      encodeOptionValue(
-        value.root_hint,
-        (entry, context) => encodeFixedByteArrayArchiveValue(entry, 32, context),
-        "zk.Unshield.root_hint",
-      ),
-    ],
-  ]);
-}
-
 function encodeCreateElectionPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.CreateElection.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.CreateElection.election_id",
+    ))],
     [encodeU32Value(value.options, "zk.CreateElection.options")],
     [encodeFixedBytesValue(value.eligible_root, 32, "zk.CreateElection.eligible_root")],
     [encodeU64NumberValue(value.start_ts, "zk.CreateElection.start_ts")],
@@ -6352,7 +6207,10 @@ function encodeCreateElectionPayload(value) {
 
 function encodeSubmitBallotPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.SubmitBallot.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.SubmitBallot.election_id",
+    ))],
     [encodeByteVecValue(value.ciphertext, "zk.SubmitBallot.ciphertext")],
     [encodeProofAttachmentValue(value.ballot_proof, "zk.SubmitBallot.ballot_proof")],
     [encodeFixedBytesValue(value.nullifier, 32, "zk.SubmitBallot.nullifier")],
@@ -6361,7 +6219,10 @@ function encodeSubmitBallotPayload(value) {
 
 function encodeFinalizeElectionPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "zk.FinalizeElection.election_id"))],
+    [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
+      value.election_id,
+      "zk.FinalizeElection.election_id",
+    ))],
     [encodeNoritoVec(value.tally ?? [], (entry, index) =>
       encodeU64NumberValue(entry, `zk.FinalizeElection.tally[${index}]`),
     )],
@@ -7601,13 +7462,10 @@ function decodeKaigiRoomPolicyValue(payload, context) {
 
 function encodeZkAssetModeValue(value, context) {
   const normalized = assertNonEmptyString(value, context).toLowerCase();
-  if (normalized === "zknative") {
+  if (normalized === "hybrid") {
     return encodeEnumTagValue(0);
   }
-  if (normalized === "hybrid") {
-    return encodeEnumTagValue(1);
-  }
-  throw new Error(`${context} must be ZkNative or Hybrid`);
+  throw new Error(`${context} must be Hybrid`);
 }
 
 function decodeZkAssetModeValue(payload, context) {
@@ -7616,8 +7474,6 @@ function decodeZkAssetModeValue(payload, context) {
   reader.assertEof();
   switch (tag) {
     case 0:
-      return "ZkNative";
-    case 1:
       return "Hybrid";
     default:
       throw new Error(`${context} uses unsupported zk asset mode ${tag}`);

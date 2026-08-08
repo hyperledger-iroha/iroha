@@ -65,8 +65,11 @@ const DS2_MANIFEST_HASH: &str = "02000000000000000000000000000000000000000000000
 const NEXUS_LANE_INDEX: u32 = 0;
 const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
-const TOTAL_PEERS: usize = 12;
 const VALIDATORS_PER_LANE: usize = 4;
+const LANE_VALIDATOR_COUNT: usize = VALIDATORS_PER_LANE * 3;
+// Keep the global permissioned committee at exact revision-4 geometry while
+// assigning only the first twelve peers to the three disjoint lane committees.
+const TOTAL_PEERS: usize = 13;
 const VALIDATOR_STAKE: u64 = 2_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -424,7 +427,7 @@ fn npos_multilane_genesis_post_topology_transactions(
         Mint::asset_quantity(200_u32, AssetId::new(ds2_asset_def.clone(), BOB_ID.clone())).into(),
     ];
 
-    for (index, peer) in topology.iter().enumerate() {
+    for (index, peer) in topology.iter().take(LANE_VALIDATOR_COUNT).enumerate() {
         let lane_index = if index < VALIDATORS_PER_LANE {
             NEXUS_LANE_INDEX
         } else if index < VALIDATORS_PER_LANE * 2 {
@@ -1215,7 +1218,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     )?;
 
     ensure!(
-        (VALIDATORS_PER_LANE * 2..TOTAL_PEERS).contains(&ALICE_WRONG_INGRESS_INDEX),
+        (VALIDATORS_PER_LANE * 2..LANE_VALIDATOR_COUNT).contains(&ALICE_WRONG_INGRESS_INDEX),
         "alice wrong-dataspace ingress index must point into the ds2 lane"
     );
     ensure!(
@@ -1557,15 +1560,16 @@ mod tests {
     use super::{
         ALICE_ID, ALICE_KEYPAIR, AccountId, Algorithm, AssetDefinitionId, DS1_ID_U64,
         DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH,
-        DataSpaceId, DomainId, ExpectedLaneValidatorBinding, KeyPair, LaneId, Level, Log,
-        NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, PeerId, RoutedJsonResponse,
-        RoutedTransactionSubmitResponse, SignedTransaction, TOTAL_PEERS,
-        account_assets_response_contains, encode_versioned_signed_transaction,
-        expect_proxy_fanout_headers, expect_proxy_route_headers, expected_lane_binding_for_peer,
-        lane_validator_snapshot, manifest_response_contains_dataspace,
-        manifest_response_contains_status, multilane_da_proof_policy_bundle,
-        nexus_fee_asset_definition_id, npos_multilane_genesis_post_topology_transactions,
-        permission_response_contains, routed_header_string, routed_json_empty_body_is_transient,
+        DataSpaceId, DomainId, ExpectedLaneValidatorBinding, KeyPair, LANE_VALIDATOR_COUNT, LaneId,
+        Level, Log, NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, PeerId,
+        RegisterPublicLaneValidator, RoutedJsonResponse, RoutedTransactionSubmitResponse,
+        SignedTransaction, TOTAL_PEERS, account_assets_response_contains,
+        encode_versioned_signed_transaction, expect_proxy_fanout_headers,
+        expect_proxy_route_headers, expected_lane_binding_for_peer, lane_validator_snapshot,
+        manifest_response_contains_dataspace, manifest_response_contains_status,
+        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
+        npos_multilane_genesis_post_topology_transactions, permission_response_contains,
+        routed_header_string, routed_json_empty_body_is_transient,
         routed_json_response_is_transient, routed_response_context, routing_probe_gas_account_id,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
         validator_authority_seed,
@@ -1705,7 +1709,22 @@ mod tests {
         let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
 
         assert_eq!(transactions.len(), 1);
-        assert_eq!(transactions[0].len(), 12 + TOTAL_PEERS * 5);
+        assert_eq!(transactions[0].len(), 12 + LANE_VALIDATOR_COUNT * 5);
+        let lane_registrations = transactions[0]
+            .iter()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lane_registrations.len(), LANE_VALIDATOR_COUNT);
+        assert!(
+            lane_registrations
+                .iter()
+                .all(|register| register.peer_id != topology[LANE_VALIDATOR_COUNT]),
+            "the thirteenth global voter must not become a fifth lane validator"
+        );
         assert_eq!(
             expected_lane_binding_for_peer(0, &topology[0]).peer_id,
             topology[0].to_string()

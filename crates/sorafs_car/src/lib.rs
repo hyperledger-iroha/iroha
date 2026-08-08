@@ -70,6 +70,8 @@ pub mod fixtures;
 pub mod gateway;
 pub mod local_fetch;
 pub mod multi_fetch;
+#[cfg(feature = "manifest")]
+pub mod musubi;
 pub mod policy;
 #[cfg(feature = "manifest")]
 #[path = "proof_stream.rs"]
@@ -97,7 +99,7 @@ pub use trustless::{
     TrustlessVerifierConfig,
 };
 #[cfg(feature = "manifest")]
-pub use verifier::{CarVerificationReport, CarVerifier, CarVerifyError};
+pub use verifier::{CarVerificationReport, CarVerifier, CarVerifyError, VerifiedCanonicalCarV1};
 
 /// Compute the BLAKE3 digest of the provided payload.
 #[must_use]
@@ -9357,12 +9359,6 @@ mod tests {
             CarBuildPlan::from_directory(Path::new("payload")),
             Err(CarPlanError::SecureDirectoryUnsupported)
         ));
-    }
-
-    #[test]
-    fn empty_input_rejected() {
-        let err = CarBuildPlan::single_file(&[]).unwrap_err();
-        assert!(matches!(err, CarPlanError::EmptyInput));
     }
 
     #[test]

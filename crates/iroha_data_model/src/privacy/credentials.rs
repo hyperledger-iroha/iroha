@@ -137,7 +137,11 @@ pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
 /// Maximum genesis commitments in one typed proof-managed pool bootstrap.
 pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 /// Maximum UTF-8 byte length admitted for a privacy transcript chain id.
-pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = 128;
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "MAX_CHAIN_ID_BYTES is the compile-time constant 128 and therefore fits u32"
+)]
+pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = crate::id::MAX_CHAIN_ID_BYTES as u32;
 
 /// Explicit chain and governed-artifact binding shared by every statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -856,6 +860,8 @@ pub struct ZkAcePqAuthorizationStatementV1 {
     pub destination: AccountId,
     /// Public transferred asset definition.
     pub asset_definition_id: AssetDefinitionId,
+    /// Exact transparent balance partition authorized by the proof.
+    pub public_balance_scope: AssetBalanceScope,
     /// Atomic transfer amount.
     pub amount: u128,
     /// Ledger epoch used by authorization policy checks.

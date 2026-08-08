@@ -26,7 +26,7 @@ Create `artifacts/releases/<version>/swift/` and populate it with:
 | File | Notes |
 |------|-------|
 | `IrohaSwift-v<version>.tar.gz` | `git archive --format=tar.gz --prefix IrohaSwift/ <tag> IrohaSwift`. |
-| `IrohaSwift-tests.log` / `IrohaSwift-build.log` | Captured stdout/stderr from `swift test --configuration release` and `swift build --configuration release`. |
+| `IrohaSwift-tests.log` / `IrohaSwift-build.log` | Captured stdout/stderr from release `swift test` and `swift build` commands that use `Package.resolved` with automatic resolution disabled. |
 | `NoritoBridge.xcframework.zip` | Built via `make bridge-xcframework`; keep the unzipped directory for local debug but only archive the zip. |
 | `NoritoBridge.xcframework.zip.sha256` | `swift package compute-checksum dist/NoritoBridge.xcframework.zip > …/sha256`. |
 | `swift_fixture_state.json` | Copy of `artifacts/swift_fixture_regen_state.json` proving which canonical fixture snapshot shipped. |
@@ -43,9 +43,11 @@ Document any deviations (e.g., simulator fallback, manual fixture slot) in a sho
 
 - macOS host with the release-approved Xcode toolchain (>= 15.3 at the time of writing);
   run `xcodebuild -version` and record it in the release issue.
-- Rust toolchain from `rust-toolchain.toml` plus the bridge targets:
+- Exact Rust 1.93.1 `cargo`, `rustc`, and `rustdoc` plus the bridge targets:
   `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin`.
-- SwiftPM (`swift` CLI), `zip`, `zipinfo`, `python3`, `jq`, and `shasum`.
+- SwiftPM (`swift` CLI), `zipinfo`, exact Python 3.12, `jq`, and `shasum`.
+- One pre-created, canonical, non-symbolic, writable `CARGO_TARGET_DIR` outside
+  the Iroha source tree. The root `Cargo.lock` is the only accepted lockfile.
 - Clean workspace (`git status` must be empty) checked out at the release tag.
 - Access to the Norito fixtures source (Android canonical directory or signed archive).
 - Optional: Buildkite metadata access if you are mirroring CI smoke artefacts.
@@ -56,6 +58,16 @@ Set helper variables for the session:
 export SWIFT_RELEASE_VERSION="2.1.0"
 export SWIFT_RELEASE_DIR="$PWD/artifacts/releases/${SWIFT_RELEASE_VERSION}/swift"
 mkdir -p "${SWIFT_RELEASE_DIR}"
+export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
+mkdir -p "$CARGO_TARGET_DIR"
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_NET_OFFLINE=true
+export RUSTC_BOOTSTRAP=1
+export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
+export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 ```
 
 ## Checklist
@@ -64,13 +76,13 @@ mkdir -p "${SWIFT_RELEASE_DIR}"
 |------|-----------|----------|
 | 1. Sync release tag | `git fetch --tags`<br>`git checkout <tag>`<br>`git submodule update --init --recursive` | Record `git status --short` in release ticket to prove a clean tree. |
 | 2. Refresh fixtures & parity | `make swift-fixtures`<br>`make swift-fixtures-check` | Copy `artifacts/swift_fixture_regen_state.json` to `${SWIFT_RELEASE_DIR}/swift_fixture_state.json`. Note any fallback cadence env vars you set. |
-| 3. Run Swift tests | `swift test --configuration release --package-path IrohaSwift 2>&1 | tee ${SWIFT_RELEASE_DIR}/IrohaSwift-tests.log` | Log must show `Test Suite 'All tests' passed`. |
-| 4. Build release bits | `swift build --configuration release --package-path IrohaSwift 2>&1 | tee ${SWIFT_RELEASE_DIR}/IrohaSwift-build.log` | Confirms SPM resolves deterministically before packaging. |
-| 5. Build NoritoBridge | `make bridge-xcframework` (wraps `scripts/build_norito_xcframework.sh`) | Copy `dist/NoritoBridge.xcframework.zip` into the release dir and capture `swift package compute-checksum dist/NoritoBridge.xcframework.zip > ${SWIFT_RELEASE_DIR}/NoritoBridge.xcframework.zip.sha256`. |
-| 6. Verify bridge bundling (SPM/Carthage/Pods) | ```bash<br>ls dist/NoritoBridge.xcframework/*/NoritoBridge.framework/NoritoBridge<br>zipinfo -1 dist/NoritoBridge.xcframework.zip | grep NoritoBridge.framework/NoritoBridge<br>swift package describe --type json --package-path IrohaSwift \\<br>  | jq '.targets[] | select(.name == "NoritoBridge")' \\<br>  > ${SWIFT_RELEASE_DIR}/NoritoBridge-spm-target.json<br>``` | Attach the `ls`/`zipinfo` output and the JSON blob to the release ticket to prove every slice ships. Keep the XCFramework zip adjacent to the repository `dist/` directory before running CocoaPods/Carthage packaging so `ConnectCodec` remains fail-closed in downstream artefacts. |
+| 3. Run Swift tests | `swift test --package-path IrohaSwift --configuration release --disable-automatic-resolution 2>&1 | tee ${SWIFT_RELEASE_DIR}/IrohaSwift-tests.log` | Log must show `Test Suite 'All tests' passed` and must consume the reviewed `Package.resolved`. |
+| 4. Build release bits | `swift build --package-path IrohaSwift --configuration release --disable-automatic-resolution 2>&1 | tee ${SWIFT_RELEASE_DIR}/IrohaSwift-build.log` | Confirms the reviewed resolution builds deterministically before packaging. |
+| 5. Build NoritoBridge | `make bridge-xcframework` with the exact environment above (wraps `scripts/build_norito_xcframework.sh`) | Copy `dist/NoritoBridge.xcframework.zip` into the release dir and capture `swift package compute-checksum dist/NoritoBridge.xcframework.zip > ${SWIFT_RELEASE_DIR}/NoritoBridge.xcframework.zip.sha256`. |
+| 6. Verify bridge bundling (SPM/Carthage/Pods) | ```bash<br>ls dist/NoritoBridge.xcframework/*/libNoritoBridge.a<br>/usr/bin/unzip -t dist/NoritoBridge.xcframework.zip<br>zipinfo -1 dist/NoritoBridge.xcframework.zip | grep '/libNoritoBridge.a$'<br>swift package --package-path IrohaSwift --disable-automatic-resolution describe --type json \\<br>  | jq '.targets[] | select(.name == "NoritoBridge")' \\<br>  > ${SWIFT_RELEASE_DIR}/NoritoBridge-spm-target.json<br>``` | Attach the archive integrity/inventory output and JSON blob to the release ticket. The Apple artifact workflow additionally copies this exact ZIP into a fresh local SwiftPM package and compiles a `NoritoBridge` consumer. Keep the XCFramework zip adjacent to the repository `dist/` directory before running CocoaPods/Carthage packaging so `ConnectCodec` remains fail-closed in downstream artefacts. |
 | 7. Capture dashboards | `make swift-ci` (validates fixtures + dashboards)<br>`cp dashboards/data/mobile_parity.sample.json ${SWIFT_RELEASE_DIR}/mobile_parity.json`<br>`cp dashboards/data/mobile_ci.sample.json ${SWIFT_RELEASE_DIR}/mobile_ci.json` | Keeps the exact feeds that the exporter consumed; auditors can diff them later. |
 | 8. Export status bundle | ```bash<br>SWIFT_PARITY_FEED_PATH=${SWIFT_RELEASE_DIR}/mobile_parity.json \\<br>SWIFT_CI_FEED_PATH=${SWIFT_RELEASE_DIR}/mobile_ci.json \\<br>SWIFT_STATUS_EXPORT_OUT=${SWIFT_RELEASE_DIR}/swift_status.md \\<br>SWIFT_STATUS_SUMMARY_OUT=${SWIFT_RELEASE_DIR}/swift_status.json \\<br>SWIFT_STATUS_METRICS_PATH=${SWIFT_RELEASE_DIR}/swift_status.prom \\<br>SWIFT_STATUS_METRICS_STATE=${SWIFT_RELEASE_DIR}/swift_status_state.json \\<br>ci/swift_status_export.sh<br>``` | The markdown summary is pasted into the release ticket; the Prometheus textfile proves parity cadence, success counters, and alert status. The exporter now also copies the readiness doc metadata (repro checklist + support playbook) into the digest/summary by default so reviewers see the evidence without extra uploads. |
-| 9. Archive XCFramework smoke logs (if run locally) | `scripts/ci/run_xcframework_smoke.sh 2>&1 | tee ${SWIFT_RELEASE_DIR}/xcframework_smoke_report.txt` | Copy `artifacts/xcframework_smoke_result.json` when applicable so the IOS6 gate can be replayed. |
+| 9. Archive XCFramework smoke logs (if run locally) | `scripts/ci/run_xcframework_smoke.sh 2>&1 | tee ${SWIFT_RELEASE_DIR}/xcframework_smoke_report.txt` with the same exact environment | Copy `artifacts/xcframework_smoke_result.json` when applicable so the IOS6 gate can be replayed. The harness always rebuilds the bridge and fails if prerequisites or packaging are unavailable. |
 | 10. Package source snapshot | `git archive --format=tar.gz --prefix=IrohaSwift/ <tag> IrohaSwift > ${SWIFT_RELEASE_DIR}/IrohaSwift-v${SWIFT_RELEASE_VERSION}.tar.gz` | Tarball is signed/hashed with the other artefacts. |
 | 11. Generate checksums | ```bash<br>(cd "${SWIFT_RELEASE_DIR}" && \\<br>  shasum -a 256 NoritoBridge.xcframework.zip IrohaSwift-v${SWIFT_RELEASE_VERSION}.tar.gz \\<br>         mobile_parity.json mobile_ci.json swift_status.prom \\<br>         > SHA256SUMS)<br>``` | Attach `SHA256SUMS` + individual `.sha256` files to the release ticket. |
 | 12. Update docs & ticket | Link `${SWIFT_RELEASE_DIR}` contents from the release ticket and reference this checklist row-by-row. Update `status.md` with a short summary and cite the evidence path. | Keeps roadmap/status in sync and gives auditors a single location to inspect. |
@@ -81,9 +93,12 @@ mkdir -p "${SWIFT_RELEASE_DIR}"
   `artifacts/swift_fixture_regen_state.json`. When consuming a signed archive set
   `SWIFT_FIXTURE_ARCHIVE=/path/to/archive.tar.gz` so the provenance hash is included in
   the state file.
-- `make bridge-xcframework` already strips timestamps (`zip -X`), ensuring zip entries
-  are deterministic. If you rerun the command, delete the destination zip first or the
-  `zip` command will append.
+- `make bridge-xcframework` invokes the sole archive owner. It authenticates an
+  immutable snapshot while holding the shared output lock, recomputes source/tool
+  provenance, authenticates Mach-O architectures and native exports, sorts every
+  entry, normalizes modes and timestamps from `SOURCE_DATE_EPOCH`, and atomically
+  replaces the destination. Never delete the prior archive or invoke `zip`/`ditto`
+  manually.
 - If you must rerun `ci/swift_status_export.sh`, reuse the same parity/CI JSON files and
   `swift_status_state.json` so counters remain monotonic.
 - Store large artefacts (XCFramework zip, tarball) in LFS or an external bucket if the

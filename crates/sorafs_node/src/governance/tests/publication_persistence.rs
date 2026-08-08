@@ -1,17 +1,57 @@
+// Publication persistence, crash recovery, and artifact-boundary regressions.
+
 #[test]
-fn filesystem_publisher_rejects_malformed_runtime_dag_index() {
+fn filesystem_publisher_rejects_malformed_runtime_dag_index_in_committed_state() {
     let temp = tempdir().expect("tempdir");
     let publisher = signed_runtime_publisher(temp.path());
-    fs::write(
-        temp.path().join(GOVERNANCE_RUNTIME_DAG_INDEX_FILE),
-        br#"{"schema":"sorafs.governance_dag.wrong","blocks":[]}"#,
-    )
-    .expect("write bad runtime index");
     let (settlement, encoded) = sample_settlement();
-
-    let err = publisher
+    publisher
         .publish_deal_settlement(&settlement, &encoded)
-        .expect_err("malformed runtime DAG index must fail closed");
+        .expect("seed signed runtime DAG");
+    let store = open_runtime_dag_committed_store_v1(temp.path(), publisher.root_guard())
+        .expect("open committed runtime DAG state");
+    let (mut committed, snapshot) =
+        load_runtime_dag_committed_state_v1(&store).expect("load committed runtime DAG state");
+    let mut index: JsonValue = json::from_slice(
+        committed
+            .index_bytes
+            .as_deref()
+            .expect("committed runtime index bytes"),
+    )
+    .expect("decode committed runtime index");
+    index.as_object_mut().expect("runtime index object").insert(
+        "schema".to_owned(),
+        JsonValue::from("sorafs.governance_dag.wrong"),
+    );
+    committed.index_bytes = Some(
+        json::to_json_pretty(&index)
+            .expect("encode malformed runtime index")
+            .into_bytes(),
+    );
+    let bytes =
+        encode_governance_two_slot_value_v1(&committed, "malformed committed runtime DAG state")
+            .expect("encode malformed committed state");
+    compare_and_swap_governance_two_slot_store_v1(
+        &store,
+        &snapshot,
+        &bytes,
+        "malformed committed runtime DAG state",
+    )
+    .expect("commit malformed semantic fixture");
+    drop(store);
+
+    let err = validate_existing_runtime_dag_root(
+        temp.path(),
+        publisher
+            .runtime_dag_signer
+            .as_ref()
+            .expect("signed publisher"),
+        publisher
+            .runtime_dag_checkpoint_store
+            .as_ref()
+            .expect("signed publisher store"),
+    )
+    .expect_err("malformed runtime DAG index must fail closed");
     assert!(
         err.to_string().contains("unsupported schema"),
         "unexpected error: {err}"
@@ -55,10 +95,11 @@ fn filesystem_publisher_writes_settlement_files() {
     let json_digest = json_digest.trim();
     assert_eq!(json_digest, blake3::hash(&json_bytes).to_hex().as_str());
 
-    let publication_path = temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE);
-    let publication_bytes = fs::read(&publication_path).expect("read publication state");
-    let publication: JsonValue =
-        norito::json::from_slice(&publication_bytes).expect("publication state json");
+    let publication_snapshot = read_publication_snapshot_fixture(temp.path());
+    let publication_identity = publication_snapshot.store_identity();
+    let publication_bytes = publication_snapshot.canonical_bytes().to_vec();
+    let publication: JsonValue = norito::json::from_slice(&publication_bytes)
+        .expect("decode authoritative publication snapshot");
     assert_eq!(
         publication.get("schema").and_then(JsonValue::as_str),
         Some(GOVERNANCE_PUBLICATION_STATE_SCHEMA)
@@ -269,9 +310,15 @@ fn filesystem_publisher_writes_settlement_files() {
     publisher
         .publish_deal_settlement(&settlement, &encoded)
         .expect("exact duplicate publication is a no-op");
+    let duplicate_snapshot = read_publication_snapshot_fixture(temp.path());
     assert_eq!(
-        fs::read(&publication_path).expect("reread publication state after duplicate"),
-        publication_bytes,
+        duplicate_snapshot.store_identity(),
+        publication_identity,
+        "an exact duplicate must not advance the typed authority identity"
+    );
+    assert_eq!(
+        duplicate_snapshot.canonical_bytes(),
+        publication_bytes.as_slice(),
         "an exact duplicate must not advance or rewrite the authority envelope"
     );
     assert_eq!(
@@ -292,9 +339,15 @@ fn filesystem_publisher_writes_settlement_files() {
         error.to_string().contains("occupied by different bytes"),
         "unexpected duplicate substitution error: {error}"
     );
+    let rejected_snapshot = read_publication_snapshot_fixture(temp.path());
     assert_eq!(
-        fs::read(&publication_path).expect("reread authority after substituted duplicate"),
-        publication_bytes,
+        rejected_snapshot.store_identity(),
+        publication_identity,
+        "a rejected duplicate must preserve the typed authority identity"
+    );
+    assert_eq!(
+        rejected_snapshot.canonical_bytes(),
+        publication_bytes.as_slice(),
         "a rejected duplicate must leave the authority envelope unchanged"
     );
     assert_eq!(
@@ -431,7 +484,7 @@ fn filesystem_publisher_rejects_legacy_separate_car_queue_authority() {
 }
 
 #[test]
-fn filesystem_publisher_rejects_malformed_publication_authority_before_artifact_writes() {
+fn filesystem_publisher_rejects_legacy_flat_publication_authority_before_artifact_writes() {
     let temp = tempdir().expect("tempdir");
     fs::write(
         temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE),
@@ -440,8 +493,13 @@ fn filesystem_publisher_rejects_malformed_publication_authority_before_artifact_
     .expect("write malformed authoritative publication state");
 
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-        .expect_err("malformed authority must reject publisher startup");
+        .expect_err("legacy flat authority must reject publisher startup");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error
+            .to_string()
+            .contains("legacy governance publication authority")
+    );
     assert!(
         !temp
             .path()
@@ -473,33 +531,6 @@ fn filesystem_publisher_reclaims_bounded_uncommitted_artifacts_at_startup() {
             &orphan,
         )
         .expect("assemble orphan CAR artifacts");
-        let source_directory = temp
-            .path()
-            .join(&orphan.encoded_path)
-            .parent()
-            .expect("source pair parent")
-            .to_path_buf();
-        fs::write(
-            source_directory.join(".payload.to.tmp-42000-1"),
-            b"interrupted source temp",
-        )
-        .expect("seed interrupted source temp");
-        let car_base = temp
-            .path()
-            .join(governance_car_segment_relative_base(&orphan).expect("CAR base"));
-        let car_target = car_base.with_extension("car");
-        let car_target_name = car_target
-            .file_name()
-            .and_then(OsStr::to_str)
-            .expect("canonical CAR target name");
-        fs::write(
-            car_target
-                .parent()
-                .expect("CAR parent")
-                .join(format!(".{car_target_name}.tmp-42000-2")),
-            b"interrupted CAR temp",
-        )
-        .expect("seed interrupted CAR temp");
     }
     assert!(
         temp.path()
@@ -508,8 +539,52 @@ fn filesystem_publisher_reclaims_bounded_uncommitted_artifacts_at_startup() {
     );
     assert!(temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists());
 
-    let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-        .expect("startup reconciles one bounded interrupted publication");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("Unix recovery must isolate interrupted artifacts before startup");
+        assert!(
+            error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected quarantine error: {error}"
+        );
+        let quarantine = recovery_quarantine_path(temp.path());
+        let isolated = fs::read_dir(&quarantine)
+            .expect("read bounded recovery quarantine")
+            .map(|entry| entry.expect("quarantine entry").file_name())
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "car-file-00",
+            "car-file-01",
+            "car-file-02",
+            "car-file-03",
+            "car-file-04",
+            "car-file-05",
+            "car-root",
+            "source-file-00",
+            "source-file-01",
+            "source-file-02",
+            "source-file-03",
+            "source-kind",
+            "source-pair",
+            "source-root",
+        ]
+        .map(OsString::from)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(isolated, expected, "quarantine slots are deterministic");
+        clear_recovery_quarantine_offline(temp.path());
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("startup succeeds after offline quarantine cleanup"),
+        );
+    }
+    #[cfg(windows)]
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("Windows exact-handle cleanup reconciles the publication"),
+    );
     assert!(
         !temp
             .path()
@@ -521,34 +596,925 @@ fn filesystem_publisher_reclaims_bounded_uncommitted_artifacts_at_startup() {
         !temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists(),
         "unreferenced CAR files and their empty directory must be reclaimed"
     );
+}
+
+#[test]
+fn filesystem_publisher_reclaims_only_the_exact_next_car_atomic_temp() {
+    let temp = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize empty publication authority"),
+    );
+    let orphan = write_car_segment_source_fixture(temp.path(), b"orphan-publication");
+    let car_base = temp
+        .path()
+        .join(governance_car_segment_relative_base(&orphan).expect("CAR base"));
+    let car_target = car_base.with_extension("car");
+    let car_directory = car_target.parent().expect("CAR directory");
+    fs::create_dir_all(car_directory).expect("create interrupted CAR directory");
+    let car_target_name = car_target
+        .file_name()
+        .and_then(OsStr::to_str)
+        .expect("canonical CAR target name");
+    fs::write(
+        car_directory.join(format!(".{car_target_name}.tmp-42000-1")),
+        b"interrupted CAR temp",
+    )
+    .expect("seed exact next CAR temp");
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("Unix recovery must isolate the exact interrupted temp");
+        assert!(
+            error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected quarantine error: {error}"
+        );
+        clear_recovery_quarantine_offline(temp.path());
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("startup succeeds after offline quarantine cleanup"),
+        );
+    }
+    #[cfg(windows)]
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("Windows exact-handle cleanup reconciles the interrupted temp"),
+    );
+    assert!(
+        !temp
+            .path()
+            .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+            .exists()
+    );
+    assert!(!temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists());
+}
+
+#[test]
+fn filesystem_publisher_verifies_every_committed_role_before_orphan_cleanup() {
+    #[derive(Clone, Copy, Debug)]
+    enum Mutation {
+        Missing,
+        Corrupt,
+    }
+
+    for mutation in [Mutation::Missing, Mutation::Corrupt] {
+        for role_index in 0..10 {
+            let temp = tempdir().expect("tempdir");
+            let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("publisher");
+            let (settlement, encoded) = sample_settlement();
+            publisher
+                .publish_deal_settlement(&settlement, &encoded)
+                .expect("publish committed settlement");
+            let state = read_publication_state_fixture(temp.path());
+            let committed = committed_publication_artifact_paths(
+                temp.path(),
+                state.as_object().expect("publication state object"),
+            );
+            drop(publisher);
+
+            let (_, orphan_snapshots) = seed_complete_uncommitted_publication_fixture(
+                temp.path(),
+                "interrupted_test_payload",
+                b"interrupted-publication",
+                1,
+            );
+            let (role, committed_path) = committed
+                .into_iter()
+                .nth(role_index)
+                .expect("committed role index");
+            match mutation {
+                Mutation::Missing => {
+                    fs::remove_file(&committed_path)
+                        .expect("remove one committed publication role");
+                }
+                Mutation::Corrupt => {
+                    fs::write(&committed_path, b"corrupt committed publication artifact")
+                        .expect("corrupt one committed publication role");
+                }
+            }
+
+            let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("startup must reject a missing or corrupt committed publication role");
+            assert_eq!(
+                error.kind(),
+                io::ErrorKind::InvalidData,
+                "unexpected error kind for {mutation:?} {role}: {error}"
+            );
+            for (orphan_path, expected) in &orphan_snapshots {
+                let actual = fs::read(orphan_path).unwrap_or_else(|error| {
+                    panic!(
+                        "{mutation:?} {role} deleted orphan `{}` before failing: {error}",
+                        orphan_path.display()
+                    )
+                });
+                assert_eq!(
+                    actual.as_slice(),
+                    expected.as_slice(),
+                    "{mutation:?} {role} changed orphan `{}` before failing",
+                    orphan_path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn filesystem_publisher_rejects_multiple_interrupted_source_pairs_without_cleanup() {
+    let temp = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize empty publication authority"),
+    );
+    let first = write_car_segment_source_fixture_for_kind(
+        temp.path(),
+        "interrupted_alpha",
+        b"interrupted-alpha",
+    );
+    let second = write_car_segment_source_fixture_for_kind(
+        temp.path(),
+        "interrupted_beta",
+        b"interrupted-beta",
+    );
+    let snapshots = [first, second]
+        .into_iter()
+        .flat_map(|entry| {
+            let encoded = temp.path().join(entry.encoded_path);
+            let json = temp.path().join(entry.json_path);
+            [
+                encoded.clone(),
+                digest_sidecar_path_for(&encoded),
+                json.clone(),
+                digest_sidecar_path_for(&json),
+            ]
+        })
+        .map(|path| {
+            let bytes = fs::read(&path).expect("snapshot interrupted source role");
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+
+    let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+        .expect_err("multiple interrupted source identities must fail closed");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    for (path, expected) in snapshots {
+        assert_eq!(
+            fs::read(&path).expect("multiple-source rejection preserves every artifact"),
+            expected,
+            "multiple-source rejection changed `{}`",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn filesystem_publisher_rejects_split_interrupted_car_bases_without_cleanup() {
+    let temp = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize empty publication authority"),
+    );
+    let (entry, _) = seed_complete_uncommitted_publication_fixture(
+        temp.path(),
+        "interrupted_split_car",
+        b"interrupted-split-car",
+        0,
+    );
+    let original_base = temp
+        .path()
+        .join(governance_car_segment_relative_base(&entry).expect("derive original CAR base"));
+    let pair_id = original_base
+        .file_name()
+        .and_then(OsStr::to_str)
+        .and_then(|base| base.split_once('_'))
+        .map(|(_, pair_id)| pair_id)
+        .expect("fixture CAR pair identity");
+    let alternate_base = temp
+        .path()
+        .join(GOVERNANCE_CAR_SEGMENTS_DIR)
+        .join(format!("{:020}_{pair_id}", 1));
+    for suffix in ["json", "json.blake3"] {
+        let source = original_base.with_extension(suffix);
+        let target = alternate_base.with_extension(suffix);
+        fs::rename(&source, &target).expect("split CAR role across another base");
+    }
+    let snapshots = fs::read_dir(temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR))
+        .expect("read split CAR directory")
+        .map(|entry| {
+            let path = entry.expect("split CAR entry").path();
+            let bytes = fs::read(&path).expect("snapshot split CAR role");
+            (path, bytes)
+        })
+        .chain(
+            publication_artifact_paths_for_fixture(temp.path(), &entry)
+                .into_iter()
+                .take(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+                .map(|path| {
+                    let bytes = fs::read(&path).expect("snapshot split source role");
+                    (path, bytes)
+                }),
+        )
+        .collect::<Vec<_>>();
+
+    let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+        .expect_err("CAR roles split across bases must fail closed");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error.to_string().contains("more than one artifact base"),
+        "unexpected error: {error}"
+    );
+    for (path, expected) in snapshots {
+        assert_eq!(
+            fs::read(&path).expect("split-base rejection preserves every artifact"),
+            expected,
+            "split-base rejection changed `{}`",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn filesystem_publisher_rejects_non_next_or_uncorrelated_interrupted_car_without_cleanup() {
+    for (case, replacement_position, replacement_pair_id) in [
+        ("non-next", 1_usize, None),
+        ("uncorrelated", 0_usize, Some("ab".repeat(32))),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let (entry, _) = seed_complete_uncommitted_publication_fixture(
+            temp.path(),
+            "interrupted_identity_check",
+            b"interrupted-identity-check",
+            0,
+        );
+        let original_base = temp
+            .path()
+            .join(governance_car_segment_relative_base(&entry).expect("derive original CAR base"));
+        let original_pair_id = original_base
+            .file_name()
+            .and_then(OsStr::to_str)
+            .and_then(|base| base.split_once('_'))
+            .map(|(_, pair_id)| pair_id)
+            .expect("fixture CAR pair identity");
+        let replacement_pair_id = replacement_pair_id.as_deref().unwrap_or(original_pair_id);
+        let replacement_base = temp
+            .path()
+            .join(GOVERNANCE_CAR_SEGMENTS_DIR)
+            .join(format!("{replacement_position:020}_{replacement_pair_id}"));
+        for suffix in [
+            "car",
+            "car.blake3",
+            "plan.json",
+            "plan.json.blake3",
+            "json",
+            "json.blake3",
+        ] {
+            fs::rename(
+                original_base.with_extension(suffix),
+                replacement_base.with_extension(suffix),
+            )
+            .expect("move CAR role to a single invalid interrupted base");
+        }
+        let snapshots = fs::read_dir(temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR))
+            .expect("read invalid CAR directory")
+            .map(|entry| {
+                let path = entry.expect("invalid CAR entry").path();
+                let bytes = fs::read(&path).expect("snapshot invalid CAR role");
+                (path, bytes)
+            })
+            .chain(
+                publication_artifact_paths_for_fixture(temp.path(), &entry)
+                    .into_iter()
+                    .take(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+                    .map(|path| {
+                        let bytes = fs::read(&path).expect("snapshot source role");
+                        (path, bytes)
+                    }),
+            )
+            .collect::<Vec<_>>();
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("invalid interrupted CAR identity must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let message = error.to_string();
+        assert!(
+            message.contains("exact expected next position")
+                || message.contains("source and CAR identities diverge"),
+            "unexpected {case} error: {error}"
+        );
+        for (path, expected) in snapshots {
+            assert_eq!(
+                fs::read(&path).expect("identity rejection preserves every artifact"),
+                expected,
+                "{case} rejection changed `{}`",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn filesystem_publisher_cleanup_is_restart_safe_after_every_rollback_step() {
+    const CLEANUP_STEPS: usize = GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT
+        + 1
+        + GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT
+        + 3;
+
+    for interrupted_after in 1..=CLEANUP_STEPS {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        seed_complete_uncommitted_publication_fixture(
+            temp.path(),
+            "interrupted_rollback_boundary",
+            b"interrupted-rollback-boundary",
+            0,
+        );
+        let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+            .expect("retain rollback fixture root");
+        let state = read_publication_state_fixture(temp.path());
+        let state = state.as_object().expect("publication state object");
+        let inventory = governance_publication_artifact_inventory(state)
+            .expect("derive rollback fixture inventory");
+        let (mut cleanup_plan, interrupted_identity) =
+            plan_governance_publication_source_artifacts(&root_guard, &inventory)
+                .expect("plan interrupted source rollback");
+        plan_governance_publication_car_artifacts(
+            &root_guard,
+            &inventory,
+            interrupted_identity.as_ref(),
+            &mut cleanup_plan,
+        )
+        .expect("plan interrupted CAR rollback");
+        verify_governance_publication_artifact_integrity(temp.path(), &root_guard, state)
+            .expect("verify empty committed authority");
+        let observed_step = std::cell::Cell::new(0_usize);
+        let error =
+            apply_governance_publication_cleanup_plan_with(&root_guard, cleanup_plan, |step| {
+                observed_step.set(step);
+                if step == interrupted_after {
+                    Err(GovernancePublishError::other(
+                        "injected cleanup interruption",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+            .expect_err("injected rollback interruption must stop cleanup");
+        assert!(error.to_string().contains("injected cleanup interruption"));
+        assert_eq!(observed_step.get(), interrupted_after);
+        drop(root_guard);
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let publisher = {
+            let quarantine = recovery_quarantine_path(temp.path());
+            let before_restart = fs::read_dir(&quarantine)
+                .expect("read interrupted recovery quarantine")
+                .count();
+            assert_eq!(before_restart, interrupted_after);
+            let restart_error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect_err("restart must stop at a preserved recovery quarantine");
+            assert!(
+                restart_error
+                    .to_string()
+                    .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+                "unexpected restart error: {restart_error}"
+            );
+            assert_eq!(
+                fs::read_dir(&quarantine)
+                    .expect("reread preserved recovery quarantine")
+                    .count(),
+                before_restart,
+                "restart must not mutate a preserved quarantine"
+            );
+            clear_recovery_quarantine_offline(temp.path());
+            finish_recovery_after_offline_quarantine_cleanup(temp.path())
+        };
+        #[cfg(windows)]
+        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "restart after cleanup step {interrupted_after}/{CLEANUP_STEPS} failed: {error}"
+                )
+            });
+        assert!(
+            !temp
+                .path()
+                .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+                .exists(),
+            "source residue remained after restarting cleanup step {interrupted_after}"
+        );
+        assert!(
+            !temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists(),
+            "CAR residue remained after restarting cleanup step {interrupted_after}"
+        );
+        drop(publisher);
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn filesystem_publisher_quarantines_same_inode_byte_changes_after_cleanup_planning() {
+    let temp = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize empty publication authority"),
+    );
+    let (entry, _) = seed_complete_uncommitted_publication_fixture(
+        temp.path(),
+        "interrupted_byte_change",
+        b"interrupted-byte-change",
+        0,
+    );
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+        .expect("retain byte-change fixture root");
+    let state = read_publication_state_fixture(temp.path());
+    let state = state.as_object().expect("publication state object");
+    let inventory = governance_publication_artifact_inventory(state)
+        .expect("derive byte-change fixture inventory");
+    let (mut cleanup_plan, interrupted_identity) =
+        plan_governance_publication_source_artifacts(&root_guard, &inventory)
+            .expect("plan interrupted source rollback");
+    plan_governance_publication_car_artifacts(
+        &root_guard,
+        &inventory,
+        interrupted_identity.as_ref(),
+        &mut cleanup_plan,
+    )
+    .expect("plan interrupted CAR rollback");
+    verify_governance_publication_artifact_integrity(temp.path(), &root_guard, state)
+        .expect("verify empty committed authority");
+
+    let car_roles = publication_artifact_paths_for_fixture(temp.path(), &entry)
+        .into_iter()
+        .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+        .collect::<Vec<_>>();
+    let first_rollback_role = car_roles
+        .last()
+        .expect("complete CAR fixture has a final rollback role");
+    let original = fs::read(first_rollback_role).expect("read planned CAR role");
+    let substituted = vec![b'x'; original.len()];
+    fs::write(first_rollback_role, &substituted)
+        .expect("change planned CAR bytes without replacing its inode");
+
+    let error = apply_governance_publication_cleanup_plan(&root_guard, cleanup_plan)
+        .expect_err("post-plan byte change must stop recovery after isolation");
+    assert!(
+        error.to_string().contains("changed after exact comparison"),
+        "unexpected byte-comparison error: {error}"
+    );
+    assert!(
+        !first_rollback_role.exists(),
+        "the changed live binding must be isolated without unlinking"
+    );
+    assert_eq!(
+        fs::read(recovery_quarantine_path(temp.path()).join("car-file-05"))
+            .expect("read preserved changed CAR role"),
+        substituted,
+        "the changed same-inode bytes must remain available for offline inspection"
+    );
+}
+
+#[test]
+fn filesystem_publisher_rolls_back_the_next_atomic_temp_before_durable_roles() {
+    let temp = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize empty publication authority"),
+    );
+    let (entry, _) = seed_complete_uncommitted_publication_fixture(
+        temp.path(),
+        "interrupted_temp_rollback",
+        b"interrupted-temp-rollback",
+        0,
+    );
+    let car_roles = publication_artifact_paths_for_fixture(temp.path(), &entry)
+        .into_iter()
+        .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+        .collect::<Vec<_>>();
+    for path in car_roles.iter().skip(1) {
+        fs::remove_file(path).expect("truncate CAR prefix after its archive");
+    }
+    let next_target = &car_roles[1];
+    let next_name = next_target
+        .file_name()
+        .and_then(OsStr::to_str)
+        .expect("next CAR role name");
+    let next_temp = next_target
+        .parent()
+        .expect("CAR role parent")
+        .join(format!(".{next_name}.tmp-42000-1"));
+    fs::write(&next_temp, b"partially-written-sidecar").expect("seed next atomic temporary");
+
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+        .expect("retain temporary rollback root");
+    let state = read_publication_state_fixture(temp.path());
+    let state = state.as_object().expect("publication state object");
+    let inventory = governance_publication_artifact_inventory(state)
+        .expect("derive temporary rollback inventory");
+    let (mut cleanup_plan, interrupted_identity) =
+        plan_governance_publication_source_artifacts(&root_guard, &inventory)
+            .expect("plan temporary source rollback");
+    plan_governance_publication_car_artifacts(
+        &root_guard,
+        &inventory,
+        interrupted_identity.as_ref(),
+        &mut cleanup_plan,
+    )
+    .expect("plan temporary CAR rollback");
+    verify_governance_publication_artifact_integrity(temp.path(), &root_guard, state)
+        .expect("verify empty committed authority");
+    apply_governance_publication_cleanup_plan_with(&root_guard, cleanup_plan, |step| {
+        if step == 1 {
+            Err(GovernancePublishError::other(
+                "injected post-temporary interruption",
+            ))
+        } else {
+            Ok(())
+        }
+    })
+    .expect_err("cleanup must stop immediately after removing the next temporary");
+    assert!(
+        !next_temp.exists(),
+        "the next temporary must leave the live namespace first"
+    );
+    assert!(
+        car_roles[0].exists(),
+        "the durable CAR prefix must remain after the first rollback step"
+    );
+    drop(root_guard);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let publisher = {
+        let quarantine = recovery_quarantine_path(temp.path());
+        assert_eq!(
+            fs::read_dir(&quarantine)
+                .expect("read temporary recovery quarantine")
+                .count(),
+            1,
+            "the exact next temporary is the first isolated slot"
+        );
+        let restart_error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("restart must require offline cleanup of the isolated temp");
+        assert!(
+            restart_error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected restart error: {restart_error}"
+        );
+        clear_recovery_quarantine_offline(temp.path());
+        finish_recovery_after_offline_quarantine_cleanup(temp.path())
+    };
+    #[cfg(windows)]
+    let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+        .expect("restart accepts the preserved durable CAR prefix");
+    assert!(!temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists());
+    assert!(
+        !temp
+            .path()
+            .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+            .exists()
+    );
     drop(publisher);
 }
 
 #[test]
-fn filesystem_publisher_reclaims_interrupted_authority_temp_at_startup() {
-    let temp = tempdir().expect("tempdir");
-    let stale_temp = temp
-        .path()
-        .join(format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.tmp-42000-1"));
-    let stale_marker_temp = temp.path().join(format!(
-        ".{GOVERNANCE_PUBLICATION_INITIALIZED_FILE}.tmp-42000-2"
-    ));
-    fs::write(&stale_temp, b"interrupted authoritative state")
-        .expect("seed interrupted authority temp");
-    fs::write(&stale_marker_temp, b"interrupted initialization marker")
-        .expect("seed interrupted marker temp");
+fn filesystem_publisher_accepts_one_empty_interrupted_kind_and_rejects_two() {
+    let accepted = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+            .expect("initialize empty publication authority"),
+    );
+    fs::create_dir_all(
+        accepted
+            .path()
+            .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+            .join("interrupted_empty_kind"),
+    )
+    .expect("seed one durably created empty source kind");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let error = FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+            .expect_err("one legitimate empty prefix must be isolated on Unix");
+        assert!(
+            error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected quarantine error: {error}"
+        );
+        clear_recovery_quarantine_offline(accepted.path());
+        drop(
+            FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+                .expect("startup succeeds after offline quarantine cleanup"),
+        );
+    }
+    #[cfg(windows)]
+    drop(
+        FilesystemGovernancePublisher::try_new(accepted.path().to_path_buf())
+            .expect("one empty source-kind prefix is a legitimate interrupted write"),
+    );
+    assert!(
+        !accepted
+            .path()
+            .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+            .exists()
+    );
 
-    let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
-        .expect("startup reclaims interrupted authority temp");
-    assert!(
-        !stale_temp.exists(),
-        "the canonical authoritative-state temp must be reclaimed before startup reads"
+    let rejected = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(rejected.path().to_path_buf())
+            .expect("initialize second empty publication authority"),
     );
-    assert!(
-        !stale_marker_temp.exists(),
-        "the canonical initialization-marker temp must be reclaimed before startup reads"
+    let source_root = rejected.path().join(GOVERNANCE_PUBLICATION_SOURCES_DIR);
+    for kind in ["interrupted_empty_alpha", "interrupted_empty_beta"] {
+        fs::create_dir_all(source_root.join(kind)).expect("seed excess empty source kind");
+    }
+    let error = FilesystemGovernancePublisher::try_new(rejected.path().to_path_buf())
+        .expect_err("more than one empty source-kind prefix must fail closed");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    for kind in ["interrupted_empty_alpha", "interrupted_empty_beta"] {
+        assert!(
+            source_root.join(kind).is_dir(),
+            "excess-prefix rejection removed `{kind}`"
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn filesystem_publisher_rejects_empty_recovery_quarantine_until_offline_cleanup() {
+    let temp = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize empty publication authority"),
     );
-    drop(publisher);
+    let quarantine = recovery_quarantine_path(temp.path());
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+        .expect("retain empty-quarantine fixture root");
+    drop(
+        prepare_governance_publication_recovery_quarantine(&root_guard)
+            .expect("simulate a crash after durable quarantine creation"),
+    );
+    drop(root_guard);
+
+    let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+        .expect_err("an empty retained quarantine must still block restart");
+    assert!(
+        error
+            .to_string()
+            .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+        "unexpected empty-quarantine error: {error}"
+    );
+    assert_eq!(
+        fs::read_dir(&quarantine)
+            .expect("reread empty recovery quarantine")
+            .count(),
+        0,
+        "restart must preserve an empty quarantine for explicit offline cleanup"
+    );
+    clear_recovery_quarantine_offline(temp.path());
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("restart succeeds after removing the empty quarantine offline"),
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn filesystem_publisher_rejects_saturated_recovery_quarantine_without_mutation() {
+    let temp = tempdir().expect("tempdir");
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize empty publication authority"),
+    );
+    let quarantine = recovery_quarantine_path(temp.path());
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+        .expect("retain saturated-quarantine fixture root");
+    drop(
+        prepare_governance_publication_recovery_quarantine(&root_guard)
+            .expect("create durable saturated-quarantine fixture"),
+    );
+    drop(root_guard);
+    for position in 0..=GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP {
+        fs::write(
+            quarantine.join(format!("preserved-{position:02}")),
+            position.to_le_bytes(),
+        )
+        .expect("seed preserved quarantine entry");
+    }
+
+    let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+        .expect_err("a saturated recovery quarantine must block startup");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error.to_string().contains("hard cap")
+            && error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+        "unexpected saturation error: {error}"
+    );
+    assert_eq!(
+        fs::read_dir(&quarantine)
+            .expect("reread saturated quarantine")
+            .count(),
+        GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_ENTRY_HARD_CAP + 1,
+        "startup must not mutate a saturated quarantine"
+    );
+}
+
+#[test]
+fn filesystem_publisher_rejects_foreign_car_bytes_at_the_expected_base_without_cleanup() {
+    let donor = tempdir().expect("donor tempdir");
+    let (donor_entry, _) = seed_complete_uncommitted_publication_fixture(
+        donor.path(),
+        "foreign_interrupted_payload",
+        b"foreign-interrupted-publication",
+        0,
+    );
+    let donor_roles = publication_artifact_paths_for_fixture(donor.path(), &donor_entry)
+        .into_iter()
+        .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+        .map(|path| fs::read(path).expect("read foreign CAR role"))
+        .collect::<Vec<_>>();
+    assert_eq!(donor_roles.len(), GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT);
+
+    for substituted_role in 0..GOVERNANCE_PUBLICATION_CAR_ARTIFACT_COUNT {
+        let temp = tempdir().expect("tempdir");
+        drop(
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+                .expect("initialize empty publication authority"),
+        );
+        let (entry, _) = seed_complete_uncommitted_publication_fixture(
+            temp.path(),
+            "expected_interrupted_payload",
+            b"expected-interrupted-publication",
+            0,
+        );
+        let target_roles = publication_artifact_paths_for_fixture(temp.path(), &entry)
+            .into_iter()
+            .skip(GOVERNANCE_PUBLICATION_SOURCE_PAIR_ARTIFACT_COUNT)
+            .collect::<Vec<_>>();
+        assert_ne!(
+            fs::read(&target_roles[substituted_role]).expect("read expected CAR role"),
+            donor_roles[substituted_role],
+            "foreign role fixture unexpectedly matches role {substituted_role}"
+        );
+        fs::write(
+            &target_roles[substituted_role],
+            &donor_roles[substituted_role],
+        )
+        .expect("substitute foreign bytes at expected CAR base");
+        let snapshots = publication_artifact_paths_for_fixture(temp.path(), &entry)
+            .into_iter()
+            .map(|path| {
+                let bytes = fs::read(&path).expect("snapshot substituted publication role");
+                (path, bytes)
+            })
+            .collect::<Vec<_>>();
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("foreign CAR bytes at the expected base must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("diverges from its canonical source projection"),
+            "unexpected role {substituted_role} error: {error}"
+        );
+        for (path, expected) in snapshots {
+            assert_eq!(
+                fs::read(&path).expect("content-correlation rejection preserves role"),
+                expected,
+                "content-correlation rejection changed `{}` for role {substituted_role}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[test]
+fn governance_atomic_writes_reconcile_stale_names_before_mutation() {
+    let temp = tempdir().expect("tempdir");
+    let root_guard = GovernanceFilesystemRootGuard::capture_writer(temp.path())
+        .expect("retain atomic-write fixture root");
+    let replace_target = temp.path().join("replace-state");
+    let replace_stale = temp.path().join(".replace-state.tmp-42000-1");
+    fs::write(&replace_stale, b"older failed write").expect("seed replacement stale temp");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let error = write_rooted_atomic(&root_guard, &replace_target, b"current write")
+            .expect_err("Unix must quarantine a stale replacement before writing");
+        assert!(
+            error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected replacement quarantine error: {error}"
+        );
+        assert!(!replace_target.exists());
+        assert!(!replace_stale.exists());
+        assert_eq!(
+            fs::read(recovery_quarantine_path(temp.path()).join("mutable-state-recovery-000000"))
+                .expect("read isolated replacement temp"),
+            b"older failed write"
+        );
+        clear_recovery_quarantine_offline(temp.path());
+    }
+    #[cfg(windows)]
+    {
+        write_rooted_atomic(&root_guard, &replace_target, b"current write")
+            .expect("Windows removes the exact opened stale temp before writing");
+        assert_eq!(
+            fs::read(&replace_target).expect("read replacement"),
+            b"current write"
+        );
+        assert!(!replace_stale.exists());
+    }
+
+    let create_target = temp.path().join("create-state");
+    let create_stale = temp.path().join(".create-state.tmp-42000-2");
+    fs::write(&create_stale, b"older failed create").expect("seed create stale temp");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let error = write_rooted_atomic_expected(
+            &root_guard,
+            &create_target,
+            b"current create",
+            governance_rooted_fs::ExpectedFile::Missing,
+        )
+        .expect_err("Missing writes must quarantine a stale create before mutation");
+        assert!(
+            error
+                .to_string()
+                .contains(GOVERNANCE_PUBLICATION_RECOVERY_QUARANTINE_DIR),
+            "unexpected create quarantine error: {error}"
+        );
+        assert!(!create_target.exists());
+        assert!(!create_stale.exists());
+        assert_eq!(
+            fs::read(recovery_quarantine_path(temp.path()).join("mutable-state-recovery-000000"))
+                .expect("read isolated create temp"),
+            b"older failed create"
+        );
+        clear_recovery_quarantine_offline(temp.path());
+    }
+    #[cfg(windows)]
+    {
+        write_rooted_atomic_expected(
+            &root_guard,
+            &create_target,
+            b"current create",
+            governance_rooted_fs::ExpectedFile::Missing,
+        )
+        .expect("Windows removes the exact opened stale temp before create");
+        assert_eq!(
+            fs::read(&create_target).expect("read created target"),
+            b"current create"
+        );
+        assert!(!create_stale.exists());
+    }
+}
+
+#[test]
+fn filesystem_publisher_rejects_legacy_authority_temp_without_online_cleanup() {
+    for legacy_name in [
+        format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.tmp-42000-1"),
+        format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.tmp-bad"),
+        format!(".{GOVERNANCE_PUBLICATION_STATE_FILE}.retained-v1-bad"),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let stale_temp = temp.path().join(&legacy_name);
+        fs::write(&stale_temp, b"interrupted authoritative state")
+            .expect("seed interrupted authority temp");
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("legacy authority temporary must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("legacy governance publication authority"),
+            "unexpected legacy authority error: {error}"
+        );
+        assert!(
+            stale_temp.exists(),
+            "startup must leave unsupported authority state for deliberate offline handling"
+        );
+        assert!(
+            !temp
+                .path()
+                .join(GOVERNANCE_PUBLICATION_STORE_DIR_V1)
+                .exists(),
+            "legacy rejection must precede typed-store creation for `{legacy_name}`"
+        );
+    }
 }
 
 #[test]
@@ -558,9 +1524,13 @@ fn filesystem_publisher_persists_explicit_empty_authority_and_marker() {
         .expect("initialize publication authority");
     assert!(
         temp.path()
-            .join(GOVERNANCE_PUBLICATION_STATE_FILE)
-            .is_file(),
-        "a pristine root must gain an explicit empty authority"
+            .join(GOVERNANCE_PUBLICATION_STORE_DIR_V1)
+            .is_dir(),
+        "a pristine root must gain an explicit typed authority"
+    );
+    assert!(
+        !temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE).exists(),
+        "the retired flat-file authority must not be recreated"
     );
     assert_eq!(
         fs::read(temp.path().join(GOVERNANCE_PUBLICATION_INITIALIZED_FILE))
@@ -570,6 +1540,91 @@ fn filesystem_publisher_persists_explicit_empty_authority_and_marker() {
     let state = read_publication_state_fixture(temp.path());
     assert_eq!(state.get("generation").and_then(JsonValue::as_u64), Some(0));
     drop(publisher);
+    let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+        .expect("retain read-only publication root");
+    let snapshot = load_governance_publication_snapshot_v1(&reader)
+        .expect("load typed publication reader snapshot")
+        .expect("typed publication authority exists");
+    assert_eq!(snapshot.store_identity().0, 1);
+    assert_ne!(snapshot.store_identity().1, [0; 32]);
+    let value: JsonValue = json::from_slice(snapshot.canonical_bytes())
+        .expect("decode canonical publication reader bytes");
+    assert_eq!(value.get("generation").and_then(JsonValue::as_u64), Some(0));
+}
+
+#[test]
+fn governance_publication_readers_reject_logical_store_generation_drift() {
+    for substituted_generation in [7_u64, u64::MAX] {
+        let temp = tempdir().expect("tempdir");
+        let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("initialize publication authority");
+        let (mut state, snapshot) =
+            read_governance_publication_state(&publisher.publication_state_store)
+                .expect("load initial typed authority");
+        state.insert("generation".into(), JsonValue::from(substituted_generation));
+        let bytes = json::to_json_pretty(&JsonValue::Object(state))
+            .expect("encode canonical substituted authority")
+            .into_bytes();
+        compare_and_swap_governance_two_slot_store_v1(
+            &publisher.publication_state_store,
+            &snapshot,
+            &bytes,
+            "substituted governance publication authority",
+        )
+        .expect("commit internally valid substituted authority");
+
+        let error = read_governance_publication_state(&publisher.publication_state_store)
+            .expect_err("publisher read boundary must reject generation drift");
+        assert!(
+            error
+                .to_string()
+                .contains("publication generation does not match its fixed-store generation"),
+            "unexpected publisher drift error: {error}"
+        );
+        drop(publisher);
+
+        let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+            .expect("retain read-only publication root");
+        let error = load_governance_publication_snapshot_v1(&reader)
+            .expect_err("public read boundary must reject generation drift");
+        assert!(
+            error
+                .to_string()
+                .contains("publication generation does not match its fixed-store generation"),
+            "unexpected reader drift error: {error}"
+        );
+    }
+}
+
+#[test]
+fn filesystem_publisher_restart_preserves_typed_authority_generation() {
+    let temp = tempdir().expect("tempdir");
+    let publisher = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+        .expect("initialize publication authority");
+    let (settlement, encoded) = sample_settlement();
+    publisher
+        .publish_deal_settlement(&settlement, &encoded)
+        .expect("advance typed publication authority");
+    let before = read_publication_state_fixture(temp.path());
+    assert_eq!(
+        before.get("generation").and_then(JsonValue::as_u64),
+        Some(1)
+    );
+    drop(publisher);
+
+    drop(
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("restart accepts canonical typed authority"),
+    );
+    assert_eq!(
+        read_publication_state_fixture(temp.path()),
+        before,
+        "startup must not mutate the committed typed generation"
+    );
+    assert!(
+        !temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE).exists(),
+        "restart must not recreate the retired flat-file authority"
+    );
 }
 
 #[test]
@@ -601,13 +1656,13 @@ fn filesystem_publisher_rejects_missing_authority_without_deleting_history() {
         })
         .expect("committed CAR segment");
     drop(publisher);
-    fs::remove_file(temp.path().join(GOVERNANCE_PUBLICATION_STATE_FILE))
-        .expect("remove authority fixture");
+    fs::remove_dir_all(temp.path().join(GOVERNANCE_PUBLICATION_STORE_DIR_V1))
+        .expect("remove typed authority fixture");
 
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect_err("missing initialized authority must fail closed");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert!(error.to_string().contains("state is missing"));
+    assert!(error.to_string().contains("authority is missing"));
     for path in [encoded_path, json_path].into_iter().chain(car_paths) {
         assert!(
             path.is_file(),

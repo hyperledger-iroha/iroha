@@ -870,7 +870,7 @@ class HttpClientTransportTest {
             },
             "full-bootstrap verifier commitment drift" to { operationVectors ->
                 val material = mutableObj(operationVectors, "full_bootstrap_material")
-                material["vk_commitment_hex"] = string(material, "parameter_digest_hex")
+                material["vk_commitment_hex"] = string(material, "expected_material_digest_hex")
             },
             "noncanonical full-bootstrap material digest" to { operationVectors ->
                 val material = mutableObj(operationVectors, "full_bootstrap_material")

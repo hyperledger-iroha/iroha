@@ -217,6 +217,27 @@ impl VegaT256PointV1 {
         Self(self.0 * scalar.0)
     }
 
+    /// Select `a` for zero and `b` for one without secret-dependent branches.
+    ///
+    /// Only the low bit of `choice` is used. Multiplication by that scalar uses
+    /// the linked curve's constant-time scalar multiplication and avoids a
+    /// secret-dependent branch or table lookup.
+    #[must_use]
+    pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
+        *a + (*b - *a).mul_scalar(VegaT256ScalarV1::from_u64(u64::from(choice & 1)))
+    }
+
+    /// Replace this complete projective point instance with the identity.
+    ///
+    /// This is best-effort safe erasure for a named value. The point is
+    /// [`Copy`], so compiler-created copies and register temporaries cannot be
+    /// guaranteed erased, and no destructor runs after process abort.
+    pub fn clear_secret(&mut self) {
+        *self = Self::identity();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *self);
+    }
+
     pub(super) fn identity() -> Self {
         Self(T256::identity())
     }
@@ -230,7 +251,7 @@ impl VegaT256PointV1 {
             for bit in (0..8).rev() {
                 result = result + result;
                 if byte & (1 << bit) != 0 {
-                    result = result + self;
+                    result += self;
                 }
             }
         }
@@ -364,6 +385,19 @@ mod tests {
         q_minus_one[31] -= 1;
         let minus_one = VegaT256ScalarV1::from_be_bytes_exact(q_minus_one).expect("q - 1 scalar");
         assert!((generator.mul_scalar(minus_one) + generator).is_identity());
+
+        let identity = VegaT256PointV1::identity();
+        assert_eq!(
+            VegaT256PointV1::conditional_select(&identity, &generator, 0),
+            identity
+        );
+        assert_eq!(
+            VegaT256PointV1::conditional_select(&identity, &generator, 1),
+            generator
+        );
+        let mut cleared = generator;
+        cleared.clear_secret();
+        assert_eq!(cleared, identity);
     }
 
     #[test]

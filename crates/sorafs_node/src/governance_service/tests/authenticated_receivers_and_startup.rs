@@ -416,12 +416,7 @@ fn sealed_http_receiver_fails_closed_on_store_drift_and_readback_divergence() {
                 now,
             )
             .expect_err("store ambiguity cannot authorize ingress");
-        let message = error.to_string();
-        if failure == "cas-drift" {
-            assert!(message.contains("identity or policy changed"));
-        } else {
-            assert!(message.contains("readback diverged"));
-        }
+        assert!(error.to_string().contains("replay store is unavailable"));
         assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 1);
     }
 }
@@ -468,7 +463,7 @@ fn sealed_http_receiver_rejects_corrupt_and_noncanonical_replay_payloads() {
                 now,
             )
             .expect_err("invalid sealed payload cannot authorize ingress");
-        assert!(error.to_string().contains("canonical"));
+        assert!(error.to_string().contains("replay store is unavailable"));
         assert_eq!(store.replay_cas_calls.load(AtomicOrdering::SeqCst), 0);
     }
 }
@@ -664,14 +659,14 @@ fn inbound_request_auth_accepts_canonical_ipfs_and_head_operations() {
             "content-length".to_owned(),
             body.len().to_string().into_bytes(),
         ));
-        headers.push(("cache-control".to_owned(), b"no-store".to_vec()));
-        headers.push(("x-request-id".to_owned(), b"public-request-id".to_vec()));
         let (policy, replay_cache) = match scope {
             GovernanceDagAuthenticationScope::Ipfs => (&ipfs_policy, &mut ipfs_replay_cache),
             GovernanceDagAuthenticationScope::SignedHead => (&head_policy, &mut head_replay_cache),
         };
         verify_request_before_test_backend(
-            TestBackendRequest::new(&request, &headers, body),
+            &request,
+            &headers,
+            body,
             scope,
             policy,
             now,
@@ -715,17 +710,22 @@ fn inbound_request_auth_header_mapping_is_an_exact_hard_cut() {
         5,
     )
     .expect("valid IPFS receiver policy");
-    let mut zero_bound_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
-    let zero_bound_error = GovernanceDagHttpRequestReceiverV1::try_new(
+    let zero_bound_error = GovernanceDagRequestIngressBindingV1::try_new(
         GovernanceDagAuthenticationScope::Ipfs,
+        governance_dag_request_ingress_endpoint_binding_v1(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "https://example.invalid/",
+        )
+        .expect("canonical zero-bound test endpoint"),
+        policy.public_key(),
         0,
-        &policy,
-        &mut zero_bound_cache,
+        policy.max_envelope_lifetime_secs(),
+        policy.max_future_skew_secs(),
     )
-    .expect_err("receiver must reject a zero body ceiling");
+    .expect_err("ingress binding must reject a zero body ceiling");
     assert_eq!(
         zero_bound_error,
-        GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest
+        crate::GovernanceDagRequestIngressQualificationErrorV1::InvalidRequestBodyLimit
     );
     let backend_calls = AtomicU64::new(0);
 
@@ -763,18 +763,12 @@ fn inbound_request_auth_header_mapping_is_an_exact_hard_cut() {
             },
             GovernanceDagRequestAuthenticationErrorV1::UnknownHeader,
         ),
-        (
-            {
-                let mut fields = canonical.clone();
-                fields.push(("X-Sorafs-Governance-Auth-Version".to_owned(), b"1".to_vec()));
-                fields
-            },
-            GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader,
-        ),
     ];
     for (fields, expected) in cases {
         let error = verify_request_before_test_backend(
-            TestBackendRequest::new(&request, &fields, b""),
+            &request,
+            &fields,
+            b"",
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -784,6 +778,48 @@ fn inbound_request_auth_header_mapping_is_an_exact_hard_cut() {
         .expect_err("noncanonical header map must stop before backend dispatch");
         assert_eq!(error, expected);
     }
+
+    for unexpected_name in [
+        "cache-control",
+        "x-request-id",
+        "x-http-method-override",
+        "x-original-url",
+        "forwarded",
+    ] {
+        let mut fields = canonical.clone();
+        fields.push((unexpected_name.to_owned(), b"semantic-extension".to_vec()));
+        let error = verify_request_before_test_backend(
+            &request,
+            &fields,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("unsigned semantic headers must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::UnexpectedHeader
+        );
+    }
+
+    let unavailable_error = verify_request_before_test_backend(
+        &request,
+        &canonical,
+        b"",
+        GovernanceDagAuthenticationScope::Ipfs,
+        &policy,
+        now,
+        &mut UnavailableTestReplayStore,
+        &backend_calls,
+    )
+    .expect_err("unavailable shared replay state must stop before backend dispatch");
+    assert_eq!(
+        unavailable_error,
+        GovernanceDagRequestAuthenticationErrorV1::ReplayStoreUnavailable
+    );
 
     for (index, value) in [
         (0, b"01".to_vec()),
@@ -795,7 +831,9 @@ fn inbound_request_auth_header_mapping_is_an_exact_hard_cut() {
         let mut fields = canonical.clone();
         fields[index].1 = value;
         let error = verify_request_before_test_backend(
-            TestBackendRequest::new(&request, &fields, b""),
+            &request,
+            &fields,
+            b"",
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -821,7 +859,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
     let request = canonical_test_request(
         GovernanceDagAuthenticationScope::SignedHead,
         "PUT",
-        "https://example.invalid/governance/head?revision=7",
+        "https://example.invalid/governance/head",
         &[
             ("accept-encoding", "identity"),
             ("content-type", "application/vnd.iroha.norito"),
@@ -847,7 +885,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         canonical_test_request(
             GovernanceDagAuthenticationScope::Ipfs,
             "PUT",
-            "https://example.invalid/governance/head?revision=7",
+            "https://example.invalid/governance/head",
             &[
                 ("accept-encoding", "identity"),
                 ("content-type", "application/vnd.iroha.norito"),
@@ -858,7 +896,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         canonical_test_request(
             GovernanceDagAuthenticationScope::SignedHead,
             "POST",
-            "https://example.invalid/governance/head?revision=7",
+            "https://example.invalid/governance/head",
             &[
                 ("accept-encoding", "identity"),
                 ("content-type", "application/vnd.iroha.norito"),
@@ -869,7 +907,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         canonical_test_request(
             GovernanceDagAuthenticationScope::SignedHead,
             "PUT",
-            "https://example.invalid/governance/head?revision=8",
+            "https://example.invalid/governance/head-v8",
             &[
                 ("accept-encoding", "identity"),
                 ("content-type", "application/vnd.iroha.norito"),
@@ -880,7 +918,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         canonical_test_request(
             GovernanceDagAuthenticationScope::SignedHead,
             "PUT",
-            "https://example.invalid/governance/head?revision=7",
+            "https://example.invalid/governance/head",
             &[
                 ("accept-encoding", "identity"),
                 ("content-type", "application/vnd.iroha.norito"),
@@ -891,7 +929,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         canonical_test_request(
             GovernanceDagAuthenticationScope::SignedHead,
             "PUT",
-            "https://example.invalid/governance/head?revision=7",
+            "https://example.invalid/governance/head",
             &[
                 ("accept-encoding", "identity"),
                 ("content-type", "application/vnd.iroha.norito"),
@@ -901,7 +939,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         canonical_test_request(
             GovernanceDagAuthenticationScope::SignedHead,
             "PUT",
-            "https://example.invalid/governance/head?revision=7",
+            "https://example.invalid/governance/head",
             &[
                 ("accept-encoding", "identity"),
                 ("content-type", "application/vnd.iroha.norito"),
@@ -912,7 +950,7 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         GovernanceDagCanonicalRequestV1::try_new(
             GovernanceDagAuthenticationScope::SignedHead,
             "PUT",
-            "https://example.invalid/governance/head?revision=7",
+            "https://example.invalid/governance/head",
             request.selected_headers().to_vec(),
             request.body_length().saturating_add(1),
             request.body_blake3(),
@@ -928,7 +966,9 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
             b"head-v7".as_slice()
         };
         let error = verify_request_before_test_backend(
-            TestBackendRequest::new(tampered_request, &headers, body),
+            tampered_request,
+            &headers,
+            body,
             GovernanceDagAuthenticationScope::SignedHead,
             &policy,
             now,
@@ -942,7 +982,9 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
         );
     }
     let error = verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &headers, b"head-v7"),
+        &request,
+        &headers,
+        b"head-v7",
         GovernanceDagAuthenticationScope::Ipfs,
         &policy,
         now,
@@ -961,7 +1003,9 @@ fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
     )
     .expect("alternate valid receiver key");
     let error = verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &headers, b"head-v7"),
+        &request,
+        &headers,
+        b"head-v7",
         GovernanceDagAuthenticationScope::SignedHead,
         &wrong_key_policy,
         now,
@@ -1010,7 +1054,9 @@ fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
             nonce,
         );
         let error = verify_request_before_test_backend(
-            TestBackendRequest::new(&request, &request_auth_header_fields(&envelope), b""),
+            &request,
+            &request_auth_header_fields(&envelope),
+            b"",
             GovernanceDagAuthenticationScope::Ipfs,
             &policy,
             now,
@@ -1034,7 +1080,9 @@ fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
     let mut zero_nonce_headers = request_auth_header_fields(&valid);
     zero_nonce_headers[4].1 = "00".repeat(32).into_bytes();
     let error = verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &zero_nonce_headers, b""),
+        &request,
+        &zero_nonce_headers,
+        b"",
         GovernanceDagAuthenticationScope::Ipfs,
         &policy,
         now,
@@ -1052,7 +1100,9 @@ fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
     invalid_signature[32..].fill(0);
     bad_signature_headers[7].1 = hex::encode(invalid_signature).into_bytes();
     let error = verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &bad_signature_headers, b""),
+        &request,
+        &bad_signature_headers,
+        b"",
         GovernanceDagAuthenticationScope::Ipfs,
         &policy,
         now,
@@ -1069,7 +1119,9 @@ fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
     let headers = request_auth_header_fields(&valid);
     let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
     verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &headers, b""),
+        &request,
+        &headers,
+        b"",
         GovernanceDagAuthenticationScope::Ipfs,
         &policy,
         now,
@@ -1078,7 +1130,9 @@ fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
     )
     .expect("first nonce use reaches backend");
     let error = verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &headers, b""),
+        &request,
+        &headers,
+        b"",
         GovernanceDagAuthenticationScope::Ipfs,
         &policy,
         now,
@@ -1104,7 +1158,9 @@ fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
         .expect("one-entry replay cache");
     let capacity_backend_calls = AtomicU64::new(0);
     verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &headers, b""),
+        &request,
+        &headers,
+        b"",
         GovernanceDagAuthenticationScope::Ipfs,
         &policy,
         now,
@@ -1113,7 +1169,9 @@ fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
     )
     .expect("first live nonce fits bounded cache");
     let error = verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &request_auth_header_fields(&second), b""),
+        &request,
+        &request_auth_header_fields(&second),
+        b"",
         GovernanceDagAuthenticationScope::Ipfs,
         &policy,
         now,
@@ -1161,7 +1219,9 @@ fn inbound_receiver_rejects_framing_before_replay_consumption_or_dispatch() {
     let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
     let backend_calls = AtomicU64::new(0);
     let error = verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &ambiguous_headers, body),
+        &request,
+        &ambiguous_headers,
+        body,
         GovernanceDagAuthenticationScope::SignedHead,
         &policy,
         now,
@@ -1176,7 +1236,9 @@ fn inbound_receiver_rejects_framing_before_replay_consumption_or_dispatch() {
     assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 0);
 
     verify_request_before_test_backend(
-        TestBackendRequest::new(&request, &request_auth_header_fields(&envelope), body),
+        &request,
+        &request_auth_header_fields(&envelope),
+        body,
         GovernanceDagAuthenticationScope::SignedHead,
         &policy,
         now,
@@ -1318,7 +1380,7 @@ fn canonical_request_hard_cut_rejects_credentials_aliases_and_bounds() {
 }
 
 #[test]
-fn outbound_descriptor_binds_only_selected_public_headers() {
+fn outbound_descriptor_binds_selected_headers_and_rejects_unsigned_semantics() {
     let body = b"canonical-body";
     let baseline_headers = [
         ("accept-encoding", b"identity".as_slice()),
@@ -1333,23 +1395,31 @@ fn outbound_descriptor_binds_only_selected_public_headers() {
         1024,
     )
     .expect("canonical baseline descriptor");
-    let with_ordinary_headers = [
-        ("accept-encoding", b"identity".as_slice()),
-        ("content-type", b"application/vnd.iroha.norito".as_slice()),
-        ("content-length", b"14".as_slice()),
-        ("cache-control", b"no-cache".as_slice()),
-        ("x-request-id", b"request-7".as_slice()),
-    ];
-    let with_ordinary = canonicalize_governance_dag_outbound_http_request_v1(
-        GovernanceDagAuthenticationScope::SignedHead,
-        "PUT",
-        "https://example.invalid/governance/head",
-        with_ordinary_headers,
-        body,
-        1024,
-    )
-    .expect("ordinary public headers are safely excluded");
-    assert_eq!(with_ordinary, baseline);
+    for unexpected_name in [
+        "cache-control",
+        "x-request-id",
+        "x-http-method-override",
+        "x-original-url",
+        "forwarded",
+    ] {
+        let headers = [
+            ("accept-encoding", b"identity".as_slice()),
+            ("content-type", b"application/vnd.iroha.norito".as_slice()),
+            ("content-length", b"14".as_slice()),
+            (unexpected_name, b"semantic-extension".as_slice()),
+        ];
+        assert_eq!(
+            canonicalize_governance_dag_outbound_http_request_v1(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head",
+                headers,
+                body,
+                1024,
+            ),
+            Err(GovernanceDagRequestAuthenticationErrorV1::UnexpectedHeader)
+        );
+    }
 
     let changed_selected = canonicalize_governance_dag_outbound_http_request_v1(
         GovernanceDagAuthenticationScope::SignedHead,
@@ -1359,8 +1429,6 @@ fn outbound_descriptor_binds_only_selected_public_headers() {
             ("accept-encoding", b"gzip".as_slice()),
             ("content-type", b"application/vnd.iroha.norito".as_slice()),
             ("content-length", b"14".as_slice()),
-            ("cache-control", b"no-cache".as_slice()),
-            ("x-request-id", b"request-7".as_slice()),
         ],
         body,
         1024,
@@ -1483,35 +1551,57 @@ async fn authenticated_execute_discards_response_after_qualification_drift() {
         TEST_IPFS_AUTH_HANDLE,
         "in-flight-secret-token",
     ));
-    let authenticator = OpaqueAuthenticator::try_new(
-        TEST_IPFS_AUTH_HANDLE,
-        TEST_AUTH_QUALIFICATION,
-        test_request_auth_policy(provider.public_key()),
-        provider.clone(),
-        GovernanceDagAuthenticationScope::Ipfs,
-        test_replay_store(),
-        "IPFS authenticator",
-    )
-    .expect("bind stable runtime authenticator");
     let router = Router::new()
         .route("/drift", get(mock_authenticator_drift))
-        .with_state(provider);
+        .with_state(provider.clone());
     let (endpoint, task) = spawn_router_with_authenticator(
         router,
         "/drift",
         GovernanceDagAuthenticationScope::Ipfs,
-        authenticator,
+        provider,
     )
     .await;
     let request = endpoint
         .request(Method::GET, endpoint.url.clone())
         .expect("construct drift request");
-    let error = endpoint
-        .execute(request, "drift request failed")
-        .await
-        .expect_err("post-execute policy drift must discard the response");
-    assert!(error.to_string().contains("policy changed"));
+    let error = match endpoint.execute(request, "drift request failed").await {
+        Ok(_) => panic!("post-execute policy drift must discard the response"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("ingress qualification changed"));
     assert!(!error.to_string().contains("in-flight-secret-token"));
+    task.abort();
+}
+
+#[tokio::test]
+async fn authenticated_response_discards_body_when_qualification_drifts_before_eof() {
+    let provider = Arc::new(TestAuthenticator::new(
+        TEST_IPFS_AUTH_HANDLE,
+        "response-lifetime-secret",
+    ));
+    let router = Router::new().route("/body", get(|| async { "authenticated-body" }));
+    let (endpoint, task) = spawn_router_with_authenticator(
+        router,
+        "/body",
+        GovernanceDagAuthenticationScope::Ipfs,
+        provider.clone(),
+    )
+    .await;
+    let request = endpoint
+        .request(Method::GET, endpoint.url.clone())
+        .expect("construct authenticated body request");
+    let response = endpoint
+        .execute(request, "authenticated body request failed")
+        .await
+        .expect("receive response under the original qualification");
+    provider
+        .qualification_revision
+        .store(2, AtomicOrdering::SeqCst);
+    let error = read_bounded_response(response, 1024)
+        .await
+        .expect_err("qualification drift before completed consumption must discard the body");
+    assert!(error.to_string().contains("ingress qualification changed"));
+    assert!(!error.to_string().contains("response-lifetime-secret"));
     task.abort();
 }
 
@@ -1524,14 +1614,19 @@ async fn runtime_registry_injection_reaches_startup_with_exact_bindings() {
         .state_dir
         .clone()
         .expect("test state directory");
-    let request_auth_max_body_bytes = view.service.max_request_bytes.0;
+    let request_auth_max_body_bytes =
+        authenticated_ipfs_wire_body_max_bytes(view.service.max_request_bytes.0)
+            .expect("derive authenticated wire-body binding");
     let registry = Arc::new(TestRuntimeProviderRegistry::returning(
-        test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        test_runtime_providers(
+            &view,
+            Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE)),
+        ),
     ));
     let runtime_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> = registry.clone();
     let providers = resolve_runtime_registry_providers(&view, Some(runtime_registry))
         .expect("registry resolves the configured providers");
-    let _service = Service::from_view(view, providers)
+    let _service = Service::from_view(view.clone(), providers)
         .await
         .expect("registry providers reach qualified service startup");
 
@@ -1555,8 +1650,15 @@ async fn runtime_registry_injection_reaches_startup_with_exact_bindings() {
         Some(TEST_AUTH_QUALIFICATION)
     );
     assert_eq!(
-        observed.request_auth_max_body_bytes(),
+        observed.ipfs_request_ingress_binding().max_body_bytes(),
         request_auth_max_body_bytes
+    );
+    assert_eq!(
+        observed
+            .head_request_ingress_binding()
+            .expect("signed-head ingress binding")
+            .max_body_bytes(),
+        view.service.max_request_bytes.0
     );
     assert_eq!(
         observed.checkpoint_store_handle(),
@@ -1580,7 +1682,10 @@ fn embedding_launcher_preflight_qualifies_adapters_without_opening_state() {
         .expect("test state directory");
     validate_governance_dag_service_runtime_providers(
         &view,
-        &test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        &test_runtime_providers(
+            &view,
+            Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE)),
+        ),
     )
     .expect("qualify the exact deployment adapter set");
     assert!(
@@ -1598,13 +1703,49 @@ fn embedding_launcher_preflight_qualifies_adapters_without_opening_state() {
 
     let error = validate_governance_dag_service_runtime_providers(
         &view,
-        &test_runtime_providers(Arc::new(TestSealedStore::new(
-            "kms:governance/checkpoint:test",
-        ))),
+        &test_runtime_providers(
+            &view,
+            Arc::new(TestSealedStore::new("kms:governance/checkpoint:test")),
+        ),
     )
     .expect_err("test-marked provider must fail launcher preflight");
     assert!(error.to_string().contains("test-marked"));
     assert!(!state_dir.exists());
+}
+
+#[test]
+fn ipns_runtime_bindings_omit_and_reject_signed_head_provider() {
+    let root = secure_temp_dir();
+    let mut view = runtime_boundary_view(root.path());
+    view.service.head_mode = "ipns".to_owned();
+    view.service.signed_head_url = None;
+    view.service.ipns_name = Some("k51qzi5uqu5dl-governance".to_owned());
+    view.service.ipns_key_name = Some("governance-publisher".to_owned());
+    view.service.head_authenticator_handle = None;
+    view.service.head_authenticator_revision = None;
+    view.service.head_authenticator_policy_digest = None;
+    view.service.head_request_auth_public_key = None;
+
+    let bindings = runtime_provider_bindings(&view).expect("derive IPNS runtime bindings");
+    assert_eq!(bindings.head_authenticator_handle(), None);
+    assert_eq!(bindings.head_authenticator_qualification(), None);
+    assert_eq!(bindings.head_request_ingress_binding(), None);
+
+    let store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+    let providers = test_runtime_providers(&view, store);
+    validate_governance_dag_service_runtime_providers(&view, &providers)
+        .expect("IPNS mode requires only IPFS authentication and sealed checkpoint providers");
+
+    let substituted = GovernanceDagServiceRuntimeProviders {
+        head_authenticator: Some(Arc::new(TestAuthenticator::new(
+            TEST_HEAD_AUTH_HANDLE,
+            "must-not-be-used",
+        ))),
+        ..providers
+    };
+    let error = validate_governance_dag_service_runtime_providers(&view, &substituted)
+        .expect_err("a signed-head provider must fail closed in IPNS mode");
+    assert!(error.to_string().contains("must be absent in IPNS mode"));
 }
 
 #[tokio::test]
@@ -1632,7 +1773,7 @@ async fn prepare_reconciles_initial_state_without_publication() {
 
     let runner = prepare_governance_dag_service_from_view(
         view.clone(),
-        test_runtime_providers(checkpoint_provider.clone()),
+        test_runtime_providers(&view, checkpoint_provider.clone()),
     )
     .await
     .expect("empty authenticated state may prepare for an allowed bootstrap");
@@ -1648,17 +1789,199 @@ async fn prepare_reconciles_initial_state_without_publication() {
         &checkpoint,
     )
     .expect("seed authenticated checkpoint");
-    let error =
-        prepare_governance_dag_service_from_view(view, test_runtime_providers(checkpoint_provider))
-            .await
-            .err()
-            .expect("a missing public head cannot satisfy an existing checkpoint");
+    let error = prepare_governance_dag_service_from_view(
+        view.clone(),
+        test_runtime_providers(&view, checkpoint_provider),
+    )
+    .await
+    .err()
+    .expect("a missing public head cannot satisfy an existing checkpoint");
     assert!(error.to_string().contains("public head disappeared"));
     assert_eq!(
         head_state.0.lock().await.put_count,
         0,
         "prepare must not repair or publish the public head"
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn prepare_recovers_empty_typed_mirror_but_keeps_reader_unready() {
+    let root = secure_temp_dir();
+    let mut view = runtime_boundary_view(root.path());
+    let mut source = signed_source(1, 0x70, current_unix_timestamp_seconds().saturating_sub(1));
+    materialize_source_snapshot(
+        view.source_dir.as_deref().expect("test source directory"),
+        &mut source,
+    );
+    let publisher_key_hex = hex::encode(&source.head.head_signature.public_key);
+    view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+    view.service.publisher_public_key_hex = Some(publisher_key_hex);
+
+    let (head_endpoint, head_state, task) = spawn_signed_head(SignedHeadInner {
+        bytes: Some(source.head_bytes.clone()),
+        etag: "\"v1\"".to_owned(),
+        ..SignedHeadInner::default()
+    })
+    .await;
+    view.service.signed_head_url = Some(head_endpoint.url.to_string());
+
+    let checkpoint_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+    seed_producer_checkpoint(
+        &checkpoint_provider,
+        view.source_dir.as_deref().expect("test source directory"),
+        &source,
+    );
+    let checkpoint = checkpoint_with_canonical_mirror(&source);
+    let checkpoint_revision = save_checkpoint(
+        &test_checkpoint_store(checkpoint_provider.clone()),
+        None,
+        &checkpoint,
+    )
+    .expect("seed authenticated checkpoint");
+
+    let runner = prepare_governance_dag_service_from_view(
+        view.clone(),
+        test_runtime_providers(&view, checkpoint_provider),
+    )
+    .await
+    .expect("prepare must recover an empty typed mirror");
+    let mirror = verify_mirror_index_store(
+        &runner.service.config,
+        &runner.service.mirror_store,
+        &checkpoint,
+    )
+    .expect("prepare installs a checkpoint-coherent mirror");
+    let canonical_bytes = json::to_json_pretty(&mirror)
+        .expect("encode recovered mirror")
+        .into_bytes();
+    assert_eq!(blake3_array(&canonical_bytes), checkpoint.mirror_blake3);
+    assert_eq!(runner.service.checkpoint_revision, Some(checkpoint_revision));
+    let error = runner
+        .mirror_read_handle()
+        .read()
+        .expect_err("prepare must keep mirror reads unavailable until the first full audit");
+    assert!(
+        matches!(error, GovernanceDagServiceError::Unavailable(_)),
+        "unexpected pre-audit mirror-read error: {error}"
+    );
+    assert_eq!(
+        head_state.0.lock().await.put_count,
+        0,
+        "startup mirror recovery must not publish the public head"
+    );
+    drop(runner);
+    task.abort();
+}
+
+#[tokio::test]
+async fn prepare_repairs_nonempty_checkpoint_incoherent_derived_mirror() {
+    let root = secure_temp_dir();
+    let mut view = runtime_boundary_view(root.path());
+    let mut source = signed_source(1, 0x71, current_unix_timestamp_seconds().saturating_sub(1));
+    materialize_source_snapshot(
+        view.source_dir.as_deref().expect("test source directory"),
+        &mut source,
+    );
+    let publisher_key_hex = hex::encode(&source.head.head_signature.public_key);
+    view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+    view.service.publisher_public_key_hex = Some(publisher_key_hex);
+
+    let (head_endpoint, head_state, task) = spawn_signed_head(SignedHeadInner {
+        bytes: Some(source.head_bytes.clone()),
+        etag: "\"v1\"".to_owned(),
+        ..SignedHeadInner::default()
+    })
+    .await;
+    view.service.signed_head_url = Some(head_endpoint.url.to_string());
+
+    let checkpoint_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+    seed_producer_checkpoint(
+        &checkpoint_provider,
+        view.source_dir.as_deref().expect("test source directory"),
+        &source,
+    );
+    let checkpoint = checkpoint_with_canonical_mirror(&source);
+    save_checkpoint(
+        &test_checkpoint_store(checkpoint_provider.clone()),
+        None,
+        &checkpoint,
+    )
+    .expect("seed authenticated checkpoint");
+
+    let service = Service::from_view(
+        view.clone(),
+        test_runtime_providers(&view, checkpoint_provider.clone()),
+    )
+    .await
+    .expect("open service state for mismatch fixture");
+    let mut drifted_mirror = mirror_index_value(
+        &source,
+        &checkpoint.mirror_blocks,
+        &checkpoint.archive_head,
+        checkpoint.generation,
+        &checkpoint.head_ipfs_cid,
+        checkpoint.published_at_unix,
+    )
+    .expect("build canonical mirror fixture");
+    drifted_mirror
+        .get_mut("head")
+        .and_then(JsonValue::as_object_mut)
+        .expect("mirror head object")
+        .insert(
+            "head_block_cid_hex".into(),
+            JsonValue::from("00".repeat(32)),
+        );
+    let drifted_payload = MirrorIndexStorePayloadV1::committed(
+        checkpoint.generation,
+        [0; 32],
+        json::to_json_pretty(&drifted_mirror)
+            .expect("encode internally canonical drifted mirror")
+            .into_bytes(),
+    )
+    .expect("construct internally valid drifted mirror payload");
+    let (empty_snapshot, empty_payload) =
+        load_mirror_index_store(&service.config, &service.mirror_store)
+            .expect("load empty typed mirror");
+    assert!(empty_payload.is_empty());
+    compare_and_swap_mirror_index_store(
+        &service.config,
+        &service.mirror_store,
+        &empty_snapshot,
+        &drifted_payload,
+    )
+    .expect("install nonempty checkpoint-incoherent mirror fixture");
+    drop(service);
+
+    let runner = prepare_governance_dag_service_from_view(
+        view.clone(),
+        test_runtime_providers(&view, checkpoint_provider),
+    )
+    .await
+    .expect("sealed checkpoint repairs a stale or corrupt local derived mirror");
+    assert_eq!(
+        verify_mirror_index_store(
+            &runner.service.config,
+            &runner.service.mirror_store,
+            &checkpoint,
+        )
+        .expect("read repaired checkpoint-coherent mirror"),
+        mirror_index_value(
+            &source,
+            &checkpoint.mirror_blocks,
+            &checkpoint.archive_head,
+            checkpoint.generation,
+            &checkpoint.head_ipfs_cid,
+            checkpoint.published_at_unix,
+        )
+        .expect("rebuild expected derived mirror")
+    );
+    assert_eq!(
+        head_state.0.lock().await.put_count,
+        0,
+        "derived-cache recovery must not republish the public head"
+    );
+    drop(runner);
     task.abort();
 }
 
@@ -1693,14 +2016,18 @@ async fn prepare_rejects_source_conflicting_publish_intent_before_publication() 
     )
     .expect("seed independently valid but source-conflicting intent");
 
-    let error =
-        prepare_governance_dag_service_from_view(view, test_runtime_providers(checkpoint_provider))
-            .await
-            .err()
-            .expect("prepare must reconcile the durable intent against the source");
+    let error = prepare_governance_dag_service_from_view(
+        view.clone(),
+        test_runtime_providers(&view, checkpoint_provider),
+    )
+    .await
+    .err()
+    .expect("prepare must reconcile the durable intent against the source");
     assert!(
         error.to_string().contains("source forked")
             || error.to_string().contains("incompatible with the source")
+            || error.to_string().contains("not an authenticated source prefix"),
+        "unexpected source-conflicting intent error: {error}"
     );
     assert_eq!(head_state.0.lock().await.put_count, 0);
     task.abort();
@@ -1742,7 +2069,7 @@ async fn sealed_producer_intent_blocks_all_publication_io_before_checkpoint_comm
         )
         .expect("pause producer after sealing its intent");
 
-    let mut service = Service::from_view(view, test_runtime_providers(provider))
+    let mut service = Service::from_view(view.clone(), test_runtime_providers(&view, provider))
         .await
         .expect("construct service without performing public I/O");
     let error = service
@@ -1754,6 +2081,58 @@ async fn sealed_producer_intent_blocks_all_publication_io_before_checkpoint_comm
         request_count.load(AtomicOrdering::SeqCst),
         0,
         "service must perform no Kubo or public-head I/O before producer checkpoint commit"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn incomplete_service_intent_suffix_fails_before_all_publication_io() {
+    let root = secure_temp_dir();
+    let mut view = runtime_boundary_view(root.path());
+    let mut source = signed_source(2, 0x7c, current_unix_timestamp_seconds().saturating_sub(2));
+    let source_dir = view.source_dir.as_deref().expect("test source directory");
+    materialize_source_snapshot(source_dir, &mut source);
+    let publisher_key_hex = hex::encode(&source.head.head_signature.public_key);
+    view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+    view.service.publisher_public_key_hex = Some(publisher_key_hex);
+
+    let request_count = Arc::new(AtomicU64::new(0));
+    let router = Router::new()
+        .fallback(any(count_unexpected_publication_io))
+        .with_state(request_count.clone());
+    let (endpoint, task) = spawn_router(router, "/").await;
+    view.service.ipfs_api_url = Some(endpoint.url.to_string());
+    view.service.signed_head_url = Some(endpoint.url.to_string());
+
+    let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+    seed_producer_checkpoint(&provider, source_dir, &source);
+    let mut incomplete_intent = intent_from_source(&source);
+    incomplete_intent.blocks.remove(0);
+    incomplete_intent.blocks[0].ipfs_cid = None;
+    incomplete_intent.head_ipfs_cid = None;
+    save_publish_intent(
+        &test_checkpoint_store(provider.clone()),
+        None,
+        &incomplete_intent,
+    )
+    .expect("seal internally contiguous but incomplete service intent fixture");
+
+    let mut service = Service::from_view(view.clone(), test_runtime_providers(&view, provider))
+        .await
+        .expect("construct service without performing public I/O");
+    let error = service
+        .reconcile_once()
+        .await
+        .expect_err("incomplete unpublished suffix must fail before publication");
+    assert!(
+        error
+            .to_string()
+            .contains("complete unpublished source suffix")
+    );
+    assert_eq!(
+        request_count.load(AtomicOrdering::SeqCst),
+        0,
+        "invalid service intent must perform no Kubo or public-head I/O"
     );
     task.abort();
 }
@@ -1803,7 +2182,7 @@ async fn substituted_producer_binding_fails_before_all_publication_io() {
             )
             .expect("seed substituted producer checkpoint");
 
-        let mut service = Service::from_view(view, test_runtime_providers(provider))
+        let mut service = Service::from_view(view.clone(), test_runtime_providers(&view, provider))
             .await
             .expect("construct service without performing public I/O");
         let error = service
@@ -1854,7 +2233,7 @@ async fn replaced_source_or_state_root_fails_before_all_publication_io() {
 
         let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
         seed_producer_checkpoint(&provider, &source_dir, &source);
-        let mut service = Service::from_view(view, test_runtime_providers(provider))
+        let mut service = Service::from_view(view.clone(), test_runtime_providers(&view, provider))
             .await
             .expect("construct service with pinned source and state roots");
         let replaced = if replaced_role == "source" {
@@ -1905,8 +2284,11 @@ async fn service_rejects_configured_provider_qualification_substitution_before_s
     view.service.ipfs_authenticator_policy_digest = Some([0x99; 32]);
 
     let error = Service::from_view(
-        view,
-        test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        view.clone(),
+        test_runtime_providers(
+            &view,
+            Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE)),
+        ),
     )
     .await
     .err()
@@ -1914,7 +2296,7 @@ async fn service_rejects_configured_provider_qualification_substitution_before_s
     assert!(
         error
             .to_string()
-            .contains("qualification does not match configuration")
+            .contains("qualification or ingress binding does not match configuration")
     );
     assert!(
         !state_dir.exists(),
@@ -1972,7 +2354,7 @@ async fn runtime_registry_failures_precede_service_state() {
     ] {
         let registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
             Arc::new(TestRuntimeProviderRegistry::returning(
-                test_runtime_providers(Arc::new(TestSealedStore::new(provider_handle))),
+                test_runtime_providers(&view, Arc::new(TestSealedStore::new(provider_handle))),
             ));
         let providers = resolve_runtime_registry_providers(&view, Some(registry))
             .expect("registry returns provider for startup qualification");
@@ -2073,7 +2455,7 @@ async fn service_rejects_stale_providers_before_state_access() {
     stale_store
         .qualification_refuse
         .store(true, AtomicOrdering::SeqCst);
-    let error = Service::from_view(view.clone(), test_runtime_providers(stale_store))
+    let error = Service::from_view(view.clone(), test_runtime_providers(&view, stale_store))
         .await
         .err()
         .expect("stale sealed store must fail startup");

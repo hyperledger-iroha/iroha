@@ -1,4 +1,5 @@
-// Publication recovery tests included from the parent module.
+// Publication recovery, retry, readback, and finalization tests.
+
 #[test]
 fn finalized_chain_time_must_strictly_pass_the_exact_registration_deadline() {
     let (request, broker) = request();
@@ -41,10 +42,15 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
     let store = PublicationJournalStore::open(temp.path()).expect("journal store");
     let engine = PublicationEngine::new(&store);
     let (request, broker) = request();
+    let source = BytesSource(b"runtime-only-car-secret".to_vec());
+    let plan_bytes = source
+        .car_plan(&request.archive_commitment)
+        .expect("fixture wire plan")
+        .canonical_bytes()
+        .expect("canonical fixture plan");
     let operation_id = engine
         .begin_detached(request)
         .expect("persist detached operation");
-    let source = BytesSource(b"runtime-only-car-secret".to_vec());
     let journal_bytes = fs::read(
         temp.path()
             .join(JOURNAL_DIRECTORY)
@@ -56,11 +62,19 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
             .windows(b"runtime-only-car-secret".len())
             .any(|window| window == b"runtime-only-car-secret")
     );
+    assert!(
+        !journal_bytes
+            .windows(plan_bytes.len())
+            .any(|window| window == plan_bytes.as_slice())
+    );
 
     let mut backend = EarlyBackend {
         broker,
         fail_validation_once: true,
         substitute_receipt: true,
+        now_ms: 1_500,
+        receipt_window: None,
+        prepare_calls: 0,
     };
     let error = engine
         .advance_once(operation_id, &source, &mut backend)
@@ -95,6 +109,117 @@ fn retry_and_receipt_substitution_never_advance_the_journal() {
     assert_eq!(unchanged.phase, PublicationPhaseV1::SeedIngress);
     assert_eq!(unchanged.revision, 2);
     assert!(unchanged.staging_receipt.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn future_issued_receipt_waits_within_service_skew_before_registration() {
+    let within = tempdir().expect("within-skew state root");
+    let within_store =
+        PublicationJournalStore::open(within.path()).expect("within-skew journal store");
+    let within_engine = PublicationEngine::new(&within_store);
+    let (within_request, within_broker) = request();
+    let within_operation = within_engine
+        .begin_detached(within_request)
+        .expect("persist within-skew operation");
+    let source = BytesSource(b"canonical-car".to_vec());
+    let now_ms = 1_000;
+    let issued_at_ms = now_ms + MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1;
+    let mut within_backend = EarlyBackend {
+        broker: within_broker,
+        fail_validation_once: false,
+        substitute_receipt: false,
+        now_ms,
+        receipt_window: Some((issued_at_ms, issued_at_ms + 100)),
+        prepare_calls: 0,
+    };
+
+    assert_eq!(
+        within_engine
+            .advance_once(within_operation, &source, &mut within_backend)
+            .expect("validate within-skew operation"),
+        PublicationAdvanceV1::Progressed(PublicationPhaseV1::SeedIngress)
+    );
+    assert_eq!(
+        within_engine
+            .advance_once(within_operation, &source, &mut within_backend)
+            .expect("accept bounded future-issued receipt"),
+        PublicationAdvanceV1::Progressed(PublicationPhaseV1::ArchiveRegistration)
+    );
+    let waiting = within_store
+        .load(within_operation)
+        .expect("future-issued receipt journal");
+    assert_eq!(
+        within_engine
+            .advance_once(within_operation, &source, &mut within_backend)
+            .expect("wait for receipt issue time"),
+        PublicationAdvanceV1::Pending(PublicationPhaseV1::ArchiveRegistration)
+    );
+    assert_eq!(
+        within_store
+            .load(within_operation)
+            .expect("unchanged waiting journal"),
+        waiting
+    );
+    assert_eq!(within_backend.prepare_calls, 0);
+
+    within_backend.now_ms = issued_at_ms;
+    assert_eq!(
+        within_engine
+            .advance_once(within_operation, &source, &mut within_backend)
+            .expect("prepare at the inclusive issue time"),
+        PublicationAdvanceV1::Progressed(PublicationPhaseV1::ArchiveRegistration)
+    );
+    assert_eq!(within_backend.prepare_calls, 1);
+    assert_eq!(
+        within_store
+            .load(within_operation)
+            .expect("prepared registration journal")
+            .archive_registration_attempts
+            .len(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn future_issued_receipt_beyond_service_skew_is_rejected_before_persistence() {
+    let beyond = tempdir().expect("beyond-skew state root");
+    let beyond_store =
+        PublicationJournalStore::open(beyond.path()).expect("beyond-skew journal store");
+    let beyond_engine = PublicationEngine::new(&beyond_store);
+    let (beyond_request, beyond_broker) = request();
+    let beyond_operation = beyond_engine
+        .begin_detached(beyond_request)
+        .expect("persist beyond-skew operation");
+    let source = BytesSource(b"canonical-car".to_vec());
+    let now_ms = 1_000;
+    let beyond_issue = now_ms + MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1 + 1;
+    let mut beyond_backend = EarlyBackend {
+        broker: beyond_broker,
+        fail_validation_once: false,
+        substitute_receipt: false,
+        now_ms,
+        receipt_window: Some((beyond_issue, beyond_issue + 100)),
+        prepare_calls: 0,
+    };
+    beyond_engine
+        .advance_once(beyond_operation, &source, &mut beyond_backend)
+        .expect("validate beyond-skew operation");
+    assert!(matches!(
+        beyond_engine.advance_once(beyond_operation, &source, &mut beyond_backend),
+        Err(PublicationError::InvalidEvidence {
+            phase: PublicationPhaseV1::SeedIngress,
+            ..
+        })
+    ));
+    let rejected = beyond_store
+        .load(beyond_operation)
+        .expect("unchanged beyond-skew journal");
+    assert_eq!(rejected.phase, PublicationPhaseV1::SeedIngress);
+    assert!(rejected.staging_receipt.is_none());
+    assert!(rejected.archive_registration_attempts.is_empty());
+    assert_eq!(beyond_backend.prepare_calls, 0);
 }
 
 #[cfg(unix)]
@@ -154,8 +279,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
     assert_eq!(backend.prepare_calls, 1);
     assert_eq!(backend.registration_calls, 0);
 
-    drop(engine);
-    drop(store);
     let reopened = PublicationJournalStore::open(temp.path()).expect("reopen journal store");
     let resumed = PublicationEngine::new(&reopened);
     let error = resumed
@@ -200,8 +323,6 @@ fn registration_intent_recovers_a_dropped_commit_response_after_expiry_and_resta
     assert_eq!(backend.registration_calls, 2);
     assert_eq!(backend.pin_calls, 0);
 
-    drop(resumed);
-    drop(reopened);
     let pin_store = PublicationJournalStore::open(temp.path()).expect("reopen before pin");
     let pin_resume = PublicationEngine::new(&pin_store);
     assert_eq!(
@@ -249,8 +370,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     assert!(prepared.archive_location_attempts[0].terminal.is_none());
     let first_intent = prepared.archive_location_attempts[0].intent.clone();
 
-    drop(engine);
-    drop(store);
     let submitted_store =
         PublicationJournalStore::open(temp.path()).expect("reopen after preparation");
     let submitted_engine = PublicationEngine::new(&submitted_store);
@@ -270,8 +389,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     );
     assert_eq!(backend.applied_generations, vec![1]);
 
-    drop(submitted_engine);
-    drop(submitted_store);
     let applied_store =
         PublicationJournalStore::open(temp.path()).expect("reopen after applied cut");
     let applied_engine = PublicationEngine::new(&applied_store);
@@ -311,8 +428,6 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
     assert!(retired.replication.is_none());
     assert!(retired.readbacks.is_empty());
 
-    drop(applied_engine);
-    drop(applied_store);
     let replacement_store =
         PublicationJournalStore::open(temp.path()).expect("reopen after retirement");
     let replacement_engine = PublicationEngine::new(&replacement_store);
@@ -367,7 +482,7 @@ fn archive_location_generation_recovers_prepared_submitted_applied_and_retired_c
 
 #[cfg(unix)]
 #[test]
-fn retirement_is_rechecked_before_readback_and_release_submission() {
+fn retirement_is_rechecked_before_replication_and_readback() {
     for (script, expected_phase) in [
         (
             vec![LocationPollV1::Retired],
@@ -376,14 +491,6 @@ fn retirement_is_rechecked_before_readback_and_release_submission() {
         (
             vec![LocationPollV1::Healthy, LocationPollV1::Retired],
             PublicationPhaseV1::Readback,
-        ),
-        (
-            vec![
-                LocationPollV1::Healthy,
-                LocationPollV1::Healthy,
-                LocationPollV1::Retired,
-            ],
-            PublicationPhaseV1::ReleaseSubmission,
         ),
     ] {
         let temp = tempdir().expect("state root");
@@ -421,7 +528,7 @@ fn retirement_is_rechecked_before_readback_and_release_submission() {
 
 #[cfg(unix)]
 #[test]
-fn stale_healthy_poll_preserves_the_journal_and_exact_or_newer_revisions_resume() {
+fn selected_location_renewal_requires_terminal_rotation_and_fresh_readbacks() {
     let temp = tempdir().expect("state root");
     let store = PublicationJournalStore::open(temp.path()).expect("journal store");
     let engine = PublicationEngine::new(&store);
@@ -488,27 +595,27 @@ fn stale_healthy_poll_preserves_the_journal_and_exact_or_newer_revisions_resume(
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
-            .expect("newer healthy revision returns to readback"),
-        PublicationAdvanceV1::Progressed(PublicationPhaseV1::Readback)
+            .expect("changed selected location keeps the stale-readback intent unsent"),
+        PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
     );
-    let newer = store.load(operation_id).expect("newer journal");
+    let guarded = store.load(operation_id).expect("guarded journal");
     assert_eq!(
-        newer
+        guarded.release_submission_attempts[0]
+            .intent
+            .preparation
             .replication
-            .as_ref()
-            .expect("newer replication")
             .finalized_page
             .items[0]
             .revision,
-        4
+        3
     );
-    assert!(newer.readbacks.is_empty());
-    assert!(newer.submission.is_none());
+    assert_eq!(backend.release_preparations, 1);
+    assert_eq!(backend.release_submissions, 0);
 }
 
 #[cfg(unix)]
 #[test]
-fn stale_healthy_poll_in_release_submission_preserves_checkpoint_and_readbacks() {
+fn stale_pre_send_poll_preserves_the_live_intent_and_replays_identical_bytes() {
     let temp = tempdir().expect("state root");
     let store = PublicationJournalStore::open(temp.path()).expect("journal store");
     let engine = PublicationEngine::new(&store);
@@ -547,6 +654,8 @@ fn stale_healthy_poll_in_release_submission_preserves_checkpoint_and_readbacks()
         guarded
     );
     assert_eq!(backend.release_submissions, 0);
+    assert_eq!(backend.release_preparations, 1);
+    assert_eq!(backend.release_intents.len(), 1);
 
     assert_eq!(
         engine
@@ -555,11 +664,70 @@ fn stale_healthy_poll_in_release_submission_preserves_checkpoint_and_readbacks()
         PublicationAdvanceV1::Progressed(PublicationPhaseV1::FinalVerification)
     );
     assert_eq!(backend.release_submissions, 1);
+    assert_eq!(backend.release_preparations, 1);
+    assert_eq!(backend.release_intents.len(), 2);
+    assert_eq!(backend.release_intents[0], backend.release_intents[1]);
 }
 
 #[cfg(unix)]
 #[test]
-fn page_only_release_advance_is_journaled_before_submission_without_dropping_readbacks() {
+fn authoritative_pending_status_never_resigns_or_replaces_the_live_transaction() {
+    let temp = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+    let engine = PublicationEngine::new(&store);
+    let (request, broker) = request();
+    let operation_id = engine
+        .begin_detached(request)
+        .expect("persist detached operation");
+    let source = BytesSource(b"canonical-car".to_vec());
+    let mut backend = LocationRecoveryBackend::new(
+        broker,
+        [
+            LocationPollV1::Healthy,
+            LocationPollV1::Healthy,
+            LocationPollV1::Healthy,
+            LocationPollV1::Healthy,
+            LocationPollV1::Healthy,
+        ],
+    );
+    backend.release_pending_responses = 2;
+    for step in 0..8 {
+        engine
+            .advance_once(operation_id, &source, &mut backend)
+            .unwrap_or_else(|error| panic!("reach release submission step {step}: {error}"));
+    }
+    let live = store.load(operation_id).expect("live release journal");
+    let digest = live.release_submission_attempts[0]
+        .intent
+        .signed_transaction_digest;
+
+    for _ in 0..2 {
+        assert_eq!(
+            engine
+                .advance_once(operation_id, &source, &mut backend)
+                .expect("pending exact status remains retryable"),
+            PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
+        );
+        assert_eq!(store.load(operation_id).expect("unchanged journal"), live);
+    }
+    assert_eq!(backend.release_preparations, 1);
+    assert_eq!(backend.release_submissions, 0);
+    assert_eq!(backend.release_intents, vec![digest, digest]);
+
+    assert_eq!(
+        engine
+            .advance_once(operation_id, &source, &mut backend)
+            .expect("the same exact transaction is eventually applied"),
+        PublicationAdvanceV1::Progressed(PublicationPhaseV1::FinalVerification)
+    );
+    assert_eq!(backend.release_preparations, 1);
+    assert_eq!(backend.release_submissions, 1);
+    assert_eq!(backend.release_intents, vec![digest, digest, digest]);
+}
+
+#[cfg(unix)]
+#[test]
+fn lost_release_response_restarts_from_the_same_journaled_transaction() {
     let temp = tempdir().expect("state root");
     let store = PublicationJournalStore::open(temp.path()).expect("journal store");
     let engine = PublicationEngine::new(&store);
@@ -585,51 +753,47 @@ fn page_only_release_advance_is_journaled_before_submission_without_dropping_rea
     }
     let before = store.load(operation_id).expect("release journal");
     assert_eq!(before.phase, PublicationPhaseV1::ReleaseSubmission);
+    let exact_digest = before.release_submission_attempts[0]
+        .intent
+        .signed_transaction_digest;
+    backend.drop_release_response_once = true;
 
+    let error = engine
+        .advance_once(operation_id, &source, &mut backend)
+        .expect_err("a lost response leaves the exact live intent durable");
+    assert!(matches!(
+        error,
+        PublicationError::Backend(ref error)
+            if error.code() == "RELEASE_COMMIT_RESPONSE_DROPPED"
+    ));
+    assert_eq!(store.load(operation_id).expect("unchanged journal"), before);
+    assert_eq!(backend.release_preparations, 1);
+    assert_eq!(backend.release_submissions, 1);
+    let reopened_store =
+        PublicationJournalStore::open(temp.path()).expect("reopen publication journal");
+    let reopened_engine = PublicationEngine::new(&reopened_store);
     assert_eq!(
-        engine
+        reopened_engine
             .advance_once(operation_id, &source, &mut backend)
-            .expect("persist complete advanced directory"),
-        PublicationAdvanceV1::Progressed(PublicationPhaseV1::ReleaseSubmission)
-    );
-    let checkpointed = store
-        .load(operation_id)
-        .expect("advanced checkpoint journal");
-    assert_ne!(checkpointed.replication, before.replication);
-    assert_eq!(checkpointed.readbacks, before.readbacks);
-    assert_eq!(backend.release_submissions, 0);
-
-    assert_eq!(
-        engine
-            .advance_once(operation_id, &source, &mut backend)
-            .expect("exact advanced page permits release submission"),
+            .expect("status-first recovery observes the exact applied transaction"),
         PublicationAdvanceV1::Progressed(PublicationPhaseV1::FinalVerification)
     );
     assert_eq!(backend.release_submissions, 1);
+    assert_eq!(backend.release_preparations, 1);
+    assert_eq!(backend.release_intents, vec![exact_digest, exact_digest]);
 }
 
 #[cfg(unix)]
 #[test]
-fn stale_retirement_is_pending_in_readback_and_release_submission() {
-    for (script, guarded_phase) in [
-        (
-            vec![
-                LocationPollV1::HealthyRevisionOffset(2),
-                LocationPollV1::Retired,
-                LocationPollV1::RetiredRevisionOffset(2),
-            ],
-            PublicationPhaseV1::Readback,
-        ),
-        (
-            vec![
-                LocationPollV1::HealthyRevisionOffset(2),
-                LocationPollV1::HealthyRevisionOffset(2),
-                LocationPollV1::Retired,
-                LocationPollV1::RetiredRevisionOffset(2),
-            ],
-            PublicationPhaseV1::ReleaseSubmission,
-        ),
-    ] {
+fn stale_retirement_is_pending_in_readback() {
+    for (script, guarded_phase) in [(
+        vec![
+            LocationPollV1::HealthyRevisionOffset(2),
+            LocationPollV1::Retired,
+            LocationPollV1::RetiredRevisionOffset(2),
+        ],
+        PublicationPhaseV1::Readback,
+    )] {
         let temp = tempdir().expect("state root");
         let store = PublicationJournalStore::open(temp.path()).expect("journal store");
         let engine = PublicationEngine::new(&store);
@@ -735,27 +899,45 @@ fn stale_post_rejection_retirement_preserves_the_latest_checkpoint() {
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
+            .expect("persist the exact rejected transaction outcome"),
+        PublicationAdvanceV1::Progressed(PublicationPhaseV1::ReleaseSubmission)
+    );
+    let terminal = store.load(operation_id).expect("terminal release journal");
+    assert_ne!(terminal, guarded);
+    assert!(matches!(
+        terminal.release_submission_attempts[0].outcome,
+        Some(PublicationReleaseSubmissionOutcomeV1::Terminal(_))
+    ));
+    assert_eq!(backend.release_submissions, 1);
+
+    assert_eq!(
+        engine
+            .advance_once(operation_id, &source, &mut backend)
             .expect("stale post-rejection retirement remains retryable"),
         PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
     );
     assert_eq!(
         store.load(operation_id).expect("unchanged journal"),
-        guarded
+        terminal
     );
-    assert_eq!(backend.release_submissions, 1);
-
+    assert_eq!(
+        engine
+            .advance_once(operation_id, &source, &mut backend)
+            .expect("unchanged location cannot authorize a new signature"),
+        PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
+    );
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
             .expect("later post-rejection retirement permits rotation"),
         PublicationAdvanceV1::Progressed(PublicationPhaseV1::ArchiveRegistration)
     );
-    assert_eq!(backend.release_submissions, 2);
+    assert_eq!(backend.release_submissions, 1);
 }
 
 #[cfg(unix)]
 #[test]
-fn stale_post_rejection_healthy_page_is_pending_but_current_state_keeps_rejection() {
+fn rejected_release_never_resigns_against_stale_or_unchanged_location_state() {
     let temp = tempdir().expect("state root");
     let store = PublicationJournalStore::open(temp.path()).expect("journal store");
     let engine = PublicationEngine::new(&store);
@@ -786,28 +968,32 @@ fn stale_post_rejection_healthy_page_is_pending_but_current_state_keeps_rejectio
     assert_eq!(
         engine
             .advance_once(operation_id, &source, &mut backend)
-            .expect("stale post-rejection healthy page remains retryable"),
+            .expect("persist the authoritative rejection and exact absence"),
+        PublicationAdvanceV1::Progressed(PublicationPhaseV1::ReleaseSubmission)
+    );
+    let terminal = store.load(operation_id).expect("terminal release journal");
+    assert_ne!(terminal, guarded);
+    assert_eq!(backend.release_submissions, 1);
+    assert_eq!(backend.release_preparations, 1);
+
+    assert_eq!(
+        engine
+            .advance_once(operation_id, &source, &mut backend)
+            .expect("stale post-rejection page remains retryable"),
         PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
     );
     assert_eq!(
         store.load(operation_id).expect("unchanged journal"),
-        guarded
+        terminal
+    );
+    assert_eq!(
+        engine
+            .advance_once(operation_id, &source, &mut backend)
+            .expect("unchanged current location cannot authorize a successor"),
+        PublicationAdvanceV1::Pending(PublicationPhaseV1::ReleaseSubmission)
     );
     assert_eq!(backend.release_submissions, 1);
-
-    let error = engine
-        .advance_once(operation_id, &source, &mut backend)
-        .expect_err("current location state preserves the release rejection");
-    assert!(matches!(
-        error,
-        PublicationError::Backend(ref error)
-            if error.code() == "RELEASE_SUBMISSION_TRANSACTION_REJECTED"
-    ));
-    assert_eq!(
-        store.load(operation_id).expect("unchanged journal"),
-        guarded
-    );
-    assert_eq!(backend.release_submissions, 2);
+    assert_eq!(backend.release_preparations, 1);
 }
 
 #[test]
@@ -863,6 +1049,12 @@ fn rejected_release_rotates_only_after_post_rejection_retirement_evidence() {
     assert_eq!(
         store.load(operation_id).expect("release journal").phase,
         PublicationPhaseV1::ReleaseSubmission
+    );
+    assert_eq!(
+        engine
+            .advance_once(operation_id, &source, &mut backend)
+            .expect("persist exact rejection before any location rotation"),
+        PublicationAdvanceV1::Progressed(PublicationPhaseV1::ReleaseSubmission)
     );
     assert_eq!(
         engine
@@ -964,8 +1156,6 @@ fn expired_unsubmitted_intent_rotates_only_after_authoritative_terminal_absence(
     let first_attempt = before_crash.archive_registration_attempts[0].clone();
     assert_eq!(backend.registration_calls, 0);
 
-    drop(engine);
-    drop(store);
     backend.now_ms = first_attempt.intent.staging_receipt.payload.expires_at_ms + 1;
     let reopened = PublicationJournalStore::open(temp.path()).expect("reopen journal store");
     let resumed = PublicationEngine::new(&reopened);
@@ -1171,6 +1361,7 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
         let generation = u8::try_from(generation).expect("generation fits u8");
         let registration =
             location_registration_generation(operation_id, &request, &registered, generation);
+        let replication = replication_checkpoint(&request, &registration, 3);
         let terminal = retired_location_terminal(&registration);
         journal
             .archive_location_attempts
@@ -1179,7 +1370,9 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
                 intent: registration.intent.clone(),
                 registration: Some(registration),
                 terminal: Some(terminal),
-                terminal_floor: Some(PublicationArchiveLocationTerminalFloorV1::Registered),
+                terminal_floor: Some(PublicationArchiveLocationTerminalFloorV1::Replication(
+                    replication,
+                )),
             });
     }
     journal
@@ -1188,6 +1381,14 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
     let encoded = norito::encode_canonical(&journal).expect("encode bounded journal");
     assert!(encoded.len() <= MAX_JOURNAL_BYTES_USIZE);
     store.write(&journal).expect("persist bounded journal");
+    let persisted_bytes = fs::metadata(temp.path().join(journal_relative_path(operation_id)))
+        .expect("bounded journal metadata")
+        .len();
+    assert!(persisted_bytes <= MAX_JOURNAL_BYTES);
+    assert_eq!(
+        store.load(operation_id).expect("reload bounded journal"),
+        journal
+    );
 
     let mut rewritten = journal.clone();
     rewritten.archive_location_attempts[0]
@@ -1204,6 +1405,7 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
         u8::try_from(MUSUBI_MAX_ARCHIVE_LOCATION_ATTEMPTS_V1 + 1).expect("ninth fits u8");
     let registration =
         location_registration_generation(operation_id, &request, &registered, generation);
+    let replication = replication_checkpoint(&request, &registration, 3);
     let terminal = retired_location_terminal(&registration);
     let mut oversized = journal;
     oversized
@@ -1213,7 +1415,9 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
             intent: registration.intent.clone(),
             registration: Some(registration),
             terminal: Some(terminal),
-            terminal_floor: Some(PublicationArchiveLocationTerminalFloorV1::Registered),
+            terminal_floor: Some(PublicationArchiveLocationTerminalFloorV1::Replication(
+                replication,
+            )),
         });
     assert!(matches!(
         oversized.validate(),
@@ -1224,6 +1428,10 @@ fn archive_location_attempt_generation_is_bounded_and_encoded_below_journal_limi
 
 #[cfg(unix)]
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the test covers substitution at each terminal-to-replacement snapshot boundary"
+)]
 fn terminal_and_replacement_pages_reject_same_snapshot_or_revision_substitution() {
     let (request, broker) = request();
     let operation_id = request.operation_id();
@@ -1486,6 +1694,9 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
         replication_pending_once: true,
         finality_pending_once: true,
         substitute_readback: false,
+        substitute_all_readbacks: false,
+        readback_backend_failure: None,
+        readback_providers: Vec::new(),
         submissions: 0,
     };
 
@@ -1529,7 +1740,7 @@ fn detached_resume_crosses_all_seven_phases_and_reuses_amx_submission() {
 
 #[cfg(unix)]
 #[test]
-fn trait_backed_readback_substitution_stops_before_amx() {
+fn trait_backed_readback_skips_corrupt_provider_and_uses_later_quorum() {
     let temp = tempdir().expect("state root");
     let store = PublicationJournalStore::open(temp.path()).expect("journal store");
     let engine = PublicationEngine::new(&store);
@@ -1541,19 +1752,161 @@ fn trait_backed_readback_substitution_stops_before_amx() {
         replication_pending_once: false,
         finality_pending_once: false,
         substitute_readback: true,
+        substitute_all_readbacks: false,
+        readback_backend_failure: None,
+        readback_providers: Vec::new(),
         submissions: 0,
     };
     assert!(matches!(
-        engine.publish(request, &source, &mut backend),
-        Err(PublicationError::InvalidEvidence {
+        engine
+            .publish(request, &source, &mut backend)
+            .expect("later providers satisfy the readback floor"),
+        PublicationAdvanceV1::Complete(_)
+    ));
+    assert_eq!(backend.submissions, 1);
+    assert_eq!(
+        backend.readback_providers,
+        vec![
+            ProviderId::new([1; 32]),
+            ProviderId::new([2; 32]),
+            ProviderId::new([3; 32]),
+        ]
+    );
+    let journal = store.load(operation_id).expect("completed journal");
+    assert_eq!(
+        journal
+            .readbacks
+            .iter()
+            .map(|readback| readback.provider)
+            .collect::<Vec<_>>(),
+        vec![ProviderId::new([2; 32]), ProviderId::new([3; 32])]
+    );
+    journal.validate().expect("fallback journal remains valid");
+}
+
+#[cfg(unix)]
+#[test]
+fn trait_backed_invalid_readback_quorum_stops_before_amx_without_journal_mutation() {
+    let temp = tempdir().expect("state root");
+    let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+    let engine = PublicationEngine::new(&store);
+    let (request, broker) = request();
+    let operation_id = request.operation_id();
+    let source = BytesSource(b"canonical-car".to_vec());
+    let mut backend = CompleteBackend {
+        broker,
+        replication_pending_once: false,
+        finality_pending_once: false,
+        substitute_readback: false,
+        substitute_all_readbacks: true,
+        readback_backend_failure: None,
+        readback_providers: Vec::new(),
+        submissions: 0,
+    };
+
+    let error = engine
+        .publish(request, &source, &mut backend)
+        .expect_err("invalid providers cannot authorize AMX submission");
+    let PublicationError::InvalidEvidence { phase, reason } = error else {
+        panic!("substituted provider evidence must retain its integrity classification");
+    };
+    assert_eq!(phase, PublicationPhaseV1::Readback);
+    assert_eq!(reason, "provider readback evidence was substituted");
+    assert_eq!(backend.submissions, 0);
+    assert_eq!(
+        backend.readback_providers,
+        vec![
+            ProviderId::new([1; 32]),
+            ProviderId::new([2; 32]),
+            ProviderId::new([3; 32]),
+        ]
+    );
+    let unchanged = store.load(operation_id).expect("readback journal");
+    assert_eq!(unchanged.phase, PublicationPhaseV1::Readback);
+    assert!(unchanged.readbacks.is_empty());
+    assert!(unchanged.release_submission_attempts.is_empty());
+    assert!(unchanged.submission.is_none());
+    unchanged
+        .validate()
+        .expect("failed readbacks leave a valid journal");
+
+    let error = engine
+        .resume(operation_id, &source, &mut backend)
+        .expect_err("retry still lacks two valid providers");
+    assert!(matches!(
+        error,
+        PublicationError::InvalidEvidence {
             phase: PublicationPhaseV1::Readback,
             ..
-        })
+        }
     ));
+    assert_eq!(
+        store.load(operation_id).expect("retried readback journal"),
+        unchanged
+    );
     assert_eq!(backend.submissions, 0);
-    let journal = store.load(operation_id).expect("readback journal");
-    assert_eq!(journal.phase, PublicationPhaseV1::Readback);
-    assert!(journal.readbacks.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn trait_backed_readback_exhaustion_preserves_backend_failure_class_and_code() {
+    for (class, code) in [
+        (
+            PublicationBackendFailureClass::Permanent,
+            "READBACK_AUTHENTICATION_FAILED",
+        ),
+        (
+            PublicationBackendFailureClass::Retryable,
+            "READBACK_PROVIDER_TIMEOUT",
+        ),
+    ] {
+        let temp = tempdir().expect("state root");
+        let store = PublicationJournalStore::open(temp.path()).expect("journal store");
+        let engine = PublicationEngine::new(&store);
+        let (request, broker) = request();
+        let operation_id = request.operation_id();
+        let source = BytesSource(b"canonical-car".to_vec());
+        let failure = match class {
+            PublicationBackendFailureClass::Retryable => PublicationBackendError::retryable(code),
+            PublicationBackendFailureClass::Permanent => PublicationBackendError::permanent(code),
+        };
+        let mut backend = CompleteBackend {
+            broker,
+            replication_pending_once: false,
+            finality_pending_once: false,
+            substitute_readback: false,
+            substitute_all_readbacks: true,
+            readback_backend_failure: Some((ProviderId::new([1; 32]), failure)),
+            readback_providers: Vec::new(),
+            submissions: 0,
+        };
+
+        let error = engine
+            .publish(request, &source, &mut backend)
+            .expect_err("one backend failure plus invalid evidence cannot authorize AMX");
+        let PublicationError::Backend(error) = error else {
+            panic!("backend failure must retain its redacted classification");
+        };
+        assert_eq!(error.class(), class);
+        assert_eq!(error.code(), code);
+        assert_eq!(backend.submissions, 0);
+        assert_eq!(
+            backend.readback_providers,
+            vec![
+                ProviderId::new([1; 32]),
+                ProviderId::new([2; 32]),
+                ProviderId::new([3; 32]),
+            ]
+        );
+        let unchanged = store.load(operation_id).expect("readback journal");
+        assert_eq!(unchanged.phase, PublicationPhaseV1::Readback);
+        assert!(unchanged.readbacks.is_empty());
+        assert!(unchanged.release_submission_attempts.is_empty());
+        assert!(unchanged.submission.is_none());
+        unchanged
+            .validate()
+            .expect("failed readbacks leave a valid journal");
+    }
 }
 
 #[cfg(unix)]
@@ -1579,6 +1932,9 @@ fn journal_rejects_missing_phase_evidence_and_tampered_receipt_signature() {
         broker,
         fail_validation_once: false,
         substitute_receipt: false,
+        now_ms: 1_500,
+        receipt_window: None,
+        prepare_calls: 0,
     };
     assert!(matches!(
         engine
@@ -1724,15 +2080,13 @@ fn journal_rejects_a_refreshed_receipt_after_archive_registration() {
     journal.phase = PublicationPhaseV1::Replication;
     assert!(matches!(
         journal.validate(),
-        Err(PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::ArchiveRegistration,
-            ..
-        })
+        Err(PublicationError::InvalidJournal(ref reason))
+            if reason.contains("exact staging receipt")
     ));
 }
 
 #[test]
-fn replication_requires_three_exact_finalized_provider_attestations() {
+fn replication_requires_three_exact_finalized_providers() {
     let (request, broker) = request();
     let registration = registration(&request, &broker);
     let intent = registration_intent(
@@ -1826,10 +2180,8 @@ fn replication_requires_three_exact_finalized_provider_attestations() {
     ));
 
     let mut substituted = exact;
-    substituted.provider_attestations[1]
-        .payload
-        .binding
-        .semantic_release_manifest_digest = MusubiSemanticReleaseDigestV1::new([0xEE; 32]);
+    substituted.provider_attestation_set_digest =
+        MusubiProviderBundleAttestationSetDigestV1::new([0xEE; 32]);
     assert!(matches!(
         validate_replication(&request, &registration, &substituted),
         Err(PublicationError::InvalidEvidence {
@@ -1840,6 +2192,10 @@ fn replication_requires_three_exact_finalized_provider_attestations() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the test checks the complete revision and snapshot substitution matrix for location checkpoints"
+)]
 fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
     let (request, broker) = request();
     let registration = registration(&request, &broker);
@@ -2013,6 +2369,65 @@ fn readback_rejects_provider_or_commitment_substitution() {
 }
 
 #[test]
+fn release_preparation_requires_a_sorted_distinct_location_provider_subset() {
+    let (request, broker) = request();
+    let registration = registration(&request, &broker);
+    let replication = replication_checkpoint(&request, &registration, 3);
+    let location = replication
+        .location(&registration)
+        .expect("fixture location");
+    let readback_for = |provider| PublicationReadbackEvidenceV1 {
+        provider,
+        location_id: location.location_id,
+        replication_order: location.replication_order,
+        commitment: request.archive_commitment.clone(),
+        semantic_release_digest: request.publication.manifest.semantic_digest(),
+        verification_lock_digest: request.publication.manifest.verification_lock_digest,
+    };
+    let later_subset = vec![
+        readback_for(location.providers[1]),
+        readback_for(location.providers[2]),
+    ];
+    PublicationReleasePreparationFloorV1::try_new(
+        registration.intent.generation,
+        replication.clone(),
+        later_subset.clone(),
+        &request,
+        &registration,
+    )
+    .expect("any sorted two-provider location subset is valid");
+
+    let assert_rejected = |readbacks| {
+        assert!(matches!(
+            PublicationReleasePreparationFloorV1::try_new(
+                registration.intent.generation,
+                replication.clone(),
+                readbacks,
+                &request,
+                &registration,
+            ),
+            Err(PublicationError::InvalidEvidence {
+                phase: PublicationPhaseV1::Readback,
+                ref reason,
+            }) if reason
+                == "provider readbacks were not a strictly ordered distinct location-provider subset"
+        ));
+    };
+
+    let mut duplicate = later_subset.clone();
+    duplicate[1] = duplicate[0].clone();
+    assert_rejected(duplicate);
+
+    let mut unsorted = later_subset.clone();
+    unsorted.swap(0, 1);
+    assert_rejected(unsorted);
+
+    let mut nonmember = later_subset;
+    nonmember[1].provider = ProviderId::new([0xFE; 32]);
+    assert_rejected(nonmember);
+}
+
+#[test]
 fn amx_and_final_index_evidence_bind_the_exact_release() {
     let (request, _) = request();
     let operation_id = request.operation_id();
@@ -2048,6 +2463,42 @@ fn amx_and_final_index_evidence_bind_the_exact_release() {
     later_unrelated_snapshot
         .validate_for(&request, &exact_submission)
         .expect("an unrelated later registry revision must not invalidate the exact row");
+    let mut older_storage_projection = exact_final.clone();
+    older_storage_projection
+        .universal_release
+        .selection
+        .storage
+        .index_revision -= 1;
+    older_storage_projection
+        .validate_for(&request, &exact_submission)
+        .expect("a row may retain an older valid storage projection");
+    let mut future_storage_projection = exact_final.clone();
+    future_storage_projection
+        .universal_release
+        .selection
+        .storage
+        .index_revision += 1;
+    assert!(
+        future_storage_projection
+            .validate_for(&request, &exact_submission)
+            .is_err()
+    );
+    let mut mismatched_tip_storage = exact_final.clone();
+    mismatched_tip_storage
+        .universal_release
+        .selection
+        .storage
+        .finalized_height = mismatched_tip_storage.snapshot.finalized_height;
+    mismatched_tip_storage
+        .universal_release
+        .selection
+        .storage
+        .finalized_block_hash = [0x77; 32];
+    assert!(
+        mismatched_tip_storage
+            .validate_for(&request, &exact_submission)
+            .is_err()
+    );
     let mut pre_application_snapshot = exact_final.clone();
     pre_application_snapshot.snapshot.finalized_height = exact_submission.applied_height - 1;
     pre_application_snapshot.snapshot.finalized_block_hash = [0x76; 32];
@@ -2094,14 +2545,6 @@ fn detached_operation_ids_are_canonical_nonzero_lowercase_hex() {
 }
 
 #[test]
-fn publication_request_rejects_an_empty_chain_identity() {
-    let (mut request, _) = request();
-    request.chain_id = ChainId::from("");
-    assert!(matches!(
-        request.validate(),
-        Err(PublicationError::InvalidEvidence {
-            phase: PublicationPhaseV1::Validation,
-            ..
-        })
-    ));
+fn empty_chain_identity_is_rejected_before_publication_request_construction() {
+    assert!(ChainId::try_from(String::new()).is_err());
 }

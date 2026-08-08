@@ -8,7 +8,7 @@ use std::{
 };
 
 const INVENTORY: &str = include_str!("../../../scripts/ivm_artifacts.tsv");
-const EXPECTED_ARTIFACTS: usize = 75;
+const EXPECTED_ARTIFACTS: usize = 59;
 
 #[derive(Debug)]
 struct Artifact<'a> {

@@ -21,12 +21,16 @@ Sumeragi evidence audit endpoints.
 - Evidence with a subject height older than `sumeragi.npos.reconfig.evidence_horizon_blocks`
   (default 7 200) is dropped on ingress; the actor logs the rejection to help operators
   investigate stale submissions.
-- POST `/v1/sumeragi/evidence`
-  - Submit hex-encoded Norito evidence to the Sumeragi actor (`ControlFlow::Evidence`).
-  - Request body (JSON): `{ "evidence_hex": "<hex string>" }`; the hex string encodes Norito-framed `ConsensusEvidence` bytes and ignores whitespace.
-  - Response (JSON): `{ "status": "accepted", "kind": "<variant>" }` on success.
-  - Validation covers signer/height/view/epoch equality for double-vote payloads, requires non-empty single-signer payloads, enforces receipt quorums for `Censorship` evidence (signed `TransactionSubmissionReceipt` payloads), and rejects `InvalidProposal` records that fail to advance height or whose parent hash disagrees with the embedded commit certificate. `SumeragiV2Equivocation` retains the frozen height context, roster-ordered BLS proofs of possession, and the exact two signed proposal, phase-vote, or timeout-vote artifacts; validators canonicalize pair order, anchor the context to immutable committed v2 finality/context history, reverify every PoP, both signatures, and referenced current-context certificates, and deduplicate the durable WSV key across restart replay. Proposers may attach up to eight canonically ordered exact proofs (at most 4 MiB encoded) to a signed block. Followers validate those proofs without relying on local gossip, reject stale, future, forged, unanchored, duplicate, reordered, oversized, or previously admitted batches, and only derive penalties from admissions committed by an earlier block.
-  - CLI helper: `iroha ops sumeragi evidence submit --evidence-hex <hex>` or `--evidence-hex-file <path>`.
+
+Evidence mutation is not an HTTP or CLI operation. Evidence enters through the
+authenticated consensus peer path and, for exact v2 equivocation proofs,
+through canonically ordered proof batches bound to signed blocks. Validators
+anchor the frozen height context only to cryptographically verified committed
+v2 finality history (never the structural recovery context store), then reverify
+roster-ordered proofs of possession, both artifact signatures, referenced
+current-context certificates, the evidence horizon, canonical ordering, batch
+bounds, and the durable deduplication key before admission. Torii and the SDKs
+expose only the two read-only audit endpoints above.
 
 Additional consensus status and commit QC proofs
 

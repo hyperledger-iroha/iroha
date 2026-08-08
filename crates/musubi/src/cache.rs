@@ -4,7 +4,7 @@
 //! [`ArchiveId`]. Consumer lockfiles never supply a filesystem path. Incoming
 //! CAR bytes are checked incrementally against the finalized archive
 //! commitment, their raw payload is written to a private temporary file, and
-//! the validated SoraFS file plan materializes the source tree. Publication is
+//! the validated `SoraFS` file plan materializes the source tree. Publication is
 //! an absent-destination atomic rename, so readers observe either no entry or a
 //! complete immutable `src` directory.
 //!
@@ -66,6 +66,7 @@ const RAW_CODEC: u64 = 0x55;
 const DAG_CBOR_CODEC: u64 = 0x71;
 const BLAKE3_MULTIHASH: u64 = 0x1f;
 const CID_DIGEST_BYTES: u64 = 32;
+const CID_DIGEST_BYTES_USIZE: usize = 32;
 const IO_BUFFER_BYTES: usize = 64 * 1024;
 const DESCRIPTOR_MAX_BYTES: u64 = 64 * 1024;
 const BUNDLE_METADATA_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -94,6 +95,69 @@ const FILE_SHARE_DELETE: u32 = 0x4;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+const CACHE_INSTALL_CRASH_CUT_ENV_V1: &str = "IROHA_MUSUBI_TEST_CACHE_INSTALL_CRASH_CUT_V1";
+#[cfg(all(test, unix))]
+const CACHE_INSTALL_CRASH_ROOT_ENV_V1: &str = "IROHA_MUSUBI_TEST_CACHE_INSTALL_CRASH_ROOT_V1";
+#[cfg(test)]
+const CACHE_INSTALL_CRASH_EXIT_CODE_V1: i32 = 86;
+
+/// Test-only abrupt process cuts at cache-install mutation and durability boundaries.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheInstallCrashCutV1 {
+    VerifiedPayloadWritten,
+    VerifiedPayloadSynced,
+    SourceChunkWritten,
+    SourceFileSynced,
+    PayloadRemoved,
+    SourceTreeVerified,
+    SourceTreeSynced,
+    SourceTreePublished,
+    ArchiveDirectorySynced,
+}
+
+#[cfg(test)]
+impl CacheInstallCrashCutV1 {
+    #[cfg(unix)]
+    const ALL: [Self; 9] = [
+        Self::VerifiedPayloadWritten,
+        Self::VerifiedPayloadSynced,
+        Self::SourceChunkWritten,
+        Self::SourceFileSynced,
+        Self::PayloadRemoved,
+        Self::SourceTreeVerified,
+        Self::SourceTreeSynced,
+        Self::SourceTreePublished,
+        Self::ArchiveDirectorySynced,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::VerifiedPayloadWritten => "verified_payload_written",
+            Self::VerifiedPayloadSynced => "verified_payload_synced",
+            Self::SourceChunkWritten => "source_chunk_written",
+            Self::SourceFileSynced => "source_file_synced",
+            Self::PayloadRemoved => "payload_removed",
+            Self::SourceTreeVerified => "source_tree_verified",
+            Self::SourceTreeSynced => "source_tree_synced",
+            Self::SourceTreePublished => "source_tree_published",
+            Self::ArchiveDirectorySynced => "archive_directory_synced",
+        }
+    }
+}
+
+#[cfg(test)]
+fn crash_cache_install_at(cut: CacheInstallCrashCutV1) {
+    if std::env::var_os(CACHE_INSTALL_CRASH_CUT_ENV_V1)
+        .is_some_and(|value| value == std::ffi::OsStr::new(cut.label()))
+    {
+        // Exit without unwinding so `InstallGuard` cannot clean temporary state. This is the
+        // filesystem state a fresh process must recover from after an abrupt termination.
+        std::process::exit(CACHE_INSTALL_CRASH_EXIT_CODE_V1);
+    }
+}
+
 /// Return the one platform-derived user cache root shared by fetch and compiler workflows.
 ///
 /// The returned root is `~/Library/Caches/Iroha/musubi` on macOS,
@@ -107,27 +171,27 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub fn platform_cache_root_v1() -> Result<PathBuf, CacheError> {
     #[cfg(target_os = "macos")]
     {
-        return derive_platform_cache_root(
+        derive_platform_cache_root(
             std::env::var_os("HOME").map(PathBuf::from),
             &["Library", "Caches", "Iroha", "musubi"],
-        );
+        )
     }
     #[cfg(windows)]
     {
-        return derive_platform_cache_root(
+        derive_platform_cache_root(
             std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
             &["Iroha", "musubi", "cache"],
-        );
+        )
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         if let Some(root) = std::env::var_os("XDG_CACHE_HOME") {
             return derive_platform_cache_root(Some(PathBuf::from(root)), &["iroha", "musubi"]);
         }
-        return derive_platform_cache_root(
+        derive_platform_cache_root(
             std::env::var_os("HOME").map(PathBuf::from),
             &[".cache", "iroha", "musubi"],
-        );
+        )
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -249,7 +313,7 @@ pub enum CacheError {
     },
     /// The configured cache root is not a stable private directory.
     UnsafeRoot(String),
-    /// The archive commitment and SoraFS plan disagree.
+    /// The archive commitment and `SoraFS` plan disagree.
     InvalidPlan(String),
     /// Incoming CAR bytes did not match the finalized commitment.
     InvalidArchive(String),
@@ -509,13 +573,17 @@ impl MusubiCache {
             staging_path.clone(),
             staging_metadata,
             payload_path.clone(),
-            payload_metadata,
+            &payload_metadata,
         );
 
         stream_and_verify_car(reader, commitment, plan, &mut payload_file)?;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::VerifiedPayloadWritten);
         payload_file
             .sync_all()
             .map_err(|source| io_error("sync verified CAR payload", &payload_path, source))?;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::VerifiedPayloadSynced);
         let mut payload = FilePayload::from_open_file(&payload_path, payload_file)
             .map_err(|source| io_error("retain verified CAR payload", &payload_path, source))?;
         let mut store = bounded_musubi_chunk_store(plan)?;
@@ -527,9 +595,15 @@ impl MusubiCache {
         verify_por(commitment, &store)?;
         remove_verified_file(&payload_path, &guard.payload_identity)?;
         guard.payload_removed = true;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::PayloadRemoved);
 
         verify_tree(&staging_path, commitment, plan)?;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::SourceTreeVerified);
         make_tree_immutable_and_sync(&staging_path)?;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::SourceTreeSynced);
         for pin in &staging_pins {
             pin.validate()?;
         }
@@ -555,6 +629,8 @@ impl MusubiCache {
                 ));
             }
         }
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::SourceTreePublished);
         guard.staging_published = true;
         let published = fs::symlink_metadata(&source_path)
             .map_err(|source| io_error("inspect published source tree", &source_path, source))?;
@@ -565,6 +641,8 @@ impl MusubiCache {
         }
         sync_directory(&archive_dir)
             .map_err(|source| io_error("sync archive cache directory", &archive_dir, source))?;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::ArchiveDirectorySynced);
         let entry = self.verify(commitment, plan)?;
         Ok(InstallOutcome::Installed(entry))
     }
@@ -575,7 +653,7 @@ impl MusubiCache {
     ///
     /// Returns an error if the entry is missing, has unsafe or extra
     /// descendants, differs from the plan, or cannot reproduce the canonical
-    /// CAR, PoR, descriptor, source-tree, and bundle commitments.
+    /// CAR, `PoR`, descriptor, source-tree, and bundle commitments.
     pub fn verify(
         &self,
         commitment: &MusubiArchiveCommitmentV1,
@@ -1227,7 +1305,7 @@ fn stream_and_verify_car<R: Read>(
                 "CAR section uses a noncanonical CID".to_owned(),
             ));
         }
-        let mut digest = [0u8; CID_DIGEST_BYTES as usize];
+        let mut digest = [0u8; CID_DIGEST_BYTES_USIZE];
         stream.read_exact(&mut digest)?;
         let cid_len = stream
             .position
@@ -1369,7 +1447,7 @@ impl<R: Read> VerifiedCarStream<R> {
         mut remaining: u64,
         mut output: Option<&mut File>,
     ) -> Result<(), CacheError> {
-        let mut buffer = [0u8; IO_BUFFER_BYTES];
+        let mut buffer = vec![0_u8; IO_BUFFER_BYTES];
         while remaining != 0 {
             let count = usize::try_from(remaining.min(IO_BUFFER_BYTES as u64))
                 .expect("bounded I/O count fits usize");
@@ -1478,7 +1556,10 @@ impl SourceTreeSink {
             .set_permissions(fs::Permissions::from_mode(0o444))
             .map_err(ChunkStoreError::Io)?;
         target.file.sync_all().map_err(ChunkStoreError::Io)?;
-        validate_open_regular_file(&target.path, &target.file).map_err(ChunkStoreError::Io)
+        validate_open_regular_file(&target.path, &target.file).map_err(ChunkStoreError::Io)?;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::SourceFileSynced);
+        Ok(())
     }
 }
 
@@ -1506,7 +1587,7 @@ impl ChunkSink for SourceTreeSink {
             )));
         }
 
-        self.files = plan.files.clone();
+        self.files.clone_from(&plan.files);
         self.chunk_files = vec![usize::MAX; plan.chunks.len()];
         let mut directories = BTreeSet::<Vec<String>>::new();
         for (file_index, file) in self.files.iter().enumerate() {
@@ -1607,6 +1688,8 @@ impl ChunkSink for SourceTreeSink {
             ChunkStoreError::Io(io::Error::other("source-tree target was not opened"))
         })?;
         target.file.write_all(data).map_err(ChunkStoreError::Io)?;
+        #[cfg(test)]
+        crash_cache_install_at(CacheInstallCrashCutV1::SourceChunkWritten);
         target.written = target
             .written
             .checked_add(u64::try_from(data.len()).map_err(|_| {
@@ -1673,8 +1756,10 @@ fn verify_tree(
     let stats = CarStreamingWriter::with_expected_roots(plan, roots)
         .write_from_reader(&mut reader, io::sink())
         .map_err(|error| CacheError::CorruptEntry(error.to_string()))?;
+    let actual_car_digest = stats.car_archive_digest.as_bytes();
+    let expected_car_digest = commitment.car_digest.as_bytes();
     if stats.car_size != commitment.car_size
-        || stats.car_archive_digest.as_bytes() != commitment.car_digest.as_bytes()
+        || actual_car_digest != expected_car_digest
         || stats.root_cids.as_slice() != [commitment.root_cid.as_bytes().as_slice()]
         || stats.dag_codec != DAG_CBOR_CODEC
         || stats.chunk_count != commitment.chunk_count as usize
@@ -1936,6 +2021,10 @@ fn inventory_directory(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "compiler admission deliberately verifies every bound bundle transcript and cross-reference in one fail-closed sequence"
+)]
 fn verify_compiler_bundle(
     root: &Path,
     node: &MusubiVerificationNodeV1,
@@ -2108,10 +2197,9 @@ fn load_compiler_sources(
 
     let mut sources = Vec::new();
     let mut source_bytes = 0u64;
-    for entry in files
-        .iter()
-        .filter(|entry| !entry.path.starts_with(".musubi/") && entry.path.ends_with(".ko"))
-    {
+    for entry in files.iter().filter(|entry| {
+        !entry.path.starts_with(".musubi/") && entry.path.strip_suffix(".ko").is_some()
+    }) {
         source_bytes = source_bytes.checked_add(entry.size).ok_or_else(|| {
             CacheError::CorruptEntry("Kotodama source byte count overflow".to_owned())
         })?;
@@ -2161,6 +2249,10 @@ fn compare_inventory(plan: &CarBuildPlan, files: &[FileInventory]) -> Result<(),
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "bundle verification deliberately keeps all canonical transcript fields and cross-commitments in one auditable fail-closed sequence"
+)]
 fn verify_bundle_commitments(
     root: &Path,
     commitment: &MusubiArchiveCommitmentV1,
@@ -2390,7 +2482,7 @@ fn hash_regular_file(path: &Path) -> Result<(u64, [u8; 32]), CacheError> {
 fn hash_file_into(path: &Path, hasher: &mut blake3::Hasher) -> Result<u64, CacheError> {
     let (mut file, before) = open_regular_file_no_follow(path)?;
     let mut total = 0u64;
-    let mut buffer = [0u8; IO_BUFFER_BYTES];
+    let mut buffer = vec![0_u8; IO_BUFFER_BYTES];
     loop {
         let read = file
             .read(&mut buffer)
@@ -2527,7 +2619,7 @@ fn create_staging_directory(
                     .map_err(|source| io_error("sync archive cache directory", parent, source))?;
                 return Ok((path, metadata, pin));
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(source) => return Err(io_error("create source staging tree", &path, source)),
         }
     }
@@ -2553,7 +2645,7 @@ fn create_temporary_file(
                     .map_err(|source| io_error("sync cache temporary parent", parent, source))?;
                 return Ok((path, file, metadata));
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(source) => return Err(io_error("create cache temporary", &path, source)),
         }
     }
@@ -2569,7 +2661,7 @@ fn allocate_absent_path(parent: &Path, prefix: &str) -> Result<PathBuf, CacheErr
         let candidate = allocate_candidate(parent, prefix, "entry");
         match fs::symlink_metadata(&candidate) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(candidate),
-            Ok(_) => continue,
+            Ok(_) => {}
             Err(source) => {
                 return Err(io_error(
                     "inspect cache quarantine destination",
@@ -2608,13 +2700,13 @@ impl InstallGuard {
         staging_path: PathBuf,
         staging_identity: fs::Metadata,
         payload_path: PathBuf,
-        payload_identity: fs::Metadata,
+        payload_identity: &fs::Metadata,
     ) -> Self {
         Self {
             staging_path,
             staging_identity,
             payload_path,
-            payload_identity: DirectoryIdentity::capture(&payload_identity),
+            payload_identity: DirectoryIdentity::capture(payload_identity),
             staging_published: false,
             payload_removed: false,
         }
@@ -2924,7 +3016,7 @@ fn decode_archive_directory_name(name: &str) -> Option<ArchiveId> {
 fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        return File::open(path)?.sync_all();
+        File::open(path)?.sync_all()
     }
     #[cfg(windows)]
     {
@@ -2962,7 +3054,7 @@ fn sync_directory(path: &Path) -> io::Result<()> {
                 "cache directory changed while it was synchronized",
             ));
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -3266,7 +3358,11 @@ mod tests {
     }
 
     fn fixture(temp: &TempDir, name: &str) -> Fixture {
-        let package_root = temp.path().join(name);
+        fixture_at(temp.path(), name)
+    }
+
+    fn fixture_at(root: &Path, name: &str) -> Fixture {
+        let package_root = root.join(name);
         fs::create_dir_all(package_root.join("src")).expect("create fixture source tree");
         fs::write(
             package_root.join("src/lib.ko"),
@@ -3422,8 +3518,7 @@ mod tests {
         );
         assert!(
             retained <= MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES,
-            "launch-max retained plan estimate {retained} exceeds {}",
-            MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES
+            "launch-max retained plan estimate {retained} exceeds {MUSUBI_MAX_RETAINED_PLAN_HEAP_BYTES}"
         );
         assert!(
             validation.estimated_ingest_heap_bytes() <= MUSUBI_CACHE_CHUNK_STORE_HEAP_LIMIT_BYTES,
@@ -3550,6 +3645,80 @@ mod tests {
                 source_path: expected,
             })
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "subprocess-only abrupt cache-install worker"]
+    fn cache_install_crash_child() {
+        let Some(root) = std::env::var_os(CACHE_INSTALL_CRASH_ROOT_ENV_V1) else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let fixture = fixture_at(&root, "crashmatrix");
+        let cache = MusubiCache::open(root.join("user-cache")).expect("open child cache");
+        let outcome = cache.install(
+            &fixture.commitment,
+            fixture.car.plan(),
+            Cursor::new(fixture.car.bytes()),
+        );
+        panic!("configured abrupt cache-install cut was not reached: {outcome:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn abrupt_install_cuts_never_publish_a_partial_tree_and_retry_converges() {
+        let executable = std::env::current_exe().expect("current unit-test executable");
+        for cut in CacheInstallCrashCutV1::ALL {
+            let temp = tempfile::tempdir().expect("crash-matrix tempdir");
+            let fixture = fixture(&temp, "crashmatrix");
+            let output = std::process::Command::new(&executable)
+                .arg("--ignored")
+                .arg("--exact")
+                .arg("cache::tests::cache_install_crash_child")
+                .env(CACHE_INSTALL_CRASH_ROOT_ENV_V1, temp.path())
+                .env(CACHE_INSTALL_CRASH_CUT_ENV_V1, cut.label())
+                .output()
+                .expect("launch abrupt cache-install worker");
+            assert_eq!(
+                output.status.code(),
+                Some(CACHE_INSTALL_CRASH_EXIT_CODE_V1),
+                "cut {cut:?} did not stop at its exact boundary; stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+
+            let cache = cache(&temp);
+            let source = cache.source_path(&fixture.commitment.archive_id());
+            match fs::symlink_metadata(&source) {
+                Ok(_) => {
+                    cache
+                        .verify(&fixture.commitment, fixture.car.plan())
+                        .unwrap_or_else(|error| {
+                            panic!("cut {cut:?} exposed a partial source tree: {error}")
+                        });
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => panic!("cut {cut:?} left an unreadable source boundary: {error}"),
+            }
+
+            let retry = cache
+                .install(
+                    &fixture.commitment,
+                    fixture.car.plan(),
+                    Cursor::new(fixture.car.bytes()),
+                )
+                .unwrap_or_else(|error| panic!("cut {cut:?} did not converge on retry: {error}"));
+            assert!(matches!(
+                retry,
+                InstallOutcome::Installed(_) | InstallOutcome::AlreadyPresent(_)
+            ));
+            cache
+                .verify(&fixture.commitment, fixture.car.plan())
+                .unwrap_or_else(|error| {
+                    panic!("cut {cut:?} retry did not publish the exact tree: {error}")
+                });
+        }
     }
 
     #[cfg(unix)]

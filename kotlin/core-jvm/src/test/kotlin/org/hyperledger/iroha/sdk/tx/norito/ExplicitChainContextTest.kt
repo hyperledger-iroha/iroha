@@ -12,9 +12,7 @@ import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruction
-import org.hyperledger.iroha.sdk.core.model.instructions.ShieldInstruction
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
-import org.hyperledger.iroha.sdk.core.model.instructions.UnshieldInstruction
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -180,33 +178,8 @@ class ExplicitChainContextTest {
     fun `native account entry points expose an explicit chain argument`() {
         assertAllMethodOverloadsHaveIntParameter(
             NativeSignerBridge::class.java,
-            "encodeShieldSignedTransaction",
-            2,
-        )
-        assertAllMethodOverloadsHaveIntParameter(
-            NativeSignerBridge::class.java,
-            "encodeUnshieldSignedTransaction",
-            2,
-        )
-        assertAllMethodOverloadsHaveIntParameter(
-            NativeSignerBridge::class.java,
             "encodeRegisterZkAssetSignedTransaction",
             2,
-        )
-        assertMethodHasIntParameter(
-            NativeSignerBridge::class.java,
-            "nativeEncodeShieldSignedTransaction",
-            2,
-        )
-        assertMethodHasIntParameter(
-            NativeSignerBridge::class.java,
-            "nativeEncodeUnshieldSignedTransaction",
-            2,
-        )
-        assertMethodHasParameterCount(
-            NativeSignerBridge::class.java,
-            "nativeEncodeUnshieldSignedTransaction",
-            15,
         )
         assertMethodHasIntParameter(
             NativeSignerBridge::class.java,
@@ -269,32 +242,6 @@ class ExplicitChainContextTest {
     @Test
     fun `native signer rejects out-of-range chain before native dispatch`() {
         val feePayment = FeePaymentIntent.authority(emptyList())
-        val shield = assertFailsWith<IllegalArgumentException> {
-            NativeSignerBridge.encodeShieldSignedTransaction(
-                algorithm = SigningAlgorithm.ED25519,
-                chainId = "chain",
-                chainDiscriminant = -1,
-                authority = "authority",
-                creationTimeMs = 0,
-                instruction = null as ShieldInstruction?,
-                privateKey = byteArrayOf(1),
-                feePayment = feePayment,
-            )
-        }
-        assertTrue(shield.message.orEmpty().contains("chainDiscriminant"))
-        val unshield = assertFailsWith<IllegalArgumentException> {
-            NativeSignerBridge.encodeUnshieldSignedTransaction(
-                algorithm = SigningAlgorithm.ED25519,
-                chainId = "chain",
-                chainDiscriminant = 0x1_0000,
-                authority = "authority",
-                creationTimeMs = 0,
-                instruction = null as UnshieldInstruction?,
-                privateKey = byteArrayOf(1),
-                feePayment = feePayment,
-            )
-        }
-        assertTrue(unshield.message.orEmpty().contains("chainDiscriminant"))
         val register = assertFailsWith<IllegalArgumentException> {
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,

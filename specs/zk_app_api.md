@@ -24,10 +24,18 @@ ledger paths:
   The wire carries only a `(version, curve, n)` selector; the verifier derives
   the deterministic V1 generators and callers cannot submit another parameter
   set. The complete derived parameter fingerprint is absorbed into the opening
-  transcript. Torii applies the configured total
-  body ceiling before decoding, then applies finite batch, per-envelope,
-  curve-`k`, and transcript-label ceilings. The embedding API requires those
-  limits explicitly; the no-limit Torii handler has been removed.
+  transcript. The route fails closed unless `zk.halo2.enabled` is true and
+  admits work through Torii's general and heavy-query limits before moving
+  decoding and verification to a blocking worker; owned permits remain with
+  that physical worker if the HTTP request is cancelled. Requests must declare
+  exactly one `Content-Type`: `application/json` (optionally with the single
+  parameter `charset=utf-8`) or parameter-free `application/x-norito`. Torii
+  applies the configured total body ceiling before decoding, bounds the native
+  Norito batch length before allocating the outer vector, and rejects JSON
+  base64 strings that cannot fit `max_envelope_bytes` before allocating their
+  decoded buffers. It then applies finite batch, per-envelope, curve-`k`, and
+  transcript-label ceilings. The embedding API requires those limits
+  explicitly; the no-limit Torii handler has been removed.
 
 The pre-release decode-only `/v1/zk/verify` and `/v1/zk/submit-proof` routes
 were removed. To request ledger-authoritative proof verification, submit a
@@ -37,6 +45,24 @@ instruction) through the ordinary transaction pipeline.
 Runtime-critical surfaces such as governance ballots/tallies, confidential
 assets, `IvmProved`, and registry-backed STARK/Halo2 flows continue to use the
 guarded core verifier path instead.
+
+## Confidential-tree read endpoints
+
+- `POST /v1/zk/roots` returns a bounded suffix of mutation-time persisted roots.
+  It validates fixed frontier/current-root metadata plus bounded history and
+  checkpoint shape, but never rebuilds commitments or recomputes prefix roots.
+  Snapshot decode/recovery is the boundary that fully projects the ordered
+  commitment prefix and authenticates those persisted values.
+- `POST /v1/zk/merkle-path` accepts at most 128 distinct commitments. It scans
+  the frontier once to record requested positions and multiplicity, builds one
+  compact authenticated tree projection, compares the projection root and
+  frontier with persisted metadata, and derives every requested path plus the
+  next-zero path from that projection. Work is `O(N + k * tree_depth)` and each
+  stored commitment is leaf-hashed once per request, rather than once per path.
+
+Both routes retain Torii's general and heavy-query admission permits inside a
+blocking worker through physical completion. Their responses identify the exact
+committed block height and hash evaluated by the retained immutable state view.
 
 ## Attachments
 
@@ -463,9 +489,10 @@ iroha ledger trigger register \
 ## Governance Endpoints (ZK Ballots)
 
 For submitting ZK ballots and building transaction skeletons, refer to the
-Governance App API document. These strict request schemas do not accept
-`private_key`; Torii returns a skeleton for clients to sign locally and submit:
-- POST `/v1/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
+Governance App API document. These strict request schemas and their nested
+window, provenance, proof, and public-input objects reject unknown fields and
+all private-key aliases before dispatch; Torii returns a skeleton for clients
+to sign locally and submit:
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.
 

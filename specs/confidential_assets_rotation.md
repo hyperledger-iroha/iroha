@@ -69,9 +69,12 @@ so governance can schedule upgrades via
 - `crates/iroha_core/tests/zk_dedup.rs:1` proves that the `Preverify` cache
   rejects double-spends/double-proofs, including rotation scenarios where
   commitments differ.
-- `crates/iroha_core/tests/zk_confidential_events.rs` and
-  `zk_shield_transfer_audit.rs` cover end-to-end shield → transfer → unshield
-  flows, ensuring the audit trail survives across parameter rotations.
+- Kagemusha suites cover proof-bound top-up/redemption, escrow drawdown, and
+  confidential events; native anonymous-escrow suites cover purpose-bound
+  internal transfer behavior. The release-surface regression in
+  `integration_tests/tests/zk_confidential_localnet.rs` ensures the retired
+  generic `zk::Shield`, `zk::ZkTransfer`, and `zk::Unshield` wires cannot
+  re-enter the registry.
 - `dashboards/grafana/confidential_assets.json` and
   `specs/confidential_assets.md:401` document the CommitmentTree &
   verifier-cache gauges that accompany every calibration/rotation run.

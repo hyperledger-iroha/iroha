@@ -94,6 +94,38 @@ mod tests {
     }
 
     #[test]
+    fn canonical_catalog_retires_direct_sumeragi_mutation_routes() {
+        assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
+        assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");
+
+        for (stable_route_id, path) in [
+            ("operator.sumeragi.evidence.submit", "/v1/sumeragi/evidence"),
+            ("operator.sumeragi.vrf.commit", "/v1/sumeragi/vrf/commit"),
+            ("operator.sumeragi.vrf.reveal", "/v1/sumeragi/vrf/reveal"),
+        ] {
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.stable_route_id() != stable_route_id),
+                "retired Sumeragi route id remains cataloged: {stable_route_id}"
+            );
+            assert!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .all(|route| route.method() != HttpMethod::Post || route.path() != path),
+                "retired Sumeragi mutation route remains cataloged: POST {path}"
+            );
+        }
+
+        for path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+            assert!(
+                CATALOGED_ROUTES.iter().all(|route| route.path() != path),
+                "retired Sumeragi mutation path remains cataloged: {path}"
+            );
+        }
+    }
+
+    #[test]
     fn canonical_catalog_exposes_only_the_authoritative_privacy_routes() {
         let privacy_routes = CATALOGED_ROUTES
             .iter()
@@ -569,6 +601,7 @@ mod tests {
             "/v1/sorafs/capacity/por-challenge",
             "/v1/sorafs/capacity/por",
             "/v1/sorafs/por/trigger",
+            "/v1/gov/ballots/zk",
         ] {
             assert!(
                 routes.iter().all(|route| route.path() != unsupported_path),
@@ -1218,7 +1251,7 @@ mod tests {
 
     #[test]
     fn musubi_v1_catalog_is_post_only_and_has_no_legacy_routes() {
-        assert_eq!(musubi::ROUTES.len(), 29);
+        assert_eq!(musubi::ROUTES.len(), 31);
         assert_eq!(RouteCatalog::new(musubi::ROUTES).validate(), Ok(()));
         assert!(musubi::ROUTES.iter().all(|route| {
             route.method() == HttpMethod::Post

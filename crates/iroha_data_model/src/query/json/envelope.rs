@@ -240,11 +240,6 @@ pub enum SingularQueryJson {
         /// Escrow identifier encoded as one canonical checksummed hash literal.
         escrow_id: crate::escrow::EscrowId,
     },
-    /// Looks up a native anonymous asset escrow by identifier.
-    FindAnonymousAssetEscrowById {
-        /// Escrow identifier encoded as one canonical checksummed hash literal.
-        escrow_id: crate::escrow::EscrowId,
-    },
     /// Looks up a trigger by identifier.
     FindTriggerById {
         /// Trigger identifier.
@@ -376,17 +371,6 @@ impl SingularQueryJson {
         Ok(Self::FindAssetEscrowById { escrow_id })
     }
 
-    fn parse_anonymous_asset_escrow(payload: &Map) -> Result<Self, QueryJsonError> {
-        let escrow_id = payload
-            .get("escrow_id")
-            .ok_or(QueryJsonError::MissingField("payload", "escrow_id"))
-            .and_then(|value| {
-                json::from_value::<crate::escrow::EscrowId>(value.clone())
-                    .map_err(|_| QueryJsonError::InvalidField("payload", "escrow_id"))
-            })?;
-        Ok(Self::FindAnonymousAssetEscrowById { escrow_id })
-    }
-
     fn parse_trigger_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindTriggerById {
             id: payload_required_string(payload, "id")?.to_owned(),
@@ -516,8 +500,7 @@ impl SingularQueryJson {
                 payload.insert("nft_id".to_owned(), Value::String(nft_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
-            Self::FindAssetEscrowById { escrow_id }
-            | Self::FindAnonymousAssetEscrowById { escrow_id } => {
+            Self::FindAssetEscrowById { escrow_id } => {
                 let mut payload = Map::new();
                 payload.insert(
                     "escrow_id".to_owned(),
@@ -596,9 +579,6 @@ impl SingularQueryJson {
             "FindAssetDefinitionById" => Self::parse_asset_definition(singular_payload(map)?),
             "FindNftById" => Self::parse_nft_by_id(singular_payload(map)?),
             "FindAssetEscrowById" => Self::parse_asset_escrow(singular_payload(map)?),
-            "FindAnonymousAssetEscrowById" => {
-                Self::parse_anonymous_asset_escrow(singular_payload(map)?)
-            }
             "FindTriggerById" => Self::parse_trigger_by_id(singular_payload(map)?),
             "FindTwitterBindingByHash" => Self::parse_twitter_binding(singular_payload(map)?),
             "FindDomainById" => Self::parse_domain_by_id(singular_payload(map)?),
@@ -631,9 +611,6 @@ impl SingularQueryJson {
             SingularQueryJson::FindAssetDefinitionById { .. } => "FindAssetDefinitionById",
             SingularQueryJson::FindNftById { .. } => "FindNftById",
             SingularQueryJson::FindAssetEscrowById { .. } => "FindAssetEscrowById",
-            SingularQueryJson::FindAnonymousAssetEscrowById { .. } => {
-                "FindAnonymousAssetEscrowById"
-            }
             SingularQueryJson::FindTriggerById { .. } => "FindTriggerById",
             SingularQueryJson::FindContractManifestByCodeHash { .. } => {
                 "FindContractManifestByCodeHash"
@@ -722,11 +699,6 @@ impl SingularQueryJson {
             SingularQueryJson::FindAssetEscrowById { escrow_id } => {
                 Ok(SingularQueryBox::FindAssetEscrowById(
                     crate::query::escrow::prelude::FindAssetEscrowById::new(escrow_id),
-                ))
-            }
-            SingularQueryJson::FindAnonymousAssetEscrowById { escrow_id } => {
-                Ok(SingularQueryBox::FindAnonymousAssetEscrowById(
-                    crate::query::escrow::prelude::FindAnonymousAssetEscrowById::new(escrow_id),
                 ))
             }
             SingularQueryJson::FindTriggerById { id } => {
@@ -950,12 +922,6 @@ impl IterableQueryJson {
                     Box::new(crate::query::escrow::prelude::FindAssetEscrows)
                 })
             }
-            IterableQueryKind::FindAnonymousAssetEscrows => {
-                type Item = crate::escrow::AnonymousAssetEscrowRecord;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::escrow::prelude::FindAnonymousAssetEscrows)
-                })
-            }
             IterableQueryKind::FindRepoAgreements => {
                 type Item = crate::repo::RepoAgreement;
                 self.build_for_kind::<Item, _>(params.clone(), || {
@@ -1017,8 +983,6 @@ pub enum IterableQueryKind {
     FindAssetsDefinitions,
     /// Enumerate native asset escrows.
     FindAssetEscrows,
-    /// Enumerate native anonymous asset escrows.
-    FindAnonymousAssetEscrows,
     /// Enumerate registered NFTs.
     FindNfts,
     /// Enumerate registered RWA lots.
@@ -1044,7 +1008,6 @@ impl IterableQueryKind {
             IterableQueryKind::FindAccountIds => "FindAccountIds",
             IterableQueryKind::FindAssetsDefinitions => "FindAssetsDefinitions",
             IterableQueryKind::FindAssetEscrows => "FindAssetEscrows",
-            IterableQueryKind::FindAnonymousAssetEscrows => "FindAnonymousAssetEscrows",
             IterableQueryKind::FindNfts => "FindNfts",
             IterableQueryKind::FindRwas => "FindRwas",
             IterableQueryKind::FindRoles => "FindRoles",
@@ -1067,7 +1030,6 @@ impl FromStr for IterableQueryKind {
             "FindAccountIds" => Ok(IterableQueryKind::FindAccountIds),
             "FindAssetsDefinitions" => Ok(IterableQueryKind::FindAssetsDefinitions),
             "FindAssetEscrows" => Ok(IterableQueryKind::FindAssetEscrows),
-            "FindAnonymousAssetEscrows" => Ok(IterableQueryKind::FindAnonymousAssetEscrows),
             "FindNfts" => Ok(IterableQueryKind::FindNfts),
             "FindRwas" => Ok(IterableQueryKind::FindRwas),
             "FindRoles" => Ok(IterableQueryKind::FindRoles),

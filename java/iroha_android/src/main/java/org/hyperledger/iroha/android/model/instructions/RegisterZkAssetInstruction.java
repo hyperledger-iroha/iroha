@@ -10,7 +10,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
   private final ZkAssetMode mode;
   private final boolean allowShield;
   private final boolean allowUnshield;
-  private final String transferVerifyingKey;
   private final String unshieldVerifyingKey;
   private final String shieldVerifyingKey;
   private final Map<String, String> arguments;
@@ -20,7 +19,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
     this.mode = builder.mode;
     this.allowShield = builder.allowShield;
     this.allowUnshield = builder.allowUnshield;
-    this.transferVerifyingKey = builder.transferVerifyingKey;
     this.unshieldVerifyingKey = builder.unshieldVerifyingKey;
     this.shieldVerifyingKey = builder.shieldVerifyingKey;
     final LinkedHashMap<String, String> args = new LinkedHashMap<>();
@@ -29,7 +27,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
     args.put("mode", mode.wireName());
     args.put("allow_shield", Boolean.toString(allowShield));
     args.put("allow_unshield", Boolean.toString(allowUnshield));
-    args.put("vk_transfer", transferVerifyingKey == null ? "" : transferVerifyingKey);
     args.put("vk_unshield", unshieldVerifyingKey == null ? "" : unshieldVerifyingKey);
     args.put("vk_shield", shieldVerifyingKey == null ? "" : shieldVerifyingKey);
     this.arguments = Collections.unmodifiableMap(args);
@@ -49,10 +46,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
 
   public boolean allowUnshield() {
     return allowUnshield;
-  }
-
-  public String transferVerifyingKey() {
-    return transferVerifyingKey;
   }
 
   public String unshieldVerifyingKey() {
@@ -78,6 +71,9 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
   }
 
   public static RegisterZkAssetInstruction fromArguments(final Map<String, String> arguments) {
+    if (arguments.containsKey("vk_transfer")) {
+      throw new IllegalArgumentException("Instruction argument 'vk_transfer' is no longer supported");
+    }
     final Builder builder =
         builder()
             .setAsset(requireArgument(arguments, "asset"))
@@ -85,10 +81,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
             .setAllowShield(parseBoolean(requireArgument(arguments, "allow_shield"), "allow_shield"))
             .setAllowUnshield(
                 parseBoolean(requireArgument(arguments, "allow_unshield"), "allow_unshield"));
-    final String transfer = optionalArgument(arguments, "vk_transfer");
-    if (transfer != null) {
-      builder.setTransferVerifyingKey(transfer);
-    }
     final String unshield = optionalArgument(arguments, "vk_unshield");
     if (unshield != null) {
       builder.setUnshieldVerifyingKey(unshield);
@@ -125,10 +117,9 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
 
   public static final class Builder {
     private String asset;
-    private ZkAssetMode mode = ZkAssetMode.ZK_NATIVE;
+    private ZkAssetMode mode = ZkAssetMode.HYBRID;
     private boolean allowShield = true;
     private boolean allowUnshield = true;
-    private String transferVerifyingKey;
     private String unshieldVerifyingKey;
     private String shieldVerifyingKey;
 
@@ -154,12 +145,6 @@ public final class RegisterZkAssetInstruction implements InstructionTemplate {
 
     public Builder setAllowUnshield(final boolean allowUnshield) {
       this.allowUnshield = allowUnshield;
-      return this;
-    }
-
-    public Builder setTransferVerifyingKey(final String verifyingKey) {
-      this.transferVerifyingKey =
-          ZkInstructionUtils.optionalVerifyingKeyId(verifyingKey, "transferVerifyingKey");
       return this;
     }
 

@@ -24,6 +24,7 @@ use iroha_data_model::{
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::json;
+use sha2::Sha256;
 
 use crate::workspace_root;
 
@@ -57,6 +58,8 @@ struct PeerMaterial {
     address: String,
     public_key: String,
     private_key: String,
+    soranet_transport_public_key: String,
+    soranet_transport_private_key: String,
     streaming_public_key: String,
     streaming_private_key: String,
     pop: Vec<u8>,
@@ -801,6 +804,8 @@ allow_tool_prefixes = ["iroha."]
 chain = "{chain}"
 {chain_discriminant}public_key = "{node_pk}"
 private_key = "{node_sk}"
+soranet_transport_public_key = "{soranet_transport_pk}"
+soranet_transport_private_key = "{soranet_transport_sk}"
 
 trusted_peers = [
 {trusted_peers}
@@ -810,7 +815,6 @@ trusted_peers_pop = [
 ]
 
 [sumeragi]
-protocol_version = 4
 role = "validator"
 
 [sumeragi.block]
@@ -822,9 +826,6 @@ proposal_queue_scan_multiplier = 4
 authenticated_non_validator_sources = {authenticated_non_validator_sources}
 body_bytes = {body_bytes}
 body_source_bytes = {body_source_bytes}
-
-[sumeragi.da]
-enabled = true
 
 [network]
 address = "{network_address}"
@@ -856,6 +857,8 @@ expected_hash = "{genesis_expected_hash}"
         chain_discriminant = chain_discriminant,
         node_pk = node.public_key,
         node_sk = node.private_key,
+        soranet_transport_pk = node.soranet_transport_public_key,
+        soranet_transport_sk = node.soranet_transport_private_key,
         trusted_peers = trusted_peers,
         trusted_peers_pop = trusted_peers_pop,
         max_transactions = max_transactions,
@@ -1001,6 +1004,9 @@ fn render_readme(
     } else {
         "VRF seed: derived from chain id".to_string()
     };
+    let verify_vrf_seed_arg = vrf_seed_hex
+        .map(|seed| format!(" --vrf-seed-hex {seed}"))
+        .unwrap_or_default();
     let chain_discriminant_line = spec.chain_discriminant.map_or_else(String::new, |value| {
         format!("- chain discriminant: {value}\n")
     });
@@ -1034,7 +1040,7 @@ Files:
 - genesis.signed.nrt — canonical signed genesis wire artifact consumed by every validator
 - genesis.public_key — canonical one-line verifier key for the signed genesis artifact
 - genesis.expected_hash — canonical one-line independently provisioned signed-header hash
-- verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json`
+- verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 {site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
@@ -1050,6 +1056,7 @@ Regenerate:
         genesis_pk = genesis_public_key,
         peer_rows = peer_rows,
         profile = spec.profile_flag,
+        verify_vrf_seed_arg = verify_vrf_seed_arg,
         nexus_regeneration_arg = nexus_regeneration_arg,
         site_bindings_file = site_bindings_file,
     )
@@ -1071,6 +1078,7 @@ fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
                 &format!("{}-streaming-{idx}", spec.slug),
                 Algorithm::Ed25519,
             )?;
+            let soranet_transport_kp = deterministic_soranet_transport_keypair(spec, idx)?;
             let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).map_err(|err| {
                 format!("failed to generate deterministic BLS PoP for `{seed}`: {err}")
             })?;
@@ -1089,6 +1097,11 @@ fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
                 address,
                 public_key: kp.public_key().to_string(),
                 private_key: ExposedPrivateKey(kp.private_key().clone()).to_string(),
+                soranet_transport_public_key: soranet_transport_kp.public_key().to_string(),
+                soranet_transport_private_key: ExposedPrivateKey(
+                    soranet_transport_kp.private_key().clone(),
+                )
+                .to_string(),
                 streaming_public_key: streaming_kp.public_key().to_string(),
                 streaming_private_key: ExposedPrivateKey(streaming_kp.private_key().clone())
                     .to_string(),
@@ -1097,6 +1110,27 @@ fn build_peers(spec: &ProfileSpec) -> AnyResult<Vec<PeerMaterial>> {
             })
         })
         .collect()
+}
+
+fn deterministic_soranet_transport_keypair(
+    spec: &ProfileSpec,
+    peer_index: usize,
+) -> AnyResult<KeyPair> {
+    let seed_label = if peer_index == 0 {
+        format!("kagami-{}-soranet-transport-v1", spec.slug)
+    } else {
+        format!(
+            "kagami-{}-soranet-transport-v1-peer-{peer_index}",
+            spec.slug
+        )
+    };
+    let seed = Sha256::digest(seed_label.as_bytes()).to_vec();
+    KeyPair::try_from_seed(seed, Algorithm::Ed25519).map_err(|err| {
+        format!(
+            "failed to derive deterministic Ed25519 SoraNet transport keypair for `{seed_label}`: {err}"
+        )
+        .into()
+    })
 }
 
 fn deterministic_keypair(seed_label: &str, algorithm: Algorithm) -> AnyResult<KeyPair> {
@@ -1231,7 +1265,9 @@ fn profile_slug_list() -> String {
 
 #[cfg(test)]
 mod tests {
+    use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_crypto::Signature;
+    use iroha_data_model::account::address::ChainDiscriminantGuard;
     use tempfile::tempdir;
 
     use super::*;
@@ -1339,6 +1375,44 @@ mod tests {
             !rendered.contains("[sumeragi.npos]"),
             "NPoS policy belongs in the signed genesis parameter snapshot"
         );
+        assert!(
+            !rendered.contains("protocol_version"),
+            "wire protocol version is derived from the signed consensus metadata"
+        );
+        assert!(
+            !rendered.contains("[sumeragi.da]"),
+            "mandatory DA policy is derived from the signed consensus metadata"
+        );
+    }
+
+    #[test]
+    fn rendered_profile_configs_pass_actual_config_admission() {
+        let expected_hash = Hash::new(b"xtask profile config admission").to_string();
+
+        for profile in PROFILES {
+            let peers = build_peers(profile).expect("build deterministic peers");
+            let genesis_key = deterministic_keypair(
+                &format!("config-{}-admission-genesis", profile.slug),
+                Algorithm::Ed25519,
+            )
+            .expect("derive deterministic genesis key");
+            let rendered = render_config(profile, &peers, genesis_key.public_key(), &expected_hash);
+            let table = rendered
+                .parse::<toml::Table>()
+                .expect("rendered profile config is valid TOML");
+            let bundle = tempdir().expect("profile config admission directory");
+            let path = bundle.path().join("peer0.toml");
+            let _chain_discriminant = profile
+                .chain_discriminant
+                .map(ChainDiscriminantGuard::enter);
+
+            actual::Root::from_toml_source(TomlSource::new(path, table)).unwrap_or_else(|error| {
+                panic!(
+                    "rendered profile {} must pass exact runtime config admission: {error:?}",
+                    profile.slug
+                )
+            });
+        }
     }
 
     #[test]
@@ -1400,6 +1474,10 @@ mod tests {
             None,
         );
         assert!(readme.contains("- chain discriminant: 369"));
+        assert!(readme.contains(
+            "kagami verify --profile iroha3-taira --genesis genesis.json \
+             --vrf-seed-hex ABCD"
+        ));
         assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-taira\n"));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
@@ -1783,6 +1861,7 @@ mod tests {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
         let genesis_key = deterministic_keypair("distinct-peer-configs", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
+        let mut transport_public_keys = std::collections::BTreeSet::new();
 
         for (peer_index, peer) in peers.iter().enumerate() {
             let rendered = render_peer_config(
@@ -1794,8 +1873,38 @@ mod tests {
             );
             let torii_port = 8080 + peer_index;
             assert!(rendered.contains(&format!("private_key = \"{}\"", peer.private_key)));
+            assert!(rendered.contains(&format!(
+                "soranet_transport_public_key = \"{}\"",
+                peer.soranet_transport_public_key
+            )));
+            assert!(rendered.contains(&format!(
+                "soranet_transport_private_key = \"{}\"",
+                peer.soranet_transport_private_key
+            )));
             assert!(rendered.contains(&peer.streaming_public_key));
             assert!(rendered.contains(&peer.streaming_private_key));
+            assert_ne!(peer.soranet_transport_public_key, peer.public_key);
+            assert_ne!(peer.soranet_transport_private_key, peer.private_key);
+            assert_ne!(peer.soranet_transport_public_key, peer.streaming_public_key);
+            assert_ne!(
+                peer.soranet_transport_private_key,
+                peer.streaming_private_key
+            );
+            let transport_public = peer
+                .soranet_transport_public_key
+                .parse::<iroha_crypto::PublicKey>()
+                .expect("transport public key");
+            let transport_private = peer
+                .soranet_transport_private_key
+                .parse::<ExposedPrivateKey>()
+                .expect("transport private key");
+            let transport_key_pair = KeyPair::new(transport_public.clone(), transport_private.0)
+                .expect("transport public/private key pair must match");
+            assert_eq!(transport_key_pair.algorithm(), Algorithm::Ed25519);
+            assert!(
+                transport_public_keys.insert(transport_public),
+                "profile peers must not share a SoraNet transport identity"
+            );
             assert!(rendered.contains(&format!("0.0.0.0:{torii_port}")));
             assert!(rendered.contains("file = \"genesis.signed.nrt\""));
             assert!(!rendered.contains("manifest_json"));
@@ -1804,9 +1913,34 @@ mod tests {
                     assert!(
                         !rendered.contains(&format!("private_key = \"{}\"", other.private_key))
                     );
+                    assert!(!rendered.contains(&other.soranet_transport_private_key));
                     assert!(!rendered.contains(&other.streaming_private_key));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn checked_in_profile_transport_identities_are_reproducible() {
+        let expected = [
+            (
+                "ed01205A4FF1E3840273F79909F02BA854FE9394DE6FBAEF06B87397B059C16BAD6ADC",
+                "802620BBEB9930B26B2CFB85EF7683349DAB2921927F0EA1F5E5BFF89C7E60A7D1700B",
+            ),
+            (
+                "ed012080A47B672C44202B67EC8E81DFFA4D0B46AD2507113C8627F30599FB1CC83717",
+                "802620F18FE388B674C8831AB6061413C8184D7BC03C5595B3AD671852B8FE1611240F",
+            ),
+            (
+                "ed01201F60DE7C82F77FF1EA9AA2DFC60166A0DF904A771DCBFF36186EFAE8AC8324D3",
+                "802620720B9507E31A382E02FF4523D0E22071E19D39974C9AE907492EEAE616F23E15",
+            ),
+        ];
+
+        for (spec, (public_key, private_key)) in PROFILES.iter().zip(expected) {
+            let peers = build_peers(spec).expect("build deterministic profile peers");
+            assert_eq!(peers[0].soranet_transport_public_key, public_key);
+            assert_eq!(peers[0].soranet_transport_private_key, private_key);
         }
     }
 

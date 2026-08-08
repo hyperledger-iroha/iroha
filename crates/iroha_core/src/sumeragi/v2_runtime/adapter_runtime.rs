@@ -882,7 +882,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         };
         let preflight =
             self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
-        if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {
+        if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {
             return BodyAvailableReservation::coalesced_with_owner(tag, manifest, ownership);
         }
         let restored_owner = match preflight {
@@ -1503,7 +1503,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             };
             let preflight =
                 self.command_admission_preflight(*tag, CommandClass::Completion, &command)?;
-            if self.owned_preflight_is_coalesced(*tag, preflight, ownership)? {
+            if self.owned_preflight_is_coalesced(*tag, &command, preflight, ownership)? {
                 continue;
             }
             let restored_owner = match preflight {

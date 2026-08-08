@@ -1963,8 +1963,8 @@ impl ProofAttachmentList {
     ///
     /// # Errors
     ///
-    /// Returns an error when the attachment count or canonical encoded frame
-    /// would exceed the first-release bounds.
+    /// Returns [`ProofAttachmentListError`] when the attachment count or the
+    /// canonical encoded frame would exceed its first-release bound.
     pub fn try_push(
         &mut self,
         attachment: ProofAttachment,
@@ -2148,10 +2148,10 @@ fn proof_attachment_list_base64_decoded_len(
         ));
     }
 
-    let padding = if encoded.ends_with("==") {
-        2
-    } else {
-        usize::from(encoded.ends_with('='))
+    let padding = match encoded.as_bytes() {
+        [.., b'=', b'='] => 2,
+        [.., b'='] => 1,
+        _ => 0,
     };
     let payload_len = encoded.len() - padding;
     let bytes = encoded.as_bytes();
@@ -2170,12 +2170,12 @@ fn proof_attachment_list_base64_decoded_len(
         1 => {
             payload_len % 4 == 3
                 && proof_attachment_list_base64_sextet(bytes[payload_len - 1])
-                    .is_some_and(|sextet| sextet.trailing_zeros() >= 2)
+                    .is_some_and(|sextet| sextet.is_multiple_of(4))
         }
         2 => {
             payload_len % 4 == 2
                 && proof_attachment_list_base64_sextet(bytes[payload_len - 1])
-                    .is_some_and(|sextet| sextet.trailing_zeros() >= 4)
+                    .is_some_and(|sextet| sextet.is_multiple_of(16))
         }
         _ => false,
     };

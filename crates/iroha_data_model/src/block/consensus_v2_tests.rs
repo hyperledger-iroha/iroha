@@ -1,4 +1,3 @@
-// Consensus V2 regressions are included at module scope to preserve private-item access.
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -6,7 +5,23 @@ mod tests {
 
     use super::*;
 
-    // Wire-schema regression tests included in the parent consensus-v2 test module.
+    #[test]
+    fn consensus_modes_project_canonical_protocol_identities() {
+        assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
+        assert_eq!(ConsensusMode::Npos.tag(), NPOS_TAG);
+        assert_eq!(
+            ConsensusMode::Permissioned.bls_domain(),
+            PERMISSIONED_BLS_DOMAIN
+        );
+        assert_eq!(ConsensusMode::Npos.bls_domain(), NPOS_BLS_DOMAIN);
+        assert!(ConsensusMode::Permissioned.is_permissioned());
+        assert!(!ConsensusMode::Npos.is_permissioned());
+
+        for mode in [ConsensusMode::Permissioned, ConsensusMode::Npos] {
+            let parameter_mode = crate::parameter::system::SumeragiConsensusMode::from(mode);
+            assert_eq!(ConsensusMode::from(parameter_mode), mode);
+        }
+    }
 
     #[test]
     fn global_phase_wire_tags_are_explicit_and_schema_aligned() {
@@ -33,21 +48,45 @@ mod tests {
     }
 
     #[test]
-    fn consensus_modes_project_canonical_protocol_identities() {
-        assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
-        assert_eq!(ConsensusMode::Npos.tag(), NPOS_TAG);
+    fn payload_encoding_uses_natural_zero_tag_and_rejects_retired_tag_one() {
+        let canonical = PayloadEncoding::ReedSolomon16.encode();
+        assert_eq!(canonical, 0_u32.to_le_bytes());
         assert_eq!(
-            ConsensusMode::Permissioned.bls_domain(),
-            PERMISSIONED_BLS_DOMAIN
+            PayloadEncoding::decode_all(&mut canonical.as_slice())
+                .expect("decode canonical RS16 payload encoding"),
+            PayloadEncoding::ReedSolomon16
         );
-        assert_eq!(ConsensusMode::Npos.bls_domain(), NPOS_BLS_DOMAIN);
-        assert!(ConsensusMode::Permissioned.is_permissioned());
-        assert!(!ConsensusMode::Npos.is_permissioned());
 
-        for mode in [ConsensusMode::Permissioned, ConsensusMode::Npos] {
-            let parameter_mode = crate::parameter::system::SumeragiConsensusMode::from(mode);
-            assert_eq!(ConsensusMode::from(parameter_mode), mode);
-        }
+        let retired_tag = 1_u32.to_le_bytes();
+        assert!(
+            PayloadEncoding::decode_all(&mut retired_tag.as_slice()).is_err(),
+            "retired payload-encoding tag 1 must fail closed"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn payload_encoding_json_rejects_retired_plain_variant() {
+        let canonical = norito::json::to_value(&PayloadEncoding::ReedSolomon16)
+            .expect("serialize canonical RS16 payload encoding");
+        assert_eq!(
+            norito::json::from_value::<PayloadEncoding>(canonical.clone())
+                .expect("decode canonical RS16 payload encoding"),
+            PayloadEncoding::ReedSolomon16
+        );
+
+        let mut retired = canonical;
+        let encoding = retired
+            .as_object_mut()
+            .expect("adjacently tagged payload encoding")
+            .get_mut("encoding")
+            .expect("payload encoding tag");
+        assert_eq!(encoding.as_str(), Some("reed_solomon16"));
+        *encoding = norito::json::Value::String("plain".to_owned());
+        assert!(
+            norito::json::from_value::<PayloadEncoding>(retired).is_err(),
+            "retired Plain payload encoding must fail closed"
+        );
     }
 
     #[test]
@@ -57,16 +96,8 @@ mod tests {
         let topup = Hash::new(b"topup tree");
         let executed = Hash::new(b"executed block wire");
         let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
-        let canonical = ExecutionCommitment::new_without_merge_carrier(
-            parent,
-            post,
-            ordinary,
-            Some(topup),
-            2,
-            1,
-            executed,
-        )
-        .expect("canonical top-up commitment");
+        let canonical = ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2, executed)
+            .expect("canonical top-up commitment");
         assert_eq!(canonical.validate(), Ok(()));
         assert_eq!(canonical.executed_block_wire_hash, executed);
 
@@ -78,95 +109,31 @@ mod tests {
         );
 
         assert_eq!(
-            ExecutionCommitment::new_without_merge_carrier(
+            ExecutionCommitment::new(
                 parent,
                 Hash::new(b"wrong"),
                 ordinary,
                 Some(topup),
                 2,
-                1,
                 executed,
             ),
             Err(ValidationError::ExecutionCommitmentPostRootMismatch)
         );
         assert_eq!(
-            ExecutionCommitment::new_without_merge_carrier(
-                parent,
-                post,
-                ordinary,
-                Some(topup),
-                0,
-                1,
-                executed,
-            ),
+            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0, executed),
             Err(ValidationError::InvalidExecutionCommitment)
         );
         assert_eq!(
-            ExecutionCommitment::new_without_merge_carrier(
+            ExecutionCommitment::new(
                 parent,
                 post,
                 ordinary,
                 Some(topup),
                 MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
-                1,
                 executed,
             ),
             Err(ValidationError::TooManyKagemushaTopupAnchors)
         );
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn execution_commitment_json_requires_explicit_merge_carrier() {
-        use iroha_schema::{IntoSchema as _, Metadata};
-
-        let schema = ExecutionCommitment::schema();
-        let Metadata::Struct(metadata) = schema
-            .get::<ExecutionCommitment>()
-            .expect("execution commitment schema")
-        else {
-            panic!("execution commitment schema must be a struct");
-        };
-        let merge_carrier = metadata
-            .declarations
-            .iter()
-            .find(|field| field.name == "merge_carrier")
-            .expect("merge carrier schema declaration");
-        assert_eq!(
-            merge_carrier.ty,
-            core::any::TypeId::of::<Option<MergeCarrierCommitmentV1>>()
-        );
-
-        let carrier_free = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"json parent"),
-            Hash::new(b"json post"),
-            Hash::new(b"json ordinary"),
-            1,
-            Hash::new(b"json executed wire"),
-        );
-        let with_carrier = ExecutionCommitment {
-            merge_carrier: Some(MergeCarrierCommitmentV1::new(
-                HashOf::from_untyped_unchecked(Hash::new(b"json merge entry")),
-            )),
-            ..carrier_free
-        };
-        for commitment in [carrier_free, with_carrier] {
-            let value = norito::json::to_value(&commitment).expect("serialize commitment");
-            assert!(value.get("merge_carrier").is_some());
-            let decoded = norito::json::from_value::<ExecutionCommitment>(value)
-                .expect("explicit merge carrier projection decodes");
-            assert_eq!(decoded, commitment);
-            assert_eq!(decoded.encode(), commitment.encode());
-        }
-
-        let mut missing = norito::json::to_value(&carrier_free).expect("serialize commitment");
-        missing
-            .as_object_mut()
-            .expect("commitment is an object")
-            .remove("merge_carrier");
-        let error = norito::json::from_value::<ExecutionCommitment>(missing)
-            .expect_err("omitted merge carrier must reject");
-        assert!(error.to_string().contains("missing field `merge_carrier`"));
     }
 
     #[test]
@@ -181,68 +148,18 @@ mod tests {
             executed_block_wire_hash: Hash,
         }
 
-        #[derive(Encode)]
-        struct PreMergeCarrierExecutionCommitment {
-            parent_state_root: Hash,
-            post_state_root: Hash,
-            ordinary_writes_root: Hash,
-            topup_anchor_root: Option<Hash>,
-            topup_anchor_count: u32,
-            native_amx_application_manifest_version: u16,
-            native_amx_application_manifest_root: Hash,
-            native_amx_application_manifest_count: u32,
-            executed_block_wire_hash: Hash,
-        }
-
-        #[derive(Encode)]
-        struct PreWireLengthExecutionCommitment {
-            parent_state_root: Hash,
-            post_state_root: Hash,
-            ordinary_writes_root: Hash,
-            topup_anchor_root: Option<Hash>,
-            topup_anchor_count: u32,
-            native_amx_application_manifest_version: u16,
-            native_amx_application_manifest_root: Hash,
-            native_amx_application_manifest_count: u32,
-            merge_carrier: Option<MergeCarrierCommitmentV1>,
-            executed_block_wire_hash: Hash,
-        }
-
         let parent = Hash::new(b"native manifest parent");
         let post = Hash::new(b"native manifest post");
         let ordinary = Hash::new(b"native manifest ordinary");
         let executed = Hash::new(b"native manifest executed wire");
         let root = Hash::new(b"native manifest non-empty root");
-        let empty = ExecutionCommitment::without_topups_or_merge_carrier(
-            parent, post, ordinary, 1, executed,
-        );
+        let empty = ExecutionCommitment::without_topups(parent, post, ordinary, executed);
         assert_eq!(
             empty.native_amx_application_manifest_root,
             native_amx_application_manifest_empty_root()
         );
         assert_eq!(empty.native_amx_application_manifest_count, 0);
         assert_eq!(empty.validate(), Ok(()));
-        let mut zero_wire_len = empty;
-        zero_wire_len.executed_block_wire_len = 0;
-        assert_eq!(
-            zero_wire_len.validate(),
-            Err(ValidationError::InvalidExecutedBlockWireLength)
-        );
-        let mut maximum_wire_len = empty;
-        maximum_wire_len.executed_block_wire_len = MAX_EXECUTED_BLOCK_WIRE_BYTES;
-        assert_eq!(maximum_wire_len.validate(), Ok(()));
-        let mut oversized_wire_len = empty;
-        oversized_wire_len.executed_block_wire_len = MAX_EXECUTED_BLOCK_WIRE_BYTES + 1;
-        assert_eq!(
-            oversized_wire_len.validate(),
-            Err(ValidationError::InvalidExecutedBlockWireLength)
-        );
-        let mut unrepresentable_wire_len = empty;
-        unrepresentable_wire_len.executed_block_wire_len = u64::MAX;
-        assert_eq!(
-            unrepresentable_wire_len.validate(),
-            Err(ValidationError::InvalidExecutedBlockWireLength)
-        );
         let legacy = LegacyExecutionCommitment {
             parent_state_root: parent,
             post_state_root: post,
@@ -257,92 +174,22 @@ mod tests {
             ExecutionCommitment::decode_all(&mut legacy_cursor).is_err(),
             "the pre-manifest execution commitment must not decode implicitly"
         );
-        let pre_merge = PreMergeCarrierExecutionCommitment {
-            parent_state_root: parent,
-            post_state_root: post,
-            ordinary_writes_root: ordinary,
-            topup_anchor_root: None,
-            topup_anchor_count: 0,
-            native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
-            native_amx_application_manifest_count: 0,
-            executed_block_wire_hash: executed,
-        }
-        .encode();
-        let mut pre_merge_cursor = pre_merge.as_slice();
-        assert!(
-            ExecutionCommitment::decode_all(&mut pre_merge_cursor).is_err(),
-            "the pre-v4 execution commitment must not decode as implicitly carrier-free"
-        );
-        let pre_wire_length = PreWireLengthExecutionCommitment {
-            parent_state_root: parent,
-            post_state_root: post,
-            ordinary_writes_root: ordinary,
-            topup_anchor_root: None,
-            topup_anchor_count: 0,
-            native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
-            native_amx_application_manifest_count: 0,
-            merge_carrier: None,
-            executed_block_wire_hash: executed,
-        }
-        .encode();
-        let mut pre_wire_length_cursor = pre_wire_length.as_slice();
-        assert!(
-            ExecutionCommitment::decode_all(&mut pre_wire_length_cursor).is_err(),
-            "the pre-wire-length execution commitment must not decode implicitly"
-        );
-        let canonical =
-            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
-                parent,
-                post,
-                ordinary,
-                None,
-                0,
-                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-                root,
-                1,
-                1,
-                executed,
-            )
-            .expect("canonical Native AMX manifest commitment");
+        let canonical = ExecutionCommitment::new_with_native_amx_application_manifest(
+            parent,
+            post,
+            ordinary,
+            None,
+            0,
+            NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            root,
+            1,
+            executed,
+        )
+        .expect("canonical Native AMX manifest commitment");
         assert_eq!(canonical.validate(), Ok(()));
 
-        let entry_hash = HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
-            b"merge carrier commitment fixture",
-        ));
-        let with_merge =
-            ExecutionCommitment::new_with_native_amx_application_manifest_and_merge_carrier(
-                parent,
-                post,
-                ordinary,
-                None,
-                0,
-                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-                native_amx_application_manifest_empty_root(),
-                0,
-                Some(MergeCarrierCommitmentV1::new(entry_hash)),
-                1,
-                executed,
-            )
-            .expect("canonical merge-carrier execution commitment");
         assert_eq!(
-            with_merge.merge_carrier.map(|carrier| carrier.entry_hash),
-            Some(entry_hash)
-        );
-        let mut wrong_merge_version = with_merge;
-        wrong_merge_version
-            .merge_carrier
-            .as_mut()
-            .expect("fixture has a merge carrier")
-            .version = MERGE_CARRIER_COMMITMENT_VERSION_V1.saturating_add(1);
-        assert_eq!(
-            wrong_merge_version.validate(),
-            Err(ValidationError::InvalidMergeCarrierCommitmentVersion)
-        );
-
-        assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
+            ExecutionCommitment::new_with_native_amx_application_manifest(
                 parent,
                 post,
                 ordinary,
@@ -351,13 +198,12 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 0,
-                1,
                 executed,
             ),
             Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
         );
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
+            ExecutionCommitment::new_with_native_amx_application_manifest(
                 parent,
                 post,
                 ordinary,
@@ -366,13 +212,12 @@ mod tests {
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 root,
                 MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
-                1,
                 executed,
             ),
             Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
         );
         assert_eq!(
-            ExecutionCommitment::new_with_native_amx_application_manifest_without_merge_carrier(
+            ExecutionCommitment::new_with_native_amx_application_manifest(
                 parent,
                 post,
                 ordinary,
@@ -380,7 +225,6 @@ mod tests {
                 0,
                 NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 root,
-                1,
                 1,
                 executed,
             ),
@@ -543,14 +387,18 @@ mod tests {
         }
     }
 
+    fn rs16_fixture_chunks(context: &HeightContext, payload: &[u8]) -> Vec<Vec<u8>> {
+        encode_payload_chunks(context.da_layout, payload)
+            .expect("fixture payload encoding succeeds")
+    }
+
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
-        ExecutionCommitment::new_without_merge_carrier(
+        ExecutionCommitment::new(
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),
             Hash::new([seed, 5]),
             None,
             0,
-            1,
             Hash::new([seed, 6]),
         )
         .expect("canonical fixture execution commitment")
@@ -578,7 +426,8 @@ mod tests {
 
     fn manifest(context: &HeightContext) -> PayloadManifest {
         let subject = subject(9);
-        PayloadManifest::derive(context, round(context, 1), subject, 4, &[b"body".to_vec()])
+        let encoded_chunks = rs16_fixture_chunks(context, b"body");
+        PayloadManifest::derive(context, round(context, 1), subject, 4, &encoded_chunks)
             .expect("valid canonical manifest")
     }
 
@@ -803,6 +652,35 @@ mod tests {
     }
 
     #[test]
+    fn payload_chunk_encoding_is_complete_padded_and_deterministic() {
+        let context = context(&[1, 1, 1, 1]);
+        let payload = b"abcdef";
+        let chunks = encode_payload_chunks(context.da_layout, payload)
+            .expect("canonical payload encoding succeeds");
+        assert_eq!(chunks.len(), 4);
+        assert!(chunks.iter().all(|chunk| chunk.len() == 4));
+        assert_eq!(chunks[0], b"abcd");
+        assert_eq!(chunks[1], chunks[0]);
+        assert_eq!(chunks[2], [b'e', b'f', 0, 0]);
+        assert_eq!(chunks[3], chunks[2]);
+        assert_eq!(
+            chunks,
+            encode_payload_chunks(context.da_layout, payload)
+                .expect("repeated canonical encoding succeeds")
+        );
+
+        let manifest = PayloadManifest::derive(
+            &context,
+            round(&context, 1),
+            subject(9),
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &chunks,
+        )
+        .expect("complete encoded chunks derive a valid manifest");
+        assert_eq!(manifest.validate(&context), Ok(()));
+    }
+
+    #[test]
     fn height_context_rejects_noncanonical_rosters_and_quorums() {
         let mut empty = context(&[1, 1, 1, 1]);
         empty.roster.clear();
@@ -845,15 +723,6 @@ mod tests {
         let largest = context(&vec![1; MAX_VALIDATORS_PER_HEIGHT]);
         assert_eq!(largest.validate(), Ok(()));
 
-        let mut plain_da = context(&[1, 1, 1, 1]);
-        plain_da.da_layout.encoding = PayloadEncoding::Plain;
-        plain_da.da_layout.data_shards = 0;
-        plain_da.da_layout.parity_shards = 0;
-        assert_eq!(
-            plain_da.validate(),
-            Err(ValidationError::InvalidDataAvailabilityLayout)
-        );
-
         let mut odd_rs16_symbols = context(&[1, 1, 1, 1]);
         odd_rs16_symbols.da_layout.chunk_size_bytes = 3;
         assert_eq!(
@@ -891,8 +760,6 @@ mod tests {
                 native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
                 native_amx_application_manifest_count: 0,
-                merge_carrier: None,
-                executed_block_wire_len: 1,
                 executed_block_wire_hash: Hash::new(b"executed block wire"),
             },
             signers: vec![0, 1, 2],
@@ -958,9 +825,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x13, 0x00, 0xcf, 0x26, 0xd2, 0x40, 0x58, 0x12, 0x45, 0x68, 0xee, 0x55, 0xde, 0xa8,
-                0xee, 0xce, 0x18, 0xda, 0xf5, 0xed, 0x0d, 0xaf, 0x9b, 0xf0, 0x45, 0x63, 0x70, 0xac,
-                0x50, 0xfa, 0x41, 0x4d,
+                0x06, 0xfd, 0x74, 0x10, 0x75, 0x8d, 0x71, 0xbb, 0x75, 0xff, 0xf8, 0x45, 0xd6, 0x8f,
+                0x38, 0xdc, 0xda, 0x6f, 0x7b, 0x52, 0xd1, 0x79, 0x91, 0xdb, 0x1c, 0xe9, 0x9e, 0xe0,
+                0x29, 0xb4, 0x7c, 0x37,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -984,9 +851,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x2d, 0xcb, 0xf6, 0x22, 0xa5, 0x46, 0x47, 0x3b, 0xf2, 0x5c, 0xf7, 0x88, 0x06, 0x22,
-                0xe2, 0x6e, 0x69, 0x28, 0xd5, 0x2b, 0x52, 0x1b, 0x6c, 0x3a, 0x47, 0xf4, 0xba, 0xe8,
-                0xf8, 0xb9, 0xb8, 0xa5,
+                0x63, 0xe4, 0x91, 0xf6, 0x3a, 0x8e, 0x16, 0xc8, 0x2b, 0x73, 0x30, 0xf7, 0x0e, 0x30,
+                0x4e, 0x09, 0x32, 0x22, 0xe1, 0xdf, 0xb7, 0xf2, 0x53, 0x95, 0x9a, 0x87, 0xbc, 0x48,
+                0xaa, 0x46, 0xd1, 0x5f,
             ],
             "intentional transition-identity changes require updating this golden"
         );
@@ -1821,7 +1688,7 @@ mod tests {
         let round = round(&context, 1);
         let mut response_subject = subject(9);
         response_subject.payload_hash = Hash::new(&body);
-        let chunks = body.chunks(4).map(<[u8]>::to_vec).collect::<Vec<_>>();
+        let chunks = rs16_fixture_chunks(&context, &body);
         let manifest = PayloadManifest::derive(
             &context,
             round,
@@ -2026,8 +1893,6 @@ mod tests {
         assert_ne!(changed_responder.signature_preimage(), original_preimage);
     }
 
-    // Status fixtures and validation tests included in the parent consensus-v2 test module.
-
     fn status(context: &HeightContext) -> SumeragiV2Status {
         SumeragiV2Status {
             protocol_version: PROTOCOL_VERSION,
@@ -2179,7 +2044,7 @@ mod tests {
         assert_eq!(
             impossible_signer_power.validate(),
             Err(Error::InvalidCommitSummaryQuorum),
-            "each authenticated signer must contribute at least one unit of voting power"
+            "the redundant signed-vote projection must equal the authenticated signer count"
         );
 
         let mut one_sided_commit = status(&context);
@@ -2405,6 +2270,7 @@ mod tests {
             Err(Error::LivenessGenerationFromFuture)
         );
     }
+
     #[test]
     fn status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry() {
         use SumeragiV2StatusValidationError as Error;
@@ -2715,6 +2581,61 @@ mod tests {
             .insert("unknown".to_owned(), norito::json::Value::Bool(true));
         assert!(norito::json::from_value::<ConsensusMessageV2>(envelope_json).is_err());
     }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn execution_commitment_json_requires_explicit_merge_carrier() {
+        use iroha_schema::{IntoSchema as _, Metadata};
+
+        let schema = ExecutionCommitment::schema();
+        let Metadata::Struct(metadata) = schema
+            .get::<ExecutionCommitment>()
+            .expect("execution commitment schema")
+        else {
+            panic!("execution commitment schema must be a struct");
+        };
+        let merge_carrier = metadata
+            .declarations
+            .iter()
+            .find(|field| field.name == "merge_carrier")
+            .expect("merge carrier schema declaration");
+        assert_eq!(
+            merge_carrier.ty,
+            core::any::TypeId::of::<Option<MergeCarrierCommitmentV1>>()
+        );
+
+        let carrier_free = ExecutionCommitment::without_topups_or_merge_carrier(
+            Hash::new(b"json parent"),
+            Hash::new(b"json post"),
+            Hash::new(b"json ordinary"),
+            1,
+            Hash::new(b"json executed wire"),
+        );
+        let with_carrier = ExecutionCommitment {
+            merge_carrier: Some(MergeCarrierCommitmentV1::new(
+                HashOf::from_untyped_unchecked(Hash::new(b"json merge entry")),
+            )),
+            ..carrier_free
+        };
+        for commitment in [carrier_free, with_carrier] {
+            let value = norito::json::to_value(&commitment).expect("serialize commitment");
+            assert!(value.get("merge_carrier").is_some());
+            let decoded = norito::json::from_value::<ExecutionCommitment>(value)
+                .expect("explicit merge carrier projection decodes");
+            assert_eq!(decoded, commitment);
+            assert_eq!(decoded.encode(), commitment.encode());
+        }
+
+        let mut missing = norito::json::to_value(&carrier_free).expect("serialize commitment");
+        missing
+            .as_object_mut()
+            .expect("commitment is an object")
+            .remove("merge_carrier");
+        let error = norito::json::from_value::<ExecutionCommitment>(missing)
+            .expect_err("omitted merge carrier must reject");
+        assert!(error.to_string().contains("missing field `merge_carrier`"));
+    }
+
     #[test]
     fn dual_quorum_requires_count_and_power() {
         let context = context(&[70, 10, 10, 10]);

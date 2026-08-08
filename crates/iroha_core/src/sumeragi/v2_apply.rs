@@ -3826,6 +3826,35 @@ pub(crate) struct V2ApplyService {
     test_failures: tests::FailureInjection,
 }
 
+/// Opaque proof that Kura authenticated the sole finalized subject for recovery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VerifiedRecoveredFinalitySubject {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    subject: wire::BlockSubject,
+}
+
+impl VerifiedRecoveredFinalitySubject {
+    /// Return the cryptographically authenticated finalized subject.
+    pub(crate) const fn subject(self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Return whether this proof belongs to the exact body-store context.
+    pub(crate) fn authorizes_context(self, context: &wire::HeightContext) -> bool {
+        self.context_id == context.id() && self.height == context.height
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(context: &wire::HeightContext, subject: wire::BlockSubject) -> Self {
+        Self {
+            context_id: context.id(),
+            height: context.height,
+            subject,
+        }
+    }
+}
+
 impl V2ApplyService {
     fn classify_native_amx_evidence_byte_budget_error(
         error: NativeAmxParticipantApplicationEvidenceByteBudgetError,
@@ -3936,15 +3965,38 @@ impl V2ApplyService {
             &hashes,
         )
         .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
-        if !expected.unavailable_indices.is_empty()
-            || expected.ownerships != bundle.lane_payload_ownerships
+        if expected.unavailable_indices.is_empty()
+            && expected.ownerships == bundle.lane_payload_ownerships
         {
-            return Err(V2ApplyError::Validation(
-                "Sumeragi v2 lane ownerships differ from deterministic committed-state planning"
-                    .to_owned(),
-            ));
+            return Ok(());
         }
-        Ok(())
+        // A validator may have committed the canonical predecessor globally
+        // while its independently durable lane certificate/application receipt
+        // is still catching up. Proposal production remains blocked on that
+        // debt, but validation must not turn local sidecar lag into a different
+        // decision. Recompute from the exact canonical predecessor retained by
+        // Kura; never trust the received ownership as planning authority.
+        let recovered = super::lane_planner::prepare_v2_lane_payload_validation_plan(
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            context,
+            view,
+            &leader.validator,
+            &routes,
+            &hashes,
+        )
+        .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        if recovered.unavailable_indices.is_empty()
+            && recovered.ownerships == bundle.lane_payload_ownerships
+        {
+            return Ok(());
+        }
+        Err(V2ApplyError::Validation(format!(
+            "Sumeragi v2 lane ownerships differ from deterministic committed-state planning \
+             (ordinary_unavailable={}, recovery_unavailable={})",
+            expected.unavailable_indices.len(),
+            recovered.unavailable_indices.len(),
+        )))
     }
 
     /// Construct the serialized state/Kura application adapter.
@@ -4490,6 +4542,63 @@ impl V2ApplyService {
             )
             .map_err(Self::classify_native_amx_evidence_byte_budget_error)?;
         Ok(execution_commitment)
+    }
+
+    /// Revalidate one checksummed restart marker before it can restore vote authority.
+    ///
+    /// An unfinished height re-executes the ordinary deterministic candidate
+    /// validator. If Kura already crossed finality, replaying against the
+    /// advanced world state would be both incorrect and needlessly expensive;
+    /// the cryptographically verified finality artifact instead authenticates
+    /// the exact proposal subject and execution commitment.
+    pub(crate) fn revalidate_recovered_candidate(
+        &self,
+        context: &wire::HeightContext,
+        body: &SignedBlock,
+    ) -> Result<wire::ExecutionCommitment, V2ApplyError> {
+        if let Some(artifact) = self.kura.v2_finality_artifact(context.height)? {
+            if artifact.height_context != *context || !body.is_resultless_proposal() {
+                return Err(V2ApplyError::Validation(
+                    "recovered candidate differs from its verified finality context".to_owned(),
+                ));
+            }
+            let canonical_wire = body
+                .encode_wire()
+                .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
+            let subject = wire::BlockSubject {
+                parent_block_hash: body.header().prev_block_hash(),
+                block_hash: body.hash(),
+                payload_hash: Hash::new(canonical_wire),
+            };
+            if artifact.subject != subject {
+                return Err(V2ApplyError::Validation(
+                    "recovered candidate differs from its verified finality subject".to_owned(),
+                ));
+            }
+            artifact.commit_qc.execution_commitment.validate()?;
+            return Ok(artifact.commit_qc.execution_commitment);
+        }
+        self.validate_candidate(context, body)
+    }
+
+    /// Return the sole subject allowed to recover marker authority after finality.
+    pub(crate) fn recovered_finality_subject(
+        &self,
+        context: &wire::HeightContext,
+    ) -> Result<Option<VerifiedRecoveredFinalitySubject>, V2ApplyError> {
+        let Some(artifact) = self.kura.v2_finality_artifact(context.height)? else {
+            return Ok(None);
+        };
+        if artifact.height_context != *context {
+            return Err(V2ApplyError::Validation(
+                "verified finality differs from the recovered height context".to_owned(),
+            ));
+        }
+        Ok(Some(VerifiedRecoveredFinalitySubject {
+            context_id: context.id(),
+            height: context.height,
+            subject: artifact.subject,
+        }))
     }
 
     fn validate_and_apply(

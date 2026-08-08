@@ -530,7 +530,7 @@ height-context state are not migrated in place.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  474-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  524-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
   One hundred six `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
@@ -1295,7 +1295,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 834 named tests
+Before network startup, the executable wrapper inventories 835 named tests
 across 39 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1397,7 +1397,7 @@ and reconstructed-chunk terminality regressions bring the 818-test checkpoint.
 Thirteen exact admission, retry, tombstone, and high-water regressions bring the
 inventory to the 831-test checkpoint. Retiring five obsolete peer-genesis
 protocol regressions brings the
-current inventory to 834 tests across 39 modules.
+current inventory to 835 tests across 39 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 86 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1472,7 +1472,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`2f818f6a1174b77a9078b9e80b000671a44d045f23088fdf0da271b91ff2ea12`.
+`3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1596,7 +1596,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 86 pre-network legs and the exact
-834-test inventory, the pinned harness lock and resolved toolchain, the formal
+835-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

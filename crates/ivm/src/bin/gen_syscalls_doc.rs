@@ -28,11 +28,11 @@ fn guess_defaults(n: u32) -> (String, String, String) {
 
     let up = name;
     // Heuristics for common patterns; conservative and non-binding
-    if up.contains("ZK_VERIFY_BATCH") || n == 0x68 {
+    if up.contains("ZK_VERIFY_BATCH") || n == 0x64 {
         args = "r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)".into();
         ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64".into();
         gas = "G_verify + bytes".into();
-    } else if matches!(n, 0x60..=0x63) {
+    } else if matches!(n, 0x60..=0x61) {
         args = "r10=&NoritoBytes(OpenVerifyEnvelope)".into();
         ret = "u64=0/1".into();
         gas = "G_verify_proof + bytes".into();
@@ -50,11 +50,11 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(OpenVerifyEnvelope)".into();
         ret = "r10=0/1, r11=status:u64".into();
         gas = "G_verify_proof + bytes".into();
-    } else if up.contains("ROOTS_GET") || n == 0x64 {
+    } else if up.contains("ROOTS_GET") || n == 0x62 {
         args = "r10=&NoritoBytes(RootsGetRequest)".into();
         ret = "host-owned ptr (&NoritoBytes)".into();
         gas = "G_roots_get + bytes".into();
-    } else if up.contains("VOTE_GET_TALLY") || n == 0x65 {
+    } else if up.contains("VOTE_GET_TALLY") || n == 0x63 {
         args = "r10=&NoritoBytes(VoteGetTallyRequest)".into();
         ret = "host-owned ptr (&NoritoBytes)".into();
         gas = "G_vote_get + bytes".into();

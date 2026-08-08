@@ -148,20 +148,20 @@ pub(super) const PROVIDER_INGEST_SOURCE_CHUNK_DOMAIN_V1: &[u8] =
     b"iroha.runtime-provider-broker.provider-ingest-source-chunk.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct PopRuntimeOpenResultWireV1 {
-    issuer_hsm_key_id: String,
-    issuer_public_key: [u8; 32],
-    enrollment_recipient_key_id: String,
-    enrollment_recipient_public_key_digest: [u8; 32],
-    wallet_recipient_key_id: String,
-    wallet_recipient_public_key_digest: [u8; 32],
-    wallet_wrapping_key_id: String,
+pub(super) struct PopRuntimeOpenResultWireV1 {
+    pub(super) issuer_hsm_key_id: String,
+    pub(super) issuer_public_key: [u8; 32],
+    pub(super) enrollment_recipient_key_id: String,
+    pub(super) enrollment_recipient_public_key_digest: [u8; 32],
+    pub(super) wallet_recipient_key_id: String,
+    pub(super) wallet_recipient_public_key_digest: [u8; 32],
+    pub(super) wallet_wrapping_key_id: String,
 }
 
 #[derive(PartialEq, Eq, Decode, Encode)]
-struct PopRecipientOpenRequestWireV1 {
-    encrypted_payload: sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1,
-    aad: Vec<u8>,
+pub(super) struct PopRecipientOpenRequestWireV1 {
+    pub(super) encrypted_payload: sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1,
+    pub(super) aad: Vec<u8>,
 }
 
 impl fmt::Debug for PopRecipientOpenRequestWireV1 {
@@ -182,12 +182,12 @@ impl Drop for PopRecipientOpenRequestWireV1 {
 }
 
 #[derive(PartialEq, Eq, Decode, Encode)]
-struct PopRecipientOpenResultWireV1 {
-    plaintext: Vec<u8>,
+pub(super) struct PopRecipientOpenResultWireV1 {
+    pub(super) plaintext: Vec<u8>,
 }
 
 impl PopRecipientOpenResultWireV1 {
-    fn take_plaintext(&mut self) -> Vec<u8> {
+    pub(super) fn take_plaintext(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.plaintext)
     }
 }
@@ -208,7 +208,7 @@ impl Drop for PopRecipientOpenResultWireV1 {
     }
 }
 
-fn validate_pop_open_result(
+pub(super) fn validate_pop_open_result(
     result: &PopRuntimeOpenResultWireV1,
     exact: &PopCredentialRuntimeBindingWireV1,
 ) -> Result<(), BrokerError> {
@@ -226,7 +226,7 @@ fn validate_pop_open_result(
     Ok(())
 }
 
-fn validate_pop_cursor(
+pub(super) fn validate_pop_cursor(
     cursor: sorafs_node::pop_credentials::PopFinalizedCursorV1,
 ) -> Result<(), BrokerError> {
     if cursor.block_height == 0 || cursor.block_hash == [0; 32] {
@@ -250,7 +250,7 @@ fn pop_recipient_plaintext_limit(operation: u16) -> Result<usize, BrokerError> {
     }
 }
 
-fn validate_pop_recipient_open_request(
+pub(super) fn validate_pop_recipient_open_request(
     request: &PopRecipientOpenRequestWireV1,
     operation: u16,
 ) -> Result<(), BrokerError> {
@@ -277,7 +277,7 @@ fn validate_pop_recipient_open_request(
     Ok(())
 }
 
-fn validate_pop_recipient_open_result(
+pub(super) fn validate_pop_recipient_open_result(
     result: &PopRecipientOpenResultWireV1,
     operation: u16,
 ) -> Result<(), BrokerError> {
@@ -615,8 +615,7 @@ pub(super) struct ProviderBindingWireV1 {
     pub(super) native_signer_binding: Option<NativeTransactionSignerBindingWireV1>,
     pub(super) governance_dag_publisher_peer_id: Option<Vec<u8>>,
     pub(super) governance_dag_publisher_public_key: Option<[u8; 32]>,
-    pub(super) governance_request_auth_public_key: Option<[u8; 32]>,
-    pub(super) governance_request_auth_max_body_bytes: Option<u64>,
+    pub(super) governance_request_ingress_binding: Option<GovernanceRequestIngressBindingWireV1>,
     pub(super) provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>,
     pub(super) provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>,
     pub(super) provider_ingest_checkpoint_max_bytes: Option<u64>,
@@ -643,6 +642,16 @@ pub(super) struct ModerationPanelNotificationArchiveBindingWireV1 {
     pub(super) public_key: [u8; 32],
     pub(super) max_bytes: u64,
     pub(super) max_records: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct GovernanceRequestIngressBindingWireV1 {
+    pub(super) scope: u8,
+    pub(super) endpoint_binding: [u8; 32],
+    pub(super) public_key: [u8; 32],
+    pub(super) max_body_bytes: u64,
+    pub(super) max_envelope_lifetime_secs: u64,
+    pub(super) max_future_skew_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]

@@ -7,7 +7,7 @@
 #[cfg(feature = "quic")]
 use std::sync::OnceLock;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt::Debug,
     io,
     net::{IpAddr, ToSocketAddrs},
@@ -50,8 +50,8 @@ use tokio::{
 #[cfg(feature = "p2p_tls")]
 use crate::boilerplate;
 use crate::{
-    Broadcast, Error, NetworkMessage, OnlinePeers, Post, Priority, RelayRole, UpdatePeers,
-    UpdateTopology, UpdateTrustedPeers,
+    Broadcast, Error, NetworkMessage, OnlinePeers, P2pIdentityKeys, Post, Priority, RelayRole,
+    UpdatePeers, UpdateTopology, UpdateTrustedPeers,
     boilerplate::*,
     peer::{
         Connection, ConnectionId, OutboundFrameQueueLimits, OutboundPostByteBudgets,
@@ -98,6 +98,7 @@ struct ConsensusCapsSnapshot {
 #[derive(Clone, Debug, Default)]
 struct PendingReplySourceAuthority {
     topology: Option<UpdateTopology>,
+    validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
     trusted: Option<UpdateTrustedPeers>,
     acl: Option<message::UpdateAcl>,
     consensus_caps: Option<ConsensusCapsSnapshot>,
@@ -106,16 +107,151 @@ struct PendingReplySourceAuthority {
 impl PendingReplySourceAuthority {
     fn is_empty(&self) -> bool {
         self.topology.is_none()
+            && self.validator_dial_roster.is_none()
             && self.trusted.is_none()
             && self.acl.is_none()
             && self.consensus_caps.is_none()
     }
 }
 
+/// Retained validator-dial authority updates.
+///
+/// Consensus topology changes use the coupled variant so a newly admitted
+/// validator can never be observed as an unmanaged eager-dial peer between two
+/// independently scheduled actor updates.
+#[derive(Clone, Debug)]
+enum ValidatorDialControlUpdate {
+    Roster(message::UpdateValidatorDialRoster),
+    Topology(message::UpdateValidatorTopology),
+}
+
 #[derive(Clone, Debug)]
 struct ReplySourceAuthorityProjection {
     protected_sources: HashSet<PeerId>,
     reconciliation_topology: HashSet<PeerId>,
+}
+
+/// Deterministic ownership of configured-validator connection establishment.
+///
+/// The canonical roster defines a balanced tournament: every unordered pair
+/// has one preferred dialer, while each node owns either `floor((n - 1) / 2)`
+/// or `ceil((n - 1) / 2)` of its pairs.  A standby installs its takeover
+/// deadline only when that pair first has an address to dial, so daemon startup
+/// work before topology publication cannot consume the failover interval.
+#[derive(Debug)]
+struct ValidatorDialScheduler {
+    configured_roster: BTreeSet<PeerId>,
+    roster: BTreeSet<PeerId>,
+    standby_not_before: HashMap<PeerId, tokio::time::Instant>,
+    takeover_delay: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidatorDialRole {
+    /// Relay, observer, dynamic, or otherwise unmanaged peer.
+    Unmanaged,
+    /// This endpoint owns the pair's immediate dial attempt.
+    Preferred,
+    /// The other endpoint owns the immediate attempt; this endpoint is backup.
+    Standby,
+}
+
+impl ValidatorDialScheduler {
+    fn new(roster: HashSet<PeerId>, takeover_delay: Duration) -> Self {
+        let roster: BTreeSet<_> = roster.into_iter().collect();
+        Self {
+            configured_roster: roster.clone(),
+            roster,
+            standby_not_before: HashMap::new(),
+            takeover_delay,
+        }
+    }
+
+    fn replace_roster(&mut self, roster: HashSet<PeerId>, self_id: &PeerId) {
+        self.roster = roster
+            .into_iter()
+            .filter(|peer_id| self.configured_roster.contains(peer_id))
+            .collect();
+        let roster = &self.roster;
+        self.standby_not_before.retain(|peer_id, _| {
+            Self::role_in(roster, self_id, peer_id) == ValidatorDialRole::Standby
+        });
+    }
+
+    fn role(&self, self_id: &PeerId, peer_id: &PeerId) -> ValidatorDialRole {
+        Self::role_in(&self.roster, self_id, peer_id)
+    }
+
+    fn role_in(roster: &BTreeSet<PeerId>, self_id: &PeerId, peer_id: &PeerId) -> ValidatorDialRole {
+        if self_id == peer_id || !roster.contains(self_id) || !roster.contains(peer_id) {
+            return ValidatorDialRole::Unmanaged;
+        }
+
+        let Some(self_rank) = roster.iter().position(|candidate| candidate == self_id) else {
+            return ValidatorDialRole::Unmanaged;
+        };
+        let Some(peer_rank) = roster.iter().position(|candidate| candidate == peer_id) else {
+            return ValidatorDialRole::Unmanaged;
+        };
+        let count = roster.len();
+        let forward = (peer_rank + count - self_rank) % count;
+        let reverse = count - forward;
+        let preferred = forward < reverse || (forward == reverse && self_rank < peer_rank);
+        if preferred {
+            ValidatorDialRole::Preferred
+        } else {
+            ValidatorDialRole::Standby
+        }
+    }
+
+    /// Return the earliest instant at which this endpoint may dial `peer_id`.
+    ///
+    /// `None` means immediate. Repeated calls retain the first standby deadline;
+    /// topology refreshes and malicious address gossip therefore cannot postpone
+    /// takeover indefinitely or create additional retry epochs.
+    fn not_before(
+        &mut self,
+        self_id: &PeerId,
+        peer_id: &PeerId,
+        now: tokio::time::Instant,
+        startup_not_before: tokio::time::Instant,
+    ) -> Option<tokio::time::Instant> {
+        match self.role(self_id, peer_id) {
+            ValidatorDialRole::Unmanaged | ValidatorDialRole::Preferred => {
+                self.standby_not_before.remove(peer_id);
+                None
+            }
+            ValidatorDialRole::Standby => {
+                let base = core::cmp::max(now, startup_not_before);
+                Some(
+                    *self
+                        .standby_not_before
+                        .entry(peer_id.clone())
+                        .or_insert_with(|| base + self.takeover_delay),
+                )
+            }
+        }
+    }
+
+    /// Start a fresh failover epoch after an authenticated session exists.
+    fn note_session_established(
+        &mut self,
+        self_id: &PeerId,
+        peer_id: &PeerId,
+        now: tokio::time::Instant,
+        startup_not_before: tokio::time::Instant,
+    ) {
+        match self.role(self_id, peer_id) {
+            ValidatorDialRole::Standby => {
+                let base = core::cmp::max(now, startup_not_before);
+                self.standby_not_before
+                    .insert(peer_id.clone(), base + self.takeover_delay);
+            }
+            ValidatorDialRole::Unmanaged | ValidatorDialRole::Preferred => {
+                self.standby_not_before.remove(peer_id);
+            }
+        }
+    }
 }
 
 impl ConsensusCapsSnapshot {
@@ -345,6 +481,11 @@ fn runtime_from_handshake(
             })
         })
         .transpose()?;
+    if puzzle_params.is_some() && ticket_ttl <= min_ticket_ttl {
+        return Err(Error::HandshakeSoranet(format!(
+            "invalid soranet puzzle ticket timing: ticket_ttl {ticket_ttl:?} must exceed min_ticket_ttl {min_ticket_ttl:?}"
+        )));
+    }
 
     let signed_ticket_public_key = signed_ticket_public_key
         .map(|key| {
@@ -7219,6 +7360,8 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     update_topology_sender: ControlUpdateSender<UpdateTopology>,
     /// Latest [`UpdatePeers`] snapshot sender.
     update_peers_sender: ControlUpdateSender<UpdatePeers>,
+    /// Latest configured-validator dial-roster snapshot sender.
+    update_validator_dial_roster_sender: ControlUpdateSender<ValidatorDialControlUpdate>,
     /// Latest [`UpdatePeerCapabilities`] snapshot sender.
     update_peer_capabilities_sender: ControlUpdateSender<message::UpdatePeerCapabilities>,
     /// Latest trusted-peers snapshot sender.
@@ -7278,6 +7421,7 @@ impl<T: Pload, E: Enc> Clone for NetworkBaseHandle<T, E> {
             reply_route_source_capacity: self.reply_route_source_capacity,
             update_topology_sender: self.update_topology_sender.clone(),
             update_peers_sender: self.update_peers_sender.clone(),
+            update_validator_dial_roster_sender: self.update_validator_dial_roster_sender.clone(),
             update_peer_capabilities_sender: self.update_peer_capabilities_sender.clone(),
             update_trusted_peers_sender: self.update_trusted_peers_sender.clone(),
             update_acl_sender: self.update_acl_sender.clone(),
@@ -7740,9 +7884,9 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// # Errors
     /// Returns an error for invalid frame/queue geometry, listener binding or
     /// transport setup failures, and incompatible handshake configuration.
-    #[log(skip(key_pair, shutdown_signal))]
+    #[log(skip(identity_keys, shutdown_signal))]
     pub async fn start(
-        key_pair: KeyPair,
+        identity_keys: P2pIdentityKeys,
         config: Config,
         chain_id: ChainId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
@@ -7750,7 +7894,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
         Self::start_with_crypto(
-            key_pair,
+            identity_keys,
             config,
             chain_id,
             consensus_caps,
@@ -7769,6 +7913,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
         let (update_topology_tx, update_topology_rx) = control_update_channel();
         let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_validator_dial_roster_tx, update_validator_dial_roster_rx) =
+            control_update_channel();
         let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
         let (update_trusted_tx, update_trusted_rx) = control_update_channel();
         let (update_acl_tx, update_acl_rx) = control_update_channel();
@@ -7793,6 +7939,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
 
         drop(update_topology_rx);
         drop(update_peers_rx);
+        drop(update_validator_dial_roster_rx);
         drop(update_peer_capabilities_rx);
         drop(update_trusted_rx);
         drop(update_acl_rx);
@@ -7809,6 +7956,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             reply_route_source_capacity: 1,
             update_topology_sender: update_topology_tx,
             update_peers_sender: update_peers_tx,
+            update_validator_dial_roster_sender: update_validator_dial_roster_tx,
             update_peer_capabilities_sender: update_peer_capabilities_tx,
             update_trusted_peers_sender: update_trusted_tx,
             update_acl_sender: update_acl_tx,
@@ -7844,7 +7992,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         }
     }
 
-    /// Launch the P2P runtime with pluggable Noise/TLS capability overrides.
+    /// Launch the P2P runtime with pluggable SoraNet/TLS capability overrides.
     ///
     /// Use this entrypoint when tests or specialised deployments need to force
     /// specific handshake capabilities (e.g., consensus/torii lanes, confidential
@@ -7861,10 +8009,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// address, if the crypto handshake fails during bootstrap, or if the
     /// reactor tasks fail to initialise (for example, due to TLS key/cert issues
     /// or capability mismatches).
-    #[log(skip(key_pair, shutdown_signal))]
+    #[log(skip(identity_keys, shutdown_signal))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
     pub async fn start_with_crypto(
-        key_pair: KeyPair,
+        identity_keys: P2pIdentityKeys,
         config: Config,
         chain_id: ChainId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
@@ -7873,7 +8021,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
         Self::start_with_crypto_and_initial_trusted_sources(
-            key_pair,
+            identity_keys,
             config,
             chain_id,
             consensus_caps,
@@ -7898,10 +8046,48 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// Returns an error under the same conditions as [`Self::start_with_crypto`],
     /// and when the initial protected-source projection exceeds
     /// `network.max_total_connections`.
-    #[log(skip(key_pair, shutdown_signal))]
+    #[log(skip(identity_keys, shutdown_signal))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
     pub async fn start_with_crypto_and_initial_trusted_sources(
-        key_pair: KeyPair,
+        identity_keys: P2pIdentityKeys,
+        config: Config,
+        chain_id: ChainId,
+        consensus_caps: Option<crate::ConsensusHandshakeCaps>,
+        confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
+        crypto_caps: Option<crate::CryptoHandshakeCaps>,
+        initial_trusted_sources: HashSet<PeerId>,
+        shutdown_signal: ShutdownSignal,
+    ) -> Result<(Self, Child), Error> {
+        Self::start_with_crypto_and_initial_authorities(
+            identity_keys,
+            config,
+            chain_id,
+            consensus_caps,
+            confidential_caps,
+            crypto_caps,
+            initial_trusted_sources,
+            HashSet::new(),
+            shutdown_signal,
+        )
+        .await
+    }
+
+    /// Launch with both protected-source authority and the configured validator
+    /// roster that owns pairwise initial dials.
+    ///
+    /// The validator roster is installed before the actor can process topology
+    /// or address snapshots, closing the zero-delay startup race that would
+    /// otherwise permit both endpoints to begin the expensive mandatory-PQ
+    /// handshake.
+    #[log(skip(
+        identity_keys,
+        initial_trusted_sources,
+        initial_validator_dial_roster,
+        shutdown_signal
+    ))]
+    #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
+    pub async fn start_with_crypto_and_initial_authorities(
+        identity_keys: P2pIdentityKeys,
         Config {
             address: listen_addr,
             public_address,
@@ -7990,11 +8176,16 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
         mut initial_trusted_sources: HashSet<PeerId>,
+        mut initial_validator_dial_roster: HashSet<PeerId>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
+        let P2pIdentityKeys {
+            node: key_pair,
+            soranet_transport: soranet_transport_key_pair,
+        } = identity_keys;
         // This is the first startup preflight because QUIC and TCP listener setup below may bind
-        // sockets. It also prevents a sender from reaching encryption with a frame length that
-        // the deterministic contiguous-buffer limit cannot represent.
+        // sockets. It prevents a sender from reaching encryption with a frame length that the
+        // deterministic contiguous-buffer limit cannot represent.
         let topic_frame_caps = TopicFrameCaps {
             consensus: max_frame_bytes_consensus,
             control: max_frame_bytes_control,
@@ -8100,6 +8291,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             NetworkActorByteBudget::new(p2p_outbound_frame_queue_max_low_bytes.get(), 0)
                 .expect("zero-reserve low actor byte geometry cannot overflow");
         let self_id = PeerId::from(key_pair.public_key().clone());
+        initial_validator_dial_roster
+            .retain(|peer_id| peer_id == &self_id || initial_trusted_sources.contains(peer_id));
+        let validator_dial_scheduler = ValidatorDialScheduler::new(
+            initial_validator_dial_roster,
+            dial_timeout.saturating_add(idle_timeout),
+        );
         initial_trusted_sources.remove(&self_id);
         let authenticated_source_geometry =
             crate::peer::AuthenticatedSourceGeometry::new(max_total_connections);
@@ -8374,6 +8571,8 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             mpsc::channel(p2p_subscriber_queue_cap.get());
         let (update_topology_sender, update_topology_receiver) = control_update_channel();
         let (update_peers_sender, update_peers_receiver) = control_update_channel();
+        let (update_validator_dial_roster_sender, update_validator_dial_roster_receiver) =
+            control_update_channel();
         let (update_peer_capabilities_sender, update_peer_capabilities_receiver) =
             control_update_channel();
         let (update_trusted_peers_sender, update_trusted_peers_receiver) = control_update_channel();
@@ -8414,6 +8613,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             match start_quic_listener::<WireMessage<T>, E>(
                 &listen_addr.value().to_socket_addrs()?.as_slice()[0],
                 key_pair.clone(),
+                soranet_transport_key_pair.clone(),
                 public_address.value().clone(),
                 service_message_sender.clone(),
                 idle_timeout,
@@ -8464,6 +8664,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 match start_tls_listener::<WireMessage<T>, E>(
                     tls_addr.to_socket_addrs()?.as_slice()[0],
                     key_pair.clone(),
+                    soranet_transport_key_pair.clone(),
                     public_address.value().clone(),
                     service_message_sender.clone(),
                     idle_timeout,
@@ -8545,6 +8746,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet_runtime.clone(),
+            soranet_transport_key_pair,
             listener,
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
@@ -8566,6 +8768,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             network_actor_progress_budget: Arc::clone(&network_actor_progress_budget),
             update_topology_receiver,
             update_peers_receiver,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver,
@@ -8586,6 +8789,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler,
             current_peers_addresses: Vec::new(),
             idle_timeout,
             reply_writer_flush_timeout,
@@ -8695,6 +8899,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 reply_route_source_capacity: max_total_connections,
                 update_topology_sender,
                 update_peers_sender,
+                update_validator_dial_roster_sender,
                 update_peer_capabilities_sender,
                 update_trusted_peers_sender,
                 update_acl_sender,
@@ -9816,6 +10021,34 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         send_control_update(&self.update_peers_sender, "peers", peers);
     }
 
+    /// Replace the configured-validator subset governed by deterministic
+    /// pairwise dial ownership.
+    ///
+    /// Relay hubs, observers, dynamically discovered peers, and ordinary P2P
+    /// test callers remain on the existing eager dial policy unless explicitly
+    /// included in this authenticated local roster.
+    pub fn update_validator_dial_roster(&self, roster: message::UpdateValidatorDialRoster) {
+        send_control_update(
+            &self.update_validator_dial_roster_sender,
+            "validator dial roster",
+            ValidatorDialControlUpdate::Roster(roster),
+        );
+    }
+
+    /// Atomically replace the consensus topology and the configured-validator
+    /// subset governed by deterministic pairwise dial ownership.
+    ///
+    /// Publishing the two snapshots as one retained actor update prevents a
+    /// newly admitted validator from briefly entering the eager dynamic-peer
+    /// dial path before its ownership role is installed.
+    pub fn update_validator_topology(&self, update: message::UpdateValidatorTopology) {
+        send_control_update(
+            &self.update_validator_dial_roster_sender,
+            "validator topology",
+            ValidatorDialControlUpdate::Topology(update),
+        );
+    }
+
     /// Send [`UpdatePeerCapabilities`] message on network actor.
     pub fn update_peer_capabilities(&self, capabilities: message::UpdatePeerCapabilities) {
         send_control_update(
@@ -9915,2523 +10148,7 @@ fn test_network_actor_progress_budget() -> Arc<NetworkActorProgressBudget> {
 }
 
 #[cfg(test)]
-mod handle_update_tests {
-    use std::{
-        collections::HashSet,
-        sync::{Barrier, atomic::AtomicUsize},
-    };
-
-    use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
-    use iroha_crypto::encryption::ChaCha20Poly1305;
-    use iroha_primitives::addr::socket_addr;
-    use norito::codec::{Decode, DecodeAll, Encode};
-    use tokio::sync::{mpsc, watch};
-
-    use super::*;
-
-    #[derive(Clone, Debug, Decode, Encode)]
-    struct Dummy;
-
-    impl message::ClassifyTopic for Dummy {}
-
-    #[derive(Debug, Decode, Encode)]
-    struct CloneCountingPayload(Vec<u8>);
-
-    static ACTOR_SIZE_CLONES: AtomicUsize = AtomicUsize::new(0);
-
-    impl Clone for CloneCountingPayload {
-        fn clone(&self) -> Self {
-            ACTOR_SIZE_CLONES.fetch_add(1, Ordering::Relaxed);
-            Self(self.0.clone())
-        }
-    }
-
-    impl message::ClassifyTopic for CloneCountingPayload {}
-
-    impl<'a> norito::core::DecodeFromSlice<'a> for CloneCountingPayload {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-            let mut slice = bytes;
-            let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
-                norito::core::Error::Message(format!("codec decode error: {error}"))
-            })?;
-            Ok((value, bytes.len() - slice.len()))
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    struct BadLengthHintPayload;
-
-    impl ncore::NoritoSerialize for BadLengthHintPayload {
-        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            writer.write_all(&[1, 2, 3, 4])?;
-            Ok(())
-        }
-
-        fn encoded_len_exact(&self) -> Option<usize> {
-            Some(1)
-        }
-    }
-
-    impl<'a> ncore::NoritoDeserialize<'a> for BadLengthHintPayload {
-        fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
-            Self
-        }
-    }
-
-    impl<'a> ncore::DecodeFromSlice<'a> for BadLengthHintPayload {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            if bytes.len() < 4 {
-                return Err(ncore::Error::LengthMismatch);
-            }
-            Ok((Self, 4))
-        }
-    }
-
-    impl message::ClassifyTopic for BadLengthHintPayload {}
-
-    #[derive(Clone, Debug)]
-    struct FailingSerializerPayload;
-
-    impl ncore::NoritoSerialize for FailingSerializerPayload {
-        fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            Err(ncore::Error::Message(
-                "intentional actor-admission serialization failure".to_owned(),
-            ))
-        }
-    }
-
-    impl<'a> ncore::NoritoDeserialize<'a> for FailingSerializerPayload {
-        fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
-            Self
-        }
-    }
-
-    impl<'a> ncore::DecodeFromSlice<'a> for FailingSerializerPayload {
-        fn decode_from_slice(_bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            Err(ncore::Error::Message(
-                "intentional actor-admission decode failure".to_owned(),
-            ))
-        }
-    }
-
-    impl message::ClassifyTopic for FailingSerializerPayload {}
-
-    impl<'a> norito::core::DecodeFromSlice<'a> for Dummy {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-            let mut slice = bytes;
-            let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
-                norito::core::Error::Message(format!("codec decode error: {error}"))
-            })?;
-            Ok((value, bytes.len() - slice.len()))
-        }
-    }
-
-    #[derive(Clone, Debug, Decode, Encode, PartialEq, Eq)]
-    enum RoutedActorDummy {
-        Safety,
-        Control,
-        Lane,
-        LaneAlternate,
-        BlockSync,
-    }
-
-    impl message::ClassifyTopic for RoutedActorDummy {
-        fn topic(&self) -> message::Topic {
-            match self {
-                Self::Safety => message::Topic::ConsensusSafety,
-                Self::Control => message::Topic::Control,
-                Self::Lane | Self::LaneAlternate => message::Topic::Consensus,
-                Self::BlockSync => message::Topic::BlockSync,
-            }
-        }
-
-        fn progress_reconstruction(&self) -> message::ProgressReconstruction {
-            message::ProgressReconstruction::Retransmit
-        }
-    }
-
-    impl<'a> norito::core::DecodeFromSlice<'a> for RoutedActorDummy {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-            let mut slice = bytes;
-            let value = <Self as DecodeAll>::decode_all(&mut slice).map_err(|error| {
-                norito::core::Error::Message(format!("codec decode error: {error}"))
-            })?;
-            Ok((value, bytes.len() - slice.len()))
-        }
-    }
-
-    fn test_network_actor_byte_budget() -> Arc<NetworkActorByteBudget> {
-        NetworkActorByteBudget::new(usize::MAX, 0)
-            .expect("zero safety reserve must fit the test actor budget")
-    }
-
-    fn test_topic_frame_caps() -> TopicFrameCaps {
-        TopicFrameCaps {
-            consensus: usize::MAX,
-            control: usize::MAX,
-            block_sync: usize::MAX,
-            tx_gossip: usize::MAX,
-            peer_gossip: usize::MAX,
-            health: usize::MAX,
-            other: usize::MAX,
-        }
-    }
-
-    #[test]
-    fn network_actor_byte_budget_preserves_additive_safety_reserve() {
-        assert!(NetworkActorByteBudget::new(usize::MAX, 0).is_some());
-        assert!(
-            NetworkActorByteBudget::new(usize::MAX, 1).is_none(),
-            "aggregate capacity overflow must fail closed"
-        );
-
-        let budget = NetworkActorByteBudget::new(10, 4).expect("small exact budget");
-        let ordinary = budget
-            .try_reserve(10, false)
-            .expect("ordinary traffic owns its complete configured subcap");
-        assert_eq!(
-            budget.retained(),
-            NetworkActorRetainedBytes {
-                total: 10,
-                ordinary: 10,
-            }
-        );
-        assert!(budget.try_reserve(1, false).is_none());
-
-        let safety = budget
-            .try_reserve(4, true)
-            .expect("ordinary saturation must leave the safety reserve available");
-        assert_eq!(
-            budget.retained(),
-            NetworkActorRetainedBytes {
-                total: 14,
-                ordinary: 10,
-            }
-        );
-        assert!(budget.try_reserve(1, true).is_none());
-
-        drop(ordinary);
-        assert_eq!(
-            budget.retained(),
-            NetworkActorRetainedBytes {
-                total: 4,
-                ordinary: 0,
-            }
-        );
-        let replacement = budget
-            .try_reserve(10, false)
-            .expect("released ordinary ownership must be reusable while safety is retained");
-        drop((replacement, safety));
-        assert_eq!(budget.retained(), NetworkActorRetainedBytes::default());
-    }
-
-    #[test]
-    fn progress_budget_bounds_unregistered_waiters_without_fresh_barging() {
-        assert!(
-            NetworkActorProgressBudget::new(usize::MAX, 2, 2).is_none(),
-            "per-source reserve multiplication must fail closed"
-        );
-        let classed = NetworkActorProgressBudget::new_classed(
-            ActorProgressByteLimits {
-                safety: 1,
-                lane: 2,
-                bulk: 4,
-            },
-            2,
-            6,
-        )
-        .expect("small classed geometry must fit");
-        assert_eq!(classed.max_sources, 6);
-        assert_eq!(classed.max_sources_per_class, 2);
-        assert_eq!(classed.max_total_bytes, 14);
-        let budget = NetworkActorProgressBudget::new(10, 1, 1).expect("small progress budget");
-        let shape = ProgressTicketShape {
-            topic: message::Topic::BlockSync,
-            stream_wire_bytes: 10,
-            broadcast: false,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new(b"progress-budget-waiter"),
-            authority: None,
-        };
-        let ProgressLeaseAttempt::Ready {
-            lease: full_lease,
-            ticket: mut accepted_ticket,
-        } = budget.try_reserve(10, shape, None)
-        else {
-            panic!("the exact progress maximum must be admitted");
-        };
-        accepted_ticket.commit();
-        assert_eq!(budget.retained(), 10);
-
-        let ProgressLeaseAttempt::Waiting {
-            ticket: Some(first_ticket),
-            rank: 1,
-        } = budget.try_reserve(1, shape, None)
-        else {
-            panic!("the first blocked source must receive rank one");
-        };
-        let ProgressLeaseAttempt::Waiting {
-            ticket: None,
-            rank: 2,
-        } = budget.try_reserve(1, shape, None)
-        else {
-            panic!("a second blocked producer must not consume another waiter slot");
-        };
-        drop(full_lease);
-        let ProgressLeaseAttempt::Ready {
-            lease,
-            ticket: mut first_ticket,
-        } = budget.try_reserve(1, shape, Some(first_ticket))
-        else {
-            panic!("the live source ticket must acquire released capacity");
-        };
-        first_ticket.commit();
-        drop(lease);
-        assert_eq!(budget.retained(), 0);
-    }
-
-    #[test]
-    fn progress_budget_preserves_fifo_for_three_registered_producers() {
-        let budget = NetworkActorProgressBudget::new(1, 1, 4)
-            .expect("one source with four registered waiter ranks");
-        let shape = |tag| ProgressTicketShape {
-            topic: message::Topic::Consensus,
-            stream_wire_bytes: 1,
-            broadcast: false,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new([tag]),
-            authority: None,
-        };
-        let ProgressLeaseAttempt::Ready {
-            lease: occupied,
-            ticket: mut admitted,
-        } = budget.try_reserve(1, shape(0), None)
-        else {
-            panic!("fixture must occupy the source slot");
-        };
-        admitted.commit();
-
-        let mut tickets = Vec::new();
-        for expected_rank in 1..=3 {
-            let ProgressLeaseAttempt::Waiting {
-                ticket: Some(ticket),
-                rank,
-            } = budget.try_reserve(1, shape(expected_rank), None)
-            else {
-                panic!("each bounded producer must receive a persistent rank");
-            };
-            assert_eq!(rank, usize::from(expected_rank));
-            tickets.push(ticket);
-        }
-        let first = tickets.remove(0);
-        drop(first);
-        assert_eq!(tickets[0].rank(), Some(1));
-        assert_eq!(tickets[1].rank(), Some(2));
-
-        drop(occupied);
-        let second = tickets.remove(0);
-        let ProgressLeaseAttempt::Ready {
-            lease: second_lease,
-            ticket: mut second,
-        } = budget.try_reserve(1, shape(2), Some(second))
-        else {
-            panic!("oldest surviving producer must acquire the released source");
-        };
-        second.commit();
-        drop(second_lease);
-        assert_eq!(tickets[0].rank(), Some(1));
-
-        let third = tickets.remove(0);
-        let ProgressLeaseAttempt::Ready {
-            lease: third_lease,
-            ticket: mut third,
-        } = budget.try_reserve(1, shape(3), Some(third))
-        else {
-            panic!("the final producer's rank must decrease to service");
-        };
-        third.commit();
-        drop(third_lease);
-        assert_eq!(budget.retained(), 0);
-    }
-
-    #[test]
-    fn configured_producer_geometry_gives_six_same_source_waiters_decreasing_ranks() {
-        let waiters_per_source = RELIABLE_PROGRESS_WAITERS_PER_SOURCE;
-        assert!(
-            waiters_per_source >= 6,
-            "the complete production geometry must cover the adversarial waiter set"
-        );
-        let target_sources = 2_usize;
-        let max_waiters = target_sources
-            .checked_mul(ActorProgressClass::COUNT)
-            .and_then(|sources| sources.checked_mul(waiters_per_source))
-            .expect("small test producer/source geometry");
-        let budget = NetworkActorProgressBudget::new_classed(
-            ActorProgressByteLimits::uniform(1),
-            target_sources,
-            max_waiters,
-        )
-        .expect("checked production-derived waiter geometry");
-        let source_a = ActorProgressSource {
-            target: Some(PeerId::from(KeyPair::random().public_key().clone())),
-            class: ActorProgressClass::Lane,
-        };
-        let source_b = ActorProgressSource {
-            target: Some(PeerId::from(KeyPair::random().public_key().clone())),
-            class: ActorProgressClass::Lane,
-        };
-        let shape = |tag| ProgressTicketShape {
-            topic: message::Topic::Consensus,
-            stream_wire_bytes: 1,
-            broadcast: false,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new([tag]),
-            authority: None,
-        };
-
-        let ProgressLeaseAttempt::Ready {
-            lease: occupied_a,
-            ticket: mut admitted_a,
-        } = budget.try_reserve_for_source(1, shape(0), source_a.clone(), None, None)
-        else {
-            panic!("source A fixture must occupy its actor lane");
-        };
-        admitted_a.commit();
-
-        let mut waiters = Vec::new();
-        for expected_rank in 1_u8..=6 {
-            let request_shape = shape(expected_rank);
-            let ProgressLeaseAttempt::Waiting {
-                ticket: Some(ticket),
-                rank,
-            } = budget.try_reserve_for_source(1, request_shape, source_a.clone(), None, None)
-            else {
-                panic!("every admitted source-A producer must receive a persistent rank");
-            };
-            assert_eq!(rank, usize::from(expected_rank));
-            waiters.push((request_shape, ticket));
-        }
-
-        let ProgressLeaseAttempt::Ready {
-            lease: independent_b,
-            ticket: mut admitted_b,
-        } = budget.try_reserve_for_source(1, shape(100), source_b, None, None)
-        else {
-            panic!("source A saturation must not consume source B's reserved lane");
-        };
-        admitted_b.commit();
-        drop(independent_b);
-
-        drop(occupied_a);
-        while !waiters.is_empty() {
-            for (index, (_, ticket)) in waiters.iter().enumerate() {
-                assert_eq!(
-                    ticket.rank(),
-                    Some(index + 1),
-                    "each service step must strictly decrease every surviving rank"
-                );
-            }
-            let (request_shape, ticket) = waiters.remove(0);
-            let ProgressLeaseAttempt::Ready {
-                lease,
-                ticket: mut ready,
-            } = budget.try_reserve_for_source(
-                1,
-                request_shape,
-                source_a.clone(),
-                None,
-                Some(ticket),
-            )
-            else {
-                panic!("the exact source-A head must acquire released actor ownership");
-            };
-            ready.commit();
-            drop(lease);
-        }
-        assert_eq!(budget.retained(), 0);
-    }
-
-    #[test]
-    fn targetized_broadcast_coalesces_only_the_same_digest_and_membership() {
-        let budget = NetworkActorProgressBudget::new_classed(
-            ActorProgressByteLimits {
-                safety: 1,
-                lane: 1,
-                bulk: 1,
-            },
-            1,
-            3,
-        )
-        .expect("one target per class must fit");
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let source = ActorProgressSource {
-            target: Some(target.clone()),
-            class: ActorProgressClass::Lane,
-        };
-        let membership = |generation| {
-            Arc::new(ReliableProgressMembership {
-                peer_id: target.clone(),
-                generation,
-                active: AtomicBool::new(true),
-            })
-        };
-        let generation_seven = membership(7);
-        let generation_eight = membership(8);
-        let generation_seven_authority =
-            ProgressDeliveryAuthority::Topology(Arc::clone(&generation_seven));
-        let generation_eight_authority =
-            ProgressDeliveryAuthority::Topology(Arc::clone(&generation_eight));
-        let shape = |request_digest, generation| ProgressTicketShape {
-            topic: message::Topic::Consensus,
-            stream_wire_bytes: 1,
-            broadcast: true,
-            reply_writer_timeout_attempt: None,
-            request_digest,
-            authority: Some(ProgressAuthorityIdentity::Topology(generation)),
-        };
-
-        let first_digest = Hash::new(b"first-broadcast-request");
-        let ProgressLeaseAttempt::Ready {
-            lease: first,
-            ticket: mut admitted,
-        } = budget.try_reserve_for_source(
-            1,
-            shape(first_digest, 7),
-            source.clone(),
-            Some(&generation_seven_authority),
-            None,
-        )
-        else {
-            panic!("first targetized request must own the lane");
-        };
-        admitted.commit();
-
-        assert!(matches!(
-            budget.try_reserve_for_source(
-                1,
-                shape(first_digest, 7),
-                source.clone(),
-                Some(&generation_seven_authority),
-                None,
-            ),
-            ProgressLeaseAttempt::SameRequestAlreadyOwned
-        ));
-        assert!(matches!(
-            budget.try_reserve_for_source(
-                1,
-                shape(Hash::new(b"second-broadcast-request"), 7),
-                source.clone(),
-                Some(&generation_seven_authority),
-                None,
-            ),
-            ProgressLeaseAttempt::Waiting { rank: 1, .. }
-        ));
-        assert!(matches!(
-            budget.try_reserve_for_source(
-                1,
-                shape(first_digest, 8),
-                source,
-                Some(&generation_eight_authority),
-                None,
-            ),
-            ProgressLeaseAttempt::Waiting { rank: 1, .. }
-        ));
-        drop(first);
-        assert_eq!(budget.retained(), 0);
-    }
-
-    #[test]
-    fn removed_membership_cancellation_is_race_safe_across_ticket_id_reuse() {
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let source = ActorProgressSource {
-            target: Some(target.clone()),
-            class: ActorProgressClass::Lane,
-        };
-        let membership = |generation| {
-            Arc::new(ReliableProgressMembership {
-                peer_id: target.clone(),
-                generation,
-                active: AtomicBool::new(true),
-            })
-        };
-        let broadcast_shape = |generation, tag| ProgressTicketShape {
-            topic: message::Topic::Consensus,
-            stream_wire_bytes: 1,
-            broadcast: true,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new([tag]),
-            authority: Some(ProgressAuthorityIdentity::Topology(generation)),
-        };
-        let direct_shape = ProgressTicketShape {
-            topic: message::Topic::Consensus,
-            stream_wire_bytes: 1,
-            broadcast: false,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new(b"membership-cancellation-direct-owner"),
-            authority: None,
-        };
-        let budget =
-            NetworkActorProgressBudget::new_classed(ActorProgressByteLimits::uniform(1), 1, 3)
-                .expect("one target and one waiter per class must fit");
-        let ProgressLeaseAttempt::Ready {
-            lease: direct_lease,
-            ticket: mut direct_ticket,
-        } = budget.try_reserve_for_source(1, direct_shape, source.clone(), None, None)
-        else {
-            panic!("direct fixture must retain the shared target lane");
-        };
-        direct_ticket.commit();
-
-        let old_membership = membership(7);
-        let old_authority = ProgressDeliveryAuthority::Topology(Arc::clone(&old_membership));
-        let old_shape = broadcast_shape(7, 7);
-        let ProgressLeaseAttempt::Waiting {
-            ticket: Some(old_ticket),
-            rank: 1,
-        } = budget.try_reserve_for_source(1, old_shape, source.clone(), Some(&old_authority), None)
-        else {
-            panic!("old membership must own the first blocked rank");
-        };
-        old_membership.cancel();
-        assert_eq!(budget.cancel_membership(&old_membership, true), 1);
-        assert_eq!(old_ticket.rank(), None);
-
-        let new_membership = membership(8);
-        let new_authority = ProgressDeliveryAuthority::Topology(Arc::clone(&new_membership));
-        let new_shape = broadcast_shape(8, 8);
-        let ProgressLeaseAttempt::Waiting {
-            ticket: Some(new_ticket),
-            rank: 1,
-        } = budget.try_reserve_for_source(1, new_shape, source.clone(), Some(&new_authority), None)
-        else {
-            panic!("new membership must reuse the released rank exactly");
-        };
-        assert_eq!(old_ticket.id, new_ticket.id, "empty waiter set resets ids");
-        drop(old_ticket);
-        assert_eq!(
-            new_ticket.rank(),
-            Some(1),
-            "delayed old-ticket drop must match its complete old shape"
-        );
-        drop(direct_lease);
-        let ProgressLeaseAttempt::Ready {
-            lease: new_lease,
-            ticket: mut new_ticket,
-        } = budget.try_reserve_for_source(
-            1,
-            new_shape,
-            source.clone(),
-            Some(&new_authority),
-            Some(new_ticket),
-        )
-        else {
-            panic!("new membership must acquire the released target lane");
-        };
-        new_ticket.commit();
-        drop(new_lease);
-
-        // Reconciliation can remove the waiter after `Ready` installs its
-        // lease but before the channel handoff commits the ticket. That exact
-        // cancelled commit is a no-op, not a panic or a cancellation of later
-        // work.
-        let commit_race_membership = membership(9);
-        let commit_race_authority =
-            ProgressDeliveryAuthority::Topology(Arc::clone(&commit_race_membership));
-        let commit_race_shape = broadcast_shape(9, 9);
-        let ProgressLeaseAttempt::Ready {
-            lease: commit_race_lease,
-            ticket: mut commit_race_ticket,
-        } = budget.try_reserve_for_source(
-            1,
-            commit_race_shape,
-            source.clone(),
-            Some(&commit_race_authority),
-            None,
-        )
-        else {
-            panic!("commit-race membership must initially acquire the lane");
-        };
-        commit_race_membership.cancel();
-        assert_eq!(budget.cancel_membership(&commit_race_membership, true), 1);
-        commit_race_ticket.commit();
-        drop(commit_race_lease);
-
-        // Force reservation to wait on the budget lock, publish cancellation,
-        // then race reservation against the reconciliation sweep. Since the
-        // membership check happens under the same budget lock, neither order
-        // can install a post-sweep stale waiter.
-        let cancelled_membership = membership(10);
-        let cancelled_shape = broadcast_shape(10, 10);
-        let barrier = Arc::new(Barrier::new(2));
-        let state_guard = budget
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::thread::scope(|scope| {
-            let worker_budget = Arc::clone(&budget);
-            let worker_membership = Arc::clone(&cancelled_membership);
-            let worker_source = source.clone();
-            let worker_barrier = Arc::clone(&barrier);
-            let worker = scope.spawn(move || {
-                worker_barrier.wait();
-                let worker_authority = ProgressDeliveryAuthority::Topology(worker_membership);
-                worker_budget.try_reserve_for_source(
-                    1,
-                    cancelled_shape,
-                    worker_source,
-                    Some(&worker_authority),
-                    None,
-                )
-            });
-            barrier.wait();
-            cancelled_membership.cancel();
-            drop(state_guard);
-            let swept = budget.cancel_membership(&cancelled_membership, true);
-            assert!(matches!(
-                worker.join().expect("reservation race thread"),
-                ProgressLeaseAttempt::CancelledMembership
-            ));
-            assert_eq!(swept, 0, "cancelled reservation never creates a waiter");
-        });
-        let state = budget
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(state.waiter_count, 0);
-        assert!(state.waiters.is_empty());
-        assert_eq!(state.retained_items, 0);
-    }
-
-    #[test]
-    fn progress_class_geometry_reserves_safety_from_arbitrary_lane_sources() {
-        let budget = NetworkActorProgressBudget::new_classed(
-            ActorProgressByteLimits {
-                safety: 1,
-                lane: 1,
-                bulk: 1,
-            },
-            1,
-            3,
-        )
-        .expect("single-target class geometry must fit");
-        let first_target = PeerId::from(KeyPair::random().public_key().clone());
-        let second_target = PeerId::from(KeyPair::random().public_key().clone());
-        let lane_shape = ProgressTicketShape {
-            topic: message::Topic::Consensus,
-            stream_wire_bytes: 1,
-            broadcast: false,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new(b"lane-progress-budget"),
-            authority: None,
-        };
-        let ProgressLeaseAttempt::Ready {
-            lease: lane_lease,
-            ticket: mut lane_admission,
-        } = budget.try_reserve_for_source(
-            1,
-            lane_shape,
-            ActorProgressSource {
-                target: Some(first_target),
-                class: ActorProgressClass::Lane,
-            },
-            None,
-            None,
-        )
-        else {
-            panic!("first lane source must be admitted");
-        };
-        lane_admission.commit();
-        let ProgressLeaseAttempt::Waiting {
-            ticket: Some(lane_waiter),
-            rank: 1,
-        } = budget.try_reserve_for_source(
-            1,
-            lane_shape,
-            ActorProgressSource {
-                target: Some(second_target.clone()),
-                class: ActorProgressClass::Lane,
-            },
-            None,
-            None,
-        )
-        else {
-            panic!("a second arbitrary lane target must remain with its caller");
-        };
-        let ProgressLeaseAttempt::Ready {
-            lease: safety_lease,
-            ticket: mut safety_admission,
-        } = budget.try_reserve_for_source(
-            1,
-            ProgressTicketShape {
-                topic: message::Topic::ConsensusSafety,
-                stream_wire_bytes: 1,
-                broadcast: false,
-                reply_writer_timeout_attempt: None,
-                request_digest: Hash::new(b"safety-progress-budget"),
-                authority: None,
-            },
-            ActorProgressSource {
-                target: Some(second_target),
-                class: ActorProgressClass::Safety,
-            },
-            None,
-            None,
-        )
-        else {
-            panic!("lane-source saturation must leave the safety class available");
-        };
-        safety_admission.commit();
-
-        drop((lane_waiter, lane_lease, safety_lease));
-        assert_eq!(budget.retained(), 0);
-    }
-
-    #[test]
-    fn progress_ticket_allocation_never_wraps_and_resets_only_when_empty() {
-        let budget = NetworkActorProgressBudget::new(1, 2, 2).expect("small progress budget");
-        let shape = ProgressTicketShape {
-            topic: message::Topic::BlockSync,
-            stream_wire_bytes: 1,
-            broadcast: false,
-            reply_writer_timeout_attempt: None,
-            request_digest: Hash::new(b"progress-ticket-wrap"),
-            authority: None,
-        };
-        let ProgressLeaseAttempt::Ready {
-            lease,
-            ticket: mut accepted_ticket,
-        } = budget.try_reserve(1, shape, None)
-        else {
-            panic!("fixture must fill the one-byte owner");
-        };
-        accepted_ticket.commit();
-        let ProgressLeaseAttempt::Waiting {
-            ticket: Some(waiting_ticket),
-            rank: 1,
-        } = budget.try_reserve(1, shape, None)
-        else {
-            panic!("fixture must install a live waiter");
-        };
-        budget
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .next_ticket = u64::MAX;
-
-        assert!(matches!(
-            budget.try_reserve(1, shape, None),
-            ProgressLeaseAttempt::Waiting {
-                ticket: None,
-                rank: 2
-            }
-        ));
-        drop(waiting_ticket);
-        let ProgressLeaseAttempt::Waiting {
-            ticket: Some(reset_ticket),
-            rank: 1,
-        } = budget.try_reserve(1, shape, None)
-        else {
-            panic!("an empty waiter queue must reset allocation safely");
-        };
-        assert_eq!(reset_ticket.id, 0);
-        drop((reset_ticket, lease));
-        assert_eq!(budget.retained(), 0);
-    }
-
-    #[test]
-    fn admitted_network_message_releases_byte_ownership_on_drop() {
-        let budget = NetworkActorByteBudget::new(8, 2).expect("small exact budget");
-        let lease = budget
-            .try_reserve(7, false)
-            .expect("fixture must fit ordinary subcap");
-        let message = AdmittedNetworkMessage::new(
-            NetworkMessage::Broadcast(Broadcast {
-                data: Dummy,
-                priority: Priority::High,
-            }),
-            lease,
-        );
-        assert_eq!(budget.retained().total, 7);
-        drop(message);
-        assert_eq!(budget.retained(), NetworkActorRetainedBytes::default());
-    }
-
-    #[test]
-    fn outbound_actor_admission_enforces_plaintext_cap_and_stream_charge_exactly() {
-        let (mut handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
-            handle_with_network_receivers::<Dummy>();
-        let message = NetworkMessage::Broadcast(Broadcast {
-            data: Dummy,
-            priority: Priority::High,
-        });
-        let plaintext_frame_bytes =
-            outbound_actor_message_wire_bytes(&message, &handle.self_id, handle.relay_ttl)
-                .expect("count exact actor fixture");
-        let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
-            .expect("small actor fixture must have a stream charge");
-        handle.topic_frame_caps.other = plaintext_frame_bytes;
-        handle.network_actor_byte_budget =
-            NetworkActorByteBudget::new(stream_wire_bytes, 0).expect("exact actor fixture budget");
-
-        handle.broadcast(Broadcast {
-            data: Dummy,
-            priority: Priority::High,
-        });
-        assert_eq!(
-            handle.network_actor_byte_budget.retained().total,
-            stream_wire_bytes,
-            "actor ownership must use the downstream encrypted stream charge"
-        );
-        let admitted = high_rx
-            .try_recv()
-            .expect("exact topic cap and byte budget must admit the message");
-        drop(admitted);
-        assert_eq!(
-            handle.network_actor_byte_budget.retained(),
-            NetworkActorRetainedBytes::default()
-        );
-
-        handle.topic_frame_caps.other = plaintext_frame_bytes - 1;
-        handle.broadcast(Broadcast {
-            data: Dummy,
-            priority: Priority::High,
-        });
-        assert!(matches!(
-            high_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-        assert_eq!(
-            handle.network_actor_byte_budget.retained(),
-            NetworkActorRetainedBytes::default(),
-            "rejected over-cap traffic must not retain actor ownership"
-        );
-    }
-
-    struct ControlUpdateReceivers {
-        topology: ControlUpdateReceiver<message::UpdateTopology>,
-        peers: ControlUpdateReceiver<message::UpdatePeers>,
-        peer_capabilities: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
-        trusted_peers: ControlUpdateReceiver<message::UpdateTrustedPeers>,
-        acl: ControlUpdateReceiver<message::UpdateAcl>,
-        handshake: ControlUpdateReceiver<message::UpdateHandshake>,
-        consensus_caps: ControlUpdateReceiver<ConsensusCapsSnapshot>,
-    }
-
-    fn handle_with_control_update_receivers() -> (
-        NetworkBaseHandle<Dummy, ChaCha20Poly1305>,
-        ControlUpdateReceivers,
-    ) {
-        let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
-        let (update_topology_tx, update_topology_rx) = control_update_channel();
-        let (update_peers_tx, update_peers_rx) = control_update_channel();
-        let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
-        let (update_trusted_tx, update_trusted_rx) = control_update_channel();
-        let (update_acl_tx, update_acl_rx) = control_update_channel();
-        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
-        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
-        let (network_message_high_sender, _network_message_high_rx) =
-            net_channel::channel_with_capacity(1);
-        let (network_message_safety_sender, _network_message_safety_rx) =
-            net_channel::channel_with_capacity(1);
-        let (network_message_progress_sender, _network_message_progress_rx) =
-            net_channel::channel_with_capacity(1);
-        let (network_message_low_sender, _network_message_low_rx) =
-            net_channel::channel_with_capacity(1);
-        let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
-        let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
-            watch::channel(HashMap::new());
-
-        (
-            NetworkBaseHandle {
-                subscribe_to_peers_messages_sender: subscribe_tx,
-                online_peers_receiver,
-                online_peer_capabilities_receiver,
-                reliable_broadcast_topology: Arc::new(
-                    Mutex::new(ReliableProgressTopology::empty()),
-                ),
-                reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
-                reply_route_owner: Arc::new(()),
-                reply_route_source_capacity: 8,
-                update_topology_sender: update_topology_tx,
-                update_peers_sender: update_peers_tx,
-                update_peer_capabilities_sender: update_peer_capabilities_tx,
-                update_trusted_peers_sender: update_trusted_tx,
-                update_acl_sender: update_acl_tx,
-                update_handshake_sender: update_handshake_tx,
-                update_consensus_caps_sender: update_consensus_caps_tx,
-                service_message_sender: service_message_tx,
-                network_message_high_sender,
-                network_message_safety_sender,
-                network_message_progress_sender,
-                network_message_low_sender,
-                network_message_high_deferred_permits: Arc::new(Semaphore::new(1)),
-                network_message_safety_deferred_permits: Arc::new(Semaphore::new(1)),
-                network_message_progress_deferred_permits: Arc::new(Semaphore::new(1)),
-                network_actor_byte_budget: test_network_actor_byte_budget(),
-                network_actor_progress_budget: test_network_actor_progress_budget(),
-                network_actor_low_byte_budget: test_network_actor_byte_budget(),
-                self_id: PeerId::from(KeyPair::random().public_key().clone()),
-                relay_ttl: 0,
-                topic_frame_caps: test_topic_frame_caps(),
-                subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-                _encryptor: core::marker::PhantomData,
-            },
-            ControlUpdateReceivers {
-                topology: update_topology_rx,
-                peers: update_peers_rx,
-                peer_capabilities: update_peer_capabilities_rx,
-                trusted_peers: update_trusted_rx,
-                acl: update_acl_rx,
-                handshake: update_handshake_rx,
-                consensus_caps: update_consensus_caps_rx,
-            },
-        )
-    }
-
-    fn closed_handle() -> NetworkBaseHandle<Dummy, ChaCha20Poly1305> {
-        let (handle, receivers) = handle_with_control_update_receivers();
-        drop(receivers);
-        handle
-    }
-
-    fn test_consensus_caps(marker: u8) -> crate::ConsensusHandshakeCaps {
-        crate::ConsensusHandshakeCaps {
-            mode: if marker & 1 == 0 {
-                crate::ConsensusMode::Permissioned
-            } else {
-                crate::ConsensusMode::Npos
-            },
-            proto_version: u32::from(marker),
-            consensus_fingerprint: [marker; 32],
-            config: crate::ConsensusConfigCaps {
-                execution_policy_hash: [marker; 32],
-                nexus_policy_digest: [marker; 32],
-                v2_config_fingerprint: [marker; 32],
-                ivm_gas_schedule_hash: [marker; 32],
-            },
-        }
-    }
-
-    pub(super) fn handle_with_network_receivers<T: Pload>() -> (
-        NetworkBaseHandle<T, ChaCha20Poly1305>,
-        net_channel::Receiver<AdmittedNetworkMessage<T>>,
-        net_channel::Receiver<AdmittedNetworkMessage<T>>,
-        net_channel::Receiver<AdmittedNetworkMessage<T>>,
-        net_channel::Receiver<AdmittedNetworkMessage<T>>,
-    ) {
-        let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
-        let (update_topology_tx, update_topology_rx) = control_update_channel();
-        let (update_peers_tx, update_peers_rx) = control_update_channel();
-        let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
-        let (update_trusted_tx, update_trusted_rx) = control_update_channel();
-        let (update_acl_tx, update_acl_rx) = control_update_channel();
-        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
-        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
-        let (network_message_high_sender, network_message_high_rx) =
-            net_channel::channel_with_capacity(1);
-        let (network_message_safety_sender, network_message_safety_rx) =
-            net_channel::channel_with_capacity(1);
-        let (network_message_progress_sender, network_message_progress_rx) =
-            net_channel::channel_with_capacity(1);
-        let (network_message_low_sender, network_message_low_rx) =
-            net_channel::channel_with_capacity(1);
-        let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
-        let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
-            watch::channel(HashMap::new());
-
-        drop(update_topology_rx);
-        drop(update_peers_rx);
-        drop(update_peer_capabilities_rx);
-        drop(update_trusted_rx);
-        drop(update_acl_rx);
-        drop(update_handshake_rx);
-        drop(update_consensus_caps_rx);
-
-        let handle = NetworkBaseHandle {
-            subscribe_to_peers_messages_sender: subscribe_tx,
-            online_peers_receiver,
-            online_peer_capabilities_receiver,
-            reliable_broadcast_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
-            reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
-            reply_route_owner: Arc::new(()),
-            reply_route_source_capacity: 8,
-            update_topology_sender: update_topology_tx,
-            update_peers_sender: update_peers_tx,
-            update_peer_capabilities_sender: update_peer_capabilities_tx,
-            update_trusted_peers_sender: update_trusted_tx,
-            update_acl_sender: update_acl_tx,
-            update_handshake_sender: update_handshake_tx,
-            update_consensus_caps_sender: update_consensus_caps_tx,
-            service_message_sender: service_message_tx,
-            network_message_high_sender,
-            network_message_safety_sender,
-            network_message_progress_sender,
-            network_message_low_sender,
-            network_message_high_deferred_permits: Arc::new(Semaphore::new(1)),
-            network_message_safety_deferred_permits: Arc::new(Semaphore::new(1)),
-            network_message_progress_deferred_permits: Arc::new(Semaphore::new(1)),
-            network_actor_byte_budget: test_network_actor_byte_budget(),
-            network_actor_progress_budget: test_network_actor_progress_budget(),
-            network_actor_low_byte_budget: test_network_actor_byte_budget(),
-            self_id: PeerId::from(KeyPair::random().public_key().clone()),
-            relay_ttl: 0,
-            topic_frame_caps: test_topic_frame_caps(),
-            subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-            _encryptor: core::marker::PhantomData,
-        };
-
-        (
-            handle,
-            network_message_safety_rx,
-            network_message_progress_rx,
-            network_message_high_rx,
-            network_message_low_rx,
-        )
-    }
-
-    fn accept_direct_targets<T: Pload>(
-        handle: &NetworkBaseHandle<T, ChaCha20Poly1305>,
-        targets: HashSet<PeerId>,
-    ) {
-        let _ = handle
-            .reliable_direct_topology
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .reconcile(&targets, &handle.self_id);
-    }
-
-    fn handle_with_subscriber_receiver() -> (
-        NetworkBaseHandle<Dummy, ChaCha20Poly1305>,
-        mpsc::Receiver<Subscriber<Dummy>>,
-    ) {
-        let (subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
-        let (update_topology_tx, update_topology_rx) = control_update_channel();
-        let (update_peers_tx, update_peers_rx) = control_update_channel();
-        let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
-        let (update_trusted_tx, update_trusted_rx) = control_update_channel();
-        let (update_acl_tx, update_acl_rx) = control_update_channel();
-        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
-        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
-        let (service_message_tx, _service_message_rx) =
-            mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
-        let (network_message_high_sender, _network_message_high_rx) =
-            net_channel::channel_with_capacity(1);
-        let (network_message_low_sender, _network_message_low_rx) =
-            net_channel::channel_with_capacity(1);
-        let (_online_peers_tx, online_peers_receiver) = watch::channel(HashSet::new());
-        let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
-            watch::channel(HashMap::new());
-
-        drop(update_topology_rx);
-        drop(update_peers_rx);
-        drop(update_peer_capabilities_rx);
-        drop(update_trusted_rx);
-        drop(update_acl_rx);
-        drop(update_handshake_rx);
-        drop(update_consensus_caps_rx);
-
-        (
-            NetworkBaseHandle {
-                subscribe_to_peers_messages_sender: subscribe_tx,
-                online_peers_receiver,
-                online_peer_capabilities_receiver,
-                reliable_broadcast_topology: Arc::new(
-                    Mutex::new(ReliableProgressTopology::empty()),
-                ),
-                reliable_direct_topology: Arc::new(Mutex::new(ReliableProgressTopology::empty())),
-                reply_route_owner: Arc::new(()),
-                reply_route_source_capacity: 8,
-                update_topology_sender: update_topology_tx,
-                update_peers_sender: update_peers_tx,
-                update_peer_capabilities_sender: update_peer_capabilities_tx,
-                update_trusted_peers_sender: update_trusted_tx,
-                update_acl_sender: update_acl_tx,
-                update_handshake_sender: update_handshake_tx,
-                update_consensus_caps_sender: update_consensus_caps_tx,
-                service_message_sender: service_message_tx,
-                network_message_high_sender,
-                network_message_safety_sender: net_channel::channel_with_capacity(1).0,
-                network_message_progress_sender: net_channel::channel_with_capacity(1).0,
-                network_message_low_sender,
-                network_message_high_deferred_permits: Arc::new(Semaphore::new(1)),
-                network_message_safety_deferred_permits: Arc::new(Semaphore::new(1)),
-                network_message_progress_deferred_permits: Arc::new(Semaphore::new(1)),
-                network_actor_byte_budget: test_network_actor_byte_budget(),
-                network_actor_progress_budget: test_network_actor_progress_budget(),
-                network_actor_low_byte_budget: test_network_actor_byte_budget(),
-                self_id: PeerId::from(KeyPair::random().public_key().clone()),
-                relay_ttl: 0,
-                topic_frame_caps: test_topic_frame_caps(),
-                subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-                _encryptor: core::marker::PhantomData,
-            },
-            subscribe_rx,
-        )
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn control_update_channel_keeps_newest_unconsumed_value() {
-        let (tx, mut rx) = control_update_channel();
-        for value in 0..=65 {
-            send_control_update(&tx, "test", value);
-        }
-
-        assert_eq!(receive_control_update(&mut rx).await, Some(65));
-        assert!(
-            !rx.has_changed()
-                .expect("control update sender should remain open")
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn control_update_receive_is_cancellation_safe_and_reusable() {
-        let (tx, mut rx) = control_update_channel();
-
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), receive_control_update(&mut rx),)
-                .await
-                .is_err(),
-            "an untouched control slot must remain pending"
-        );
-
-        send_control_update(&tx, "test", 1);
-        assert_eq!(receive_control_update(&mut rx).await, Some(1));
-        send_control_update(&tx, "test", 2);
-        assert_eq!(receive_control_update(&mut rx).await, Some(2));
-
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), receive_control_update(&mut rx),)
-                .await
-                .is_err(),
-            "an applied snapshot must not be delivered twice"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn control_update_receive_preserves_final_value_across_close() {
-        let (empty_tx, mut empty_rx) = control_update_channel::<u8>();
-        drop(empty_tx);
-        assert_eq!(receive_control_update(&mut empty_rx).await, None);
-
-        let (tx, mut rx) = control_update_channel();
-        send_control_update(&tx, "test", 7_u8);
-        drop(tx);
-        assert_eq!(receive_control_update(&mut rx).await, Some(7));
-        assert_eq!(receive_control_update(&mut rx).await, None);
-    }
-
-    #[test]
-    fn control_update_channel_releases_superseded_snapshots() {
-        #[derive(Clone)]
-        struct DropProbe(Arc<AtomicUsize>);
-
-        impl Drop for DropProbe {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-
-        let dropped = Arc::new(AtomicUsize::new(0));
-        let (tx, rx) = control_update_channel();
-        for _ in 0..1_024 {
-            send_control_update(&tx, "test", DropProbe(Arc::clone(&dropped)));
-        }
-
-        assert_eq!(dropped.load(Ordering::SeqCst), 1_023);
-        drop(tx);
-        assert_eq!(dropped.load(Ordering::SeqCst), 1_023);
-        drop(rx);
-        assert_eq!(dropped.load(Ordering::SeqCst), 1_024);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn publisher_does_not_wait_for_receiver_payload_clone() {
-        struct CloneGate(bool);
-
-        struct SlowClone {
-            marker: u8,
-            clone_started: tokio::sync::mpsc::UnboundedSender<()>,
-            gate: Arc<(std::sync::Mutex<CloneGate>, std::sync::Condvar)>,
-        }
-
-        impl Clone for SlowClone {
-            fn clone(&self) -> Self {
-                let _ = self.clone_started.send(());
-                let (lock, ready) = &*self.gate;
-                let mut released = lock
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                while !released.0 {
-                    released = ready
-                        .wait(released)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                }
-                Self {
-                    marker: self.marker,
-                    clone_started: self.clone_started.clone(),
-                    gate: Arc::clone(&self.gate),
-                }
-            }
-        }
-
-        let (clone_started_tx, mut clone_started_rx) = tokio::sync::mpsc::unbounded_channel();
-        let gate = Arc::new((
-            std::sync::Mutex::new(CloneGate(false)),
-            std::sync::Condvar::new(),
-        ));
-        let (tx, mut rx) = control_update_channel();
-        send_control_update(
-            &tx,
-            "test",
-            SlowClone {
-                marker: 1,
-                clone_started: clone_started_tx.clone(),
-                gate: Arc::clone(&gate),
-            },
-        );
-
-        let receive_task = tokio::spawn(async move {
-            let first = receive_control_update(&mut rx).await.expect("first update");
-            (first, rx)
-        });
-        clone_started_rx
-            .recv()
-            .await
-            .expect("receiver must begin cloning");
-
-        let send_tx = tx.clone();
-        let send_gate = Arc::clone(&gate);
-        let (send_done_tx, mut send_done_rx) = tokio::sync::oneshot::channel();
-        let send_task = tokio::spawn(async move {
-            send_control_update(
-                &send_tx,
-                "test",
-                SlowClone {
-                    marker: 2,
-                    clone_started: clone_started_tx,
-                    gate: send_gate,
-                },
-            );
-            let _ = send_done_tx.send(());
-        });
-        let send_completed = tokio::time::timeout(Duration::from_secs(1), &mut send_done_rx)
-            .await
-            .is_ok();
-
-        let (lock, ready) = &*gate;
-        lock.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .0 = true;
-        ready.notify_all();
-
-        send_task.await.expect("sender task must not panic");
-        let (first, mut rx) = receive_task.await.expect("receiver task must not panic");
-        assert!(
-            send_completed,
-            "publishing a newer snapshot blocked on a full payload clone"
-        );
-        assert_eq!(first.marker, 1);
-        assert_eq!(
-            receive_control_update(&mut rx)
-                .await
-                .expect("second update")
-                .marker,
-            2
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn concurrent_control_update_writers_publish_the_latest_completed_write() {
-        let (tx, mut rx) = control_update_channel();
-        let mut writers = Vec::new();
-        for writer in 0..8_u32 {
-            let tx = tx.clone();
-            writers.push(tokio::spawn(async move {
-                for sequence in 0..256_u32 {
-                    send_control_update(&tx, "test", (writer, sequence));
-                    tokio::task::yield_now().await;
-                }
-            }));
-        }
-        for writer in writers {
-            writer.await.expect("control update writer must not panic");
-        }
-
-        let (writer, sequence) =
-            tokio::time::timeout(Duration::from_secs(1), receive_control_update(&mut rx))
-                .await
-                .expect("a concurrent write must reach the retained slot")
-                .expect("control update sender remains open");
-        assert!(writer < 8);
-        assert_eq!(
-            sequence, 255,
-            "the globally last completed writer must have published its final sequence"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn update_topology_overflow_keeps_newest_snapshot() {
-        let mut handle = closed_handle();
-        let (update_topology_tx, mut update_topology_rx) = control_update_channel();
-        handle.update_topology_sender = update_topology_tx;
-
-        for _ in 0..64 {
-            handle.update_topology(message::UpdateTopology(HashSet::new()));
-        }
-
-        let superseded_peer = PeerId::from(KeyPair::random().public_key().clone());
-        handle.update_topology(message::UpdateTopology(HashSet::from([superseded_peer])));
-
-        let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let expected = HashSet::from([newest_peer]);
-        handle.update_topology(message::UpdateTopology(expected.clone()));
-
-        let message::UpdateTopology(actual) = receive_control_update(&mut update_topology_rx)
-            .await
-            .expect("newest topology update should remain pending");
-        assert_eq!(actual, expected);
-        assert!(
-            !update_topology_rx
-                .has_changed()
-                .expect("topology sender should remain open")
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn all_control_update_methods_keep_newest_category_snapshot() {
-        let (handle, mut receivers) = handle_with_control_update_receivers();
-        let newest_handle = handle.clone();
-        let stale_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let stale_addr = socket_addr!(127.0.0.1:11_001);
-        let newest_addr = socket_addr!(127.0.0.1:11_002);
-
-        handle.update_topology(message::UpdateTopology(HashSet::from([stale_peer.clone()])));
-        handle.update_peers_addresses(message::UpdatePeers(vec![(stale_peer.clone(), stale_addr)]));
-        handle.update_peer_capabilities(message::UpdatePeerCapabilities(vec![(
-            stale_peer.clone(),
-            message::PeerTransportCapabilities {
-                scion_supported: false,
-            },
-        )]));
-        handle.update_trusted_peers(message::UpdateTrustedPeers(HashSet::from([
-            stale_peer.clone()
-        ])));
-        handle.update_acl(message::UpdateAcl {
-            allowlist_only: false,
-            allow_keys: vec![stale_peer.public_key().clone()],
-            deny_keys: Vec::new(),
-            allow_cidrs: vec!["10.0.0.0/8".to_owned()],
-            deny_cidrs: Vec::new(),
-        });
-        let mut stale_handshake = ActualSoranetHandshake::default();
-        stale_handshake.kem_id = 1;
-        handle.update_soranet_handshake(stale_handshake);
-        handle.update_consensus_caps(test_consensus_caps(1), true);
-
-        newest_handle.update_topology(message::UpdateTopology(HashSet::from(
-            [newest_peer.clone()],
-        )));
-        newest_handle.update_peers_addresses(message::UpdatePeers(vec![(
-            newest_peer.clone(),
-            newest_addr.clone(),
-        )]));
-        newest_handle.update_peer_capabilities(message::UpdatePeerCapabilities(vec![(
-            newest_peer.clone(),
-            message::PeerTransportCapabilities {
-                scion_supported: true,
-            },
-        )]));
-        newest_handle.update_trusted_peers(message::UpdateTrustedPeers(HashSet::from([
-            newest_peer.clone(),
-        ])));
-        newest_handle.update_acl(message::UpdateAcl {
-            allowlist_only: true,
-            allow_keys: vec![newest_peer.public_key().clone()],
-            deny_keys: Vec::new(),
-            allow_cidrs: vec!["192.0.2.0/24".to_owned()],
-            deny_cidrs: vec!["198.51.100.0/24".to_owned()],
-        });
-        let mut newest_handshake = ActualSoranetHandshake::default();
-        newest_handshake.kem_id = 2;
-        newest_handle.update_soranet_handshake(newest_handshake);
-        let newest_caps = test_consensus_caps(2);
-        newest_handle.update_consensus_caps(newest_caps.clone(), false);
-
-        assert!(receivers.topology.has_changed().expect("topology open"));
-        assert!(receivers.peers.has_changed().expect("peers open"));
-        assert!(
-            receivers
-                .peer_capabilities
-                .has_changed()
-                .expect("peer capabilities open")
-        );
-        assert!(
-            receivers
-                .trusted_peers
-                .has_changed()
-                .expect("trusted peers open")
-        );
-        assert!(receivers.acl.has_changed().expect("ACL open"));
-        assert!(receivers.handshake.has_changed().expect("handshake open"));
-        assert!(
-            receivers
-                .consensus_caps
-                .has_changed()
-                .expect("consensus caps open")
-        );
-
-        let message::UpdateTopology(topology) = receive_control_update(&mut receivers.topology)
-            .await
-            .expect("topology update");
-        assert_eq!(topology, HashSet::from([newest_peer.clone()]));
-
-        let message::UpdatePeers(peers) = receive_control_update(&mut receivers.peers)
-            .await
-            .expect("peer-address update");
-        assert_eq!(peers, vec![(newest_peer.clone(), newest_addr)]);
-
-        let message::UpdatePeerCapabilities(capabilities) =
-            receive_control_update(&mut receivers.peer_capabilities)
-                .await
-                .expect("peer-capability update");
-        assert_eq!(
-            capabilities,
-            vec![(
-                newest_peer.clone(),
-                message::PeerTransportCapabilities {
-                    scion_supported: true,
-                },
-            )]
-        );
-
-        let message::UpdateTrustedPeers(trusted) =
-            receive_control_update(&mut receivers.trusted_peers)
-                .await
-                .expect("trusted-peer update");
-        assert_eq!(trusted, HashSet::from([newest_peer.clone()]));
-
-        let acl = receive_control_update(&mut receivers.acl)
-            .await
-            .expect("ACL update");
-        assert!(acl.allowlist_only);
-        assert_eq!(acl.allow_keys, vec![newest_peer.public_key().clone()]);
-        assert_eq!(acl.allow_cidrs, vec!["192.0.2.0/24"]);
-        assert_eq!(acl.deny_cidrs, vec!["198.51.100.0/24"]);
-
-        let handshake = receive_control_update(&mut receivers.handshake)
-            .await
-            .expect("handshake update");
-        assert_eq!(handshake.handshake.kem_id, 2);
-
-        let consensus = receive_control_update(&mut receivers.consensus_caps)
-            .await
-            .expect("consensus-capabilities update");
-        assert_eq!(consensus.caps, newest_caps);
-        let mut applied_generation = ReconnectGeneration::default();
-        assert!(consensus.take_reconnect_request(&mut applied_generation));
-        assert!(!consensus.take_reconnect_request(&mut applied_generation));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn consensus_reconnect_request_survives_newer_caps_only_snapshot() {
-        let (sender, mut receiver) = consensus_caps_update_channel();
-        sender.send(test_consensus_caps(1), true);
-        let newest_caps = test_consensus_caps(2);
-        sender.send(newest_caps.clone(), false);
-
-        let snapshot = receive_control_update(&mut receiver)
-            .await
-            .expect("latest consensus snapshot");
-        assert_eq!(snapshot.caps, newest_caps);
-        let mut applied_generation = ReconnectGeneration::default();
-        assert!(snapshot.take_reconnect_request(&mut applied_generation));
-
-        sender.send(test_consensus_caps(3), false);
-        let caps_only = receive_control_update(&mut receiver)
-            .await
-            .expect("caps-only snapshot");
-        assert!(!caps_only.take_reconnect_request(&mut applied_generation));
-
-        sender.send(test_consensus_caps(4), true);
-        let reconnect = receive_control_update(&mut receiver)
-            .await
-            .expect("new reconnect snapshot");
-        assert!(reconnect.take_reconnect_request(&mut applied_generation));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn concurrent_consensus_updates_preserve_every_reconnect_generation() {
-        const WRITERS: u8 = 8;
-        const UPDATES_PER_WRITER: u8 = 96;
-        const RECONNECT_EVERY: u8 = 3;
-
-        let (sender, mut receiver) = consensus_caps_update_channel();
-        let mut writers = Vec::new();
-        for writer in 0..WRITERS {
-            let sender = sender.clone();
-            writers.push(tokio::spawn(async move {
-                for sequence in 0..UPDATES_PER_WRITER {
-                    let reconnect = sequence % RECONNECT_EVERY == 0;
-                    sender.send(
-                        test_consensus_caps(writer.wrapping_add(sequence)),
-                        reconnect,
-                    );
-                    tokio::task::yield_now().await;
-                }
-            }));
-        }
-        for writer in writers {
-            writer
-                .await
-                .expect("consensus update writer must not panic");
-        }
-
-        let snapshot = tokio::time::timeout(
-            Duration::from_secs(1),
-            receive_control_update(&mut receiver),
-        )
-        .await
-        .expect("a concurrent consensus update must reach the retained slot")
-        .expect("consensus update sender remains open");
-        let reconnects_per_writer = u64::from(UPDATES_PER_WRITER.div_ceil(RECONNECT_EVERY));
-        let expected_generation = u64::from(WRITERS) * reconnects_per_writer;
-        assert_eq!(
-            snapshot.reconnect_generation,
-            ReconnectGeneration(expected_generation),
-            "caps-only publications must not erase concurrent reconnect requests"
-        );
-
-        let mut applied_generation = ReconnectGeneration::default();
-        assert!(snapshot.take_reconnect_request(&mut applied_generation));
-        assert!(!snapshot.take_reconnect_request(&mut applied_generation));
-    }
-
-    #[test]
-    fn subscriber_registration_queue_is_bounded() {
-        let (handle, _subscribe_rx) = handle_with_subscriber_receiver();
-        let (first_tx, _first_rx) = mpsc::channel(1);
-        let (second_tx, _second_rx) = mpsc::channel(1);
-
-        assert!(handle.subscribe_to_peers_messages(first_tx).is_ok());
-        assert!(handle.subscribe_to_peers_messages(second_tx).is_err());
-    }
-
-    #[test]
-    fn high_actor_drain_limit_scales_with_queue_pressure() {
-        assert_eq!(high_actor_drain_limit(1), NETWORK_HIGH_ACTOR_DRAIN_BASE);
-        assert_eq!(
-            high_actor_drain_limit(65),
-            NETWORK_HIGH_ACTOR_DRAIN_PRESSURED
-        );
-        assert_eq!(
-            high_actor_drain_limit(257),
-            NETWORK_HIGH_ACTOR_DRAIN_SATURATED
-        );
-    }
-
-    #[test]
-    fn saturated_high_actor_drain_yields_to_service_and_shutdown() {
-        assert!(!should_stop_high_actor_drain(
-            1,
-            NETWORK_HIGH_ACTOR_DRAIN_SATURATED,
-            false,
-            false,
-        ));
-        assert!(should_stop_high_actor_drain(
-            1,
-            NETWORK_HIGH_ACTOR_DRAIN_SATURATED,
-            true,
-            false,
-        ));
-        assert!(should_stop_high_actor_drain(
-            1,
-            NETWORK_HIGH_ACTOR_DRAIN_SATURATED,
-            false,
-            true,
-        ));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn high_priority_post_waits_for_actor_queue_capacity() {
-        let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
-            handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-
-        handle.post(Post {
-            data: Dummy,
-            peer_id: peer_id.clone(),
-            priority: Priority::High,
-        });
-        handle.post(Post {
-            data: Dummy,
-            peer_id: peer_id.clone(),
-            priority: Priority::High,
-        });
-
-        let first = high_rx
-            .recv()
-            .await
-            .expect("first post should be queued")
-            .into_inner();
-        assert!(matches!(first, NetworkMessage::Post(_)));
-        let second = tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
-            .await
-            .expect("deferred high-priority post should enqueue after capacity opens")
-            .expect("deferred high-priority post should be present")
-            .into_inner();
-        match second {
-            NetworkMessage::Post(post) => {
-                assert_eq!(post.peer_id, peer_id);
-                assert_eq!(post.priority, Priority::High);
-            }
-            NetworkMessage::Broadcast(_) => panic!("expected deferred post"),
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn high_priority_actor_overflow_waiters_are_bounded() {
-        let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
-            handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        let post = || Post {
-            data: Dummy,
-            peer_id: peer_id.clone(),
-            priority: Priority::High,
-        };
-
-        handle.post(post());
-        handle.post(post());
-        handle.post(post());
-
-        assert_eq!(
-            handle
-                .network_message_high_deferred_permits
-                .available_permits(),
-            0,
-            "only one overflow waiter may retain a message for a capacity-one actor queue"
-        );
-        assert!(matches!(
-            high_rx.recv().await.map(AdmittedNetworkMessage::into_inner),
-            Some(NetworkMessage::Post(_))
-        ));
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
-                .await
-                .map(|message| message.map(AdmittedNetworkMessage::into_inner)),
-            Ok(Some(NetworkMessage::Post(_)))
-        ));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), high_rx.recv())
-                .await
-                .is_err(),
-            "messages beyond the bounded actor queue and overflow allowance must be dropped"
-        );
-        tokio::task::yield_now().await;
-        assert_eq!(
-            handle
-                .network_message_high_deferred_permits
-                .available_permits(),
-            1,
-            "the overflow permit must be released after delivery"
-        );
-    }
-
-    #[test]
-    fn outbound_actor_sizing_does_not_clone_large_payloads() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let payload = CloneCountingPayload(vec![0xA5; 4 * 1024 * 1024]);
-        let payload_len = ncore::encoded_payload_len(&payload)
-            .expect("large test payload must have a representable encoded length");
-        let message = NetworkMessage::Post(Post {
-            data: payload,
-            peer_id: target.clone(),
-            priority: Priority::High,
-        });
-        let clones_before = ACTOR_SIZE_CLONES.load(Ordering::Relaxed);
-
-        let measured = outbound_actor_message_wire_bytes(&message, &origin, DEFAULT_RELAY_TTL)
-            .expect("large actor payload must have a representable wire length");
-
-        assert_eq!(ACTOR_SIZE_CLONES.load(Ordering::Relaxed), clones_before);
-        assert_eq!(
-            measured,
-            data_frame_wire_len_from_payload_len::<CloneCountingPayload>(
-                &origin,
-                Some(&target),
-                payload_len,
-            )
-        );
-    }
-
-    #[test]
-    fn outbound_actor_sizing_ignores_understated_exact_length_hints() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let message = NetworkMessage::Post(Post {
-            data: BadLengthHintPayload,
-            peer_id: target.clone(),
-            priority: Priority::High,
-        });
-
-        let measured = outbound_actor_message_wire_bytes(&message, &origin, DEFAULT_RELAY_TTL)
-            .expect("a bad optimization hint must not break fallible wire counting");
-
-        assert_eq!(
-            measured,
-            data_frame_wire_len_from_payload_len::<BadLengthHintPayload>(&origin, Some(&target), 4,)
-        );
-    }
-
-    #[test]
-    fn outbound_actor_sizing_propagates_serializer_failure_without_panicking() {
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let target = PeerId::from(KeyPair::random().public_key().clone());
-        let message = NetworkMessage::Post(Post {
-            data: FailingSerializerPayload,
-            peer_id: target,
-            priority: Priority::High,
-        });
-
-        assert!(outbound_actor_message_wire_bytes(&message, &origin, DEFAULT_RELAY_TTL).is_err());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn deferred_actor_message_retains_and_releases_exact_byte_ownership() {
-        let (mut handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
-            handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        let fixture = NetworkMessage::Post(Post {
-            data: Dummy,
-            peer_id: peer_id.clone(),
-            priority: Priority::High,
-        });
-        let plaintext_frame_bytes =
-            outbound_actor_message_wire_bytes(&fixture, &handle.self_id, handle.relay_ttl)
-                .expect("count exact deferred actor fixture");
-        let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
-            .expect("small deferred actor fixture must have a stream charge");
-        let two_message_bytes = stream_wire_bytes
-            .checked_mul(2)
-            .expect("small two-message actor budget");
-        handle.network_actor_byte_budget = NetworkActorByteBudget::new(two_message_bytes, 0)
-            .expect("exact two-message actor budget");
-
-        let post = || Post {
-            data: Dummy,
-            peer_id: peer_id.clone(),
-            priority: Priority::High,
-        };
-        handle.post(post());
-        handle.post(post());
-        handle.post(post());
-        assert_eq!(
-            handle.network_actor_byte_budget.retained().total,
-            two_message_bytes,
-            "one queued item and one waiter must retain exactly two charges; the third must fail admission"
-        );
-
-        let first = high_rx.recv().await.expect("first item must be queued");
-        drop(first);
-        let second = tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
-            .await
-            .expect("deferred waiter must make progress after queue capacity opens")
-            .expect("deferred item must enter the actor channel");
-        assert_eq!(
-            handle.network_actor_byte_budget.retained().total,
-            stream_wire_bytes,
-            "handoff must release only the consumed first item"
-        );
-        drop(second);
-        assert_eq!(
-            handle.network_actor_byte_budget.retained(),
-            NetworkActorRetainedBytes::default()
-        );
-
-        let (
-            mut closed_handle,
-            _closed_safety_rx,
-            _closed_progress_rx,
-            closed_high_rx,
-            _closed_low_rx,
-        ) = handle_with_network_receivers::<Dummy>();
-        let closed_fixture = NetworkMessage::Post(post());
-        let closed_plaintext_bytes = outbound_actor_message_wire_bytes(
-            &closed_fixture,
-            &closed_handle.self_id,
-            closed_handle.relay_ttl,
-        )
-        .expect("count exact closed actor fixture");
-        let closed_stream_bytes = crate::frame_queue_charge(closed_plaintext_bytes)
-            .expect("small closed actor fixture must have a stream charge");
-        closed_handle.network_actor_byte_budget =
-            NetworkActorByteBudget::new(closed_stream_bytes, 0)
-                .expect("single-message closed-channel budget");
-        drop(closed_high_rx);
-        closed_handle.post(post());
-        assert_eq!(
-            closed_handle.network_actor_byte_budget.retained(),
-            NetworkActorRetainedBytes::default(),
-            "a closed actor channel must release the reservation exactly once"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn high_priority_broadcast_waits_for_actor_queue_capacity() {
-        let (handle, _safety_rx, _progress_rx, mut high_rx, _low_rx) =
-            handle_with_network_receivers::<Dummy>();
-
-        handle.broadcast(Broadcast {
-            data: Dummy,
-            priority: Priority::High,
-        });
-        handle.broadcast(Broadcast {
-            data: Dummy,
-            priority: Priority::High,
-        });
-
-        let first = high_rx
-            .recv()
-            .await
-            .expect("first broadcast should be queued")
-            .into_inner();
-        assert!(matches!(first, NetworkMessage::Broadcast(_)));
-        let second = tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
-            .await
-            .expect("deferred high-priority broadcast should enqueue after capacity opens")
-            .expect("deferred high-priority broadcast should be present")
-            .into_inner();
-        match second {
-            NetworkMessage::Broadcast(broadcast) => {
-                assert_eq!(broadcast.priority, Priority::High);
-            }
-            NetworkMessage::Post(_) => panic!("expected deferred broadcast"),
-        }
-    }
-
-    #[test]
-    fn ordinary_high_saturation_does_not_consume_progress_or_safety_capacity() {
-        let (handle, mut safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-
-        handle.post(Post {
-            data: RoutedActorDummy::Control,
-            peer_id: peer_id.clone(),
-            priority: Priority::High,
-        });
-        handle
-            .post_recoverable(
-                Post {
-                    data: RoutedActorDummy::Lane,
-                    peer_id: peer_id.clone(),
-                    priority: Priority::Low,
-                },
-                None,
-            )
-            .expect("lane progress must enter its source-isolated queue");
-        handle
-            .post_recoverable(
-                Post {
-                    data: RoutedActorDummy::Safety,
-                    peer_id,
-                    // Safety classification must override a mistaken caller priority.
-                    priority: Priority::Low,
-                },
-                None,
-            )
-            .expect("safety progress must enter its source-isolated lane");
-
-        assert!(matches!(
-            high_rx.try_recv().map(AdmittedNetworkMessage::into_inner),
-            Ok(NetworkMessage::Post(Post {
-                data: RoutedActorDummy::Control,
-                priority: Priority::High,
-                ..
-            }))
-        ));
-        assert!(matches!(
-            safety_rx.try_recv().map(AdmittedNetworkMessage::into_inner),
-            Ok(NetworkMessage::Post(Post {
-                data: RoutedActorDummy::Safety,
-                priority: Priority::High,
-                ..
-            }))
-        ));
-        assert!(matches!(
-            progress_rx
-                .try_recv()
-                .map(AdmittedNetworkMessage::into_inner),
-            Ok(NetworkMessage::Post(Post {
-                data: RoutedActorDummy::Lane,
-                priority: Priority::High,
-                ..
-            }))
-        ));
-        assert!(matches!(
-            low_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    fn consensus_lane_and_block_sync_use_progress_and_canonical_high() {
-        let (handle, _safety_rx, mut progress_rx, mut high_rx, mut low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-
-        for data in [RoutedActorDummy::Lane, RoutedActorDummy::BlockSync] {
-            handle
-                .post_recoverable(
-                    Post {
-                        data: data.clone(),
-                        peer_id: peer_id.clone(),
-                        priority: Priority::Low,
-                    },
-                    None,
-                )
-                .expect("reliable progress must enter its additive actor corridor");
-            assert!(matches!(
-                progress_rx
-                    .try_recv()
-                    .map(AdmittedNetworkMessage::into_inner),
-                Ok(NetworkMessage::Post(Post {
-                    data: admitted,
-                    priority: Priority::High,
-                    ..
-                })) if admitted == data
-            ));
-        }
-        assert!(matches!(
-            high_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            low_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-    }
-
-    #[test]
-    #[should_panic(expected = "requires post_recoverable")]
-    fn void_post_rejects_reliable_route_at_developer_boundary() {
-        let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        handle.post(Post {
-            data: RoutedActorDummy::Lane,
-            peer_id: PeerId::from(KeyPair::random().public_key().clone()),
-            priority: Priority::High,
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "requires broadcast_recoverable")]
-    fn void_broadcast_rejects_reliable_route_at_developer_boundary() {
-        let (handle, _safety_rx, _progress_rx, _high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        handle.broadcast(Broadcast {
-            data: RoutedActorDummy::Lane,
-            priority: Priority::High,
-        });
-    }
-
-    #[test]
-    fn recoverable_progress_admission_preserves_fifo_and_exact_original() {
-        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-        let post = || Post {
-            data: RoutedActorDummy::Lane,
-            peer_id: peer_id.clone(),
-            priority: Priority::Low,
-        };
-        let fixture = NetworkMessage::Post(post());
-        let plaintext_frame_bytes =
-            outbound_actor_message_wire_bytes(&fixture, &handle.self_id, handle.relay_ttl)
-                .expect("count exact consensus-lane actor fixture");
-        let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
-            .expect("small consensus-lane fixture must have a stream charge");
-        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
-        handle.network_actor_progress_budget =
-            NetworkActorProgressBudget::new(stream_wire_bytes, 4, 4)
-                .expect("small progress budget");
-        handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
-        handle
-            .post_recoverable(post(), None)
-            .expect("the exact maximum must enter the empty progress corridor");
-        assert_eq!(
-            handle.network_actor_progress_budget.retained(),
-            stream_wire_bytes
-        );
-
-        let (second, first_ticket) = match handle.post_recoverable(post(), None) {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message,
-                ticket: Some(ticket),
-                rank: 1,
-            }) => (message, ticket),
-            other => panic!("expected rank-one recoverable pressure, got {other:?}"),
-        };
-        assert_eq!(second.data, RoutedActorDummy::Lane);
-        assert_eq!(second.peer_id, peer_id);
-        assert_eq!(second.priority, Priority::Low);
-
-        let (third, second_ticket) = match handle.post_recoverable(post(), None) {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message,
-                ticket: Some(ticket),
-                rank: 2,
-            }) => (message, ticket),
-            other => panic!("expected rank-two recoverable pressure, got {other:?}"),
-        };
-        assert_eq!(third.priority, Priority::Low);
-
-        let first = progress_rx
-            .try_recv()
-            .expect("first progress post must be queued");
-        assert!(matches!(
-            &first.message,
-            Some(NetworkMessage::Post(Post {
-                priority: Priority::High,
-                ..
-            }))
-        ));
-        drop(first);
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-
-        assert!(matches!(
-            handle.post_recoverable(post(), None),
-            Err(NetworkActorAdmissionError::Backpressured {
-                ticket: Some(_),
-                rank: 3,
-                ..
-            })
-        ));
-        handle
-            .post_recoverable(second, Some(first_ticket))
-            .expect("the oldest ticket must acquire the released corridor");
-        assert_eq!(
-            second_ticket.rank(),
-            Some(1),
-            "committing the oldest ticket must decrease the next caller's rank"
-        );
-        let admitted = progress_rx
-            .try_recv()
-            .expect("the oldest retry must enter the progress channel")
-            .into_inner();
-        assert!(matches!(
-            admitted,
-            NetworkMessage::Post(Post {
-                data: RoutedActorDummy::Lane,
-                priority: Priority::High,
-                ..
-            })
-        ));
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-        handle
-            .post_recoverable(third, Some(second_ticket))
-            .expect("the second ticket must acquire the released corridor");
-        let admitted = progress_rx
-            .try_recv()
-            .expect("the second retry must enter the progress channel")
-            .into_inner();
-        assert!(matches!(
-            admitted,
-            NetworkMessage::Post(Post {
-                data: RoutedActorDummy::Lane,
-                priority: Priority::High,
-                ..
-            })
-        ));
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-    }
-
-    #[test]
-    fn progress_ticket_rejects_a_different_same_length_payload() {
-        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-        let post = |data| Post {
-            data,
-            peer_id: peer_id.clone(),
-            priority: Priority::Low,
-        };
-        let fixture = NetworkMessage::Post(post(RoutedActorDummy::Lane));
-        let plaintext_frame_bytes =
-            outbound_actor_message_wire_bytes(&fixture, &handle.self_id, handle.relay_ttl)
-                .expect("count exact ticket-identity fixture");
-        let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
-            .expect("small ticket-identity fixture must have a stream charge");
-        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
-        handle.network_actor_progress_budget =
-            NetworkActorProgressBudget::new(stream_wire_bytes, 1, 2)
-                .expect("one source with two bounded waiters");
-        handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
-        handle
-            .post_recoverable(post(RoutedActorDummy::Lane), None)
-            .expect("first exact request fills the retained source slot");
-        let ticket = match handle.post_recoverable(post(RoutedActorDummy::Lane), None) {
-            Err(NetworkActorAdmissionError::Backpressured {
-                ticket: Some(ticket),
-                rank: 1,
-                ..
-            }) => ticket,
-            other => panic!("expected an identity-bound rank-one ticket, got {other:?}"),
-        };
-        let different = post(RoutedActorDummy::LaneAlternate);
-        assert_eq!(
-            outbound_actor_message_wire_bytes(
-                &NetworkMessage::Post(different.clone()),
-                &handle.self_id,
-                handle.relay_ttl,
-            )
-            .expect("count alternate request"),
-            plaintext_frame_bytes,
-            "the adversarial replacement must have the same actor shape"
-        );
-        match handle.post_recoverable(different, Some(ticket)) {
-            Err(NetworkActorAdmissionError::Rejected { message, reason }) => {
-                assert_eq!(reason, NetworkActorAdmissionRejection::InvalidTicket);
-                assert_eq!(message.data, RoutedActorDummy::LaneAlternate);
-                assert_eq!(message.peer_id, peer_id);
-                assert_eq!(message.priority, Priority::Low);
-            }
-            other => panic!("same-length payload substitution must be rejected: {other:?}"),
-        }
-
-        drop(
-            progress_rx
-                .try_recv()
-                .expect("release the first retained request"),
-        );
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-    }
-
-    #[test]
-    fn distinct_direct_posts_to_the_same_target_remain_exactly_backpressured() {
-        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-        let post = |data| Post {
-            data,
-            peer_id: peer_id.clone(),
-            priority: Priority::Low,
-        };
-        let first = post(RoutedActorDummy::Lane);
-        let second = post(RoutedActorDummy::LaneAlternate);
-        let first_wire = outbound_actor_message_wire_bytes(
-            &NetworkMessage::Post(first.clone()),
-            &handle.self_id,
-            handle.relay_ttl,
-        )
-        .expect("count first direct progress request");
-        assert_eq!(
-            outbound_actor_message_wire_bytes(
-                &NetworkMessage::Post(second.clone()),
-                &handle.self_id,
-                handle.relay_ttl,
-            )
-            .expect("count second direct progress request"),
-            first_wire,
-            "the collision fixture must differ only in its same-size payload identity"
-        );
-        let stream_wire_bytes = crate::frame_queue_charge(first_wire)
-            .expect("small direct progress fixture must have a stream charge");
-        handle.topic_frame_caps.consensus = first_wire;
-        handle.network_actor_progress_budget =
-            NetworkActorProgressBudget::new(stream_wire_bytes, 1, 2)
-                .expect("one exact target source and one waiter must fit");
-        handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
-        handle
-            .post_recoverable(first, None)
-            .expect("first direct request owns the target lane");
-        let (second, ticket) = match handle.post_recoverable(second, None) {
-            Err(NetworkActorAdmissionError::Backpressured {
-                message,
-                ticket: Some(ticket),
-                rank: 1,
-            }) => (message, ticket),
-            other => panic!("distinct direct request must remain exact: {other:?}"),
-        };
-        assert_eq!(second.data, RoutedActorDummy::LaneAlternate);
-        assert_eq!(second.peer_id, peer_id);
-        assert_eq!(second.priority, Priority::Low);
-
-        drop(
-            progress_rx
-                .try_recv()
-                .expect("release the first direct request owner"),
-        );
-        handle
-            .post_recoverable(second, Some(ticket))
-            .expect("the exact distinct request acquires the released target lane");
-        let admitted = progress_rx
-            .try_recv()
-            .expect("distinct direct request reaches the actor")
-            .into_inner();
-        assert!(matches!(
-            admitted,
-            NetworkMessage::Post(Post {
-                data: RoutedActorDummy::LaneAlternate,
-                priority: Priority::High,
-                ..
-            })
-        ));
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-    }
-
-    #[test]
-    fn recoverable_progress_budget_isolates_targets_at_one_frame_per_source() {
-        let (mut handle, _safety_rx, mut progress_rx, _high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let blocked_peer = PeerId::from(KeyPair::random().public_key().clone());
-        let responsive_peer = PeerId::from(KeyPair::random().public_key().clone());
-        accept_direct_targets(
-            &handle,
-            HashSet::from([blocked_peer.clone(), responsive_peer.clone()]),
-        );
-        let post = |peer_id| Post {
-            data: RoutedActorDummy::Lane,
-            peer_id,
-            priority: Priority::Low,
-        };
-        let fixture = NetworkMessage::Post(post(blocked_peer.clone()));
-        let plaintext_frame_bytes =
-            outbound_actor_message_wire_bytes(&fixture, &handle.self_id, handle.relay_ttl)
-                .expect("count exact source-isolation fixture");
-        let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
-            .expect("small source-isolation fixture must have a stream charge");
-        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
-        handle.network_actor_progress_budget =
-            NetworkActorProgressBudget::new(stream_wire_bytes, 4, 4)
-                .expect("small progress budget");
-        handle.network_message_progress_deferred_permits = Arc::new(Semaphore::new(0));
-
-        handle
-            .post_recoverable(post(blocked_peer), None)
-            .expect("the blocked target must acquire its one-frame source reserve");
-        let first = progress_rx.try_recv().expect("blocked target is retained");
-        handle
-            .post_recoverable(post(responsive_peer.clone()), None)
-            .expect("a different target must bypass the occupied source reserve");
-        assert_eq!(
-            handle.network_actor_progress_budget.retained(),
-            stream_wire_bytes * 2
-        );
-
-        let second = progress_rx
-            .try_recv()
-            .expect("responsive target is independently admitted");
-        assert!(matches!(
-            &second.message,
-            Some(NetworkMessage::Post(Post { peer_id, .. })) if peer_id == &responsive_peer
-        ));
-        drop(first);
-        assert_eq!(
-            handle.network_actor_progress_budget.retained(),
-            stream_wire_bytes
-        );
-        drop(second);
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-    }
-
-    #[test]
-    fn recoverable_progress_rejects_one_over_cap_and_releases_on_close() {
-        let (mut handle, _safety_rx, progress_rx, _high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        let post = || Post {
-            data: RoutedActorDummy::Lane,
-            peer_id: peer_id.clone(),
-            priority: Priority::Low,
-        };
-        let fixture = NetworkMessage::Post(post());
-        let plaintext_frame_bytes =
-            outbound_actor_message_wire_bytes(&fixture, &handle.self_id, handle.relay_ttl)
-                .expect("count exact close fixture");
-        let stream_wire_bytes = crate::frame_queue_charge(plaintext_frame_bytes)
-            .expect("small close fixture must have a stream charge");
-        handle.topic_frame_caps.consensus = plaintext_frame_bytes;
-        handle.network_actor_progress_budget =
-            NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
-                .expect("small progress budget");
-        drop(progress_rx);
-
-        let closed = handle
-            .post_recoverable(post(), None)
-            .expect_err("a closed progress channel must return source ownership");
-        assert!(matches!(
-            closed,
-            NetworkActorAdmissionError::Closed {
-                message: Post {
-                    data: RoutedActorDummy::Lane,
-                    priority: Priority::Low,
-                    ..
-                }
-            }
-        ));
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-
-        handle.topic_frame_caps.consensus = plaintext_frame_bytes - 1;
-        let rejected = handle
-            .post_recoverable(post(), None)
-            .expect_err("one byte over the topic cap must be permanently rejected");
-        assert!(matches!(
-            rejected,
-            NetworkActorAdmissionError::Rejected {
-                message: Post {
-                    priority: Priority::Low,
-                    ..
-                },
-                reason: NetworkActorAdmissionRejection::FrameTooLarge,
-            }
-        ));
-        assert_eq!(handle.network_actor_progress_budget.retained(), 0);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn ordinary_control_overflow_cannot_consume_source_isolated_safety_capacity() {
-        let (handle, mut safety_rx, mut progress_rx, mut high_rx, _low_rx) =
-            handle_with_network_receivers::<RoutedActorDummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-        accept_direct_targets(&handle, HashSet::from([peer_id.clone()]));
-        let post = |data| Post {
-            data,
-            peer_id: peer_id.clone(),
-            priority: Priority::High,
-        };
-
-        handle.post(post(RoutedActorDummy::Control));
-        handle.post(post(RoutedActorDummy::Control));
-        assert_eq!(
-            handle
-                .network_message_high_deferred_permits
-                .available_permits(),
-            0
-        );
-        assert_eq!(
-            handle
-                .network_message_safety_deferred_permits
-                .available_permits(),
-            1,
-            "ordinary control overflow must not reserve safety overflow capacity"
-        );
-
-        handle
-            .post_recoverable(post(RoutedActorDummy::Safety), None)
-            .expect("the safety source owns its independent progress slot");
-        assert!(matches!(
-            handle.post_recoverable(post(RoutedActorDummy::Safety), None),
-            Err(NetworkActorAdmissionError::Backpressured {
-                ticket: Some(_),
-                rank: 1,
-                ..
-            })
-        ));
-        assert_eq!(
-            handle
-                .network_message_safety_deferred_permits
-                .available_permits(),
-            1,
-            "a second item from one safety source must remain with its caller"
-        );
-
-        assert!(matches!(
-            progress_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-        assert!(matches!(
-            high_rx.recv().await.map(AdmittedNetworkMessage::into_inner),
-            Some(NetworkMessage::Post(_))
-        ));
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), high_rx.recv())
-                .await
-                .map(|message| message.map(AdmittedNetworkMessage::into_inner)),
-            Ok(Some(NetworkMessage::Post(_)))
-        ));
-        assert!(matches!(
-            safety_rx
-                .recv()
-                .await
-                .map(AdmittedNetworkMessage::into_inner),
-            Some(NetworkMessage::Post(Post {
-                data: RoutedActorDummy::Safety,
-                ..
-            }))
-        ));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn low_priority_post_still_drops_when_actor_queue_is_full() {
-        let (handle, _safety_rx, _progress_rx, _high_rx, mut low_rx) =
-            handle_with_network_receivers::<Dummy>();
-        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
-
-        handle.post(Post {
-            data: Dummy,
-            peer_id: peer_id.clone(),
-            priority: Priority::Low,
-        });
-        handle.post(Post {
-            data: Dummy,
-            peer_id,
-            priority: Priority::Low,
-        });
-
-        let first = low_rx
-            .recv()
-            .await
-            .expect("first low-priority post should be queued")
-            .into_inner();
-        assert!(matches!(first, NetworkMessage::Post(_)));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), low_rx.recv())
-                .await
-                .is_err(),
-            "low-priority overflow should remain lossy"
-        );
-    }
-
-    #[test]
-    fn update_methods_ignore_closed_channels() {
-        let handle = closed_handle();
-        handle.update_topology(message::UpdateTopology(HashSet::new()));
-        handle.update_peers_addresses(message::UpdatePeers(Vec::new()));
-        handle.update_peer_capabilities(message::UpdatePeerCapabilities(Vec::new()));
-        handle.update_trusted_peers(message::UpdateTrustedPeers::default());
-        handle.update_acl(message::UpdateAcl::default());
-        handle.update_soranet_handshake(ActualSoranetHandshake::default());
-        handle.update_consensus_caps(test_consensus_caps(0), false);
-    }
-
-    #[test]
-    fn closed_handle_reports_subscriber_queue_cap() {
-        let handle = closed_handle();
-        assert_eq!(handle.subscriber_queue_cap().get(), 1);
-        assert_eq!(handle.authenticated_source_credit_capacity().get(), 1);
-    }
-
-    #[tokio::test]
-    async fn wait_online_peers_update_reports_closed_channel() {
-        let mut handle = closed_handle();
-        let result = handle.wait_online_peers_update(HashSet::len).await;
-        assert!(result.is_err());
-    }
-}
+include!("network/handle_update_tests.rs");
 
 #[cfg(test)]
 mod accept_stream_tests {
@@ -12477,6 +10194,20 @@ mod accept_stream_tests {
 
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
+
+    fn test_node_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x71; 32], Algorithm::BlsNormal)
+            .expect("test BLS-normal node key")
+    }
+
+    fn test_transport_key_pair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 transport key")
+    }
+
+    fn test_p2p_identity_keys(node: KeyPair) -> P2pIdentityKeys {
+        P2pIdentityKeys::new(node, test_transport_key_pair()).expect("test P2P identity roles")
+    }
 
     impl crate::network::message::ClassifyTopic for Dummy {}
 
@@ -12929,7 +10660,7 @@ mod accept_stream_tests {
         cfg.max_frame_bytes = crate::MAX_ENCRYPTED_FRAME_BYTES + 1;
 
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            KeyPair::random(),
+            test_p2p_identity_keys(test_node_key_pair()),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -12947,7 +10678,7 @@ mod accept_stream_tests {
         cfg.deferred_send_max_bytes_total = 1;
 
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            KeyPair::random(),
+            test_p2p_identity_keys(test_node_key_pair()),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -12964,12 +10695,12 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn accept_stream_denied_by_incoming_cap() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(1);
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13012,14 +10743,14 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_proxy_required_without_proxy() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy_required = true;
         cfg.p2p_proxy = None;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13036,7 +10767,7 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_proxy_required_with_no_proxy_exemptions() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy_required = true;
         cfg.p2p_proxy = Some("http://proxy.invalid:8080".to_string());
@@ -13044,7 +10775,7 @@ mod accept_stream_tests {
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13061,7 +10792,7 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_https_proxy_without_pin_when_verify_enabled() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy = Some("https://proxy.invalid:443".to_string());
         cfg.p2p_proxy_tls_verify = true;
@@ -13069,7 +10800,7 @@ mod accept_stream_tests {
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13087,14 +10818,14 @@ mod accept_stream_tests {
     #[cfg(not(feature = "p2p_tls"))]
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_tls_without_feature_when_tls_only_outbound() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.tls_enabled = true;
         cfg.tls_fallback_to_plain = false;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13112,14 +10843,14 @@ mod accept_stream_tests {
     #[cfg(not(feature = "p2p_tls"))]
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_tls_inbound_only_without_feature() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.tls_enabled = true;
         cfg.tls_inbound_only = true;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13137,14 +10868,14 @@ mod accept_stream_tests {
     #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn start_accepts_tls_inbound_only_with_tls_feature() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.tls_enabled = true;
         cfg.tls_inbound_only = true;
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13168,7 +10899,7 @@ mod accept_stream_tests {
     #[cfg(feature = "quic")]
     #[tokio::test(flavor = "current_thread")]
     async fn start_rejects_proxy_required_with_quic_enabled() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.p2p_proxy_required = true;
         cfg.p2p_proxy = Some("http://proxy.invalid:8080".to_string());
@@ -13176,7 +10907,7 @@ mod accept_stream_tests {
 
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13193,12 +10924,12 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn accept_stream_allows_basic() {
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(1);
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13234,12 +10965,12 @@ mod accept_stream_tests {
 
         let baseline = snapshot().len();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_frame_bytes = 37_777;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13296,7 +11027,9 @@ mod accept_stream_tests {
         };
 
         let baseline = snapshot().len();
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
+        let chain_id = ChainId::from("test-chain");
+        let soranet_transport_key_pair = test_transport_key_pair();
         let max_frame_bytes = 59_999usize;
 
         let (service_tx, mut service_rx) =
@@ -13323,10 +11056,11 @@ mod accept_stream_tests {
         let _listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
             key_pair.clone(),
+            soranet_transport_key_pair,
             socket_addr!(127.0.0.1:1_337),
             service_tx,
             Duration::from_secs(1),
-            ChainId::from("test-chain"),
+            chain_id,
             None,
             None,
             None,
@@ -13393,13 +11127,13 @@ mod accept_stream_tests {
 
         let baseline = snapshot().len();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.max_incoming = core::num::NonZeroUsize::new(2);
         cfg.max_frame_bytes = 48_888;
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13452,13 +11186,13 @@ mod accept_stream_tests {
     async fn start_provides_bind_listener_context_on_failure() {
         use iroha_primitives::addr::socket_addr;
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
         cfg.address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
         cfg.public_address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let result = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
-            key_pair,
+            test_p2p_identity_keys(key_pair),
             cfg,
             ChainId::from("test-chain"),
             None,
@@ -13495,7 +11229,7 @@ mod accept_stream_tests {
     async fn accept_new_peer_propagates_frame_cap() {
         let baseline = snapshot().len();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
         let max_frame_bytes = 59_999usize;
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
@@ -13515,6 +11249,8 @@ mod accept_stream_tests {
         let (_subscribe_tx, subscribe_rx) = mpsc::channel::<super::Subscriber<Dummy>>(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         #[allow(unused_variables)]
@@ -13558,6 +11294,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -13579,6 +11316,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -13599,6 +11337,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             chain_id: ChainId::from("test-chain"),
             consensus_caps: None,
@@ -13754,7 +11496,9 @@ mod accept_stream_tests {
         use tokio::sync::mpsc;
 
         let baseline = snapshot().len();
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
+        let chain_id = ChainId::from("test-chain");
+        let soranet_transport_key_pair = test_transport_key_pair();
         let max_frame_bytes = 61_111usize;
 
         let (service_tx, mut service_rx) =
@@ -13780,6 +11524,7 @@ mod accept_stream_tests {
         let _listener_task = start_quic_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             &addr,
             key_pair.clone(),
+            soranet_transport_key_pair,
             socket_addr!(127.0.0.1:4_321),
             service_tx,
             Duration::from_secs(1),
@@ -13788,7 +11533,7 @@ mod accept_stream_tests {
             0,
             0,
             0,
-            ChainId::from("test-chain"),
+            chain_id,
             None,
             None,
             None,
@@ -13883,7 +11628,7 @@ mod accept_stream_tests {
         use crate::network::cap_violations_consensus;
         let _guard = cap_violation_test_guard();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -13903,6 +11648,8 @@ mod accept_stream_tests {
             mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
@@ -13945,6 +11692,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -13970,6 +11718,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -13990,6 +11739,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
             reply_writer_flush_timeout:
@@ -14119,7 +11872,7 @@ mod accept_stream_tests {
         use crate::network::cap_violations_consensus;
         let _guard = cap_violation_test_guard();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -14141,6 +11894,8 @@ mod accept_stream_tests {
         ) = mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
@@ -14179,6 +11934,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -14204,6 +11960,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -14224,6 +11981,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
             reply_writer_flush_timeout:
@@ -14373,7 +12134,7 @@ mod accept_stream_tests {
         use crate::network::cap_violations_block_sync;
         let _guard = cap_violation_test_guard();
 
-        let key_pair = KeyPair::random();
+        let key_pair = test_node_key_pair();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -14395,6 +12156,8 @@ mod accept_stream_tests {
         ) = mpsc::channel(1);
         let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
         let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            super::control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
         let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
@@ -14433,6 +12196,7 @@ mod accept_stream_tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet.clone(),
+            soranet_transport_key_pair: test_transport_key_pair(),
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -14458,6 +12222,7 @@ mod accept_stream_tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -14478,6 +12243,10 @@ mod accept_stream_tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
             reply_writer_flush_timeout:
@@ -14781,6 +12550,7 @@ mod reputation_tests {
 async fn start_quic_listener<T, E>(
     addr: &std::net::SocketAddr,
     key_pair: iroha_crypto::KeyPair,
+    soranet_transport_key_pair: iroha_crypto::KeyPair,
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
@@ -14912,6 +12682,7 @@ where
             };
             let service_message_sender = service_message_sender.clone();
             let key_pair = key_pair.clone();
+            let soranet_transport_key_pair = soranet_transport_key_pair.clone();
             let public_address = public_address.clone();
             let chain_id = chain_id.clone();
             let consensus_caps = consensus_caps.clone();
@@ -15013,6 +12784,7 @@ where
                 let peer_task = connected_from::<T, E>(
                     public_address,
                     key_pair,
+                    soranet_transport_key_pair,
                     Connection::from_quic(
                         conn_id,
                         new_conn.clone(),
@@ -15078,7 +12850,11 @@ mod quic_tests {
         let reserved = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve UDP port");
         let addr = reserved.local_addr().expect("reserved UDP address");
         drop(reserved);
-        let kp = KeyPair::random();
+        let kp = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::BlsNormal)
+            .expect("test BLS-normal node key");
+        let transport = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 transport key");
+        let chain_id = iroha_data_model::ChainId::from("test-chain");
         let (tx, _rx) = tokio::sync::mpsc::channel::<
             crate::peer::message::ServiceMessage<WireMessage<Dummy>>,
         >(1);
@@ -15087,6 +12863,7 @@ mod quic_tests {
         let task = match start_quic_listener::<WireMessage<Dummy>, ChaCha20Poly1305>(
             &addr,
             kp,
+            transport,
             socket_addr!(127.0.0.1:1337),
             tx,
             std::time::Duration::from_secs(1),
@@ -15095,7 +12872,7 @@ mod quic_tests {
             0,
             0,
             0,
-            iroha_data_model::ChainId::from("test-chain"),
+            chain_id,
             None,
             None,
             None,
@@ -15146,6 +12923,7 @@ mod quic_tests {
 async fn start_tls_listener<T, E>(
     addr: std::net::SocketAddr,
     key_pair: iroha_crypto::KeyPair,
+    soranet_transport_key_pair: iroha_crypto::KeyPair,
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
@@ -15223,6 +13001,7 @@ where
             };
             let service_message_sender = service_message_sender.clone();
             let key_pair = key_pair.clone();
+            let soranet_transport_key_pair = soranet_transport_key_pair.clone();
             let public_address = public_address.clone();
             let chain_id = chain_id.clone();
             let consensus_caps = consensus_caps.clone();
@@ -15277,6 +13056,7 @@ where
                         let peer_task = connected_from::<T, E>(
                             public_address,
                             key_pair,
+                            soranet_transport_key_pair,
                             Connection::from_split_with_binding(
                                 conn_id,
                                 read_half,
@@ -15372,6 +13152,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     peer_reputations: PeerReputationBook,
     /// `SoraNet` handshake runtime configuration shared across peers.
     soranet_handshake: Arc<SoranetHandshakeConfig>,
+    /// Dedicated Ed25519 identity used by the `SoraNet` transport handshake.
+    soranet_transport_key_pair: KeyPair,
     /// Current [`Peer`]s in [`Peer::Ready`] state.
     peers: HashMap<PeerId, RefPeer<WireMessage<T>>>,
     /// [`Peer`]s in process of being connected.
@@ -15419,6 +13201,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     update_topology_receiver: ControlUpdateReceiver<UpdateTopology>,
     /// Latest [`UpdatePeers`] snapshot receiver.
     update_peers_receiver: ControlUpdateReceiver<UpdatePeers>,
+    /// Latest configured-validator dial-roster snapshot receiver.
+    update_validator_dial_roster_receiver: ControlUpdateReceiver<ValidatorDialControlUpdate>,
     /// Latest [`UpdatePeerCapabilities`] snapshot receiver.
     update_peer_capabilities_receiver: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
     /// Latest trusted-peers snapshot receiver.
@@ -15459,6 +13243,9 @@ struct NetworkBase<T: Pload, E: Enc> {
     requested_topology: HashSet<PeerId>,
     /// Current topology
     current_topology: HashSet<PeerId>,
+    /// Pairwise preferred-owner and bounded standby takeover state for the
+    /// configured validator subset only.
+    validator_dial_scheduler: ValidatorDialScheduler,
     /// Peers which are not yet connected, but should.
     ///
     /// Can have two addresses for same `PeerId`.
@@ -15706,6 +13493,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 let task = connected_from::<WireMessage<T>, E>(
                     self.public_address.clone(),
                     self.key_pair.clone(),
+                    self.soranet_transport_key_pair.clone(),
                     Connection::from_split(conn_id, read, write),
                     service_message_sender,
                     self.idle_timeout,
@@ -16267,6 +14055,18 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 Some(update_peers) = receive_control_update(&mut self.update_peers_receiver) => {
                     self.set_current_peers_addresses(update_peers);
                 }
+                Some(update_validator_dial_control) = receive_control_update(
+                    &mut self.update_validator_dial_roster_receiver,
+                ) => {
+                    match update_validator_dial_control {
+                        ValidatorDialControlUpdate::Roster(roster) => {
+                            self.set_validator_dial_roster(roster);
+                        }
+                        ValidatorDialControlUpdate::Topology(topology) => {
+                            self.set_validator_topology(topology);
+                        }
+                    }
+                }
                 Some(update_capabilities) = receive_control_update(
                     &mut self.update_peer_capabilities_receiver,
                 ) => {
@@ -16565,6 +14365,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         let task = connected_from::<WireMessage<T>, E>(
             self.public_address.clone(),
             self.key_pair.clone(),
+            self.soranet_transport_key_pair.clone(),
             Connection::new(conn_id, stream),
             service_message_sender,
             self.idle_timeout,
@@ -16685,6 +14486,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if let Some(trusted) = pending.trusted {
             self.apply_reply_source_trusted(trusted);
         }
+        if let Some(message::UpdateValidatorDialRoster(roster)) = pending.validator_dial_roster {
+            self.validator_dial_scheduler
+                .replace_roster(roster, &self.self_id);
+        }
         if let Some(topology) = pending.topology {
             self.apply_current_topology(topology);
         } else {
@@ -16719,6 +14524,30 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
     }
 
     fn set_current_topology(&mut self, update: UpdateTopology) {
+        self.stage_current_topology(update, None, "topology update");
+    }
+
+    fn set_validator_topology(
+        &mut self,
+        message::UpdateValidatorTopology {
+            topology,
+            mut validator_dial_roster,
+        }: message::UpdateValidatorTopology,
+    ) {
+        validator_dial_roster.retain(|peer_id| topology.contains(peer_id));
+        self.stage_current_topology(
+            UpdateTopology(topology),
+            Some(message::UpdateValidatorDialRoster(validator_dial_roster)),
+            "validator topology update",
+        );
+    }
+
+    fn stage_current_topology(
+        &mut self,
+        update: UpdateTopology,
+        validator_dial_roster: Option<message::UpdateValidatorDialRoster>,
+        transition: &'static str,
+    ) {
         let logical_topology: HashSet<_> = update
             .0
             .iter()
@@ -16731,7 +14560,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
         let prior = self.pending_reply_source_authority.clone();
         self.pending_reply_source_authority.topology = Some(update);
-        self.accept_staged_reply_source_authority(prior, "topology update");
+        if let Some(validator_dial_roster) = validator_dial_roster {
+            self.pending_reply_source_authority.validator_dial_roster = Some(validator_dial_roster);
+        }
+        self.accept_staged_reply_source_authority(prior, transition);
     }
 
     fn apply_reply_source_acl(&mut self, acl: message::UpdateAcl) {
@@ -16938,6 +14770,15 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             .collect();
     }
 
+    fn set_validator_dial_roster(&mut self, roster: message::UpdateValidatorDialRoster) {
+        let prior = self.pending_reply_source_authority.clone();
+        self.pending_reply_source_authority.validator_dial_roster = Some(roster);
+        // Existing authenticated sessions are deliberately retained. The
+        // roster commits through the same authority transaction as topology so
+        // pending membership changes cannot expose an unmanaged validator.
+        self.accept_staged_reply_source_authority(prior, "validator dial roster update");
+    }
+
     fn update_topology(&mut self) {
         if !self.pending_reply_source_authority.is_empty()
             && !self.retry_pending_reply_source_authority()
@@ -17001,6 +14842,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
 
         // Order addresses by preference and schedule staggered attempts
         for (peer_id, mut addrs) in by_peer {
+            let validator_not_before = self.validator_dial_scheduler.not_before(
+                &self.self_id,
+                &peer_id,
+                now,
+                self.connect_startup_delay_until,
+            );
             addrs.sort_by_key(|a| self.addr_preference(a));
             for (i, addr) in addrs.into_iter().enumerate() {
                 if self.is_scheduled(&peer_id, &addr) {
@@ -17020,7 +14867,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     self.happy_eyeballs_stagger,
                     jitter_cap_ms,
                 );
-                let when = now + base + Duration::from_millis(jitter_ms);
+                let mut when = now + base + Duration::from_millis(jitter_ms);
+                if let Some(validator_not_before) = validator_not_before {
+                    when = core::cmp::max(when, validator_not_before);
+                }
                 let when = apply_connect_startup_delay(when, self.connect_startup_delay_until);
                 self.pending_connects
                     .push((when, Peer::new(addr, peer_id.clone())));
@@ -17136,7 +14986,21 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             return false;
         }
         let peer = Peer::new(addr.clone(), peer_id.clone());
-        if self.ready_to_retry_addr(peer_id, &addr, now) {
+        let validator_not_before = self.validator_dial_scheduler.not_before(
+            &self.self_id,
+            peer_id,
+            now,
+            self.connect_startup_delay_until,
+        );
+        let backoff_not_before = self
+            .retry_backoff
+            .get(peer_id)
+            .and_then(|inner| inner.get(&addr.to_string()).map(|(when, _)| *when));
+        let not_before = validator_not_before
+            .into_iter()
+            .chain(backoff_not_before)
+            .fold(self.connect_startup_delay_until, core::cmp::max);
+        if now >= not_before {
             if !self.connect_peer(&peer) {
                 let when = apply_connect_startup_delay(
                     now + Duration::from_millis(50),
@@ -17145,13 +15009,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.pending_connects.push((when, peer));
             }
         } else {
-            let when = self
-                .retry_backoff
-                .get(peer_id)
-                .and_then(|inner| inner.get(&addr.to_string()).map(|(when, _)| *when))
-                .unwrap_or_else(|| now + Duration::from_millis(50));
-            let when = apply_connect_startup_delay(when, self.connect_startup_delay_until);
-            self.pending_connects.push((when, peer));
+            self.pending_connects.push((not_before, peer));
         }
         SESSION_RECONNECT_TOTAL.fetch_add(1, Ordering::Relaxed);
         true
@@ -17923,6 +15781,23 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             if !self.current_topology.contains(&id) && !self.relay_trusted_peers.contains(&id) {
                 continue;
             }
+            if self.peers.contains_key(&id) {
+                // A pending standby or Happy-Eyeballs attempt became obsolete
+                // when either direction authenticated. Dropping it here avoids
+                // a permanent 50 ms reschedule loop and leaves future reconnects
+                // to the existing termination/backoff path.
+                continue;
+            }
+            if let Some(not_before) = self.validator_dial_scheduler.not_before(
+                &self.self_id,
+                &id,
+                now,
+                self.connect_startup_delay_until,
+            ) && not_before > now
+            {
+                self.pending_connects.push((not_before, peer));
+                continue;
+            }
             if self.exceeds_caps() {
                 // Outbound handshakes consume the same finite process slot as
                 // accepted inbound and established connections. Keep the due
@@ -17935,11 +15810,10 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 self.pending_connects.push((when, peer));
                 continue;
             }
-            if !self.peers.contains_key(&id)
-                && !self
-                    .connecting_peers
-                    .values()
-                    .any(|p| (p.id(), p.address()) == (&id, &addr))
+            if !self
+                .connecting_peers
+                .values()
+                .any(|p| (p.id(), p.address()) == (&id, &addr))
                 && self.ready_to_retry_addr(&id, &addr, now)
             {
                 let connected = self.connect_peer(&peer);
@@ -18389,6 +16263,12 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
 
         // Register externally visible state only after the peer task accepts
         // its actor handoff; a closed oneshot must not leave a zombie session.
+        self.validator_dial_scheduler.note_session_established(
+            &self.self_id,
+            peer.id(),
+            tokio::time::Instant::now(),
+            self.connect_startup_delay_until,
+        );
         self.reset_backoff_addr(peer.id(), peer.address());
         self.last_active
             .insert(peer.id().clone(), tokio::time::Instant::now());
@@ -19850,6 +17730,271 @@ mod tests {
             ),
             0
         );
+    }
+
+    fn deterministic_validator_roster(count: u8) -> Vec<PeerId> {
+        let mut roster: Vec<_> = (1..=count)
+            .map(|seed| {
+                let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic BLS validator fixture");
+                PeerId::from(key_pair.public_key().clone())
+            })
+            .collect();
+        roster.sort();
+        roster
+    }
+
+    fn validator_scheduler(roster: &[PeerId], takeover_delay: Duration) -> ValidatorDialScheduler {
+        ValidatorDialScheduler::new(roster.iter().cloned().collect(), takeover_delay)
+    }
+
+    #[test]
+    fn four_validator_full_mesh_has_exactly_six_balanced_initial_dial_owners() {
+        let roster = deterministic_validator_roster(4);
+        let now = tokio::time::Instant::now();
+        let mut total_immediate = 0usize;
+        let mut out_degrees = vec![0usize; roster.len()];
+
+        for (self_rank, self_id) in roster.iter().enumerate() {
+            let mut scheduler = validator_scheduler(&roster, Duration::from_secs(30));
+            for peer_id in roster.iter().filter(|peer_id| *peer_id != self_id) {
+                match scheduler.role(self_id, peer_id) {
+                    ValidatorDialRole::Preferred => {
+                        assert_eq!(scheduler.not_before(self_id, peer_id, now, now), None);
+                        total_immediate += 1;
+                        out_degrees[self_rank] += 1;
+                    }
+                    ValidatorDialRole::Standby => {
+                        assert_eq!(
+                            scheduler.not_before(self_id, peer_id, now, now),
+                            Some(now + Duration::from_secs(30))
+                        );
+                    }
+                    ValidatorDialRole::Unmanaged => {
+                        panic!("every distinct configured-validator pair must be managed")
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            total_immediate, 6,
+            "four validators have six unordered pairs"
+        );
+        let min = *out_degrees.iter().min().expect("non-empty degrees");
+        let max = *out_degrees.iter().max().expect("non-empty degrees");
+        assert!(
+            max - min <= 1,
+            "pair ownership must remain balanced: {out_degrees:?}"
+        );
+    }
+
+    #[test]
+    fn standby_takes_over_once_after_bounded_owner_unavailability() {
+        let roster = deterministic_validator_roster(2);
+        let now = tokio::time::Instant::now();
+        let delay = Duration::from_secs(17);
+        let (preferred, standby) = if validator_scheduler(&roster, delay)
+            .role(&roster[0], &roster[1])
+            == ValidatorDialRole::Preferred
+        {
+            (&roster[0], &roster[1])
+        } else {
+            (&roster[1], &roster[0])
+        };
+        let mut preferred_scheduler = validator_scheduler(&roster, delay);
+        let mut standby_scheduler = validator_scheduler(&roster, delay);
+
+        assert_eq!(
+            preferred_scheduler.not_before(preferred, standby, now, now),
+            None
+        );
+        let deadline = standby_scheduler
+            .not_before(standby, preferred, now, now)
+            .expect("backup endpoint has a takeover deadline");
+        assert_eq!(deadline, now + delay);
+        assert!(now + delay - Duration::from_nanos(1) < deadline);
+        assert_eq!(
+            standby_scheduler.not_before(standby, preferred, deadline, now),
+            Some(deadline),
+            "takeover becomes eligible without minting another retry epoch"
+        );
+    }
+
+    #[test]
+    fn simultaneous_restart_and_roster_iteration_order_choose_the_same_pair_owners() {
+        let roster = deterministic_validator_roster(6);
+        let reversed: HashSet<_> = roster.iter().rev().cloned().collect();
+        let canonical: HashSet<_> = roster.iter().cloned().collect();
+        let first = ValidatorDialScheduler::new(canonical, Duration::from_secs(5));
+        let restarted = ValidatorDialScheduler::new(reversed, Duration::from_secs(5));
+
+        for self_id in &roster {
+            for peer_id in roster.iter().filter(|peer_id| *peer_id != self_id) {
+                assert_eq!(
+                    first.role(self_id, peer_id),
+                    restarted.role(self_id, peer_id),
+                    "hash-map insertion order and simultaneous restart must not affect ownership"
+                );
+                assert_ne!(
+                    first.role(self_id, peer_id),
+                    first.role(peer_id, self_id),
+                    "each unordered pair has exactly one preferred endpoint"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn address_order_and_malicious_gossip_cannot_change_validator_pair_ownership() {
+        let roster = deterministic_validator_roster(4);
+        let self_id = &roster[0];
+        let peer_id = &roster[3];
+        let outsider_key = KeyPair::try_from_seed(vec![99; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic outsider fixture");
+        let outsider = PeerId::from(outsider_key.public_key().clone());
+        let mut scheduler = validator_scheduler(&roster, Duration::from_secs(9));
+        let role = scheduler.role(self_id, peer_id);
+        let now = tokio::time::Instant::now();
+        let first_deadline = scheduler.not_before(self_id, peer_id, now, now);
+
+        // Address ordering and gossip source identities are intentionally absent
+        // from the scheduler input. Re-observing a validator through arbitrary
+        // gossip cannot reset its retained failover epoch.
+        for _untrusted_address in [
+            socket_addr!(203.0.113.9:1),
+            socket_addr!(127.0.0.1:65_000),
+            socket_addr!(192.0.2.1:2),
+        ] {
+            assert_eq!(scheduler.role(self_id, peer_id), role);
+            assert_eq!(
+                scheduler.not_before(self_id, peer_id, now, now),
+                first_deadline
+            );
+        }
+        assert_eq!(
+            scheduler.role(self_id, &outsider),
+            ValidatorDialRole::Unmanaged,
+            "malicious gossip cannot promote an outsider into validator dial authority"
+        );
+        let mut forged_roster: HashSet<_> = roster.iter().cloned().collect();
+        forged_roster.insert(outsider.clone());
+        scheduler.replace_roster(forged_roster, self_id);
+        assert_eq!(
+            scheduler.role(self_id, &outsider),
+            ValidatorDialRole::Unmanaged,
+            "runtime updates cannot expand the startup-authenticated configured subset"
+        );
+    }
+
+    #[test]
+    fn dynamic_validator_add_remove_preserves_non_validator_dial_behavior() {
+        let roster = deterministic_validator_roster(5);
+        let initial: HashSet<_> = roster[..4].iter().cloned().collect();
+        let self_id = &roster[0];
+        let removed = &roster[1];
+        let added = &roster[4];
+        let now = tokio::time::Instant::now();
+        let mut scheduler = validator_scheduler(&roster, Duration::from_secs(13));
+        scheduler.replace_roster(initial, self_id);
+
+        let _ = scheduler.not_before(self_id, removed, now, now);
+        let updated: HashSet<_> = [
+            roster[0].clone(),
+            roster[2].clone(),
+            roster[3].clone(),
+            added.clone(),
+        ]
+        .into_iter()
+        .collect();
+        scheduler.replace_roster(updated, self_id);
+
+        assert_eq!(
+            scheduler.role(self_id, removed),
+            ValidatorDialRole::Unmanaged,
+            "a removed validator immediately returns to ordinary dynamic-peer policy"
+        );
+        assert_eq!(scheduler.not_before(self_id, removed, now, now), None);
+        assert_ne!(
+            scheduler.role(self_id, added),
+            ValidatorDialRole::Unmanaged,
+            "a configured validator added by authority enters pair ownership"
+        );
+    }
+
+    #[test]
+    fn live_validator_membership_commits_with_pair_ownership_and_prunes_outsiders() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let self_id = network.self_id.clone();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let outsider = PeerId::from(KeyPair::random().public_key().clone());
+        let configured = HashSet::from([self_id.clone(), peer_id.clone(), outsider.clone()]);
+        network.validator_dial_scheduler =
+            ValidatorDialScheduler::new(configured, Duration::from_secs(11));
+        network
+            .validator_dial_scheduler
+            .replace_roster(HashSet::from([self_id.clone()]), &self_id);
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &peer_id),
+            ValidatorDialRole::Unmanaged
+        );
+
+        network.set_validator_topology(message::UpdateValidatorTopology {
+            topology: HashSet::from([self_id.clone(), peer_id.clone()]),
+            validator_dial_roster: HashSet::from([
+                self_id.clone(),
+                peer_id.clone(),
+                outsider.clone(),
+            ]),
+        });
+
+        assert!(network.current_topology.contains(&peer_id));
+        assert_ne!(
+            network.validator_dial_scheduler.role(&self_id, &peer_id),
+            ValidatorDialRole::Unmanaged,
+            "membership must never commit without pair ownership"
+        );
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &outsider),
+            ValidatorDialRole::Unmanaged,
+            "an identity outside the same topology snapshot cannot gain dial authority"
+        );
+    }
+
+    #[test]
+    fn authenticated_session_restart_has_one_immediate_reconnector_and_stable_backup_deadline() {
+        let roster = deterministic_validator_roster(4);
+        let now = tokio::time::Instant::now();
+        let delay = Duration::from_secs(23);
+        let mut immediate = 0usize;
+        let mut standby_deadlines = Vec::new();
+
+        for self_id in &roster {
+            let mut scheduler = validator_scheduler(&roster, delay);
+            for peer_id in roster.iter().filter(|peer_id| *peer_id != self_id) {
+                scheduler.note_session_established(self_id, peer_id, now, now);
+                match scheduler.not_before(self_id, peer_id, now, now) {
+                    None => immediate += 1,
+                    Some(deadline) => {
+                        assert_eq!(deadline, now + delay);
+                        assert_eq!(
+                            scheduler.not_before(self_id, peer_id, now, now),
+                            Some(deadline),
+                            "repeated reconnect triggers must coalesce on one deadline"
+                        );
+                        standby_deadlines.push(deadline);
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            immediate, 6,
+            "only one endpoint per pair reconnects immediately"
+        );
+        assert_eq!(standby_deadlines.len(), 6);
     }
 
     #[test]
@@ -21703,11 +19848,18 @@ mod tests {
     #[test]
     fn runtime_from_handshake_accepts_signed_ticket_with_configured_key() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
+        let revocation_dir = tempfile::tempdir().expect("temporary revocation directory");
         let mut handshake = ActualSoranetHandshake::default();
         handshake.pow.required = true;
         handshake.pow.difficulty = 1;
         handshake.pow.puzzle = None;
         handshake.pow.signed_ticket_public_key = Some(keypair.public_key().to_vec());
+        handshake.pow.revocation_store_path = revocation_dir
+            .path()
+            .join("ticket_revocations.norito")
+            .to_string_lossy()
+            .into_owned()
+            .into();
 
         let config = runtime_from_handshake(handshake).expect("runtime");
 
@@ -21914,7 +20066,11 @@ mod tests {
     fn bare_network_with<T: Pload + message::ClassifyTopic>()
     -> Option<NetworkBase<T, ChaCha20Poly1305>> {
         let _guard = enter_test_runtime();
-        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::BlsNormal)
+            .expect("test BLS-normal node key");
+        let soranet_transport_key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 transport key");
+        let chain_id = ChainId::from("test-chain");
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return None,
@@ -21932,6 +20088,8 @@ mod tests {
         let (_subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
         let (_update_topology_tx, update_topology_rx) = control_update_channel();
         let (_update_peers_tx, update_peers_rx) = control_update_channel();
+        let (_update_validator_dial_roster_tx, update_validator_dial_roster_receiver) =
+            control_update_channel();
         let (_update_trusted_tx, update_trusted_peers_receiver) = control_update_channel();
         let (_update_acl_tx, update_acl_rx) = control_update_channel();
         let (_update_handshake_tx, update_handshake_rx) = control_update_channel();
@@ -21970,6 +20128,7 @@ mod tests {
             address_book: HashMap::new(),
             peer_reputations: PeerReputationBook::default(),
             soranet_handshake: soranet,
+            soranet_transport_key_pair,
             peers: HashMap::new(),
             connecting_peers: HashMap::new(),
             outbound_connections: HashSet::new(),
@@ -21991,6 +20150,7 @@ mod tests {
             network_actor_progress_budget: test_network_actor_progress_budget(),
             update_topology_receiver: update_topology_rx,
             update_peers_receiver: update_peers_rx,
+            update_validator_dial_roster_receiver,
             update_peer_capabilities_receiver,
             update_trusted_peers_receiver,
             update_acl_receiver: update_acl_rx,
@@ -22011,8 +20171,12 @@ mod tests {
             current_conn_id: 0,
             requested_topology: HashSet::new(),
             current_topology: HashSet::new(),
+            validator_dial_scheduler: ValidatorDialScheduler::new(
+                HashSet::new(),
+                Duration::from_millis(50),
+            ),
             current_peers_addresses: Vec::new(),
-            chain_id: ChainId::from("test-chain"),
+            chain_id,
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -23727,6 +21891,40 @@ mod tests {
     }
 
     #[test]
+    fn rejected_validator_topology_cannot_partially_promote_dial_ownership() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        network.max_total_connections = Some(2);
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Assist;
+        let self_id = network.self_id.clone();
+        let candidate = PeerId::from(KeyPair::random().public_key().clone());
+        let configured = HashSet::from([self_id.clone(), candidate.clone()]);
+        network.validator_dial_scheduler =
+            ValidatorDialScheduler::new(configured, Duration::from_secs(7));
+        network
+            .validator_dial_scheduler
+            .replace_roster(HashSet::from([self_id.clone()]), &self_id);
+        let oversized = HashSet::from([
+            candidate.clone(),
+            PeerId::from(KeyPair::random().public_key().clone()),
+            PeerId::from(KeyPair::random().public_key().clone()),
+        ]);
+
+        network.set_validator_topology(message::UpdateValidatorTopology {
+            topology: oversized,
+            validator_dial_roster: HashSet::from([self_id.clone(), candidate.clone()]),
+        });
+
+        assert_eq!(
+            network.validator_dial_scheduler.role(&self_id, &candidate),
+            ValidatorDialRole::Unmanaged,
+            "a rejected membership snapshot must roll back its ownership roster"
+        );
+        assert!(network.pending_reply_source_authority.is_empty());
+    }
+
+    #[test]
     fn blocked_a_to_b_drains_old_route_and_suppresses_obsolete_reconnect() {
         let Some(mut network) = bare_network() else {
             return;
@@ -24321,6 +22519,27 @@ mod tests {
             network.pending_connects[0].0 >= delay_until,
             "rescheduled connect should honor startup delay"
         );
+    }
+
+    #[test]
+    fn authenticated_session_cancels_obsolete_standby_attempt_without_reschedule_loop() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:45683);
+        network.current_topology.insert(peer_id.clone());
+        let (handle, _receivers) =
+            crate::peer::handles::test_peer_handle::<WireMessage<DummyMsg>>(1);
+        insert_dummy_ref_peer(&mut network, peer_id.clone(), addr.clone(), 93, handle);
+        network
+            .pending_connects
+            .push((tokio::time::Instant::now(), Peer::new(addr, peer_id)));
+
+        network.process_pending_connects();
+
+        assert!(network.pending_connects.is_empty());
+        assert!(network.connecting_peers.is_empty());
     }
 
     #[test]
@@ -30945,6 +29164,26 @@ pub mod message {
     /// The message that is sent to `NetworkBase` to update peers addresses of the network.
     #[derive(Clone, Debug)]
     pub struct UpdatePeers(pub Vec<(PeerId, SocketAddr)>);
+
+    /// Configured validators eligible for deterministic pairwise dial ownership.
+    ///
+    /// This is local scheduling authority, never peer-gossip input. The set
+    /// includes the local validator when it participates in the roster.
+    #[derive(Clone, Debug)]
+    pub struct UpdateValidatorDialRoster(pub HashSet<PeerId>);
+
+    /// One atomic consensus-topology and validator-dial-ownership snapshot.
+    ///
+    /// `validator_dial_roster` must be the locally authenticated configured
+    /// validator subset of `topology`; the network actor also intersects it
+    /// with the immutable startup authority before applying it.
+    #[derive(Clone, Debug)]
+    pub struct UpdateValidatorTopology {
+        /// Logical consensus topology, including the local peer when active.
+        pub topology: HashSet<PeerId>,
+        /// Configured validators governed by deterministic pairwise ownership.
+        pub validator_dial_roster: HashSet<PeerId>,
+    }
 
     /// Full latest-state snapshot of transport capabilities for peers.
     #[derive(Clone, Debug)]

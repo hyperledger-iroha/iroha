@@ -9,6 +9,7 @@ use core::fmt;
 use std::{collections::BTreeSet, vec::Vec};
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
 
@@ -48,7 +49,7 @@ pub const MAX_VALIDATORS_PER_HEIGHT: usize = 3 * MAX_FAULTS_PER_HEIGHT + 1;
 pub const fn is_valid_committee_size(validator_count: usize) -> bool {
     validator_count >= MIN_VALIDATORS_PER_HEIGHT
         && validator_count <= MAX_VALIDATORS_PER_HEIGHT
-        && (validator_count - 1) % 3 == 0
+        && (validator_count - 1).is_multiple_of(3)
 }
 /// Protocol-wide upper bound for one authenticated RS16 chunk.
 pub const MAX_DA_CHUNK_SIZE_BYTES: u32 = 256 * 1024;
@@ -304,9 +305,9 @@ pub struct DataAvailabilityLayout {
     pub encoding: PayloadEncoding,
     /// Maximum encoded chunk size in bytes.
     pub chunk_size_bytes: u32,
-    /// Data shards per stripe; zero for plain chunking.
+    /// Data shards per RS16 stripe.
     pub data_shards: u16,
-    /// Parity shards per stripe; zero for plain chunking.
+    /// Parity shards per RS16 stripe.
     pub parity_shards: u16,
     /// Maximum canonical body size accepted at this height.
     pub max_payload_size_bytes: u64,
@@ -327,8 +328,6 @@ pub struct DataAvailabilityLayout {
     deny_unknown_fields
 )]
 pub enum PayloadEncoding {
-    /// Split the canonical payload into unencoded chunks.
-    Plain,
     /// Encode payload stripes with the deterministic RS16 layout.
     ReedSolomon16,
 }
@@ -1734,6 +1733,83 @@ pub struct PayloadManifest {
     pub chunk_root: Hash,
 }
 
+/// Encode a canonical payload into the complete ordered RS16 chunk sequence
+/// committed by [`PayloadManifest`].
+///
+/// This is the single owner of layout-driven striping, zero padding, and
+/// parity ordering. Callers must never substitute raw payload slices for the
+/// encoded chunk sequence accepted by [`PayloadManifest::derive`].
+///
+/// # Errors
+///
+/// Returns an error when the layout is invalid, the payload is empty or over
+/// the frozen size bound, or the complete encoded sequence cannot be formed.
+pub fn encode_payload_chunks(
+    layout: DataAvailabilityLayout,
+    payload: &[u8],
+) -> Result<Vec<Vec<u8>>, ValidationError> {
+    validate_data_availability_layout(layout)?;
+    let payload_size =
+        u64::try_from(payload.len()).map_err(|_| ValidationError::PayloadTooLarge)?;
+    if payload.is_empty() {
+        return Err(ValidationError::PayloadSizeMismatch);
+    }
+    if payload_size > layout.max_payload_size_bytes {
+        return Err(ValidationError::PayloadTooLarge);
+    }
+
+    let chunk_size = usize::try_from(layout.chunk_size_bytes)
+        .map_err(|_| ValidationError::InvalidChunkLength)?;
+    let data_shards = usize::from(layout.data_shards);
+    let parity_shards = usize::from(layout.parity_shards);
+    let data_chunk_count = payload.len().div_ceil(chunk_size);
+    let stripe_count = data_chunk_count.div_ceil(data_shards);
+    let stripe_width = data_shards
+        .checked_add(parity_shards)
+        .ok_or(ValidationError::ChunkCountTooLarge)?;
+    let encoded_chunk_count = stripe_count
+        .checked_mul(stripe_width)
+        .ok_or(ValidationError::ChunkCountTooLarge)?;
+    let expected_chunk_count = usize::try_from(expected_encoded_chunk_count(payload_size, layout)?)
+        .map_err(|_| ValidationError::ChunkCountTooLarge)?;
+    if encoded_chunk_count != expected_chunk_count {
+        return Err(ValidationError::PayloadSizeMismatch);
+    }
+
+    let mut encoded = Vec::with_capacity(encoded_chunk_count);
+    let symbol_count = chunk_size / 2;
+    for stripe in 0..stripe_count {
+        let mut data = Vec::with_capacity(data_shards);
+        let mut symbols = Vec::with_capacity(data_shards);
+        for within in 0..data_shards {
+            let data_index = stripe
+                .checked_mul(data_shards)
+                .and_then(|base| base.checked_add(within))
+                .ok_or(ValidationError::ChunkCountTooLarge)?;
+            let offset = data_index
+                .checked_mul(chunk_size)
+                .ok_or(ValidationError::PayloadTooLarge)?;
+            let mut chunk = vec![0_u8; chunk_size];
+            if offset < payload.len() {
+                let end = offset.saturating_add(chunk_size).min(payload.len());
+                chunk[..end - offset].copy_from_slice(&payload[offset..end]);
+            }
+            symbols.push(rs16::symbols_from_chunk(symbol_count, &chunk));
+            data.push(chunk);
+        }
+        let parity = rs16::encode_parity(&symbols, parity_shards)
+            .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
+        encoded.extend(data);
+        for shard in parity {
+            encoded.push(
+                rs16::chunk_from_symbols(&shard, chunk_size)
+                    .map_err(|_| ValidationError::InvalidChunkLength)?,
+            );
+        }
+    }
+    Ok(encoded)
+}
+
 impl PayloadManifest {
     /// Derive the only canonical manifest for an encoded chunk sequence.
     ///
@@ -1760,8 +1836,8 @@ impl PayloadManifest {
             chunk_root,
         };
         manifest.validate(context)?;
-        for (index, chunk) in encoded_chunks.iter().enumerate() {
-            validate_encoded_chunk_len(&manifest, index, chunk.len())?;
+        for chunk in encoded_chunks {
+            validate_encoded_chunk_len(&manifest, chunk.len())?;
         }
         Ok(manifest)
     }
@@ -1874,7 +1950,7 @@ impl PayloadChunk {
             .chunk_hashes
             .get(index)
             .ok_or(ValidationError::ChunkIndexOutOfRange)?;
-        validate_encoded_chunk_len(manifest, index, self.bytes.len())?;
+        validate_encoded_chunk_len(manifest, self.bytes.len())?;
         let chunk_hash = Hash::new(&self.bytes);
         if &chunk_hash != expected_hash {
             return Err(ValidationError::ChunkHashMismatch);
@@ -2525,7 +2601,7 @@ pub struct VrfCommit {
     pub commitment: [u8; 32],
     /// Signer index in the immutable height-context roster.
     pub signer: ValidatorIndex,
-    /// Signature over the canonical `NPoS` VRF-commit preimage.
+    /// Signature over the canonical `NPoS` `VRF`-commit preimage.
     pub bls_sig: Vec<u8>,
 }
 
@@ -2545,7 +2621,7 @@ pub struct VrfReveal {
     pub signer: ValidatorIndex,
     /// Canonical Norito-encoded VRF proof whose verified output equals `reveal`.
     pub vrf_proof: Vec<u8>,
-    /// Signature over the canonical `NPoS` VRF-reveal preimage.
+    /// Signature over the canonical `NPoS` `VRF`-reveal preimage.
     pub bls_sig: Vec<u8>,
 }
 
@@ -4170,7 +4246,6 @@ fn expected_encoded_chunk_count(
     let payload = u128::from(payload_size_bytes);
     let chunk_size = u128::from(layout.chunk_size_bytes);
     let count = match layout.encoding {
-        PayloadEncoding::Plain => return Err(ValidationError::InvalidDataAvailabilityLayout),
         PayloadEncoding::ReedSolomon16 => {
             let data_shards = u128::from(layout.data_shards);
             let stripe_payload = chunk_size
@@ -4188,8 +4263,7 @@ fn expected_encoded_chunk_count(
 fn validate_data_availability_layout(
     layout: DataAvailabilityLayout,
 ) -> Result<(), ValidationError> {
-    if layout.encoding != PayloadEncoding::ReedSolomon16
-        || layout.chunk_size_bytes == 0
+    if layout.chunk_size_bytes == 0
         || layout.chunk_size_bytes > MAX_DA_CHUNK_SIZE_BYTES
         || !layout.chunk_size_bytes.is_multiple_of(2)
         || layout.data_shards == 0
@@ -4220,24 +4294,14 @@ fn validate_data_availability_layout(
 
 fn validate_encoded_chunk_len(
     manifest: &PayloadManifest,
-    _index: usize,
     actual: usize,
 ) -> Result<(), ValidationError> {
     let chunk_size = usize::try_from(manifest.layout.chunk_size_bytes)
         .map_err(|_| ValidationError::InvalidChunkLength)?;
-    if actual == 0 || actual > chunk_size {
-        return Err(ValidationError::InvalidChunkLength);
-    }
     match manifest.layout.encoding {
-        PayloadEncoding::Plain => {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        PayloadEncoding::ReedSolomon16 if actual != chunk_size => {
-            return Err(ValidationError::InvalidChunkLength);
-        }
-        PayloadEncoding::ReedSolomon16 => {}
+        PayloadEncoding::ReedSolomon16 if actual == chunk_size => Ok(()),
+        PayloadEncoding::ReedSolomon16 => Err(ValidationError::InvalidChunkLength),
     }
-    Ok(())
 }
 
 fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationError> {

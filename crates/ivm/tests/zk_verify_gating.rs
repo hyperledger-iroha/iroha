@@ -38,17 +38,13 @@ fn actual_verify_gas(envelope: &OpenVerifyEnvelope, payload_len: usize) -> u64 {
 
 fn label_for_syscall(number: u32) -> &'static str {
     match number {
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER => host::LABEL_TRANSFER,
-        syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => host::LABEL_UNSHIELD,
         syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => host::LABEL_VOTE_BALLOT,
         syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => host::LABEL_VOTE_TALLY,
-        _ => host::LABEL_TRANSFER,
+        _ => host::LABEL_VOTE_BALLOT,
     }
 }
 
-const VERIFY_SYSCALLS: [u32; 4] = [
-    syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-    syscalls::SYSCALL_ZK_VERIFY_UNSHIELD,
+const VERIFY_SYSCALLS: [u32; 2] = [
     syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
     syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY,
 ];
@@ -102,11 +98,11 @@ fn verify_syscalls_gating_returns_backend_error_when_not_ipa() {
         backend: ZkHalo2Backend::Unsupported,
         ..ZkHalo2Config::default()
     });
-    let envelope = canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_TRANSFER);
+    let envelope = canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_VOTE_BALLOT);
     let payload = encode_envelope(&envelope);
 
     let gas = run_verify(
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+        syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
         &mut host,
         &mut vm,
         &payload,
@@ -125,11 +121,11 @@ fn max_k_configuration_does_not_replace_registered_verifier_admission() {
         max_k: 2,
         ..ZkHalo2Config::default()
     });
-    let envelope = canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_TRANSFER);
+    let envelope = canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_VOTE_BALLOT);
     let payload = encode_envelope(&envelope);
 
     let gas = run_verify(
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+        syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
         &mut host,
         &mut vm,
         &payload,
@@ -159,10 +155,10 @@ fn verify_syscalls_backend_tag_matrix_is_fail_closed() {
     let mut host = DefaultHost::new();
 
     for backend in [BackendTag::Halo2IpaPasta, BackendTag::Stark] {
-        let envelope = canonical_envelope(backend, host::LABEL_TRANSFER);
+        let envelope = canonical_envelope(backend, host::LABEL_VOTE_BALLOT);
         let payload = encode_envelope(&envelope);
         run_verify(
-            syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
             &mut host,
             &mut vm,
             &payload,
@@ -180,7 +176,7 @@ fn verify_syscalls_reject_nonportable_circuit_id() {
     let payload = encode_envelope(&envelope);
 
     let gas = run_verify(
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+        syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
         &mut host,
         &mut vm,
         &payload,
@@ -192,7 +188,7 @@ fn verify_syscalls_reject_nonportable_circuit_id() {
 
 #[test]
 fn verify_syscalls_reject_over_envelope_and_proof_limits() {
-    let envelope = canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_TRANSFER);
+    let envelope = canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_VOTE_BALLOT);
     let payload = encode_envelope(&envelope);
     assert!(payload.len() > 16);
 
@@ -202,7 +198,7 @@ fn verify_syscalls_reject_over_envelope_and_proof_limits() {
         ..ZkHalo2Config::default()
     });
     let gas = run_verify(
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+        syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
         &mut host,
         &mut vm,
         &payload,
@@ -211,7 +207,8 @@ fn verify_syscalls_reject_over_envelope_and_proof_limits() {
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), host::ERR_ENVELOPE_SIZE);
 
-    let mut oversized_proof = canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_TRANSFER);
+    let mut oversized_proof =
+        canonical_envelope(BackendTag::Halo2IpaPasta, host::LABEL_VOTE_BALLOT);
     oversized_proof.proof_bytes = vec![7; 65];
     let payload = encode_envelope(&oversized_proof);
     let mut vm = IVM::new(u64::MAX);
@@ -220,7 +217,7 @@ fn verify_syscalls_reject_over_envelope_and_proof_limits() {
         ..ZkHalo2Config::default()
     });
     let gas = run_verify(
-        syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+        syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT,
         &mut host,
         &mut vm,
         &payload,

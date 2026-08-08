@@ -398,6 +398,7 @@ pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str 
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const LOCALNET_CHAIN_ID_ENV: &str = "IROHA_LOCALNET_CHAIN_ID";
 pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
+const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-transport:v1|";
 /// Serialized reducer command queue capacity for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync outer-ingress capacity for generated localnets.
@@ -823,13 +824,8 @@ fn localnet_fee_sponsor_revision(
 }
 
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
-const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
 const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
-
-fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
-    VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_TRANSFER_NAME)
-}
 
 fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
@@ -837,10 +833,6 @@ fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
 
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
     match name {
-        LOCALNET_FEE_ZK_VK_TRANSFER_NAME => {
-            confidential_v2::confidential_transfer_v2_vk_record(name, version)
-                .map_err(|error| eyre!(error))
-        }
         LOCALNET_FEE_ZK_VK_UNSHIELD_NAME => {
             confidential_v2::confidential_unshield_v2_vk_record(name, version)
                 .map_err(|error| eyre!(error))
@@ -849,18 +841,12 @@ fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<Verif
     }
 }
 
-fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 2]>
+fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 1]>
 {
-    Ok([
-        (
-            localnet_fee_vk_transfer_id(),
-            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_TRANSFER_NAME, 1)?,
-        ),
-        (
-            localnet_fee_vk_unshield_id(),
-            localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
-        ),
-    ])
+    Ok([(
+        localnet_fee_vk_unshield_id(),
+        localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
+    )])
 }
 
 fn localnet_sample_asset_literal() -> String {
@@ -1078,6 +1064,8 @@ impl<T: Write> RunArgs<T> for Args {
 struct Peer {
     public_key: iroha_crypto::PublicKey,
     private_key: iroha_crypto::ExposedPrivateKey,
+    soranet_transport_public_key: iroha_crypto::PublicKey,
+    soranet_transport_private_key: iroha_crypto::ExposedPrivateKey,
     bls_public_key: iroha_crypto::PublicKey,
     bls_pop: Vec<u8>,
     api_port: u16,
@@ -1706,9 +1694,15 @@ fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) ->
         .map(|nth| {
             let (bls_public, bls_secret, pop) = generate_bls_key_pair(seed, &nth.to_be_bytes())
                 .wrap_err_with(|| format!("failed to generate BLS key pair for peer {nth}"))?;
+            let (soranet_transport_public_key, soranet_transport_private_key) =
+                generate_soranet_transport_key_pair(seed, &nth.to_be_bytes()).wrap_err_with(
+                    || format!("failed to generate SoraNet transport key pair for peer {nth}"),
+                )?;
             Ok(Peer {
                 public_key: bls_public.clone(),
                 private_key: bls_secret,
+                soranet_transport_public_key,
+                soranet_transport_private_key,
                 bls_public_key: bls_public,
                 bls_pop: pop,
                 api_port: base_api + nth,
@@ -2311,6 +2305,14 @@ fn render_peer_config(
     root.insert(
         "public_key".into(),
         Value::String(peer.public_key.to_string()),
+    );
+    root.insert(
+        "soranet_transport_private_key".into(),
+        Value::String(peer.soranet_transport_private_key.to_string()),
+    );
+    root.insert(
+        "soranet_transport_public_key".into(),
+        Value::String(peer.soranet_transport_public_key.to_string()),
     );
     root.insert("trusted_peers".into(), Value::Array(trusted_list));
     root.insert("trusted_peers_pop".into(), Value::Array(pops));
@@ -3801,7 +3803,6 @@ fn append_localnet_npos_bootstrap_for_services(
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(fee_asset_id.clone());
     }
-    let fee_vk_transfer_id = localnet_fee_vk_transfer_id();
     let fee_vk_unshield_id = localnet_fee_vk_unshield_id();
     for (id, record) in localnet_confidential_fee_vk_registrations()? {
         if registrations.verifying_keys.insert(id.clone()) {
@@ -3815,7 +3816,6 @@ fn append_localnet_npos_bootstrap_for_services(
             iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
             true,
             true,
-            Some(fee_vk_transfer_id),
             Some(fee_vk_unshield_id),
             None,
         ));
@@ -4377,6 +4377,25 @@ fn generate_bls_key_pair(
     let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())?;
     let (public_key, private_key) = kp.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key), pop))
+}
+
+fn generate_soranet_transport_key_pair(
+    base_seed: Option<&[u8]>,
+    peer_index: &[u8],
+) -> Result<(iroha_crypto::PublicKey, ExposedPrivateKey)> {
+    let key_pair = match base_seed {
+        Some(seed) => KeyPair::try_from_seed(
+            seed.iter()
+                .chain(SORANET_TRANSPORT_SEED_DOMAIN)
+                .chain(peer_index)
+                .copied()
+                .collect::<Vec<_>>(),
+            iroha_crypto::Algorithm::Ed25519,
+        )?,
+        None => KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)?,
+    };
+    let (public_key, private_key) = key_pair.into_parts();
+    Ok((public_key, ExposedPrivateKey(private_key)))
 }
 
 fn repo_root_path() -> PathBuf {
@@ -6615,6 +6634,14 @@ mod tests {
             peer_cfg.get("private_key").is_some(),
             "private_key is required"
         );
+        assert!(
+            peer_cfg.get("soranet_transport_public_key").is_some(),
+            "soranet_transport_public_key is required"
+        );
+        assert!(
+            peer_cfg.get("soranet_transport_private_key").is_some(),
+            "soranet_transport_private_key is required"
+        );
         assert!(peer_cfg.get("genesis").is_some(), "genesis is required");
 
         let network = peer_cfg
@@ -6639,6 +6666,49 @@ mod tests {
             assert!(
                 body.contains(':'),
                 "expected host:port in {label}, got {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_peers_use_dedicated_deterministic_soranet_transport_identities() {
+        let seed = b"kagami-transport-identity-test";
+        let peers = build_peers(4, Some(seed), 21_080, 24_337).expect("build peers");
+        let replay = build_peers(4, Some(seed), 21_080, 24_337).expect("rebuild peers");
+        let mut transport_public_keys = std::collections::BTreeSet::new();
+
+        for (peer, replay_peer) in peers.iter().zip(&replay) {
+            KeyPair::new(
+                peer.soranet_transport_public_key.clone(),
+                peer.soranet_transport_private_key.0.clone(),
+            )
+            .expect("generated SoraNet transport key pair must match");
+            assert_eq!(
+                peer.soranet_transport_public_key
+                    .try_algorithm()
+                    .expect("transport public-key algorithm"),
+                iroha_crypto::Algorithm::Ed25519
+            );
+            assert_ne!(peer.soranet_transport_public_key, peer.public_key);
+            assert_ne!(
+                peer.soranet_transport_public_key.to_string(),
+                STREAM_ID_PUBLIC
+            );
+            assert_ne!(
+                peer.soranet_transport_private_key.to_string(),
+                STREAM_ID_PRIVATE
+            );
+            assert_eq!(
+                peer.soranet_transport_public_key,
+                replay_peer.soranet_transport_public_key
+            );
+            assert_eq!(
+                peer.soranet_transport_private_key.to_string(),
+                replay_peer.soranet_transport_private_key.to_string()
+            );
+            assert!(
+                transport_public_keys.insert(peer.soranet_transport_public_key.clone()),
+                "each localnet peer must receive a unique SoraNet transport identity"
             );
         }
     }
@@ -9031,7 +9101,6 @@ mod tests {
             "generated fee asset must stay shield-capable for TAIRA wallet flows"
         );
 
-        let transfer_vk_id = localnet_fee_vk_transfer_id();
         let unshield_vk_id = localnet_fee_vk_unshield_id();
         let zk_registration = raw_genesis
             .instructions()
@@ -9047,11 +9116,6 @@ mod tests {
             "generated fee asset must emit a RegisterZkAsset instruction for shield flows"
         );
         assert_eq!(
-            zk_registration.vk_transfer(),
-            &Some(transfer_vk_id.clone()),
-            "generated fee asset must advertise a transfer verifier for shielded sends"
-        );
-        assert_eq!(
             zk_registration.vk_unshield(),
             &Some(unshield_vk_id.clone()),
             "generated fee asset must advertise an unshield verifier for withdrawals"
@@ -9065,17 +9129,6 @@ mod tests {
                     .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
             })
             .collect::<Vec<_>>();
-        assert!(
-            vk_registrations.iter().any(|register| {
-                register.id == transfer_vk_id
-                    && register.record.is_active()
-                    && register.record.key.is_some()
-                    && register.record.max_proof_bytes > 0
-                    && register.record.circuit_id
-                        == confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
-            }),
-            "generated fee asset must register an active confidential transfer verifier"
-        );
         assert!(
             vk_registrations.iter().any(|register| {
                 register.id == unshield_vk_id
@@ -9773,72 +9826,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn private_dataspace_peer_configs_use_direct_fee_settlement() {
-        let temp = tempfile::tempdir().expect("tmp dir");
-        for (profile, label, base_port) in [
-            (SoraProfile::PrivateSbp, "sbp", 28_080_u16),
-            (SoraProfile::PrivateCbuae, "cbuae", 29_080_u16),
-        ] {
-            let out_dir = temp.path().join(label);
-            let opts = LocalnetOptions {
-                build_line: BuildLine::Iroha3,
-                sora_profile: Some(profile),
-                perf_profile: None,
-                peers: NonZeroU16::new(4).expect("non-zero"),
-                seed: Some(format!("private-direct-settlement-{label}")),
-                bind_host: DEFAULT_BIND_HOST.to_owned(),
-                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-                base_api_port: base_port,
-                base_p2p_port: base_port.saturating_add(257),
-                out_dir: out_dir.clone(),
-                extra_accounts: 0,
-                assets: Vec::new(),
-                block_cadence_ms: None,
-                consensus_mode: SumeragiConsensusMode::Npos,
-            };
-
-            generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-                .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
-            for peer in 0..4 {
-                let peer_cfg: toml::Value = toml::from_str(
-                    &fs::read_to_string(out_dir.join(format!("peer{peer}.toml")))
-                        .expect("read generated peer config"),
-                )
-                .expect("parse peer config");
-                let fees = peer_cfg
-                    .get("nexus")
-                    .and_then(toml::Value::as_table)
-                    .and_then(|nexus| nexus.get("fees"))
-                    .and_then(toml::Value::as_table)
-                    .expect("nexus fees table");
-
-                assert_eq!(
-                    fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
-                    Some("0.00005")
-                );
-                assert_eq!(
-                    fees.get("settlement_mode").and_then(toml::Value::as_str),
-                    Some("direct"),
-                    "private {label} peer {peer} must use genesis-compatible direct fee settlement"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn account_id_raw_string_parses_as_account_id() {
-        let seed_bytes = Some(b"localnet-gas-parse".as_slice());
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
-            .expect("test localnet genesis key generation should succeed");
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
-            .expect("test localnet gas account derivation should succeed");
-        let encoded = account_id_raw_string(&gas_account_id);
-        let parsed = AccountId::parse_encoded(&encoded)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("account id parse");
-        assert_eq!(parsed, gas_account_id);
-    }
+    include!("localnet/private_fee_and_account_tests.rs");
 
     #[test]
     fn account_id_runtime_literal_uses_encoded_literal() {

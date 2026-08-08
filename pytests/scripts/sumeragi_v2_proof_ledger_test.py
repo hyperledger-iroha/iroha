@@ -59,6 +59,7 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     "sumeragi_v2_proof_ledger_release_corridor_cases.py",
     "sumeragi_v2_proof_ledger_formal_contract_cases.py",
+    "sumeragi_v2_proof_ledger_exact_output_cases.py",
     "sumeragi_v2_proof_ledger_transport_cases.py",
     "sumeragi_v2_proof_ledger_timeout_cases.py",
     "sumeragi_v2_proof_ledger_chain_liveness_cases.py",
@@ -17033,8 +17034,6 @@ def test_queue_plan_semantic_request_production_mutations_fail_closed(
 def test_exact_output_production_source_is_bound() -> None:
     module = load_checker()
     assert module._exact_output_production_source_fidelity_errors(ROOT_DIR) == []
-
-
 
 
 def test_proofless_release_theorems_require_exact_explicit_debt() -> None:

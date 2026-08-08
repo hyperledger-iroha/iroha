@@ -1,4 +1,3 @@
-// Query inclusion, fault-injection, and round-trip regressions share the parent module.
 #[cfg(test)]
 mod certified_merge_inclusion_tests {
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
@@ -250,7 +249,6 @@ mod certified_merge_inclusion_tests {
 mod fault_injection_tests {
     use std::str::FromStr;
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{Hash, HashOf, MerkleProof};
 
     use super::*;
@@ -258,15 +256,7 @@ mod fault_injection_tests {
         AssetDefinitionId, Level,
         events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferOutcome},
         isi::{InstructionBox, Log},
-        kaigi::{
-            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-            KaigiRoomPolicy,
-        },
         prelude::{DataTriggerSequence, Quantity, TimeTriggerEntrypoint, TransactionResult},
-        transaction::{
-            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-            PrivateKaigiTemplate, PrivateKaigiTransaction,
-        },
         trigger::TriggerId,
     };
 
@@ -284,69 +274,6 @@ mod fault_injection_tests {
             )
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),
-        });
-
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        CommittedTransaction {
-            block_hash: zero_hash(),
-            entrypoint_hash: entry.hash(),
-            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, vec![]),
-            result,
-            merge_inclusion: None,
-        }
-    }
-
-    fn make_private_committed_tx() -> CommittedTransaction {
-        let mut metadata = Metadata::default();
-        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
-        let entry = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
-            chain: "test-chain".parse().expect("chain"),
-            creation_time_ms: 42,
-            nonce: None,
-            metadata,
-            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
-                call: PrivateKaigiTemplate {
-                    id: KaigiId::new(
-                        DomainId::try_new("kaigi", "universal").expect("domain"),
-                        Name::from_str("private-room").expect("call"),
-                    ),
-                    title: Some("Private".to_owned()),
-                    description: None,
-                    max_participants: Some(2),
-                    gas_rate_per_minute: 5,
-                    metadata: Metadata::default(),
-                    scheduled_start_ms: None,
-                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-                    room_policy: KaigiRoomPolicy::Authenticated,
-                    relay_manifest: None,
-                },
-            }),
-            artifacts: PrivateKaigiArtifacts {
-                commitment: KaigiParticipantCommitment {
-                    commitment: Hash::new(b"commitment"),
-                    alias_tag: None,
-                },
-                nullifier: KaigiParticipantNullifier {
-                    digest: Hash::new(b"nullifier"),
-                    issued_at_ms: 42,
-                },
-                roster_root: Hash::new(b"root"),
-                proof: vec![1, 2, 3],
-            },
-            fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    Name::from_str("xor").expect("name"),
-                ),
-                anchor_root: Hash::new(b"anchor"),
-                nullifiers: vec![[0x11; 32]],
-                output_commitments: vec![[0x22; 32]],
-                encrypted_change_payloads: vec![vec![0x33]],
-                proof: vec![0x44],
-            },
         });
 
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
@@ -389,39 +316,6 @@ mod fault_injection_tests {
     }
 
     #[test]
-    fn private_kaigi_entrypoint_injection_records_overlay() {
-        let mut tx = make_private_committed_tx();
-        let original_hash = tx.entrypoint_hash;
-        let injected: InstructionBox = Log {
-            level: Level::WARN,
-            msg: "private tamper".into(),
-        }
-        .into();
-
-        tx.inject_instructions([injected.clone()]);
-
-        assert_ne!(
-            tx.entrypoint_hash, original_hash,
-            "entrypoint hash must reflect injected instructions"
-        );
-
-        let overlay = match &tx.entrypoint {
-            TransactionEntrypoint::PrivateKaigi(entry) => {
-                crate::transaction::signed::SignedTransaction::fault_injection_overlay(
-                    &entry.metadata,
-                )
-                .unwrap_or_default()
-            }
-            _ => panic!("expected private Kaigi entrypoint"),
-        };
-        assert_eq!(overlay.len(), 1);
-        assert_eq!(
-            overlay[0],
-            BASE64_STANDARD.encode(norito::to_bytes(&injected).expect("encode overlay payload"))
-        );
-    }
-
-    #[test]
     fn result_swap_preserves_independent_batch_receipts() {
         let mut tx = make_time_committed_tx();
         let authority = match &tx.entrypoint {
@@ -459,93 +353,12 @@ mod fault_injection_tests {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::{num::NonZeroU64, str::FromStr};
+    use std::num::NonZeroU64;
 
-    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof};
+    use iroha_crypto::KeyPair;
     use norito::json;
 
     use super::*;
-    use crate::{
-        AssetDefinitionId,
-        domain::DomainId,
-        kaigi::{
-            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-            KaigiRoomPolicy,
-        },
-        name::Name,
-        transaction::{
-            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint,
-            TransactionResult,
-        },
-    };
-
-    fn zero_hash<T>() -> HashOf<T> {
-        let zero = [0u8; 32];
-        HashOf::from_untyped_unchecked(Hash::prehashed(zero))
-    }
-
-    fn private_committed_tx() -> CommittedTransaction {
-        let mut metadata = Metadata::default();
-        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
-        let entrypoint = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
-            chain: "test-chain".parse().expect("chain"),
-            creation_time_ms: 42,
-            nonce: None,
-            metadata,
-            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
-                call: PrivateKaigiTemplate {
-                    id: KaigiId::new(
-                        DomainId::try_new("kaigi", "universal").expect("domain"),
-                        Name::from_str("private-room").expect("call"),
-                    ),
-                    title: Some("Private".to_owned()),
-                    description: None,
-                    max_participants: Some(2),
-                    gas_rate_per_minute: 5,
-                    metadata: Metadata::default(),
-                    scheduled_start_ms: None,
-                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-                    room_policy: KaigiRoomPolicy::Authenticated,
-                    relay_manifest: None,
-                },
-            }),
-            artifacts: PrivateKaigiArtifacts {
-                commitment: KaigiParticipantCommitment {
-                    commitment: Hash::new(b"commitment"),
-                    alias_tag: None,
-                },
-                nullifier: KaigiParticipantNullifier {
-                    digest: Hash::new(b"nullifier"),
-                    issued_at_ms: 42,
-                },
-                roster_root: Hash::new(b"root"),
-                proof: vec![1, 2, 3],
-            },
-            fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    Name::from_str("xor").expect("name"),
-                ),
-                anchor_root: Hash::new(b"anchor"),
-                nullifiers: vec![[0x11; 32]],
-                output_commitments: vec![[0x22; 32]],
-                encrypted_change_payloads: vec![vec![0x33]],
-                proof: vec![0x44],
-            },
-        });
-        let result = TransactionResult::new(Ok(crate::trigger::DataTriggerSequence::default()));
-        CommittedTransaction {
-            block_hash: zero_hash(),
-            entrypoint_hash: entrypoint.hash(),
-            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
-            entrypoint: entrypoint.clone(),
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, vec![]),
-            result,
-            merge_inclusion: None,
-        }
-    }
 
     #[test]
     fn proof_backend_query_payload_roundtrips() {
@@ -860,24 +673,5 @@ mod tests {
             }
             other => panic!("expected object for iterable response, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn committed_tx_filters_treat_private_kaigi_authority_as_absent() {
-        let tx = private_committed_tx();
-
-        let filters = CommittedTxFilters {
-            authority_exists: Some(false),
-            ts_ge: Some(40),
-            ts_le: Some(50),
-            ..CommittedTxFilters::default()
-        };
-        assert!(filters.applies(&tx));
-
-        let authority_required = CommittedTxFilters {
-            authority_exists: Some(true),
-            ..CommittedTxFilters::default()
-        };
-        assert!(!authority_required.applies(&tx));
     }
 }

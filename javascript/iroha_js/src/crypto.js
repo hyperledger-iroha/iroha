@@ -453,7 +453,7 @@ function ensureSm2Native(native) {
 function ensureKaigiRosterNative(native) {
   if (!native || typeof native.buildKaigiRosterJoinProof !== "function") {
     throw new Error(
-      "Kaigi roster proof helper unavailable; build iroha_js_host with `npm run build:native` before using private Kaigi joins",
+      "Kaigi roster proof helper unavailable; build iroha_js_host with `npm run build:native` before using privacy-mode Kaigi joins",
     );
   }
   return native;

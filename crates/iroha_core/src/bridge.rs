@@ -576,9 +576,7 @@ fn signed_transaction_from_sccp_entrypoint(
     match entrypoint {
         TransactionEntrypoint::External(transaction) => Some(transaction),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 
@@ -932,9 +930,9 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => continue,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                continue;
+            }
         };
         if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;
@@ -1159,9 +1157,9 @@ fn invalid_sccp_record_instruction_in_signed_block(
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-            TransactionEntrypoint::SealedCommitment(_)
-            | TransactionEntrypoint::PrivateKaigi(_)
-            | TransactionEntrypoint::Time(_) => continue,
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                continue;
+            }
         };
         if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;

@@ -3299,11 +3299,13 @@ impl<'a> CstAstLowerer<'a> {
             result
         } else if self.peek(TokenKind::LParen) {
             if let Some(message) = removed_free_helper_message(&name) {
-                return Err(self.coded_error(
-                    ident_token,
-                    removed_free_helper_code(&name),
-                    message,
-                ));
+                let mut error =
+                    self.coded_error(ident_token, removed_free_helper_code(&name), message);
+                if let Some(replacement) = retired_trigger_alias_replacement(&name) {
+                    error.range = name_range;
+                    error.fix = Some(replacement.to_owned());
+                }
+                return Err(error);
             }
             self.bump();
             let parameter_names = self.call_parameter_names(&name, false);
@@ -4585,6 +4587,12 @@ fn removed_method_helper_code(name: &str) -> &'static str {
 
 fn removed_free_helper_message(name: &str) -> Option<&'static str> {
     match name {
+        "ledger::trigger::create" => Some(
+            "`ledger::trigger::create` is not part of Kotodama V1; use `ledger::trigger::register`",
+        ),
+        "ledger::trigger::remove" => Some(
+            "`ledger::trigger::remove` is not part of Kotodama V1; use `ledger::trigger::unregister`",
+        ),
         "json::set_i64" | "json::set_int" => Some(
             "scalar JSON setters are not part of Kotodama V1; use native `json { key: value }` construction so adaptive-width int values remain exact",
         ),
@@ -4656,7 +4664,9 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
 }
 
 fn removed_free_helper_code(name: &str) -> &'static str {
-    if matches!(
+    if retired_trigger_alias_replacement(name).is_some() {
+        "E_RETIRED_TRIGGER_ALIAS"
+    } else if matches!(
         name,
         "json::set_i64"
             | "json::set_int"
@@ -4694,6 +4704,14 @@ fn removed_free_helper_code(name: &str) -> &'static str {
         "E_LEGACY_JSON_GETTER"
     } else {
         "K1001"
+    }
+}
+
+fn retired_trigger_alias_replacement(name: &str) -> Option<&'static str> {
+    match name {
+        "ledger::trigger::create" => Some("ledger::trigger::register"),
+        "ledger::trigger::remove" => Some("ledger::trigger::unregister"),
+        _ => None,
     }
 }
 
@@ -5556,6 +5574,32 @@ mod tests {
     }
 
     #[test]
+    fn retired_trigger_aliases_have_exact_canonical_fixes() {
+        for (retired, replacement) in [
+            ("ledger::trigger::create", "ledger::trigger::register"),
+            ("ledger::trigger::remove", "ledger::trigger::unregister"),
+        ] {
+            let text = format!("fn main(Json value) {{ {retired}(value); }}");
+            let source = SourceFile::new(SourceId(7), "retired-trigger.ko", &text);
+            let bundle = parse_source(&source, FrontendBudget::v1())
+                .expect_err("retired trigger alias must fail closed");
+            let diagnostic = bundle
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "E_RETIRED_TRIGGER_ALIAS")
+                .expect("retired trigger alias diagnostic");
+            let fix = diagnostic.fix.as_ref().expect("machine-applicable fix");
+            let range = fix.span.byte_range.expect("exact source range");
+            assert_eq!(&text[range.start as usize..range.end as usize], retired);
+            assert_eq!(fix.replacement, replacement);
+
+            let mut repaired = text.clone();
+            repaired.replace_range(range.start as usize..range.end as usize, &fix.replacement);
+            parse(&repaired).expect("canonical replacement must parse");
+        }
+    }
+
+    #[test]
     fn modules_reject_deployable_contract_items() {
         for body in [
             "kotoage fn run() {}",
@@ -5926,28 +5970,6 @@ mod tests {
             let error = parse_module(source).expect_err("invalid call style must fail");
             assert!(error.contains(code), "unexpected error: {error}");
         }
-    }
-
-    #[test]
-    fn unshield_parser_registry_has_no_guest_output_parameter() {
-        let source = SourceFile::new(SourceId(11), "unshield-parameters.ko", String::new());
-        let parser = CstAstLowerer::new(&[], &source, false);
-        assert_eq!(
-            parser.call_parameter_names("crypto::zk::build_unshield", false),
-            Some(
-                [
-                    "asset_definition",
-                    "destination",
-                    "amount",
-                    "inputs",
-                    "backend",
-                    "proof",
-                    "verification_key",
-                ]
-                .map(str::to_owned)
-                .to_vec()
-            )
-        );
     }
 
     #[test]
@@ -6532,44 +6554,6 @@ mod tests {
         "#;
         let err = parse(src).expect_err("parse should reject unsupported pipeline filter");
         assert!(err.contains("transaction [approved]"));
-    }
-
-    #[test]
-    fn parse_koto_test_target_fixture_and_test_binding() {
-        let src = r#"
-        module ContractTests {
-            koto_test { target: "contracts/demo.ko" }
-
-            fixture seeded {
-                caller(AccountId::parse("alice@wonderland"));
-                grant_permission("register_domain");
-            }
-
-            #[test(fixture="seeded")]
-            fn smoke() {}
-        }
-        "#;
-        let prog = parse(src).expect("parse koto_test program");
-        assert_eq!(
-            prog.test_target
-                .as_ref()
-                .map(|target| target.target.as_str()),
-            Some("contracts/demo.ko")
-        );
-        assert_eq!(prog.fixtures.len(), 1);
-        assert_eq!(prog.fixtures[0].name, "seeded");
-        assert_eq!(prog.fixtures[0].actions.len(), 2);
-
-        let func = prog
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Function(f) => Some(f),
-                _ => None,
-            })
-            .expect("function present");
-        assert!(func.modifiers.is_test);
-        assert_eq!(func.modifiers.test_fixture.as_deref(), Some("seeded"));
     }
 
     include!("parser/tests/tail_fixtures.rs");

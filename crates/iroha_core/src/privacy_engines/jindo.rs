@@ -8,6 +8,10 @@
 //! current ePrint 2026/044 revision as one exact, versioned, native-Rust experimental testnet
 //! profile: fixed ring parameters, proof wire, prover, verifier, integer-only
 //! sampling, and adversarial vectors.
+//!
+//! The executable profile remains experimental: its complete `S_35`
+//! challenge distribution does not yet carry the distribution-wide theorem
+//! and extractor-loss evidence required by [`jindo_security_certificate_v1`].
 
 use core::{num::NonZeroU32, time::Duration};
 
@@ -50,6 +54,8 @@ mod protocol;
 mod ring;
 #[path = "jindo/sampling.rs"]
 mod sampling;
+#[path = "jindo/security.rs"]
+mod security;
 #[path = "jindo/transcript.rs"]
 mod transcript;
 
@@ -61,6 +67,11 @@ pub use protocol::{
     jindo_crs_digest_v1, prove_batched_evaluation_v1, verify_batched_evaluation_v1,
 };
 pub use sampling::JindoSamplingErrorV1;
+pub use security::{
+    JINDO_SECURITY_CERTIFICATE_REQUIREMENTS_V1, JindoChallengePairErrorV1,
+    JindoSecurityCertificateErrorV1, JindoSecurityCertificateV1,
+    jindo_challenge_pair_has_unit_difference_v1, jindo_security_certificate_v1,
+};
 pub use transcript::JindoTranscriptErrorV1;
 
 /// Exact coefficient-field byte width in the first native Jindo profile.

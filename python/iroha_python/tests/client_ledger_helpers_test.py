@@ -2617,8 +2617,6 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
 
 def test_zk_instruction_helpers_serialize_full_surface() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-    source = account_address(0x61)
-    destination = account_address(0x62)
     proof = canonical_proof_attachment()
     proof["vk_commitment"] = b"\x44" * 32
     proof["envelope_hash"] = iroha_hash_bytes(b"proof-bytes")
@@ -2629,40 +2627,12 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
             vk_transfer="halo2/ipa:vk_transfer",
             vk_unshield={"backend": "halo2/ipa", "name": "vk_unshield"},
         ),
-        Instruction.shield_asset(
-            asset_definition_id,
-            source,
-            "340282366920938463463374607431768211456.25",
-            "11" * 32,
-            "22" * 32,
-            "33" * 24,
-            b"ciphertext",
-        ),
-        Instruction.zk_transfer_prepared(
-            asset_definition_id,
-            ["aa" * 32],
-            ["bb" * 32],
-            proof,
-            root_hint="cc" * 32,
-        ),
-        Instruction.unshield_prepared(
-            asset_definition_id,
-            destination,
-            "18446744073709551616.25",
-            ["dd" * 32],
-            proof,
-            root_hint="ff" * 32,
-        ),
         Instruction.verify_proof(proof),
     ]
 
     encoded = [instruction.to_json() for instruction in instructions]
     assert all(payload for payload in encoded)
-    json_roundtrip_indexes = [0, 1]
-    assert [
-        Instruction.from_json(encoded[index]).to_json()
-        for index in json_roundtrip_indexes
-    ] == [encoded[index] for index in json_roundtrip_indexes]
+    assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
 
 
 def test_legacy_zk_ace_instruction_and_client_surfaces_are_absent() -> None:
@@ -2674,6 +2644,18 @@ def test_legacy_zk_ace_instruction_and_client_surfaces_are_absent() -> None:
     ):
         assert not hasattr(Instruction, name)
         assert not hasattr(TransactionDraft, name)
+
+
+def test_retired_generic_confidential_instruction_and_client_surfaces_are_absent() -> None:
+    assert not hasattr(Instruction, "shield_asset")
+    assert not hasattr(TransactionDraft, "shield_asset")
+    assert not hasattr(ToriiClient, "shield_asset_and_wait")
+
+    for name in ("zk_transfer_prepared", "unshield_prepared"):
+        assert not hasattr(Instruction, name)
+        assert not hasattr(TransactionDraft, name)
+    for name in ("zk_transfer_prepared_and_wait", "unshield_prepared_and_wait"):
+        assert not hasattr(ToriiClient, name)
 
     for name in (
         "register_zk_ace_identity_commitment_and_wait",
@@ -2721,399 +2703,248 @@ def test_native_privacy_bundle_actions_reject_nonempty_drafts(method_name: str) 
         )
 
 
-def test_zk_instruction_helpers_accept_tuple_inputs() -> None:
+def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-    proof = canonical_proof_attachment()
+    source = account_address(0x70)
+    destination = account_address(0x71)
+    release_authority = account_address(0x72)
 
-    instruction = Instruction.zk_transfer_prepared(
-        asset_definition_id,
-        ("aa" * 32,),
-        ("bb" * 32,),
-        proof,
-        root_hint="cc" * 32,
-    )
+    instructions = [
+        Instruction.open_asset_lock(
+            "lock-sdk-1",
+            asset_definition_id,
+            destination,
+            "12.5",
+            release_authority=release_authority,
+            expires_at_ms=1_234_567,
+            evidence_hashes=["11" * 32],
+        ),
+        Instruction.drawdown_asset_lock("lock-sdk-1", "2.5", "12.5"),
+        Instruction.cancel_asset_lock("lock-sdk-1", "10"),
+        Instruction.expire_asset_lock("lock-sdk-1"),
+    ]
+    encoded = [instruction.to_json() for instruction in instructions]
+    assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
 
-    assert Instruction.from_json(instruction.to_json()).to_json() == instruction.to_json()
-
-
-def test_transaction_draft_shield_accepts_raw_text_ciphertext() -> None:
     draft = TransactionDraft(
         TransactionConfig(
             chain_id="chain",
-            authority=account_address(0x65),
+            authority=source,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
     )
+    draft.open_asset_lock(
+        "lock-sdk-2",
+        asset_definition_id,
+        destination,
+        Decimal("12.500"),
+        release_authority=release_authority,
+        expires_at_ms=1_234_567,
+        evidence_hashes=("22" * 32,),
+    )
+    draft.drawdown_asset_lock("lock-sdk-2", Decimal("2.500"), Decimal("12.500"))
+    draft.cancel_asset_lock("lock-sdk-2", Decimal("10.000"))
+    draft.expire_asset_lock("lock-sdk-2")
 
-    draft.shield_asset(
-        "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-        account_address(0x65),
-        Decimal("340282366920938463463374607431768211456.25"),
-        note_commitment="11" * 32,
-        ephemeral_public_key="22" * 32,
-        nonce="33" * 24,
-        ciphertext="raw ciphertext payload",
+    draft_encoded = [instruction.to_json() for instruction in draft.instructions]
+    assert len(draft_encoded) == 4
+    assert [Instruction.from_json(payload).to_json() for payload in draft_encoded] == draft_encoded
+
+
+def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    captured: dict[str, object] = {}
+
+    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
+        captured["draft"] = draft
+        captured["kwargs"] = kwargs
+        return {"hash": "cancel-lock"}
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+
+    result = client.cancel_asset_lock_and_wait(
+        chain_id="chain",
+        authority=account_address(0x72),
+        fee_payment=FEE_PAYMENT,
+        private_key_hex="11" * 32,
+        escrow_id="lock-sdk-client-cancel",
+        expected_remaining_amount=Decimal("10.000"),
+        transaction_metadata={"purpose": "stale-cancel-guard"},
+        wait=False,
     )
 
+    draft = captured["draft"]
+    instruction_json_bytes = draft.instructions[0].to_json().encode("utf-8")
+    instruction_archive = base64.b64decode(
+        json.loads(instruction_json_bytes),
+        validate=True,
+    )
+    cancel_asset_lock_archive = instruction_archive[-85:]
+    decoded_cancel_asset_lock = decode_cancel_asset_lock_v1(cancel_asset_lock_archive)
+    assert result == {"hash": "cancel-lock"}
     assert len(draft) == 1
+    assert draft.config.metadata == {"purpose": "stale-cancel-guard"}
+    assert instruction_json_bytes == (
+        b'"TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCOAAAAAAAAAHlkviSo5tQGAi8uaXJvaGFfZGF0YV9tb2RlbDo6'
+        b'aXNpOjplc2Nyb3c6OkNhbmNlbEFzc2V0TG9ja11VAAAAAAAAAE5SVDAAALXIpmWn3oDi7vdcyyhwePoALQAA'
+        b'AAAAAACG3Fptkn+hwwIgigyS0HjBmiKawik0EvjKoV6DBVSoxaJxqi80+Us5JkkLBQEAAAAKBAAAAAA="'
+    )
+    assert instruction_archive == bytes.fromhex(
+        "4e5254300000862a7d77075d4d23ff6c1261db027811008e000000000000007964be24a8e6d406"
+        "022f2e69726f68615f646174615f6d6f64656c3a3a6973693a3a657363726f773a3a43616e6365"
+        "6c41737365744c6f636b5d55000000000000004e5254300000b5c8a665a7de80e2eef75ccb2870"
+        "78fa002d0000000000000086dc5a6d927fa1c302208a0c92d078c19a229ac2293412f8caa15e83"
+        "0554a8c5a271aa2f34f94b3926490b05010000000a0400000000"
+    )
+    assert len(cancel_asset_lock_archive) == 85
+    assert decoded_cancel_asset_lock.escrow_id == (
+        "hash:8A0C92D078C19A229AC2293412F8CAA15E830554A8C5A271AA2F34F94B392649#91BC"
+    )
+    assert decoded_cancel_asset_lock.expected_remaining_amount == "10"
+    assert captured["kwargs"]["wait"] is False
 
 
-def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
-    with pytest.raises(ValueError, match="vk_ref.backend"):
-        Instruction.zk_transfer_prepared(
-            "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-            ["aa" * 32],
-            ["bb" * 32],
-            canonical_proof_attachment(vk_backend="other"),
+def test_cancel_asset_lock_and_wait_requires_expected_remaining_amount() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(TypeError, match="expected_remaining_amount"):
+        client.cancel_asset_lock_and_wait(  # type: ignore[call-arg]
+            chain_id="chain",
+            authority=account_address(0x72),
+            fee_payment=FEE_PAYMENT,
+            private_key_hex="11" * 32,
+            escrow_id="lock-sdk-client-cancel",
+            wait=False,
+        )
+
+
+def test_cancel_asset_lock_and_wait_rejects_non_positive_remaining_amount() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+
+    with pytest.raises(ValueError, match="expected_remaining_amount must be positive"):
+        client.cancel_asset_lock_and_wait(
+            chain_id="chain",
+            authority=account_address(0x72),
+            fee_payment=FEE_PAYMENT,
+            private_key_hex="11" * 32,
+            escrow_id="lock-sdk-client-cancel",
+            expected_remaining_amount=0,
+            wait=False,
         )
 
 
 @pytest.mark.parametrize(
-    ("factory", "error_type", "match"),
+    "amount",
     [
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.register_zk_asset(
-                asset,
-                mode="../../Hybrid",
-            ),
-            ValueError,
-            "invalid ZK asset mode",
-            id="register-invalid-mode",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.register_zk_asset(
-                asset,
-                vk_transfer="halo2/ipa",
-            ),
-            ValueError,
-            "backend:name",
-            id="register-invalid-vk-format",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.shield_asset(
-                asset,
-                source,
-                "-1",
-                "11" * 32,
-                "22" * 32,
-                "33" * 24,
-                b"ciphertext",
-            ),
-            ValueError,
-            "amount",
-            id="shield-negative-amount",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.shield_asset(
-                asset,
-                source,
-                "1.0",
-                "11" * 32,
-                "22" * 32,
-                "33" * 24,
-                b"ciphertext",
-            ),
-            ValueError,
-            "amount",
-            id="shield-noncanonical-amount",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.shield_asset(
-                asset,
-                source,
-                str(2**511),
-                "11" * 32,
-                "22" * 32,
-                "33" * 24,
-                b"ciphertext",
-            ),
-            ValueError,
-            "amount",
-            id="shield-numeric-v1-overflow",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.shield_asset(
-                asset,
-                source,
-                "1",
-                "11" * 31,
-                "22" * 32,
-                "33" * 24,
-                b"ciphertext",
-            ),
-            ValueError,
-            "note_commitment",
-            id="shield-short-commitment",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.shield_asset(
-                asset,
-                source,
-                "1",
-                "11" * 32,
-                "22" * 32,
-                "33" * 23,
-                b"ciphertext",
-            ),
-            ValueError,
-            "nonce",
-            id="shield-short-nonce",
-        ),
-        pytest.param(
-            lambda asset, source, _destination, _proof: Instruction.shield_asset(
-                asset,
-                source,
-                "1",
-                "11" * 32,
-                "22" * 32,
-                "33" * 24,
-                b"",
-            ),
-            ValueError,
-            "ciphertext",
-            id="shield-empty-ciphertext",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                [],
-                ["bb" * 32],
-                proof,
-            ),
-            ValueError,
-            "inputs",
-            id="transfer-empty-inputs",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32],
-                [],
-                proof,
-            ),
-            ValueError,
-            "outputs",
-            id="transfer-empty-outputs",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                "not-a-list",
-                ["bb" * 32],
-                proof,
-            ),
-            TypeError,
-            "list or tuple",
-            id="transfer-inputs-not-sequence",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32, "aa" * 32],
-                ["bb" * 32],
-                proof,
-            ),
-            ValueError,
-            "duplicates",
-            id="transfer-duplicate-nullifier",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32],
-                ["bb" * 32, "bb" * 32],
-                proof,
-            ),
-            ValueError,
-            "duplicates",
-            id="transfer-duplicate-commitment",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32],
-                ["bb" * 32],
-                proof,
-                root_hint="cc" * 31,
-            ),
-            ValueError,
-            "root_hint",
-            id="transfer-short-root",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32],
-                ["bb" * 32],
-                {key: value for key, value in proof.items() if key != "backend"},
-            ),
-            ValueError,
-            "backend",
-            id="transfer-missing-proof-backend",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32],
-                ["bb" * 32],
-                {**proof, "proof": {"backend": "halo2/ipa"}},
-            ),
-            ValueError,
-            "proof.bytes",
-            id="transfer-missing-proof-bytes",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32],
-                ["bb" * 32],
-                {**proof, "proof": {"backend": "halo2/ipa", "bytes": b""}},
-            ),
-            ValueError,
-            "proof.bytes",
-            id="transfer-empty-proof",
-        ),
-        pytest.param(
-            lambda asset, _source, _destination, proof: Instruction.zk_transfer_prepared(
-                asset,
-                ["aa" * 32],
-                ["bb" * 32],
-                {**proof, "proof_b64": "cHJvb2Y="},
-            ),
-            ValueError,
-            "unknown first-release field",
-            id="transfer-retired-flat-base64-proof",
-        ),
-        pytest.param(
-            lambda asset, _source, destination, proof: Instruction.unshield_prepared(
-                asset,
-                destination,
-                "-1",
-                ["aa" * 32],
-                canonical_proof_attachment(vk_name="vk_unshield"),
-            ),
-            ValueError,
-            "public_amount",
-            id="unshield-negative-public-amount",
-        ),
-        pytest.param(
-            lambda asset, _source, destination, proof: Instruction.unshield_prepared(
-                asset,
-                destination,
-                "1",
-                ["aa" * 32],
-                canonical_proof_attachment(vk_name="vk_unshield"),
-                outputs=["bb" * 32],
-            ),
-            TypeError,
-            "unexpected keyword argument.*outputs",
-            id="unshield-retired-output-field",
-        ),
+        "0." + "0" * 27 + "1",
+        str((1 << 128) - 1),
     ],
+    ids=["scale-28", "u128-max"],
 )
-def test_zk_instruction_helpers_reject_adversarial_inputs(
-    factory,
-    error_type: type[Exception],
-    match: str,
-) -> None:
-    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-    source = account_address(0x66)
-    destination = account_address(0x67)
-    proof = canonical_proof_attachment()
+def test_native_asset_lock_accepts_exact_quantity_boundaries(amount: str) -> None:
+    instruction = Instruction.open_asset_lock(
+        "lock-sdk-quantity-boundary",
+        "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+        account_address(0x73),
+        amount,
+    )
 
-    with pytest.raises(error_type, match=match):
-        factory(asset_definition_id, source, destination, proof)
+    encoded = instruction.to_json()
+    assert Instruction.from_json(encoded).to_json() == encoded
 
 
 @pytest.mark.parametrize(
-    ("call", "error_type", "match"),
+    "amount",
     [
-        pytest.param(
-            lambda draft, asset, account, proof: draft.shield_asset(
-                asset,
-                account,
-                1,
-                note_commitment="11" * 32,
-                ephemeral_public_key="22" * 32,
-                nonce="33" * 24,
-            ),
-            ValueError,
-            "ciphertext",
-            id="shield-missing-ciphertext",
+        "-1",
+        "0." + "0" * 28 + "1",
+        str(1 << 512),
+    ],
+    ids=["negative", "scale-29", "over-512-bits"],
+)
+def test_native_asset_lock_rejects_out_of_domain_quantities(amount: str) -> None:
+    with pytest.raises(ValueError):
+        Instruction.open_asset_lock(
+            "lock-sdk-invalid-quantity",
+            "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+            account_address(0x73),
+            amount,
+        )
+
+
+@pytest.mark.parametrize(
+    "expected_remaining_amount",
+    ["0", "-1", "01", "1.0"],
+    ids=["zero", "negative", "leading-zero", "noncanonical-scale"],
+)
+def test_cancel_asset_lock_instruction_rejects_non_positive_or_noncanonical_remaining_amount(
+    expected_remaining_amount: str,
+) -> None:
+    with pytest.raises(ValueError):
+        Instruction.cancel_asset_lock(
+            "lock-sdk-invalid-cancel-remaining",
+            expected_remaining_amount,
+        )
+
+
+def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
+    exact_bound = "🔒" * 1_024
+    assert len(exact_bound.encode("utf-8")) == 4_096
+    assert CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 == 4_096
+    Instruction.cancel_asset_lock(exact_bound, "1")
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x75),
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
+    draft.cancel_asset_lock(exact_bound, "1")
+
+    over_bound = exact_bound + "a"
+    assert len(over_bound.encode("utf-8")) == 4_097
+    with pytest.raises(ValueError, match="at most 4096 UTF-8 bytes"):
+        Instruction.cancel_asset_lock(over_bound, "1")
+    with pytest.raises(ValueError, match="at most 4096 UTF-8 bytes"):
+        draft.cancel_asset_lock(over_bound, "1")
+
+
+@pytest.mark.parametrize(
+    "lock_id",
+    ["", " ", " lock", "lock ", "\ufefflock", "lock\ufeff", "\ud800", "\udc00"],
+)
+def test_cancel_asset_lock_rejects_unclean_lock_id_preimage(lock_id: str) -> None:
+    with pytest.raises(ValueError, match="lock-ID preimage"):
+        Instruction.cancel_asset_lock(lock_id, "1")
+
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account_address(0x75),
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
+    with pytest.raises(ValueError):
+        draft.cancel_asset_lock(lock_id, "1")
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        (
+            "open_asset_lock",
+            ("lock-sdk-bad", "7MBRDd8cGFBZkFGdDMwV7S6FPwbw", account_address(0x73)),
         ),
-        pytest.param(
-            lambda draft, asset, account, proof: draft.shield_asset(
-                asset,
-                account,
-                1,
-                note_commitment="11" * 32,
-                ephemeral_public_key="22" * 32,
-                nonce="33" * 24,
-                ciphertext=b"raw",
-                ciphertext_b64="cmF3",
-            ),
-            ValueError,
-            "only one",
-            id="shield-conflicting-ciphertext",
-        ),
-        pytest.param(
-            lambda draft, asset, account, proof: draft.shield_asset(
-                asset,
-                account,
-                "01",
-                note_commitment="11" * 32,
-                ephemeral_public_key="22" * 32,
-                nonce="33" * 24,
-                ciphertext=b"raw",
-            ),
-            ValueError,
-            "canonical",
-            id="shield-noncanonical-amount",
-        ),
-        pytest.param(
-            lambda draft, asset, account, proof: draft.zk_transfer_prepared(
-                asset,
-                inputs=["aa" * 32],
-                outputs=["bb" * 32],
-                proof=["not", "a", "mapping"],
-            ),
-            TypeError,
-            "proof must be a mapping",
-            id="transfer-proof-not-mapping",
-        ),
-        pytest.param(
-            lambda draft, asset, account, proof: draft.unshield_prepared(
-                asset,
-                account,
-                -1,
-                inputs=["aa" * 32],
-                proof=canonical_proof_attachment(vk_name="vk_unshield"),
-            ),
-            ValueError,
-            "public_amount",
-            id="unshield-negative-public-amount",
-        ),
-        pytest.param(
-            lambda draft, asset, account, proof: draft.unshield_prepared(
-                asset,
-                account,
-                "1",
-                inputs=["aa" * 32],
-                proof=canonical_proof_attachment(vk_name="vk_unshield"),
-                outputs=["bb" * 32],
-            ),
-            TypeError,
-            "unexpected keyword argument.*outputs",
-            id="unshield-retired-output-field",
-        ),
+        ("drawdown_asset_lock", ("lock-sdk-bad",)),
     ],
 )
-def test_zk_transaction_draft_rejects_invalid_inputs(
-    call,
-    error_type: type[Exception],
-    match: str,
+@pytest.mark.parametrize("amount", [0, "0", "-1", Decimal("-0.1"), "NaN", "Infinity"])
+def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
+    method_name: str,
+    args: tuple[object, ...],
+    amount: object,
 ) -> None:
-    account = account_address(0x68)
+    account = account_address(0x74)
     draft = TransactionDraft(
         TransactionConfig(
             chain_id="chain",
@@ -3121,10 +2952,82 @@ def test_zk_transaction_draft_rejects_invalid_inputs(
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
     )
-    proof = canonical_proof_attachment()
+    method = getattr(draft, method_name)
 
-    with pytest.raises(error_type, match=match):
-        call(draft, "7MBRDd8cGFBZkFGdDMwV7S6FPwbw", account, proof)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "amount must be positive|expected_remaining_amount must be positive|"
+            "quantity must be a finite"
+        ),
+    ):
+        if method_name == "drawdown_asset_lock":
+            method(*args, amount, 1)
+        else:
+            method(*args, amount)
+
+
+@pytest.mark.parametrize("method_name", ["drawdown_asset_lock", "cancel_asset_lock"])
+@pytest.mark.parametrize(
+    "expected_remaining_amount",
+    [0, "0", "-1", Decimal("-0.1"), "NaN", "Infinity"],
+)
+def test_asset_lock_transaction_draft_rejects_non_positive_expected_remaining_amount(
+    method_name: str,
+    expected_remaining_amount: object,
+) -> None:
+    account = account_address(0x75)
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
+    method = getattr(draft, method_name)
+
+    with pytest.raises(
+        (TypeError, ValueError),
+        match=(
+            "expected_remaining_amount must be positive|"
+            "expected_remaining_amount must be positive and use a finite canonical quantity"
+        ),
+    ):
+        if method_name == "drawdown_asset_lock":
+            method("lock-sdk-bad-remaining", 1, expected_remaining_amount)
+        else:
+            method("lock-sdk-bad-remaining", expected_remaining_amount)
+
+
+def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
+    account = account_address(0x75)
+    draft = TransactionDraft(
+        TransactionConfig(
+            chain_id="chain",
+            authority=account,
+            fee_payment=authority_fee_payment(charge_limits=[]),
+        )
+    )
+
+    with pytest.raises(ValueError, match="escrow_id"):
+        draft.cancel_asset_lock("", 1)
+    with pytest.raises(ValueError, match="release_authority"):
+        draft.open_asset_lock(
+            "lock-sdk-empty-authority",
+            "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+            account_address(0x76),
+            1,
+            release_authority="",
+        )
+
+
+def test_zk_registration_helper_rejects_adversarial_inputs() -> None:
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+
+    with pytest.raises(ValueError, match="invalid ZK asset mode"):
+        Instruction.register_zk_asset(asset_definition_id, mode="../../Hybrid")
+    with pytest.raises(ValueError, match="backend:name"):
+        Instruction.register_zk_asset(asset_definition_id, vk_transfer="halo2/ipa")
 
 
 def test_zk_client_helpers_build_transaction_drafts() -> None:
@@ -3132,7 +3035,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     captured: list[tuple[object, dict[str, object]]] = []
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x63)
-    destination = account_address(0x64)
     proof = canonical_proof_attachment()
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
@@ -3152,42 +3054,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         transaction_metadata={"purpose": "zk-register"},
         wait=False,
     ) == {"hash": "zk-1"}
-    assert client.shield_asset_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="22" * 32,
-        asset_definition_id=asset_definition_id,
-        from_account_id=source,
-        amount="7",
-        note_commitment="11" * 32,
-        ephemeral_public_key="22" * 32,
-        nonce="33" * 24,
-        ciphertext_b64="Y2lwaGVydGV4dA==",
-    ) == {"hash": "zk-2"}
-    assert client.zk_transfer_prepared_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="33" * 32,
-        asset_definition_id=asset_definition_id,
-        inputs=["aa" * 32],
-        outputs=["bb" * 32],
-        proof=proof,
-        root_hint="cc" * 32,
-    ) == {"hash": "zk-3"}
-    assert client.unshield_prepared_and_wait(
-        chain_id="chain",
-        authority=source,
-        fee_payment=FEE_PAYMENT,
-        private_key_hex="44" * 32,
-        asset_definition_id=asset_definition_id,
-        to_account_id=destination,
-        public_amount="3",
-        inputs=["dd" * 32],
-        proof=proof,
-        root_hint="ff" * 32,
-    ) == {"hash": "zk-4"}
     assert client.verify_proof_and_wait(
         chain_id="chain",
         authority=source,
@@ -3195,13 +3061,12 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         private_key_hex="bb" * 32,
         proof=proof,
         wait=False,
-    ) == {"hash": "zk-5"}
+    ) == {"hash": "zk-2"}
 
-    assert [len(draft) for draft, _kwargs in captured] == [1] * 5
+    assert [len(draft) for draft, _kwargs in captured] == [1, 1]
     assert captured[0][0].config.metadata == {"purpose": "zk-register"}
     assert captured[0][1]["wait"] is False
-    assert captured[1][1]["private_key_hex"] == "22" * 32
-    assert captured[4][1]["private_key_hex"] == "bb" * 32
+    assert captured[1][1]["private_key_hex"] == "bb" * 32
 
 
 def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
@@ -3240,108 +3105,19 @@ def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
             _require_canonical_positive_u128_literal(amount, "amount")
 
 
-@pytest.mark.parametrize(
-    ("method_name", "kwargs", "error_type", "match"),
-    [
-        pytest.param(
-            "shield_asset_and_wait",
-            {
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "from_account_id": account_address(0x69),
-                "amount": 1,
-                "note_commitment": "11" * 32,
-                "ephemeral_public_key": "22" * 32,
-                "nonce": "33" * 24,
-            },
-            ValueError,
-            "ciphertext",
-            id="shield-missing-ciphertext",
-        ),
-        pytest.param(
-            "zk_transfer_prepared_and_wait",
-            {
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "inputs": ["aa" * 32, "aa" * 32],
-                "outputs": ["bb" * 32],
-                "proof": {
-                    "backend": "halo2/ipa",
-                    "proof": {"backend": "halo2/ipa", "bytes": b"proof-bytes"},
-                    "vk_ref": {"backend": "halo2/ipa", "name": "vk_transfer"},
-                },
-            },
-            ValueError,
-            "duplicates",
-            id="transfer-duplicate-input",
-        ),
-        pytest.param(
-            "zk_transfer_prepared_and_wait",
-            {
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "inputs": ["aa" * 32],
-                "outputs": ["bb" * 32],
-                "proof": object(),
-            },
-            TypeError,
-            "proof must be a mapping",
-            id="transfer-proof-not-mapping",
-        ),
-        pytest.param(
-            "verify_proof_and_wait",
-            {"proof": object()},
-            TypeError,
-            "proof must be a mapping",
-            id="verify-proof-not-mapping",
-        ),
-        pytest.param(
-            "unshield_prepared_and_wait",
-            {
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "to_account_id": account_address(0x6A),
-                "public_amount": 1,
-                "inputs": ["aa" * 32],
-                "proof": {
-                    "proof": {"backend": "halo2/ipa", "bytes": b"proof-bytes"},
-                    "vk_ref": {"backend": "halo2/ipa", "name": "vk_unshield"},
-                },
-            },
-            ValueError,
-            "backend",
-            id="unshield-missing-proof-backend",
-        ),
-        pytest.param(
-            "unshield_prepared_and_wait",
-            {
-                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                "to_account_id": account_address(0x6A),
-                "public_amount": "1",
-                "inputs": ["aa" * 32],
-                "proof": canonical_proof_attachment(vk_name="vk_unshield"),
-                "outputs": ["bb" * 32],
-            },
-            TypeError,
-            "unexpected keyword argument.*outputs",
-            id="unshield-retired-output-field",
-        ),
-    ],
-)
-def test_zk_client_helpers_reject_invalid_inputs_before_submission(
-    method_name: str,
-    kwargs: dict[str, object],
-    error_type: type[Exception],
-    match: str,
-) -> None:
+def test_verify_proof_client_helper_rejects_non_mapping_before_submission() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     client._submit_transaction_draft_result = (  # type: ignore[method-assign]
         lambda *_args, **_kwargs: pytest.fail("invalid ZK helper should not submit")
     )
 
-    with pytest.raises(error_type, match=match):
-        getattr(client, method_name)(
+    with pytest.raises(TypeError, match="proof must be a mapping"):
+        client.verify_proof_and_wait(
             chain_id="chain",
             authority=account_address(0x6B),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
-            **kwargs,
+            proof=object(),
         )
 
 

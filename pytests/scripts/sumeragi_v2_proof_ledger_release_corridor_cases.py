@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 834
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 835
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "2f818f6a1174b77a9078b9e80b000671a44d045f23088fdf0da271b91ff2ea12"
+        "3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "029b3d93c941a6d9383cd199c1b7b1d5cf44b59c94858b7d12fd09f9105fa66c"
+        "8f8f4c71940ec62d50f84fe5b90de7c628f4cc6e1bb3a9b651f259c64ec23981"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
@@ -19,10 +19,10 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "e672412b541730e0e2f0d80b7f0e03e54fb009397a9182e09cad233e5cabdda2"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 474
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 475
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 524
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 525
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "e74381ab01530611cb6ae2c7c8080af4a60024bf2b090e073a0d5c00b84d2989"
+        "de9ab0da201d361e912b935d1349c584ba78fb52f70acd3c91e8d4a7c76fab24"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -182,12 +182,12 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 834
-    assert receipt_module._G_UNIT_TEST_COUNT == 474
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 834
+    assert receipt_module._PRODUCTION_TEST_COUNT == 835
+    assert receipt_module._G_UNIT_TEST_COUNT == 524
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 835
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 474
+        == 524
     )
 
 
@@ -201,6 +201,15 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         return "\n".join(
             (ROOT_DIR / relative_path).read_text(encoding="utf-8")
             for relative_path in relative_paths
+        )
+
+    def read_reviewed_source_bundle(relative_path: str) -> str:
+        """Mirror the complete source-sealed include manifest for one Rust parent."""
+        parent = Path(relative_path)
+        components = module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative_path, ())
+        return read_source_bundle(
+            relative_path,
+            *((parent.parent / component).as_posix() for component in components),
         )
 
     seed_source = (
@@ -218,98 +227,80 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_source = (
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
     ).read_text(encoding="utf-8")
-    taira_source = (
-        ROOT_DIR / "integration_tests" / "tests" / "taira_public_localnet.rs"
-    ).read_text(encoding="utf-8")
-    integration_runner_source = read_source_bundle(
-        "integration_tests/tests/sumeragi_v2_runner.rs",
-        "integration_tests/tests/sumeragi_v2_runner/restart_timing_test.rs",
+    taira_source = read_reviewed_source_bundle(
+        "integration_tests/tests/taira_public_localnet.rs"
     )
-    sumeragi_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "mod.rs"
-    ).read_text(encoding="utf-8")
-    lane_work_source = read_source_bundle(
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_lane_work_effect_queue.rs",
+    integration_runner_source = read_reviewed_source_bundle(
+        "integration_tests/tests/sumeragi_v2_runner.rs"
+    )
+    sumeragi_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/sumeragi/mod.rs"
+    )
+    lane_work_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs"
     )
     lane_relay_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "nexus" / "lane_relay.rs"
     ).read_text(encoding="utf-8")
-    merge_sidecar_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "merge_sidecar.rs"
-    ).read_text(encoding="utf-8")
-    runner_source = read_source_bundle(
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_01.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
+    merge_sidecar_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/merge_sidecar.rs"
     )
-    adapter_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
-    ).read_text(encoding="utf-8")
-    core_source = (
-        ROOT_DIR
-        / "crates"
-        / "iroha_core"
-        / "src"
-        / "sumeragi"
-        / "v2_core"
-        / "tests.rs"
-    ).read_text(encoding="utf-8")
-    refinement_source = read_source_bundle(
-        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
-        "crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs",
+    runner_source = "\n".join(
+        (
+            read_reviewed_source_bundle("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            read_reviewed_source_bundle(
+                "crates/iroha_core/src/sumeragi/v2_runner_tests.rs"
+            ),
+        )
     )
-    effects_source = (
-        ROOT_DIR / "crates" / "iroha_core" / "src" / "sumeragi" / "v2_effects.rs"
-    ).read_text(encoding="utf-8")
-    runtime_source = read_source_bundle(
-        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_00.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_01.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_02.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_03.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_04.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_05.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_06.rs",
+    adapter_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2.rs"
     )
-    worker_source = read_source_bundle(
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_worker_reply_route_cases.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_cases.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_worker_serve_unsealed_cases.rs",
-        "crates/iroha_core/src/sumeragi/tests/v2_worker_serve_decision_restart_cases.rs",
+    core_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_core/tests.rs"
     )
-    p2p_network_source = (
-        ROOT_DIR / "crates" / "iroha_p2p" / "src" / "network.rs"
-    ).read_text(encoding="utf-8")
-    p2p_peer_source = (
-        ROOT_DIR / "crates" / "iroha_p2p" / "src" / "peer.rs"
-    ).read_text(encoding="utf-8")
-    config_actual_source = read_source_bundle(
-        "crates/iroha_config/src/parameters/actual.rs",
-        "crates/iroha_config/src/parameters/actual/tests.rs",
+    refinement_source = "\n".join(
+        (
+            read_reviewed_source_bundle(
+                "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+            ),
+            read_reviewed_source_bundle(
+                "crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs"
+            ),
+        )
     )
-    config_user_source = (
-        ROOT_DIR / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
-    ).read_text(encoding="utf-8")
+    effects_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    )
+    runtime_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    )
+    worker_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    )
+    p2p_network_source = read_reviewed_source_bundle(
+        "crates/iroha_p2p/src/network.rs"
+    )
+    p2p_peer_source = read_reviewed_source_bundle(
+        "crates/iroha_p2p/src/peer.rs"
+    )
+    config_actual_source = read_reviewed_source_bundle(
+        "crates/iroha_config/src/parameters/actual.rs"
+    )
+    config_user_source = read_reviewed_source_bundle(
+        "crates/iroha_config/src/parameters/user.rs"
+    )
     irohad_control_source = (
         ROOT_DIR / "crates" / "irohad" / "src" / "consensus_message_control.rs"
     ).read_text(encoding="utf-8")
-    irohad_main_source = (ROOT_DIR / "crates" / "irohad" / "src" / "main.rs").read_text(
-        encoding="utf-8"
+    irohad_main_source = read_reviewed_source_bundle(
+        "crates/irohad/src/main.rs"
     )
     kura_source = (ROOT_DIR / "crates" / "iroha_core" / "src" / "kura.rs").read_text(
         encoding="utf-8"
     )
-    lane_geometry_source = read_source_bundle(
-        "crates/iroha_core/src/kura/lane_geometry.rs",
-        "crates/iroha_core/src/kura/lane_geometry_tests/00_support.rs",
-        "crates/iroha_core/src/kura/lane_geometry/native_amx_retained_window_tests.rs",
-        "crates/iroha_core/src/kura/lane_geometry_tests/00_retirement.rs",
-        "crates/iroha_core/src/kura/lane_geometry_tests/01_retirement_and_recovery.rs",
-        "crates/iroha_core/src/kura/lane_geometry_tests/02_geometry_moves_and_journal.rs",
-        "crates/iroha_core/src/kura/lane_geometry_tests/03_gc_and_startup.rs",
+    lane_geometry_source = read_reviewed_source_bundle(
+        "crates/iroha_core/src/kura/lane_geometry.rs"
     )
     liveness_doc = (
         ROOT_DIR / "specs" / "sumeragi_v2_liveness.md"
@@ -588,7 +579,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert lifecycle_generation_claim < startup_reconcile < startup_claim_handoff
     assert startup_claim_handoff < first_lane_service < adapter_claim_handoff
     lane_constructor_start = lane_work_source.index(
-        "    pub(crate) fn new_with_output_guard_and_transport("
+        "    fn new_with_output_guard_and_transport_inner("
     )
     lane_constructor = lane_work_source[lane_constructor_start:]
     lane_platform_gate = lane_constructor.index(
@@ -621,7 +612,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "lane_work.activate_after_lane_drain_queue_install(&queue)?;"
     )
     assert queue_install < lane_activation
-    assert "local_validator.is_some()," in run_inner
+    assert "config.role == NodeRole::Validator," in run_inner
+    assert "local_validator.is_some()," not in run_inner
     assert "(NodeRole::Observer, _) => Ok(None)" in runner_source
     assert (
         module._kura_retirement_progress_production_source_fidelity_errors(
@@ -1531,7 +1523,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     deterministic_ownership_inventory_additions = (
         (
             "sumeragi::v2_effects::tests::",
-            "exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+            "exact_candidate_retry_coalesces_under_the_incumbent_owner",
             effects_source,
         ),
         (
@@ -1612,8 +1604,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         if f"{item[0]}{item[1]}"
         not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
     )
-    for _, test_name, source in production_inventory_additions:
-        assert source.count(f"fn {test_name}(") == 1
+    for module_name, test_name, source in production_inventory_additions:
+        declaration_count = source.count(f"fn {test_name}(")
+        assert declaration_count == 1, (
+            module_name,
+            test_name,
+            declaration_count,
+        )
     normalized_liveness_doc = re.sub(r"\s+", " ", liveness_doc.lower())
     assert (
         "other platforms are restricted to non-voting observer or development use"
@@ -1737,8 +1734,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 834
-    assert len(set(production_inventory)) == 834
+    assert len(production_inventory) == 835
+    assert len(set(production_inventory)) == 835
     leader_wire_slot_product_regression = (
         "sumeragi::serviced_candidate_store::tests::"
         "leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots"
@@ -1814,8 +1811,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert deterministic_ownership_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 415
-    assert "readonly expected_production_liveness_test_count=834" in release_source
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 416
+    assert "readonly expected_production_liveness_test_count=835" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -1825,7 +1822,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 834" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 835" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -1835,7 +1832,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 834
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 835
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2485,7 +2482,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=834"
+    canonical_declaration = "readonly canonical_production_test_count=835"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -2507,8 +2504,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=834"
-    weakened = "readonly expected_production_liveness_test_count=833"
+    canonical = "readonly expected_production_liveness_test_count=835"
+    weakened = "readonly expected_production_liveness_test_count=834"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(
@@ -2558,8 +2555,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     guard_mutations = (
         (
             canonical_declaration,
-            "readonly canonical_production_test_count=833",
-            "must seal exactly 834 production tests",
+            "readonly canonical_production_test_count=834",
+            "must seal exactly 835 production tests",
         ),
         (
             '    "sumeragi::v2_effects::tests": 71,',
@@ -2572,19 +2569,19 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "2f818f6a1174b77a9078b9e80b000671"',
+            '    "e4c0ddb4a10a7256f986e3da53ec4608"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
         (
             "readonly expected_production_liveness_test_count="
             '${canonical_production_test_count}"',
-            "readonly expected_production_liveness_test_count=833\"",
+            "readonly expected_production_liveness_test_count=834\"",
             "must bind the release-runner production count exactly once",
         ),
         (
             '_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"',
-            '_PRODUCTION_TEST_COUNT = 833"',
+            '_PRODUCTION_TEST_COUNT = 834"',
             "must bind the receipt-writer production count exactly once",
         ),
         (

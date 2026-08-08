@@ -152,16 +152,21 @@ check-docs:
 
 # Build NoritoBridge.xcframework and a reproducible zip + checksum for SPM
 bridge-xcframework:
-	@bash scripts/build_norito_xcframework.sh
-	@cd dist && rm -f NoritoBridge.xcframework.zip && /usr/bin/zip -r -X NoritoBridge.xcframework.zip NoritoBridge.xcframework >/dev/null
+	@test -n "$$SOURCE_DATE_EPOCH" || { echo "SOURCE_DATE_EPOCH is required" >&2; exit 1; }
+	@test -n "$$NORITO_BRIDGE_OUT_DIR" || { echo "NORITO_BRIDGE_OUT_DIR is required" >&2; exit 1; }
+	@test -n "$$NORITO_BRIDGE_BUILD_DIR" || { echo "NORITO_BRIDGE_BUILD_DIR is required" >&2; exit 1; }
+	@test -n "$$NORITO_BRIDGE_ARCHIVE_OUTPUT" || { echo "NORITO_BRIDGE_ARCHIVE_OUTPUT is required" >&2; exit 1; }
+	@bash scripts/build_norito_xcframework.sh \
+		--archive-output "$$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 	@$(MAKE) bridge-checksum
 
 bridge-checksum:
-	@echo "SPM checksum for dist/NoritoBridge.xcframework.zip:"
+	@test -n "$$NORITO_BRIDGE_ARCHIVE_OUTPUT" || { echo "NORITO_BRIDGE_ARCHIVE_OUTPUT is required" >&2; exit 1; }
+	@echo "SPM checksum for $$NORITO_BRIDGE_ARCHIVE_OUTPUT:"
 	@if command -v swift >/dev/null 2>&1; then \
-		swift package compute-checksum dist/NoritoBridge.xcframework.zip; \
+		swift package compute-checksum "$$NORITO_BRIDGE_ARCHIVE_OUTPUT"; \
 	else \
-		shasum -a 256 dist/NoritoBridge.xcframework.zip | awk '{print $$1}'; \
+		shasum -a 256 "$$NORITO_BRIDGE_ARCHIVE_OUTPUT" | awk '{print $$1}'; \
 	fi
 
 # Run serialization guards locally (deny direct serde/serde_json, ad-hoc AoS/NCB helpers)

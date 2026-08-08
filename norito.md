@@ -195,6 +195,16 @@ decoders inspect the nested string length before allocating its backing
 storage; malformed, oversized, or over-depth wire values never become a
 `Json`. Raw JSON producers use the fallible `Json::from_raw_json`, while plain
 text that should become a JSON string uses `Json::new` or `Json::from`.
+Each generic or tape-first typed document entry point preflights the complete
+document's maximum value depth once with an allocation-free, quote-aware scalar
+scan before generated `JsonDeserialize` or custom `FastFromJson` recursion
+begins. Generic-to-tape adapters may validate the exact next subtree again to
+find its boundary, but construct their tape over only that non-overlapping
+slice and never rescan unrelated enclosing bytes. The security bound is
+independent of the selected hardware Stage-1 tape, so every node reaches the
+same decision. Unknown fields then use the same strict iterative subtree
+grammar, so an individually valid subtree cannot exceed the global limit by
+hiding beneath a typed outer object or array.
 
 Typed JSON floating-point values must be finite. Norito rejects literals whose
 decimal exponent overflows `f64`; finite values are rendered with Ryu's

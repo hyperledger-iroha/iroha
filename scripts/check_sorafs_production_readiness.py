@@ -12,10 +12,9 @@ import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -29,6 +28,11 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
+)
+from sorafs_archive_path_components import (  # noqa: E402
+    decoded_text_variants,
+    path_component_has_uri_scheme_prefix,
+    path_component_has_windows_drive_prefix,
 )
 from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
@@ -108,6 +112,7 @@ from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
 )
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GOVERNANCE_DAG_REQUIRED_KINDS,
+    INGRESS_QUALIFICATION_BOUND_KINDS as GOVERNANCE_DAG_INGRESS_BOUND_KINDS,
     KIND_BY_NAME as GOVERNANCE_DAG_KIND_BY_NAME,
     POLICY_BOUND_KINDS as GOVERNANCE_DAG_POLICY_BOUND_KINDS,
     PUBLIC_HEAD_BOUND_KINDS as GOVERNANCE_DAG_PUBLIC_HEAD_BOUND_KINDS,
@@ -785,37 +790,6 @@ def require_threshold_map(
         if key_label is not None and value_is_valid and not key_is_sensitive:
             valid_thresholds[key_label] = value
     return valid_thresholds
-
-
-def decoded_text_variants(value: str) -> tuple[str, ...]:
-    """Return raw plus repeatedly percent/HTML-decoded text variants."""
-
-    variants = [value]
-    seen = {value}
-    current = value
-    for _ in range(4):
-        decoded = unescape(unquote(current))
-        if decoded == current or decoded in seen:
-            break
-        variants.append(decoded)
-        seen.add(decoded)
-        current = decoded
-    return tuple(variants)
-
-
-def path_component_has_windows_drive_prefix(component: str) -> bool:
-    """Return whether a path component starts with a Windows drive prefix."""
-
-    return len(component) >= 2 and component[1] == ":" and component[0].isalpha()
-
-
-def path_component_has_uri_scheme_prefix(component: str) -> bool:
-    """Return whether a path component starts with a URI-like scheme."""
-
-    head, separator, _tail = component.partition(":")
-    if not separator:
-        return False
-    return re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", head) is not None
 
 
 def path_component_has_sensitive_label(component: str) -> bool:
@@ -3837,6 +3811,30 @@ def validate_governance_dag_bound_artifact_metadata(
         ),
         errors=errors,
     )
+    for metadata_field, fingerprint_field in (
+        ("valid_receiver_policy_digests", "receiver_policy_digest_hex"),
+        ("valid_replay_namespace_digests", "replay_namespace_digest_hex"),
+        ("valid_replica_set_digests", "replica_set_digest_hex"),
+        (
+            "valid_kubo_ingress_binding_digests",
+            "kubo_ingress_binding_digest_hex",
+        ),
+        (
+            "valid_signed_head_ingress_binding_digests",
+            "signed_head_ingress_binding_digest_hex",
+        ),
+    ):
+        bound_artifact_fingerprints_match_hex_list_metadata(
+            payload,
+            kind_names=GOVERNANCE_DAG_INGRESS_BOUND_KINDS,
+            metadata_field=metadata_field,
+            fingerprint_field=fingerprint_field,
+            error=(
+                "governance_dag ingress-bound artifact fingerprints must match "
+                f"{metadata_field}"
+            ),
+            errors=errors,
+        )
 
 
 def validate_gateway_load_bound_artifact_metadata(

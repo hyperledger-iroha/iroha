@@ -109,6 +109,7 @@ impl KuraSeed {
                 field: "state.block_hashes".to_owned(),
                 message: "committed height does not fit u64".to_owned(),
             })?;
+        validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes_vec)?;
         world
             .privacy_consensus_policy
             .view()
@@ -810,6 +811,12 @@ fn take_musubi_resolver_index_revision(
     Ok(revision)
 }
 
+fn take_musubi_resolver_index_checkpoints(
+    map: &mut json::native::Map,
+) -> Result<Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>, json::Error> {
+    take_required(map, "musubi_resolver_index_checkpoints")
+}
+
 fn take_musubi_replication_shortfall_releases(
     map: &mut json::native::Map,
 ) -> Result<Cell<u64>, json::Error> {
@@ -1267,4 +1274,90 @@ fn invalid_musubi_state(field: &str, message: impl Into<String>) -> json::Error 
         field: format!("world.{field}"),
         message: message.into(),
     }
+}
+
+fn validate_musubi_resolver_checkpoint_structure(
+    checkpoints: &Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
+    current_revision: u64,
+) -> Result<(), json::Error> {
+    let checkpoints = checkpoints.view();
+    let mut previous_height = None;
+    let mut latest_revision = None;
+    for (revision, checkpoint) in checkpoints.iter() {
+        checkpoint.validate().map_err(|error| {
+            invalid_musubi_state("musubi_resolver_index_checkpoints", error.to_string())
+        })?;
+        if revision.get() != checkpoint.index_revision {
+            return Err(invalid_musubi_state(
+                "musubi_resolver_index_checkpoints",
+                "resolver checkpoint key does not match its embedded revision",
+            ));
+        }
+        if previous_height.is_none() && checkpoint.finalized_height != 1 {
+            return Err(invalid_musubi_state(
+                "musubi_resolver_index_checkpoints",
+                "resolver checkpoint history must begin at genesis",
+            ));
+        }
+        if previous_height.is_some_and(|height| height >= checkpoint.finalized_height) {
+            return Err(invalid_musubi_state(
+                "musubi_resolver_index_checkpoints",
+                "resolver checkpoint activation heights must increase strictly",
+            ));
+        }
+        previous_height = Some(checkpoint.finalized_height);
+        latest_revision = Some(revision.get());
+    }
+    if latest_revision.is_some_and(|revision| revision != current_revision) {
+        return Err(invalid_musubi_state(
+            "musubi_resolver_index_checkpoints",
+            "latest resolver checkpoint does not match the current resolver-index revision",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_musubi_resolver_checkpoint_anchors(
+    world: &World,
+    block_hashes: &[HashOf<BlockHeader>],
+) -> Result<(), json::Error> {
+    let current_revision = world.musubi_resolver_index_revision.view().get().get();
+    validate_musubi_resolver_checkpoint_structure(
+        &world.musubi_resolver_index_checkpoints,
+        current_revision,
+    )?;
+
+    let checkpoints = world.musubi_resolver_index_checkpoints.view();
+    let history_is_empty = checkpoints.is_empty();
+    if block_hashes.is_empty() {
+        if !history_is_empty {
+            return Err(invalid_musubi_state(
+                "musubi_resolver_index_checkpoints",
+                "pregenesis state cannot contain resolver checkpoints",
+            ));
+        }
+        return Ok(());
+    }
+    if history_is_empty {
+        return Err(invalid_musubi_state(
+            "musubi_resolver_index_checkpoints",
+            "committed state must retain the genesis resolver checkpoint",
+        ));
+    }
+    for (_, checkpoint) in checkpoints.iter() {
+        let index = checkpoint
+            .finalized_height
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok());
+        let canonical_hash = index
+            .and_then(|index| block_hashes.get(index))
+            .map(|hash| *hash.as_ref());
+        if canonical_hash != Some(checkpoint.finalized_block_hash) {
+            return Err(invalid_musubi_state(
+                "musubi_resolver_index_checkpoints",
+                "resolver checkpoint is not anchored to its canonical finalized block",
+            ));
+        }
+    }
+    Ok(())
 }

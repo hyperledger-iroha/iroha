@@ -287,8 +287,9 @@ Verifier behavior (native STARK)
   guardrails additionally bind decoded `OpenVerifyEnvelope.circuit_id` values to
   the requested backend label: concrete native Halo2 labels must normalize to the
   same circuit. The generic `halo2/ipa` entry point uses a closed v1 circuit
-  registry containing only IVM execution, Kaigi roster/usage, confidential
-  transfer/unshield, and Kagemusha top-up shielding. Tiny arithmetic,
+	  registry containing only IVM execution, Kaigi roster/usage, the
+	  protocol-private confidential transfer/unshield circuits used by native
+	  escrow and Kagemusha, and Kagemusha top-up shielding. Tiny arithmetic,
   anonymous-transfer demos, vote-bool demos, the historical IVM overlay-binding
   stand-in, retired recursive-spend labels, cross-family ids, and trusted-setup
   ids all fail before verifier dispatch. Prefixing or otherwise normalizing a

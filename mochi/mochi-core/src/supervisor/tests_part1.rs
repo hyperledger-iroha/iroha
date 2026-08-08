@@ -1,3 +1,5 @@
+// Supervisor configuration, genesis, and snapshot regression support and tests.
+
 #[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::{
@@ -337,6 +339,10 @@ JSON
           bound_manifest_out="$2"
           shift 2
           ;;
+        --expected-hash-out)
+          expected_hash_out="$2"
+          shift 2
+          ;;
         --private-key-file)
           private_key_file="$2"
           shift 2
@@ -352,7 +358,11 @@ JSON
     done
     test -s "$private_key_file"
     test -s "$config_file"
+    config_mode="$(stat -f %Lp "$config_file" 2>/dev/null || stat -c %a "$config_file")"
+    test "$config_mode" = "600"
+    grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
     printf 'stub-signed-genesis' > "$out_file"
+    printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
     if [ "$bound_manifest_out" != "$manifest_path" ]; then
       cp "$manifest_path" "$bound_manifest_out"
     fi
@@ -447,6 +457,10 @@ JSON
           bound_manifest_out="$2"
           shift 2
           ;;
+        --expected-hash-out)
+          expected_hash_out="$2"
+          shift 2
+          ;;
         --private-key-file)
           private_key_file="$2"
           shift 2
@@ -462,7 +476,9 @@ JSON
     done
     test -s "$private_key_file"
     test -s "$config_file"
+    grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
     printf 'stub-signed-genesis' > "$out_file"
+    printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
     if [ "$bound_manifest_out" != "$manifest_path" ]; then
       cp "$manifest_path" "$bound_manifest_out"
     fi
@@ -537,14 +553,22 @@ fn ports_available(context: &str) -> bool {
 fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
     let manifest_path = paths.genesis_dir().join(GENESIS_FILE_NAME);
     let block_path = paths.genesis_dir().join(GENESIS_SIGNED_FILE_NAME);
+    let expected_hash_path = paths.genesis_dir().join(GENESIS_EXPECTED_HASH_FILE_NAME);
+    let expected_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+        .parse::<HashOf<BlockHeader>>()
+        .expect("test genesis hash");
     fs::create_dir_all(paths.genesis_dir()).expect("genesis dir");
     fs::write(&manifest_path, b"{}").expect("write manifest");
     fs::write(&block_path, b"norito-wire-stub").expect("write signed genesis");
+    fs::write(&expected_hash_path, format!("{expected_hash}\n"))
+        .expect("write genesis expected hash");
 
     GenesisMaterial {
         key_pair: KeyPair::random(),
         manifest_path,
         block_path,
+        expected_hash_path,
+        expected_hash: Some(expected_hash),
         profile: None,
         vrf_seed_hex: None,
         verify_report: None,
@@ -772,6 +796,40 @@ fn builder_creates_peer_configs() {
 
     assert_eq!(supervisor.chain_id(), "test-chain");
     assert_eq!(supervisor.peers().len(), 4);
+    let mut transport_public_keys = HashSet::new();
+    for peer in supervisor.peers() {
+        KeyPair::new(
+            peer.spec.keys.soranet_transport_public_key.clone(),
+            peer.spec.keys.soranet_transport_private_key.0.clone(),
+        )
+        .expect("Mochi transport public/private key pair must match");
+        assert_eq!(
+            peer.spec.keys.soranet_transport_public_key.algorithm(),
+            Algorithm::Ed25519
+        );
+        assert_ne!(
+            peer.spec.keys.soranet_transport_public_key, peer.spec.keys.public_key,
+            "transport and consensus signing identities must differ"
+        );
+        assert_ne!(
+            peer.spec.keys.soranet_transport_public_key, peer.spec.keys.identity_public_key,
+            "transport and streaming identities must differ"
+        );
+        assert!(
+            transport_public_keys.insert(peer.spec.keys.soranet_transport_public_key.clone()),
+            "Mochi peers must not share a transport identity"
+        );
+    }
+
+    #[cfg(unix)]
+    for peer in supervisor.peers() {
+        let metadata = fs::symlink_metadata(peer.config_path()).expect("peer config metadata");
+        assert!(metadata.file_type().is_file());
+        assert!(!metadata.file_type().is_symlink());
+        assert_eq!(metadata.uid(), fs::metadata(temp.path()).unwrap().uid());
+        assert_eq!(metadata.nlink(), 1);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
 
     let peer = &supervisor.peers()[0];
     let config_path = peer.config_path().to_path_buf();
@@ -790,6 +848,39 @@ fn builder_creates_peer_configs() {
         value.get("chain").and_then(toml::Value::as_str),
         Some("test-chain")
     );
+    assert_eq!(
+        value
+            .get("soranet_transport_public_key")
+            .and_then(toml::Value::as_str),
+        Some(
+            peer.spec
+                .keys
+                .soranet_transport_public_key
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(
+        value
+            .get("soranet_transport_private_key")
+            .and_then(toml::Value::as_str),
+        Some(
+            peer.spec
+                .keys
+                .soranet_transport_private_key
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(
+        value
+            .get("genesis")
+            .and_then(toml::Value::as_table)
+            .and_then(|table| table.get("expected_hash"))
+            .and_then(toml::Value::as_str),
+        Some("hash:0000000000000000000000000000000000000000000000000000000000000001#C50E")
+    );
+    assert!(!contents.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
     assert!(
         value
             .get("sumeragi")
@@ -1034,6 +1125,16 @@ fn relative_data_root_renders_cwd_independent_peer_paths() {
     for peer in supervisor.peers() {
         assert!(peer.config_path().is_absolute());
         assert!(peer.config_path().is_file());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(peer.config_path())
+                .expect("peer config metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "peer config contains private keys and must never be group/world-readable"
+        );
         assert!(peer.log_path().is_absolute());
         let peer_cwd = peer
             .config_path()

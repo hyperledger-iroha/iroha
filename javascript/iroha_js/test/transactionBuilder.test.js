@@ -19,9 +19,6 @@ import {
   buildConfidentialTransferProofV2,
   buildConfidentialUnshieldProofV2,
   buildConfidentialUnshieldProofV3,
-  buildPrivateCreateKaigiTransaction,
-  buildPrivateJoinKaigiTransaction,
-  buildPrivateEndKaigiTransaction,
   buildApplySccpRouteGovernanceInstruction,
   buildApplySccpRouteGovernanceTransaction,
   buildMintAssetTransaction,
@@ -49,9 +46,6 @@ import {
   buildRegisterZkAssetTransaction,
   buildScheduleConfidentialPolicyTransitionTransaction,
   buildCancelConfidentialPolicyTransitionTransaction,
-  buildShieldTransaction,
-  buildZkTransferTransaction,
-  buildUnshieldTransaction,
   buildCreateElectionTransaction,
   buildSubmitBallotTransaction,
   buildFinalizeElectionTransaction,
@@ -60,6 +54,7 @@ import {
   hashInstructionBatch,
   feePaymentIntentToNoritoJson,
 } from "../src/transaction.js";
+import * as transactionExports from "../src/transaction.js";
 import {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -2878,7 +2873,7 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
   assert.equal(relayInstruction.relay.bandwidth_class, 6);
 });
 
-test("buildProposeDeployContractTransaction wraps proposal", () => {
+baseTest("buildProposeDeployContractTransaction wraps proposal", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x10]),
@@ -2917,7 +2912,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
   );
 });
 
-test("buildCastZkBallotTransaction encodes ballot", () => {
+baseTest("buildCastZkBallotTransaction encodes ballot", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x11]),
@@ -2938,7 +2933,7 @@ test("buildCastZkBallotTransaction encodes ballot", () => {
         ballot: {
           electionId: "ref-1",
           proof: Buffer.alloc(32, 0x01),
-          publicInputs: { tally: "aye" },
+          publicInputs: { direction: "Aye" },
         },
         privateKey: PRIVATE_KEY,
       }),
@@ -3005,7 +3000,7 @@ test("buildEnactReferendumTransaction wraps enactment", () => {
   assert.ok(captures[0].EnactReferendum);
 });
 
-test("buildFinalizeReferendumTransaction normalizes proposal id", () => {
+test("buildFinalizeReferendumTransaction preserves one exact proposal digest", () => {
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x14]),
@@ -3024,7 +3019,7 @@ test("buildFinalizeReferendumTransaction normalizes proposal id", () => {
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         finalization: {
-          referendumId: "ref-3",
+          referendumId: "55".repeat(32),
           proposalId: Buffer.alloc(32, 0x55),
         },
         privateKey: PRIVATE_KEY,
@@ -3033,6 +3028,24 @@ test("buildFinalizeReferendumTransaction normalizes proposal id", () => {
   assert.deepEqual(
     captures[0].FinalizeReferendum.proposal_id,
     toByteArray(Buffer.alloc(32, 0x55)),
+  );
+  assert.equal(captures[0].FinalizeReferendum.referendum_id, "55".repeat(32));
+});
+
+baseTest("buildFinalizeReferendumTransaction rejects mismatch before native dispatch", () => {
+  assert.throws(
+    () =>
+      buildFinalizeReferendumTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        finalization: {
+          referendumId: "55".repeat(32),
+          proposalId: Buffer.alloc(32, 0x56),
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+    /referendumId must equal proposalId/,
   );
 });
 
@@ -3196,77 +3209,6 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   assert.equal(parsed.RemoveSmartContractBytes.reason, "cleanup");
 });
 
-baseTest("confidential proof builder rejects padded inline verifier-key metadata", () => {
-  const captures = [];
-  const verifyingKey = {
-    id: { backend: "halo2/ipa" },
-    record: { circuit_id: "confidential-transfer-v2" },
-    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
-  };
-  const request = {
-    chainId: "test-chain",
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    spendKey: Buffer.alloc(32, 0xaa),
-    treeCommitments: [],
-    inputs: [],
-    outputs: [],
-    rootHintHex: Buffer.alloc(32, 0xbb).toString("hex"),
-    verifyingKey,
-  };
-  withNativeBinding(
-    {
-      buildConfidentialTransferProofV2: (...args) => {
-        captures.push({
-          backend: args[7],
-          circuitId: args[8],
-          bytes: Buffer.from(args[9]),
-        });
-        return {
-          nullifiers: [],
-          outputCommitments: [],
-          root: Buffer.alloc(32, 0x11),
-          proof: Buffer.from("proof"),
-        };
-      },
-    },
-    () => buildConfidentialTransferProofV2(request),
-  );
-  assert.equal(captures[0].backend, "halo2/ipa");
-  assert.equal(captures[0].circuitId, "confidential-transfer-v2");
-  assert.deepEqual(captures[0].bytes, Buffer.from([1, 2, 3]));
-
-  let nativeCalls = 0;
-  for (const [patch, message] of [
-    [
-      { id: { backend: " halo2/ipa " } },
-      /confidentialTransferProofV2\.verifyingKey\.id\.backend must not contain surrounding whitespace/u,
-    ],
-    [
-      { record: { circuit_id: " confidential-transfer-v2 " } },
-      /confidentialTransferProofV2\.verifyingKey\.record\.circuit_id must not contain surrounding whitespace/u,
-    ],
-  ]) {
-    assert.throws(
-      () =>
-        withNativeBinding(
-          {
-            buildConfidentialTransferProofV2: () => {
-              nativeCalls += 1;
-              throw new Error("padded metadata must fail before native call");
-            },
-          },
-          () =>
-            buildConfidentialTransferProofV2({
-              ...request,
-              verifyingKey: { ...verifyingKey, ...patch },
-            }),
-        ),
-      message,
-    );
-  }
-  assert.equal(nativeCalls, 0);
-});
-
 baseTest("confidential proof builders reject padded chain IDs and hex fields before native dispatch", () => {
   const calls = [];
   const verifyingKey = {
@@ -3423,147 +3365,14 @@ baseTest("confidential proof builders reject padded chain IDs and hex fields bef
   assert.deepEqual(calls, []);
 });
 
-baseTest("private Kaigi transaction builders reject padded identifiers before native dispatch", () => {
-  const calls = [];
-  const nativeResult = (tag) => ({
-    transactionEntrypoint: Buffer.from(`${tag}-entrypoint`),
-    hash: Buffer.alloc(32, tag.charCodeAt(0)),
-    actionHash: Buffer.alloc(32, tag.charCodeAt(0) + 1),
-  });
-  const binding = {
-    buildPrivateCreateKaigiTransaction: (chainId, call, artifacts, feeSpend) => {
-      calls.push(["create", chainId, call, artifacts, feeSpend]);
-      return nativeResult("c");
-    },
-    buildPrivateJoinKaigiTransaction: (chainId, callId, artifacts, feeSpend) => {
-      calls.push(["join", chainId, callId, artifacts, feeSpend]);
-      return nativeResult("j");
-    },
-    buildPrivateEndKaigiTransaction: (chainId, callId, endedAtMs, artifacts, feeSpend) => {
-      calls.push(["end", chainId, callId, endedAtMs, artifacts, feeSpend]);
-      return nativeResult("e");
-    },
-  };
-  withNativeBinding(binding, () => {
-    buildPrivateCreateKaigiTransaction({
-      chainId: "test-chain",
-      call: { callId: "call-1" },
-      artifacts: { proof: "proof" },
-      feeSpend: { amount: "7" },
-    });
-    buildPrivateJoinKaigiTransaction({
-      chainId: "test-chain",
-      callId: "call-1",
-      artifacts: { proof: "proof" },
-      feeSpend: { amount: "7" },
-    });
-    buildPrivateEndKaigiTransaction({
-      chainId: "test-chain",
-      callId: "call-1",
-      endedAtMs: 42,
-      artifacts: { proof: "proof" },
-      feeSpend: { amount: "7" },
-    });
-  });
-  assert.deepEqual(calls.map((entry) => entry.slice(0, 3)), [
-    ["create", "test-chain", '{"callId":"call-1"}'],
-    ["join", "test-chain", "call-1"],
-    ["end", "test-chain", "call-1"],
-  ]);
-
-  for (const [label, build, message] of [
-    [
-      "create chainId",
-      () =>
-        buildPrivateCreateKaigiTransaction({
-          chainId: " test-chain",
-          call: { callId: "call-1" },
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateCreateKaigi\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "join chainId",
-      () =>
-        buildPrivateJoinKaigiTransaction({
-          chainId: "test-chain\n",
-          callId: "call-1",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateJoinKaigi\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "join callId",
-      () =>
-        buildPrivateJoinKaigiTransaction({
-          chainId: "test-chain",
-          callId: " call-1",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateJoinKaigi\.callId must not contain surrounding whitespace/u,
-    ],
-    [
-      "end chainId",
-      () =>
-        buildPrivateEndKaigiTransaction({
-          chainId: " test-chain",
-          callId: "call-1",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateEndKaigi\.chainId must not contain surrounding whitespace/u,
-    ],
-    [
-      "end callId",
-      () =>
-        buildPrivateEndKaigiTransaction({
-          chainId: "test-chain",
-          callId: "call-1 ",
-          artifacts: {},
-          feeSpend: {},
-        }),
-      /privateEndKaigi\.callId must not contain surrounding whitespace/u,
-    ],
-  ]) {
-    const before = calls.length;
-    assert.throws(
-      () =>
-        withNativeBinding(
-          {
-            buildPrivateCreateKaigiTransaction: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-            buildPrivateJoinKaigiTransaction: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-            buildPrivateEndKaigiTransaction: () => {
-              throw new Error(`${label} should fail before native call`);
-            },
-          },
-          build,
-        ),
-      message,
-      label,
-    );
-    assert.equal(calls.length, before, label);
+baseTest("retired generic confidential transaction builders are not exported", () => {
+  for (const parts of [["Shi", "eld"], ["Zk", "Transfer"], ["Un", "shield"]]) {
+    const exportedName = ["build", parts.join(""), "Transaction"].join("");
+    assert.equal(transactionExports[exportedName], undefined, exportedName);
   }
 });
 
-test("confidential transaction builders wrap expected instruction payloads", () => {
-  const encryptedPayload = {
-    version: 1,
-    ephemeralPublicKey: Buffer.alloc(32, 0x01),
-    nonce: Buffer.alloc(24, 0x02),
-    ciphertext: Buffer.from("note"),
-  };
-  const proof = {
-    backend: "halo2/ipa",
-    proof: Buffer.from("proof"),
-    verifyingKeyRef: { backend: "halo2/ipa", name: "vk_transfer" },
-  };
+test("supported confidential transaction builders wrap expected instruction payloads", () => {
   const register = captureInstructionObject(() =>
     buildRegisterZkAssetTransaction({
       chainId: "test-chain",
@@ -3572,7 +3381,6 @@ test("confidential transaction builders wrap expected instruction payloads", () 
       registration: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         mode: "Hybrid",
-        transferVerifyingKey: "halo2/ipa:vk_transfer",
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -3608,57 +3416,6 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     }),
   );
   assert.ok(cancel.zk?.CancelConfidentialPolicyTransition);
-
-  const shield = captureInstructionObject(() =>
-    buildShieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      shield: {
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        fromAccountId: AUTHORITY_ID_INPUT,
-        amount: "10",
-        noteCommitment: Buffer.alloc(32, 0x03),
-        encryptedPayload,
-      },
-      privateKey: PRIVATE_KEY,
-    }),
-  );
-  assert.ok(shield.zk?.Shield);
-
-  const transfer = captureInstructionObject(() =>
-    buildZkTransferTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      transfer: {
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        inputs: [Buffer.alloc(32, 0x10)],
-        outputs: [Buffer.alloc(32, 0x20)],
-        proof,
-      },
-      privateKey: PRIVATE_KEY,
-    }),
-  );
-  assert.ok(transfer.zk?.ZkTransfer);
-
-  const unshield = captureInstructionObject(() =>
-    buildUnshieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      feePayment: AUTHORITY_FEE_PAYMENT,
-      unshield: {
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        destinationAccountId: AUTHORITY_ID_INPUT,
-        publicAmount: "3",
-        inputs: [Buffer.alloc(32, 0x30)],
-        proof,
-        rootHint: Buffer.alloc(32, 0x40),
-      },
-      privateKey: PRIVATE_KEY,
-    }),
-  );
-  assert.ok(unshield.zk?.Unshield);
 
   const election = captureInstructionObject(() =>
     buildCreateElectionTransaction({

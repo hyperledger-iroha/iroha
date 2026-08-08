@@ -50,7 +50,11 @@ use super::{
 use crate::vega::sponge::{Keccak256, keccak256, shake256};
 
 #[cfg(test)]
-use super::{AuthenticationSecret, wire::ZkAmsMkheWireBindingV1};
+use super::{
+    AuthenticationSecret,
+    persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
+    wire::ZkAmsMkheWireBindingV1,
+};
 
 const DECRYPTION_PROOF_TAG_V1: [u8; 4] = *b"ZADP";
 const DECRYPTION_SPLIT_MANIFEST_TAG_V1: [u8; 4] = *b"ZDSM";
@@ -2525,6 +2529,10 @@ fn decryption_challenge_seed(
     Ok(hash.finalize())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the proof boundary keeps every public relation and private witness input explicit"
+)]
 fn prove_decryption_relation<R: MaskedRelaxedRandomSourceV1>(
     profile: &BgvProfile,
     parties: &super::PartySet,
@@ -3515,6 +3523,7 @@ fn wide_from_be(bytes: &[u8]) -> Result<WideUint, ZkAmsMkheErrorV1> {
     Ok(value)
 }
 
+#[cfg(test)]
 fn wide_from_u64(value: u64) -> WideUint {
     let mut output = WideUint::zero();
     output.limbs[0] = value;

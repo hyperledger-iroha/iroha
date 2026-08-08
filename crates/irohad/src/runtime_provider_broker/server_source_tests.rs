@@ -1793,6 +1793,7 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         handle: "network://sorafs/provider-ingest/source-primary".to_owned(),
         revision: Some(5),
         policy_digest: Some([0xB1; 32]),
+        bootle_lantern_issuance_bindings: None,
         stream_token_signer_public_key: None,
         stream_token_gateway_admission_qualification: None,
         stream_token_gateway_admission_max_pending: None,
@@ -1808,8 +1809,7 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         native_signer_binding: None,
         governance_dag_publisher_peer_id: None,
         governance_dag_publisher_public_key: None,
-        governance_request_auth_public_key: None,
-        governance_request_auth_max_body_bytes: None,
+        governance_request_ingress_binding: None,
         provider_ingest_signer_binding: None,
         provider_ingest_source_limits: Some(ProviderIngestSourceLimitsWireV1 {
             operation_timeout_ms: 1_000,

@@ -1000,6 +1000,7 @@ pub mod manifest {
             crate::DeriveJsonDeserialize
         )
     )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1064,6 +1065,7 @@ pub mod manifest {
             crate::DeriveJsonDeserialize
         )
     )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub struct DynamicAccessHint {
         /// Canonical state-map base key, for example `state:Balances`.
@@ -1192,6 +1194,7 @@ pub mod manifest {
             crate::DeriveJsonDeserialize
         )
     )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),

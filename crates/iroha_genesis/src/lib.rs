@@ -1910,7 +1910,6 @@ pub mod genesis_instructions_json {
                     true,
                     None,
                     None,
-                    None,
                 ));
 
             let value = instruction_value(&instruction);

@@ -59,6 +59,32 @@ async fn post_json_batch_with_limits(
     .await
 }
 
+fn verify_batch_router_with_limits(
+    open_limits: iroha_zkp_halo2::OpenVerifyLimits,
+    max_body_bytes: usize,
+    max_batch: usize,
+    max_envelope_bytes: usize,
+    enforce_transcript_label_ascii: bool,
+) -> Router {
+    Router::new().route(
+        "/v1/zk/verify-batch",
+        post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                iroha_torii::handle_v1_zk_verify_batch_with_limits(
+                    headers,
+                    body,
+                    open_limits,
+                    max_body_bytes,
+                    max_batch,
+                    max_envelope_bytes,
+                    enforce_transcript_label_ascii,
+                )
+                .await
+            },
+        ),
+    )
+}
+
 async fn post_batch_with_limits(
     body: Vec<u8>,
     content_type: &'static str,
@@ -67,22 +93,12 @@ async fn post_batch_with_limits(
     max_envelope_bytes: usize,
     enforce_transcript_label_ascii: bool,
 ) -> norito::json::Value {
-    let app = Router::new().route(
-        "/v1/zk/verify-batch",
-        post(
-            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                iroha_torii::handle_v1_zk_verify_batch_with_limits(
-                    headers,
-                    body,
-                    open_limits,
-                    TEST_MAX_BODY_BYTES,
-                    max_batch,
-                    max_envelope_bytes,
-                    enforce_transcript_label_ascii,
-                )
-                .await
-            },
-        ),
+    let app = verify_batch_router_with_limits(
+        open_limits,
+        TEST_MAX_BODY_BYTES,
+        max_batch,
+        max_envelope_bytes,
+        enforce_transcript_label_ascii,
     );
 
     let req = http::Request::builder()
@@ -443,29 +459,124 @@ async fn zk_verify_batch_json_applies_open_verify_limits() {
 
 #[tokio::test]
 async fn zk_verify_batch_rejects_retired_text_json_alias() {
-    use base64::Engine as _;
-
-    let env = sample_pallas_envelope("torii-text-json");
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(norito::to_bytes(&env).expect("encode envelope"));
-    let body = format!(r#"["{encoded}"]"#);
-    let v = post_batch_with_limits(
-        body.into_bytes(),
-        "text/json",
+    let app = verify_batch_router_with_limits(
         iroha_zkp_halo2::OpenVerifyLimits::default(),
+        TEST_MAX_BODY_BYTES,
         16,
         usize::MAX,
         false,
-    )
-    .await;
+    );
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/v1/zk/verify-batch")
+        .header(http::header::CONTENT_TYPE, "text/json")
+        .body(axum::body::Body::from("[]"))
+        .expect("request");
 
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
-    let statuses = v
-        .get("statuses")
-        .and_then(|x| x.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert!(statuses.is_empty());
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn zk_verify_batch_enforces_one_exact_typed_content_type() {
+    let app = verify_batch_router_with_limits(
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
+        TEST_MAX_BODY_BYTES,
+        16,
+        usize::MAX,
+        false,
+    );
+
+    let accepted = http::Request::builder()
+        .method("POST")
+        .uri("/v1/zk/verify-batch")
+        .header(
+            http::header::CONTENT_TYPE,
+            "application/json; charset=UTF-8",
+        )
+        .body(axum::body::Body::from("[]"))
+        .expect("accepted request");
+    assert_eq!(
+        app.clone()
+            .oneshot(accepted)
+            .await
+            .expect("accepted response")
+            .status(),
+        http::StatusCode::OK
+    );
+
+    for content_type in [
+        "application/json-evil",
+        "application/json; profile=legacy",
+        "application/x-norito; charset=utf-8",
+    ] {
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/v1/zk/verify-batch")
+            .header(http::header::CONTENT_TYPE, content_type)
+            .body(axum::body::Body::from("[]"))
+            .expect("unsupported-media request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("unsupported-media response");
+        assert_eq!(
+            response.status(),
+            http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "{content_type}"
+        );
+    }
+
+    let missing = http::Request::builder()
+        .method("POST")
+        .uri("/v1/zk/verify-batch")
+        .body(axum::body::Body::from("[]"))
+        .expect("missing-media request");
+    assert_eq!(
+        app.clone()
+            .oneshot(missing)
+            .await
+            .expect("missing-media response")
+            .status(),
+        http::StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+
+    let mut duplicate = http::Request::builder()
+        .method("POST")
+        .uri("/v1/zk/verify-batch")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from("[]"))
+        .expect("duplicate-media request");
+    duplicate.headers_mut().append(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(duplicate)
+            .await
+            .expect("duplicate-media response")
+            .status(),
+        http::StatusCode::BAD_REQUEST
+    );
+
+    let mut non_ascii = http::Request::builder()
+        .method("POST")
+        .uri("/v1/zk/verify-batch")
+        .body(axum::body::Body::from("[]"))
+        .expect("non-ASCII media request");
+    non_ascii.headers_mut().insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_bytes(&[0xff]).expect("opaque header value"),
+    );
+    assert_eq!(
+        app.oneshot(non_ascii)
+            .await
+            .expect("non-ASCII media response")
+            .status(),
+        http::StatusCode::BAD_REQUEST
+    );
 }
 
 #[tokio::test]
@@ -487,6 +598,25 @@ async fn zk_verify_batch_json_rejects_oversized_batch_before_decode() {
     );
     assert_eq!(v.get("max").and_then(|x| x.as_u64()), Some(1));
     assert_eq!(v.get("actual").and_then(|x| x.as_u64()), Some(2));
+}
+
+#[tokio::test]
+async fn zk_verify_batch_json_rejects_impossible_or_oversized_base64_before_decode() {
+    let v = post_json_batch_with_limits(
+        r#"["!!!!!!!!","AAA"]"#.to_owned(),
+        iroha_zkp_halo2::OpenVerifyLimits::default(),
+        3,
+        false,
+    )
+    .await;
+
+    let statuses = v
+        .get("statuses")
+        .and_then(norito::json::Value::as_array)
+        .expect("per-entry statuses");
+    assert_eq!(statuses.len(), 2);
+    assert_batch_outcome(&statuses[0], "error", Some("envelope_too_large"));
+    assert_batch_outcome(&statuses[1], "error", Some("invalid_base64"));
 }
 
 #[tokio::test]
@@ -575,7 +705,7 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
 }
 
 #[tokio::test]
-async fn zk_verify_batch_returns_false_for_invalid_or_unknown_bodies() {
+async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
     let v = post_batch_with_limits(
         b"not norito".to_vec(),
         "application/x-norito",
@@ -605,17 +735,6 @@ async fn zk_verify_batch_returns_false_for_invalid_or_unknown_bodies() {
     let v = post_batch_with_limits(
         br#"["unterminated""#.to_vec(),
         "application/json",
-        iroha_zkp_halo2::OpenVerifyLimits::default(),
-        16,
-        usize::MAX,
-        false,
-    )
-    .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
-
-    let v = post_batch_with_limits(
-        b"ignored".to_vec(),
-        "text/plain",
         iroha_zkp_halo2::OpenVerifyLimits::default(),
         16,
         usize::MAX,

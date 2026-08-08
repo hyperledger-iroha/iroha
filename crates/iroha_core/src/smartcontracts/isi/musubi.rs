@@ -5,9 +5,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     asset::AssetId,
+    block::BlockHeader,
     domain::DomainId,
     events::data::{DataEvent, musubi::prelude::*},
     governance::types::ProposalKind,
@@ -213,6 +214,106 @@ impl Execute for RegisterMusubiArchiveV1 {
     }
 }
 
+impl Execute for RegisterMusubiProviderBundleAttestationV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        execute_governance_mutation(
+            state_transaction,
+            MusubiGovernanceActionV1::ArchiveLocation,
+            |state_transaction, rejection_reason| {
+                self.validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
+                let key = self.attestation.key();
+                let archive = state_transaction
+                    .world
+                    .musubi_archives
+                    .get(&key.archive_id)
+                    .cloned()
+                    .ok_or_else(|| archive_not_found(key.archive_id))?;
+                archive
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                if archive.archive_id != key.archive_id {
+                    return Err(invariant(
+                        "Musubi provider attestation archive has the wrong embedded identity",
+                    ));
+                }
+                ensure_archive_manager(
+                    &archive,
+                    authority,
+                    state_transaction.world(),
+                    rejection_reason,
+                )?;
+                if let Some(existing) = state_transaction
+                    .world
+                    .musubi_provider_bundle_attestations
+                    .get(&key)
+                {
+                    existing
+                        .validate()
+                        .map_err(|error| invariant(error.reason()))?;
+                    existing
+                        .attestation
+                        .verify(&existing.attestation.payload.binding)
+                        .map_err(|error| invariant(error.reason()))?;
+                    if existing.attestation_digest == self.attestation.digest()
+                        && existing.attestation == self.attestation
+                    {
+                        return Ok(());
+                    }
+                    return Err(invariant(
+                        "Musubi provider bundle attestation identity is permanently bound to different evidence",
+                    ));
+                }
+                classify_governance_rejection(
+                    ensure_revision(
+                        "archive location",
+                        archive.location_revision,
+                        self.expected_location_revision,
+                    ),
+                    rejection_reason,
+                    MusubiGovernanceRejectionReasonV1::StaleRevision,
+                )?;
+                validate_provider_bundle_attestation(
+                    &archive,
+                    &self.attestation,
+                    state_transaction,
+                )?;
+                let finalized_height = execution_height(state_transaction);
+                let record = MusubiProviderBundleAttestationRecordV1 {
+                    key,
+                    attestation_digest: self.attestation.digest(),
+                    attestation: self.attestation,
+                    registered_by: authority.clone(),
+                    registered_at_height: finalized_height,
+                };
+                record
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                state_transaction
+                    .world
+                    .musubi_provider_bundle_attestations
+                    .insert(key, record.clone());
+                emit_musubi_event(
+                    MusubiEvent::ProviderBundleAttestationRegistered(
+                        MusubiProviderBundleAttestationRegisteredEventV1 {
+                            key,
+                            attestation_digest: record.attestation_digest,
+                            registered_by: authority.clone(),
+                            finalized_height,
+                        },
+                    ),
+                    state_transaction,
+                );
+                Ok(())
+            },
+        )
+    }
+}
+
 impl Execute for AddMusubiArchiveLocationV1 {
     fn execute(
         self,
@@ -223,17 +324,22 @@ impl Execute for AddMusubiArchiveLocationV1 {
             state_transaction,
             MusubiGovernanceActionV1::ArchiveLocation,
             |state_transaction, rejection_reason| {
-                if self.renew_after_epoch >= self.expires_at_epoch {
-                    return Err(invalid_parameter(
-                        "Musubi archive location renewal must precede expiry",
-                    ));
-                }
+                self.validate()
+                    .map_err(|error| invalid_parameter(error.reason()))?;
                 let mut archive = state_transaction
                     .world
                     .musubi_archives
                     .get(&self.archive_id)
                     .cloned()
                     .ok_or_else(|| archive_not_found(self.archive_id))?;
+                archive
+                    .validate()
+                    .map_err(|error| invariant(error.reason()))?;
+                if archive.archive_id != self.archive_id {
+                    return Err(invariant(
+                        "Musubi archive location request resolved the wrong archive record",
+                    ));
+                }
                 ensure_archive_manager(
                     &archive,
                     authority,
@@ -277,7 +383,8 @@ impl Execute for AddMusubiArchiveLocationV1 {
                         // returns without consuming another CAS revision or emitting an event.
                         if existing.pin_manifest == self.pin_manifest
                             && existing.replication_order == self.replication_order
-                            && existing.provider_attestations == self.provider_attestations
+                            && existing.provider_attestation_set_digest
+                                == self.provider_attestation_set_digest
                             && existing.renew_after_epoch == self.renew_after_epoch
                             && existing.expires_at_epoch == self.expires_at_epoch
                         {
@@ -315,7 +422,7 @@ impl Execute for AddMusubiArchiveLocationV1 {
                     &archive,
                     &self.pin_manifest,
                     &self.replication_order,
-                    &self.provider_attestations,
+                    self.provider_attestation_set_digest,
                     self.expires_at_epoch,
                     state_transaction,
                 )?;
@@ -331,7 +438,7 @@ impl Execute for AddMusubiArchiveLocationV1 {
                     pin_manifest: self.pin_manifest,
                     replication_order: self.replication_order,
                     providers,
-                    provider_attestations: self.provider_attestations,
+                    provider_attestation_set_digest: self.provider_attestation_set_digest,
                     renew_after_epoch: self.renew_after_epoch,
                     expires_at_epoch: self.expires_at_epoch,
                     finalized_height: execution_height(state_transaction),
@@ -341,10 +448,15 @@ impl Execute for AddMusubiArchiveLocationV1 {
                 location
                     .validate()
                     .map_err(|error| invalid_parameter(error.reason()))?;
+                let provider_count = u8::try_from(location.providers.len()).map_err(|_| {
+                    invariant("Musubi archive location provider count overflows u8")
+                })?;
                 let location_event = MusubiArchiveLocationEventV1 {
                     location: key,
                     pin_manifest: location.pin_manifest,
                     replication_order: location.replication_order,
+                    provider_attestation_set_digest: location.provider_attestation_set_digest,
+                    provider_count,
                     transition: if existing_location.is_some() {
                         MusubiArchiveLocationTransitionV1::Renewed
                     } else {
@@ -436,6 +548,10 @@ impl Execute for RetireMusubiArchiveLocationV1 {
                     location: key,
                     pin_manifest: location.pin_manifest,
                     replication_order: location.replication_order,
+                    provider_attestation_set_digest: location.provider_attestation_set_digest,
+                    provider_count: u8::try_from(location.providers.len()).map_err(|_| {
+                        invariant("Musubi archive location provider count overflows u8")
+                    })?,
                     transition: MusubiArchiveLocationTransitionV1::Retired,
                     state: location.state,
                     revision: location.revision,
@@ -523,7 +639,11 @@ impl Execute for PublishMusubiReleaseV1 {
                     rejection_reason,
                 )?;
                 validate_publication_snapshot(&self.publication, state_transaction)?;
-                validate_resolution_proof(&self.publication, state_transaction.world())?;
+                validate_resolution_proof(
+                    &self.publication,
+                    state_transaction.world(),
+                    state_transaction.block_hashes(),
+                )?;
                 let archive = state_transaction
                     .world
                     .musubi_archives
@@ -1981,805 +2101,7 @@ impl Execute for AssertMusubiReleaseDigestV1 {
     }
 }
 
-impl ValidSingularQuery for FindMusubiExactPackageV1 {
-    fn execute(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiPackageRecordV1, QueryExecutionFail> {
-        self.request.package.validate().map_err(query_invalid)?;
-        state_ro
-            .world()
-            .musubi_packages()
-            .get(&self.request.package)
-            .cloned()
-            .ok_or(QueryExecutionFail::NotFound)
-    }
-}
-
-impl ValidSingularQuery for FindMusubiExactReleaseV1 {
-    fn execute(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiReleaseRecordV1, QueryExecutionFail> {
-        self.request.release.validate().map_err(query_invalid)?;
-        state_ro
-            .world()
-            .musubi_releases()
-            .get(&self.request.release)
-            .cloned()
-            .ok_or(QueryExecutionFail::NotFound)
-    }
-}
-
-/// Internal typed Musubi query failure retained through the Torii telemetry boundary.
-///
-/// The public query error remains [`QueryExecutionFail`]. This wrapper carries
-/// a Musubi-only cursor reason in-process without changing the global query
-/// wire enum or its variant indices.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MusubiQueryExecutionErrorV1 {
-    query_error: QueryExecutionFail,
-    cursor_failure: Option<MusubiCursorFailureV1>,
-}
-
-impl MusubiQueryExecutionErrorV1 {
-    fn cursor(reason: MusubiCursorFailureV1) -> Self {
-        Self {
-            query_error: QueryExecutionFail::Expired,
-            cursor_failure: Some(reason),
-        }
-    }
-
-    /// Return the exact typed cursor failure, when this is a cursor error.
-    #[must_use]
-    pub const fn cursor_failure(&self) -> Option<MusubiCursorFailureV1> {
-        self.cursor_failure
-    }
-
-    /// Drop the process-local telemetry detail and recover the stable public query error.
-    #[must_use]
-    pub fn into_query_error(self) -> QueryExecutionFail {
-        self.query_error
-    }
-}
-
-impl From<QueryExecutionFail> for MusubiQueryExecutionErrorV1 {
-    fn from(query_error: QueryExecutionFail) -> Self {
-        Self {
-            query_error,
-            cursor_failure: None,
-        }
-    }
-}
-
-/// Execute a paged Musubi query while retaining its exact cursor-failure reason.
-///
-/// Ordinary Core callers continue to use [`ValidSingularQuery`]. Torii uses
-/// this trait only to observe the bounded reason before returning the same
-/// public [`QueryExecutionFail`] value.
-pub trait ValidMusubiSingularQuery: iroha_data_model::query::SingularQuery {
-    /// Execute against one read-only state view with typed cursor diagnostics.
-    fn execute_musubi(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<Self::Output, MusubiQueryExecutionErrorV1>;
-}
-
-macro_rules! impl_valid_singular_query_via_musubi {
-    ($query:ty, $output:ty) => {
-        impl ValidSingularQuery for $query {
-            fn execute(
-                &self,
-                state_ro: &impl StateReadOnly,
-            ) -> Result<$output, QueryExecutionFail> {
-                self.execute_musubi(state_ro)
-                    .map_err(MusubiQueryExecutionErrorV1::into_query_error)
-            }
-        }
-    };
-}
-
-impl ValidMusubiSingularQuery for FindMusubiResolverIndexV1 {
-    fn execute_musubi(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiResolverIndexPageV1, MusubiQueryExecutionErrorV1> {
-        self.request.package.validate().map_err(query_invalid)?;
-        if let Some(requirement) = &self.request.requirement {
-            requirement.validate().map_err(query_invalid)?;
-        }
-        let snapshot = query_snapshot(state_ro)?;
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi resolver queries require a finalized genesis block".to_owned(),
-                )
-            })?;
-        let query_hash = resolver_query_hash(&self.request);
-        let start = package_release_page_start(&self.request.package, &self.request.page)?;
-        let rows = state_ro
-            .world()
-            .musubi_resolver_index()
-            .range(start..)
-            .take_while(|(release, _)| release.package == self.request.package)
-            .filter(|(release, _)| {
-                self.request
-                    .requirement
-                    .as_ref()
-                    .is_none_or(|requirement| requirement.matches(&release.version))
-            })
-            .map(|(release, row)| (release.version.to_string(), row.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiResolverIndexPageV1 {
-            query: self.request.clone(),
-            chain_id,
-            genesis_hash,
-            items,
-            next_cursor,
-            snapshot,
-        };
-        page.validate().map_err(query_invalid)?;
-        Ok(page)
-    }
-}
-impl_valid_singular_query_via_musubi!(FindMusubiResolverIndexV1, MusubiResolverIndexPageV1);
-
-impl ValidMusubiSingularQuery for FindMusubiVersionsV1 {
-    fn execute_musubi(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiVersionPageV1, MusubiQueryExecutionErrorV1> {
-        self.request.package.validate().map_err(query_invalid)?;
-        let snapshot = query_snapshot(state_ro)?;
-        let query_hash = package_page_query_hash(b"versions", &self.request);
-        let start = package_release_page_start(&self.request.package, &self.request.page)?;
-        let rows = state_ro
-            .world()
-            .musubi_resolver_index()
-            .range(start..)
-            .take_while(|(release, _)| release.package == self.request.package)
-            .map(|(release, _)| (release.version.to_string(), release.version.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiVersionPageV1 {
-            query: self.request.clone(),
-            items,
-            next_cursor,
-            snapshot,
-        };
-        page.validate().map_err(query_invalid)?;
-        Ok(page)
-    }
-}
-impl_valid_singular_query_via_musubi!(FindMusubiVersionsV1, MusubiVersionPageV1);
-
-impl ValidMusubiSingularQuery for FindMusubiMaintainersV1 {
-    fn execute_musubi(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiMaintainerPageV1, MusubiQueryExecutionErrorV1> {
-        self.request.package.validate().map_err(query_invalid)?;
-        let snapshot = query_snapshot(state_ro)?;
-        let query_hash = package_page_query_hash(b"maintainers", &self.request);
-        state_ro
-            .world()
-            .musubi_packages()
-            .get(&self.request.package)
-            .ok_or(QueryExecutionFail::NotFound)?;
-        let start = MusubiMaintainerDirectoryKeyV1::package_start(self.request.package.clone());
-        let rows = state_ro
-            .world()
-            .musubi_maintainer_directory()
-            .range(start..)
-            .take_while(|(key, _)| key.package == self.request.package)
-            .filter(|(_, entry)| {
-                maintainer_directory_entry_visible_at_height(entry, snapshot.finalized_height)
-            })
-            .map(|(_, entry)| (entry.cursor_key(), entry.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiMaintainerPageV1 {
-            query: self.request.clone(),
-            items,
-            next_cursor,
-            snapshot,
-        };
-        page.validate().map_err(query_invalid)?;
-        Ok(page)
-    }
-}
-impl_valid_singular_query_via_musubi!(FindMusubiMaintainersV1, MusubiMaintainerPageV1);
-
-impl ValidMusubiSingularQuery for FindMusubiArchiveLocationsV1 {
-    fn execute_musubi(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiArchiveLocationPageV1, MusubiQueryExecutionErrorV1> {
-        if self.request.archive_id.is_zero() {
-            return Err(QueryExecutionFail::Conversion(
-                "Musubi archive id must not be zero".to_owned(),
-            )
-            .into());
-        }
-        let snapshot = query_snapshot(state_ro)?;
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi archive-location queries require a finalized genesis block".to_owned(),
-                )
-            })?;
-        let query_hash = archive_location_query_hash(&self.request);
-        let archive = state_ro
-            .world()
-            .musubi_archives()
-            .get(&self.request.archive_id)
-            .cloned()
-            .ok_or(QueryExecutionFail::NotFound)?;
-        let rows = archive
-            .location_ids
-            .iter()
-            .map(|location_id| {
-                let key = MusubiArchiveLocationKeyV1::new(self.request.archive_id, *location_id);
-                let location = state_ro
-                    .world()
-                    .musubi_archive_locations()
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| {
-                        QueryExecutionFail::Conversion(
-                            "Musubi archive location directory is inconsistent".to_owned(),
-                        )
-                    })?;
-                Ok((
-                    format!(
-                        "{}:{}",
-                        digest_label(key.archive_id.as_bytes()),
-                        digest_label(key.location_id.as_bytes())
-                    ),
-                    location,
-                ))
-            })
-            .collect::<Result<Vec<_>, QueryExecutionFail>>()?;
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiArchiveLocationPageV1 {
-            chain_id,
-            genesis_hash,
-            archive,
-            items,
-            next_cursor,
-            snapshot,
-        };
-        page.validate().map_err(query_invalid)?;
-        Ok(page)
-    }
-}
-impl_valid_singular_query_via_musubi!(FindMusubiArchiveLocationsV1, MusubiArchiveLocationPageV1);
-
-impl ValidSingularQuery for FindMusubiArchiveRetentionV1 {
-    fn execute(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiArchiveRetentionPageV1, QueryExecutionFail> {
-        self.request.validate().map_err(query_invalid)?;
-        let snapshot = query_snapshot(state_ro)?;
-        if self
-            .request
-            .expected_snapshot
-            .is_some_and(|expected| expected != snapshot)
-        {
-            return Err(QueryExecutionFail::Expired);
-        }
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi archive-retention queries require a finalized genesis block".to_owned(),
-                )
-            })?;
-        let world = state_ro.world();
-        let mut items = Vec::with_capacity(self.request.archive_ids.len());
-        for archive_id in &self.request.archive_ids {
-            items.push(archive_retention_decision(*archive_id, world)?);
-        }
-        let finalized_block = state_ro.latest_block().ok_or_else(|| {
-            QueryExecutionFail::Conversion(
-                "Musubi finalized snapshot block body is unavailable".to_owned(),
-            )
-        })?;
-        let finalized_time_ms = validated_finalized_block_time(
-            &snapshot,
-            finalized_block.header().height().get(),
-            *finalized_block.hash().as_ref(),
-            finalized_block.header().creation_time_ms,
-        )?;
-        let page = MusubiArchiveRetentionPageV1 {
-            chain_id,
-            genesis_hash,
-            items,
-            snapshot,
-            finalized_time_ms,
-        };
-        page.validate().map_err(query_invalid)?;
-        Ok(page)
-    }
-}
-
-fn validated_finalized_block_time(
-    snapshot: &MusubiRegistrySnapshotV1,
-    block_height: u64,
-    block_hash: [u8; 32],
-    creation_time_ms: u64,
-) -> Result<u64, QueryExecutionFail> {
-    if block_height != snapshot.finalized_height || block_hash != snapshot.finalized_block_hash {
-        return Err(QueryExecutionFail::Conversion(
-            "Musubi finalized snapshot does not match its block body".to_owned(),
-        ));
-    }
-    Ok(creation_time_ms)
-}
-
-fn archive_retention_decision(
-    archive_id: ArchiveId,
-    world: &impl WorldReadOnly,
-) -> Result<MusubiArchiveRetentionDecisionV1, QueryExecutionFail> {
-    let archive = world.musubi_archives().get(&archive_id).cloned();
-    let references = world.musubi_archive_reverse_references().get(&archive_id);
-    let storage = world.musubi_archive_availability().get(&archive_id);
-    let Some(archive) = archive else {
-        if references.is_some() || storage.is_some() {
-            return Err(QueryExecutionFail::Conversion(
-                "Musubi archive retention state has an orphan universal projection".to_owned(),
-            ));
-        }
-        return Ok(MusubiArchiveRetentionDecisionV1 {
-            archive_id,
-            disposition: MusubiArchiveRetentionDispositionV1::RetainUnknown,
-            active_releases: 0,
-            yanked_releases: 0,
-            taken_down_releases: 0,
-            storage: None,
-        });
-    };
-    archive.validate().map_err(query_invalid)?;
-    if archive.archive_id != archive_id {
-        return Err(QueryExecutionFail::Conversion(
-            "Musubi archive retention storage key disagrees with its archive record".to_owned(),
-        ));
-    }
-    let references = references.ok_or_else(|| {
-        QueryExecutionFail::Conversion(
-            "Musubi archive retention state is missing reverse references".to_owned(),
-        )
-    })?;
-    references.validate().map_err(query_invalid)?;
-    if references.archive_id != archive_id {
-        return Err(QueryExecutionFail::Conversion(
-            "Musubi archive retention reverse-reference identity is inconsistent".to_owned(),
-        ));
-    }
-    let storage = storage.cloned().ok_or_else(|| {
-        QueryExecutionFail::Conversion(
-            "Musubi archive retention state is missing storage availability".to_owned(),
-        )
-    })?;
-    storage.validate().map_err(query_invalid)?;
-    if storage.archive_id != archive_id {
-        return Err(QueryExecutionFail::Conversion(
-            "Musubi archive retention storage identity is inconsistent".to_owned(),
-        ));
-    }
-
-    let mut active_releases = 0_u16;
-    let mut yanked_releases = 0_u16;
-    let mut taken_down_releases = 0_u16;
-    for release_id in &references.releases {
-        let release = world.musubi_releases().get(release_id).ok_or_else(|| {
-            QueryExecutionFail::Conversion(
-                "Musubi archive retention reference names a missing release".to_owned(),
-            )
-        })?;
-        release.validate().map_err(query_invalid)?;
-        if release.manifest.release != *release_id || release.manifest.archive_id != archive_id {
-            return Err(QueryExecutionFail::Conversion(
-                "Musubi archive retention reference disagrees with its release".to_owned(),
-            ));
-        }
-        match &release.artifact_governance {
-            MusubiArtifactGovernanceStateV1::Available if release.yank.yanked => {
-                yanked_releases = yanked_releases.checked_add(1).ok_or_else(|| {
-                    QueryExecutionFail::Conversion(
-                        "Musubi archive retention yanked-release count overflow".to_owned(),
-                    )
-                })?;
-            }
-            MusubiArtifactGovernanceStateV1::Available => {
-                active_releases = active_releases.checked_add(1).ok_or_else(|| {
-                    QueryExecutionFail::Conversion(
-                        "Musubi archive retention active-release count overflow".to_owned(),
-                    )
-                })?;
-            }
-            MusubiArtifactGovernanceStateV1::TakenDown(_) => {
-                taken_down_releases = taken_down_releases.checked_add(1).ok_or_else(|| {
-                    QueryExecutionFail::Conversion(
-                        "Musubi archive retention takedown count overflow".to_owned(),
-                    )
-                })?;
-            }
-        }
-    }
-    let disposition = if active_releases > 0 || yanked_releases > 0 {
-        MusubiArchiveRetentionDispositionV1::RetainReferenced
-    } else if taken_down_releases > 0 {
-        MusubiArchiveRetentionDispositionV1::PruneGovernedTakedown
-    } else {
-        MusubiArchiveRetentionDispositionV1::PruneUnreferenced
-    };
-    let decision = MusubiArchiveRetentionDecisionV1 {
-        archive_id,
-        disposition,
-        active_releases,
-        yanked_releases,
-        taken_down_releases,
-        storage: Some(storage),
-    };
-    decision.validate().map_err(query_invalid)?;
-    Ok(decision)
-}
-
-impl ValidSingularQuery for FindMusubiAliasV1 {
-    fn execute(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiAliasRecordV1, QueryExecutionFail> {
-        self.request.alias.validate().map_err(query_invalid)?;
-        state_ro
-            .world()
-            .musubi_aliases()
-            .get(&self.request.alias)
-            .cloned()
-            .ok_or(QueryExecutionFail::NotFound)
-    }
-}
-
-impl ValidMusubiSingularQuery for FindMusubiAliasHistoryV1 {
-    fn execute_musubi(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiAliasHistoryPageV1, MusubiQueryExecutionErrorV1> {
-        self.request.alias.validate().map_err(query_invalid)?;
-        let snapshot = query_snapshot(state_ro)?;
-        let query_hash = alias_history_query_hash(&self.request);
-        let start = alias_history_page_start(&self.request)?;
-        let rows = state_ro
-            .world()
-            .musubi_alias_history()
-            .range(start..)
-            .take_while(|(key, _)| key.alias == self.request.alias)
-            .map(|(key, history)| {
-                (
-                    format!("{}:{:020}", key.alias, key.revision),
-                    history.clone(),
-                )
-            });
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiAliasHistoryPageV1 {
-            query: self.request.clone(),
-            items,
-            next_cursor,
-            snapshot,
-        };
-        page.validate().map_err(query_invalid)?;
-        Ok(page)
-    }
-}
-impl_valid_singular_query_via_musubi!(FindMusubiAliasHistoryV1, MusubiAliasHistoryPageV1);
-
-impl ValidMusubiSingularQuery for FindMusubiOrderedPrefixV1 {
-    fn execute_musubi(
-        &self,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<MusubiOrderedPackagePageV1, MusubiQueryExecutionErrorV1> {
-        self.request.prefix.validate().map_err(query_invalid)?;
-        let snapshot = query_snapshot(state_ro)?;
-        let chain_id = state_ro.chain_id().clone();
-        let genesis_hash = state_ro
-            .block_hashes()
-            .first()
-            .map(|hash| *hash.as_ref())
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "Musubi directory queries require a finalized genesis block".to_owned(),
-                )
-            })?;
-        let query_hash = ordered_prefix_query_hash(&self.request);
-        let prefix = self.request.prefix.as_str();
-        let (start, namespace, name_prefix) = directory_query_start(&self.request)?;
-        let namespace_binding = state_ro
-            .world()
-            .musubi_namespace_bindings()
-            .get(&namespace)
-            .cloned()
-            .ok_or(QueryExecutionFail::NotFound)?;
-        let rows = state_ro
-            .world()
-            .musubi_public_directory()
-            .range(start..)
-            .take_while(|(selector, _)| {
-                selector.namespace == namespace
-                    && selector.name.as_str().starts_with(name_prefix.as_str())
-            })
-            .filter(|(selector, _)| selector.to_string().starts_with(prefix))
-            .map(|(selector, entry)| (selector.to_string(), entry.clone()));
-        let (items, next_cursor) = paginate(rows, &self.request.page, query_hash, snapshot)?;
-        let page = MusubiOrderedPackagePageV1 {
-            query: self.request.clone(),
-            chain_id,
-            genesis_hash,
-            namespace_binding,
-            items,
-            next_cursor,
-            snapshot,
-        };
-        page.validate().map_err(query_invalid)?;
-        Ok(page)
-    }
-}
-impl_valid_singular_query_via_musubi!(FindMusubiOrderedPrefixV1, MusubiOrderedPackagePageV1);
-
-fn query_snapshot(
-    state_ro: &impl StateReadOnly,
-) -> Result<MusubiRegistrySnapshotV1, QueryExecutionFail> {
-    let finalized_height = u64::try_from(state_ro.block_hashes().len()).map_err(|_| {
-        QueryExecutionFail::Conversion("Musubi finalized height overflows u64".to_owned())
-    })?;
-    let finalized_block_hash = state_ro
-        .block_hashes()
-        .last()
-        .map(|hash| *hash.as_ref())
-        .ok_or_else(|| {
-            QueryExecutionFail::Conversion(
-                "Musubi queries require at least one finalized block".to_owned(),
-            )
-        })?;
-    let snapshot = MusubiRegistrySnapshotV1 {
-        finalized_height,
-        finalized_block_hash,
-        index_revision: state_ro.world().musubi_resolver_index_revision(),
-    };
-    snapshot.validate().map_err(query_invalid)?;
-    Ok(snapshot)
-}
-
-fn resolver_query_hash(request: &MusubiResolverIndexQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"resolver-index", &canonical.encode())
-}
-
-fn package_page_query_hash(kind: &[u8], request: &MusubiPackagePageQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(kind, &canonical.encode())
-}
-
-fn archive_location_query_hash(request: &MusubiArchiveLocationQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"archive-locations", &canonical.encode())
-}
-
-fn alias_history_query_hash(request: &MusubiAliasQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"alias-history", &canonical.encode())
-}
-
-fn alias_history_page_start(
-    request: &MusubiAliasQueryV1,
-) -> Result<MusubiAliasHistoryKeyV1, MusubiQueryExecutionErrorV1> {
-    let revision = if let Some(cursor) = &request.page.cursor {
-        let (alias, revision) = cursor.last_key.rsplit_once(':').ok_or_else(|| {
-            MusubiQueryExecutionErrorV1::cursor(MusubiCursorFailureV1::LastKeyStale)
-        })?;
-        if alias != request.alias.as_str() || revision.len() != 20 {
-            return Err(MusubiQueryExecutionErrorV1::cursor(
-                MusubiCursorFailureV1::LastKeyStale,
-            ));
-        }
-        revision
-            .parse::<u64>()
-            .map_err(|_| MusubiQueryExecutionErrorV1::cursor(MusubiCursorFailureV1::LastKeyStale))?
-    } else {
-        0
-    };
-    Ok(MusubiAliasHistoryKeyV1::new(
-        request.alias.clone(),
-        revision,
-    ))
-}
-
-fn ordered_prefix_query_hash(request: &MusubiOrderedPrefixQueryV1) -> MusubiQueryHashV1 {
-    let mut canonical = request.clone();
-    canonical.page.cursor = None;
-    query_hash(b"ordered-prefix", &canonical.encode())
-}
-
-fn directory_query_start(
-    request: &MusubiOrderedPrefixQueryV1,
-) -> Result<(MusubiPackageSelectorV1, MusubiNamespaceV1, String), MusubiQueryExecutionErrorV1> {
-    let raw = request.prefix.as_str();
-    let (namespace_raw, name_prefix) = raw.split_once('/').ok_or_else(|| {
-        QueryExecutionFail::Conversion(
-            "Musubi ordered directory prefix must use namespace/package-prefix".to_owned(),
-        )
-    })?;
-    if name_prefix.contains('/')
-        || name_prefix.len() > MUSUBI_MAX_PACKAGE_NAME_BYTES_V1
-        || name_prefix.starts_with('-')
-        || name_prefix.contains("--")
-        || !name_prefix
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
-        return Err(QueryExecutionFail::Conversion(
-            "Musubi ordered directory package prefix is not portable canonical text".to_owned(),
-        )
-        .into());
-    }
-    let namespace = namespace_raw
-        .parse::<MusubiNamespaceV1>()
-        .map_err(query_invalid)?;
-    let start = if let Some(cursor) = &request.page.cursor {
-        let selector = cursor
-            .last_key
-            .parse::<MusubiPackageSelectorV1>()
-            .map_err(|_| {
-                MusubiQueryExecutionErrorV1::cursor(MusubiCursorFailureV1::LastKeyStale)
-            })?;
-        if selector.namespace != namespace || !selector.name.as_str().starts_with(name_prefix) {
-            return Err(MusubiQueryExecutionErrorV1::cursor(
-                MusubiCursorFailureV1::LastKeyStale,
-            ));
-        }
-        selector
-    } else {
-        let lower_name = if name_prefix.is_empty() {
-            "0".to_owned()
-        } else if name_prefix.ends_with('-') {
-            if name_prefix.len() == MUSUBI_MAX_PACKAGE_NAME_BYTES_V1 {
-                return Err(QueryExecutionFail::Conversion(
-                    "Musubi ordered directory package prefix cannot match a package".to_owned(),
-                )
-                .into());
-            }
-            format!("{name_prefix}0")
-        } else {
-            name_prefix.to_owned()
-        };
-        MusubiPackageSelectorV1 {
-            namespace: namespace.clone(),
-            name: lower_name.parse().map_err(query_invalid)?,
-        }
-    };
-    Ok((start, namespace, name_prefix.to_owned()))
-}
-
-fn query_hash(domain: &[u8], encoded: &[u8]) -> MusubiQueryHashV1 {
-    let mut payload = Vec::with_capacity(domain.len() + encoded.len() + 16);
-    payload.extend_from_slice(
-        &u64::try_from(domain.len())
-            .expect("static Musubi query domain length fits u64")
-            .to_le_bytes(),
-    );
-    payload.extend_from_slice(domain);
-    payload.extend_from_slice(
-        &u64::try_from(encoded.len())
-            .expect("bounded Musubi query length fits u64")
-            .to_le_bytes(),
-    );
-    payload.extend_from_slice(encoded);
-    MusubiQueryHashV1::new(*Hash::new(&payload).as_ref())
-}
-
-fn paginate<T>(
-    rows: impl IntoIterator<Item = (String, T)>,
-    page: &MusubiPageRequestV1,
-    query_hash: MusubiQueryHashV1,
-    snapshot: MusubiRegistrySnapshotV1,
-) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
-    paginate_for_caller(rows, page, query_hash, snapshot, None)
-}
-
-fn paginate_for_caller<T>(
-    rows: impl IntoIterator<Item = (String, T)>,
-    page: &MusubiPageRequestV1,
-    query_hash: MusubiQueryHashV1,
-    snapshot: MusubiRegistrySnapshotV1,
-    expected_caller: Option<&AccountId>,
-) -> Result<(Vec<T>, Option<MusubiFinalizedCursorV1>), MusubiQueryExecutionErrorV1> {
-    page.validate().map_err(query_invalid)?;
-    let cursor_last_key = if let Some(cursor) = &page.cursor {
-        if cursor.snapshot.finalized_height != snapshot.finalized_height
-            || cursor.snapshot.finalized_block_hash != snapshot.finalized_block_hash
-        {
-            return Err(MusubiQueryExecutionErrorV1::cursor(
-                MusubiCursorFailureV1::FinalizedAnchorMismatch,
-            ));
-        }
-        if cursor.snapshot.index_revision != snapshot.index_revision {
-            return Err(MusubiQueryExecutionErrorV1::cursor(
-                MusubiCursorFailureV1::IndexRevisionMismatch,
-            ));
-        }
-        if cursor.query_hash != query_hash {
-            return Err(MusubiQueryExecutionErrorV1::cursor(
-                MusubiCursorFailureV1::QueryMismatch,
-            ));
-        }
-        if cursor.caller.as_ref() != expected_caller {
-            return Err(MusubiQueryExecutionErrorV1::cursor(
-                MusubiCursorFailureV1::CallerMismatch,
-            ));
-        }
-        Some(cursor.last_key.as_str())
-    } else {
-        None
-    };
-    let limit = page.effective_limit();
-    let mut cursor_seen = cursor_last_key.is_none();
-    let mut page_rows = Vec::with_capacity(limit.saturating_add(1));
-    for (key, item) in rows {
-        if !cursor_seen {
-            if Some(key.as_str()) == cursor_last_key {
-                cursor_seen = true;
-            }
-            continue;
-        }
-        page_rows.push((key, item));
-        if page_rows.len() > limit {
-            break;
-        }
-    }
-    if !cursor_seen {
-        return Err(MusubiQueryExecutionErrorV1::cursor(
-            MusubiCursorFailureV1::LastKeyStale,
-        ));
-    }
-    let has_more = page_rows.len() > limit;
-    if has_more {
-        page_rows.pop();
-    }
-    let last_key = page_rows.last().map(|(key, _)| key.clone());
-    let items = page_rows
-        .into_iter()
-        .map(|(_, item)| item)
-        .collect::<Vec<_>>();
-    let next_cursor = if has_more {
-        Some(MusubiFinalizedCursorV1 {
-            snapshot,
-            query_hash,
-            last_key: last_key.expect("a page with a successor has at least one item"),
-            caller: expected_caller.cloned(),
-        })
-    } else {
-        None
-    };
-    Ok((items, next_cursor))
-}
-
-fn query_invalid(error: iroha_data_model::ParseError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
-}
+include!("musubi/query_execution.rs");
 
 fn upsert_maintainer_directory(
     entry: MusubiMaintainerDirectoryEntryV1,
@@ -2977,6 +2299,7 @@ fn active_pending_invitation_count(
         .count()
 }
 
+#[cfg(test)]
 fn pending_invitation_count(package: &MusubiPackageIdV1, world: &impl WorldReadOnly) -> usize {
     world
         .musubi_maintainer_directory()
@@ -3123,20 +2446,16 @@ fn ensure_archive_manager(
     world: &impl WorldReadOnly,
     rejection_reason: &mut MusubiGovernanceRejectionReasonV1,
 ) -> Result<(), Error> {
-    if &archive.registered_by == authority {
-        return Ok(());
-    }
-    let Some(references) = world
+    let references = world
         .musubi_archive_reverse_references()
-        .get(&archive.archive_id)
-    else {
+        .get(&archive.archive_id);
+    let Some(references) = references.filter(|references| !references.releases.is_empty()) else {
+        if &archive.registered_by == authority {
+            return Ok(());
+        }
         *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
         return Err(invariant("authority cannot manage this Musubi archive"));
     };
-    if references.releases.is_empty() {
-        *rejection_reason = MusubiGovernanceRejectionReasonV1::Unauthorized;
-        return Err(invariant("authority cannot manage this Musubi archive"));
-    }
     for release in &references.releases {
         ensure_package_capability(
             &release.package,
@@ -3281,6 +2600,7 @@ fn ensure_namespace_claim_authority(
     )
 }
 
+#[cfg(test)]
 fn validate_namespace_claim_authority(
     binding: &MusubiNamespaceBindingV1,
     delegation: Option<&MusubiNamespaceDelegationV1>,
@@ -3533,6 +2853,94 @@ fn bind_location_reverse_indices(
     Ok(())
 }
 
+fn load_location_provider_attestations(
+    archive: &MusubiArchiveRecordV1,
+    location: &MusubiArchiveLocationV1,
+    world: &impl WorldReadOnly,
+) -> Result<Vec<MusubiProviderBundleAttestationRecordV1>, Error> {
+    archive
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    location
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if location.archive_id != archive.archive_id {
+        return Err(invariant(
+            "Musubi archive location does not match its archive directory",
+        ));
+    }
+    let receipt = &archive.staging_receipt.payload.binding;
+    let mut verification_lock_digest = None;
+    let mut references = Vec::with_capacity(location.providers.len());
+    let mut records = Vec::with_capacity(location.providers.len());
+    for provider in &location.providers {
+        let key = MusubiProviderBundleAttestationKeyV1 {
+            archive_id: archive.archive_id,
+            replication_order: location.replication_order,
+            provider_id: *provider,
+        };
+        let record = world
+            .musubi_provider_bundle_attestations()
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                invariant("Musubi archive location provider attestation record was not found")
+            })?;
+        record
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        if record.key != key
+            || record.registered_at_height < archive.registered_at_height
+            || record.registered_at_height >= location.finalized_height
+        {
+            return Err(invariant(
+                "Musubi archive location provider attestation record is not a finalized predecessor",
+            ));
+        }
+        let binding = &record.attestation.payload.binding;
+        if binding.chain_id != receipt.chain_id
+            || binding.genesis_block_hash != receipt.genesis_block_hash
+            || binding.provider_id != *provider
+            || binding.replication_order != location.replication_order
+            || binding.archive_id != archive.archive_id
+            || binding.bundle_digest != archive.commitment.bundle_digest
+            || binding.descriptor_digest != archive.commitment.descriptor_digest
+            || binding.semantic_release_manifest_digest != receipt.semantic_release_manifest_digest
+            || binding.source_tree_digest != archive.commitment.source_tree_digest
+        {
+            return Err(invariant(
+                "Musubi archive location attestation does not match its immutable archive commitments",
+            ));
+        }
+        if verification_lock_digest
+            .replace(binding.verification_lock_digest)
+            .is_some_and(|digest| digest != binding.verification_lock_digest)
+        {
+            return Err(invariant(
+                "Musubi archive location attestations disagree on the verification lock",
+            ));
+        }
+        record
+            .attestation
+            .verify(binding)
+            .map_err(|error| invariant(error.reason()))?;
+        references.push(record.attestation.reference());
+        records.push(record);
+    }
+    let set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+        archive.archive_id,
+        location.replication_order,
+        &references,
+    )
+    .map_err(|error| invariant(error.reason()))?;
+    if set_digest != location.provider_attestation_set_digest {
+        return Err(invariant(
+            "Musubi archive location provider attestation set digest is inconsistent",
+        ));
+    }
+    Ok(records)
+}
+
 fn validate_exact_archive_location_replay(
     archive: &MusubiArchiveRecordV1,
     location: &MusubiArchiveLocationV1,
@@ -3553,24 +2961,12 @@ fn validate_exact_archive_location_replay(
             "Musubi archive location revision or finalized height is inconsistent",
         ));
     }
-    let receipt = &archive.staging_receipt.payload.binding;
-    for attestation in &location.provider_attestations {
-        let binding = &attestation.payload.binding;
-        if binding.chain_id != receipt.chain_id
-            || binding.genesis_block_hash != receipt.genesis_block_hash
-            || binding.archive_id != archive.archive_id
-            || binding.bundle_digest != archive.commitment.bundle_digest
-            || binding.descriptor_digest != archive.commitment.descriptor_digest
-            || binding.semantic_release_manifest_digest != receipt.semantic_release_manifest_digest
-            || binding.source_tree_digest != archive.commitment.source_tree_digest
-        {
-            return Err(invariant(
-                "Musubi archive location attestation does not match its immutable archive commitments",
-            ));
-        }
-        attestation
-            .verify(binding)
-            .map_err(|error| invariant(error.reason()))?;
+    let records =
+        load_location_provider_attestations(archive, location, state_transaction.world())?;
+    if records.len() != location.providers.len() {
+        return Err(invariant(
+            "Musubi archive location provider attestation registry is inconsistent",
+        ));
     }
 
     let key = location.key();
@@ -3671,14 +3067,82 @@ fn retire_location_reverse_indices(
     Ok(())
 }
 
+fn validate_provider_bundle_attestation(
+    archive: &MusubiArchiveRecordV1,
+    attestation: &MusubiProviderBundleVerificationAttestationV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    attestation
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    let binding = &attestation.payload.binding;
+    let order = state_transaction
+        .world
+        .replication_orders
+        .get(&binding.replication_order)
+        .ok_or_else(|| invariant("Musubi provider attestation replication order was not found"))?;
+    let completion = order
+        .provider_completion(binding.provider_id)
+        .ok_or_else(|| invariant("Musubi provider attestation has no finalized completion"))?;
+    let current_owner = state_transaction
+        .world
+        .provider_owners
+        .get(&binding.provider_id)
+        .ok_or_else(|| invariant("Musubi provider attestation owner is no longer admitted"))?;
+    let anchor_index = binding
+        .finalized_anchor
+        .height
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok());
+    let canonical_anchor = anchor_index.and_then(|index| {
+        state_transaction
+            .block_hashes()
+            .get(index)
+            .map(|hash| *hash.as_ref())
+    });
+    if binding.chain_id != *state_transaction.chain_id()
+        || binding.genesis_block_hash != genesis_block_hash(state_transaction)?
+        || order.order_id != binding.replication_order
+        || order.manifest_root_cid != archive.commitment.root_cid
+        || current_owner != &completion.completed_by
+        || current_owner != &completion.completion_authority.provider_owner
+        || binding.completed_by != completion.completed_by
+        || binding.completion_authority != completion.completion_authority
+        || binding.assignment_revision != completion.assignment_revision
+        || binding.completion_epoch != completion.completion_epoch
+        || binding.finalized_anchor != completion.finalized_anchor
+        || canonical_anchor != Some(binding.finalized_anchor.block_hash)
+        || binding.archive_id != archive.archive_id
+        || binding.bundle_digest != archive.commitment.bundle_digest
+        || binding.descriptor_digest != archive.commitment.descriptor_digest
+        || binding.semantic_release_manifest_digest
+            != archive
+                .staging_receipt
+                .payload
+                .binding
+                .semantic_release_manifest_digest
+        || binding.source_tree_digest != archive.commitment.source_tree_digest
+    {
+        return Err(invariant(
+            "Musubi provider attestation does not match the finalized completion or bundle commitment",
+        ));
+    }
+    attestation
+        .verify(binding)
+        .map_err(|error| invariant(error.reason()))
+}
+
 fn validate_sorafs_location(
     archive: &MusubiArchiveRecordV1,
     pin_manifest: &iroha_data_model::sorafs::pin_registry::ManifestDigest,
     replication_order: &iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
-    provider_attestations: &[MusubiProviderBundleVerificationAttestationV1],
+    provider_attestation_set_digest: MusubiProviderBundleAttestationSetDigestV1,
     expires_at_epoch: u64,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<Vec<iroha_data_model::sorafs::capacity::ProviderId>, Error> {
+    archive
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
     let commitment = &archive.commitment;
     let pin = state_transaction
         .world
@@ -3718,69 +3182,60 @@ fn validate_sorafs_location(
         .map(|completion| completion.provider_id)
         .collect::<Vec<_>>();
     providers.sort();
-    providers.dedup();
-    if providers.is_empty() || providers.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1 {
+    if providers.is_empty()
+        || providers.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
+        || providers.windows(2).any(|pair| pair[0] >= pair[1])
+    {
         return Err(invariant(
             "Musubi replication order has an invalid provider completion set",
         ));
     }
-    if provider_attestations.len() != providers.len()
-        || provider_attestations
-            .iter()
-            .zip(&providers)
-            .any(|(attestation, provider)| attestation.payload.binding.provider_id != *provider)
-    {
-        return Err(invariant(
-            "Musubi provider attestations must exactly cover the sorted finalized completion set",
-        ));
-    }
-    let chain_id = state_transaction.chain_id().clone();
-    let genesis_block_hash = genesis_block_hash(state_transaction)?;
-    let verification_lock_digest = provider_attestations
-        .first()
-        .expect("the finalized provider set is non-empty")
-        .payload
-        .binding
-        .verification_lock_digest;
-    for attestation in provider_attestations {
-        let binding = &attestation.payload.binding;
-        let completion = order
-            .provider_completion(binding.provider_id)
-            .ok_or_else(|| invariant("Musubi provider attestation has no finalized completion"))?;
-        let current_owner = state_transaction
+    let mut references = Vec::with_capacity(providers.len());
+    let mut verification_lock_digest = None;
+    let add_height = execution_height(state_transaction);
+    for provider in &providers {
+        let key = MusubiProviderBundleAttestationKeyV1 {
+            archive_id: archive.archive_id,
+            replication_order: *replication_order,
+            provider_id: *provider,
+        };
+        let record = state_transaction
             .world
-            .provider_owners
-            .get(&binding.provider_id)
-            .ok_or_else(|| invariant("Musubi provider attestation owner is no longer admitted"))?;
-        if binding.chain_id != chain_id
-            || binding.genesis_block_hash != genesis_block_hash
-            || current_owner != &completion.completed_by
-            || current_owner != &completion.completion_authority.provider_owner
-            || binding.completed_by != completion.completed_by
-            || binding.completion_authority != completion.completion_authority
-            || binding.replication_order != *replication_order
-            || binding.assignment_revision != completion.assignment_revision
-            || binding.completion_epoch != completion.completion_epoch
-            || binding.finalized_anchor != completion.finalized_anchor
-            || binding.archive_id != archive.archive_id
-            || binding.bundle_digest != commitment.bundle_digest
-            || binding.descriptor_digest != commitment.descriptor_digest
-            || binding.verification_lock_digest != verification_lock_digest
-            || binding.semantic_release_manifest_digest
-                != archive
-                    .staging_receipt
-                    .payload
-                    .binding
-                    .semantic_release_manifest_digest
-            || binding.source_tree_digest != commitment.source_tree_digest
-        {
+            .musubi_provider_bundle_attestations
+            .get(&key)
+            .ok_or_else(|| {
+                invariant("Musubi finalized completion has no registered provider attestation")
+            })?;
+        record
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        if record.key != key || record.registered_at_height >= add_height {
             return Err(invariant(
-                "Musubi provider attestation does not match the finalized completion or bundle commitment",
+                "Musubi provider attestation must be finalized before archive location admission",
             ));
         }
-        attestation
-            .verify(binding)
-            .map_err(|error| invariant(error.reason()))?;
+        validate_provider_bundle_attestation(archive, &record.attestation, state_transaction)?;
+        let binding = &record.attestation.payload.binding;
+        if verification_lock_digest
+            .replace(binding.verification_lock_digest)
+            .is_some_and(|digest| digest != binding.verification_lock_digest)
+        {
+            return Err(invariant(
+                "Musubi provider attestations disagree on the verification lock",
+            ));
+        }
+        references.push(record.attestation.reference());
+    }
+    let computed_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+        archive.archive_id,
+        *replication_order,
+        &references,
+    )
+    .map_err(|error| invariant(error.reason()))?;
+    if computed_set_digest != provider_attestation_set_digest {
+        return Err(invariant(
+            "Musubi provider attestation set digest does not cover the finalized completion set",
+        ));
     }
     Ok(providers)
 }
@@ -3842,8 +3297,9 @@ fn validate_publication_archive_evidence(
             .musubi_archive_locations()
             .get(&key)
             .ok_or_else(|| invariant("Musubi archive location directory is inconsistent"))?;
-        for attestation in &location.provider_attestations {
-            let binding = &attestation.payload.binding;
+        let records = load_location_provider_attestations(archive, location, world)?;
+        for record in records {
+            let binding = &record.attestation.payload.binding;
             if binding.semantic_release_manifest_digest != semantic_digest
                 || binding.verification_lock_digest != publication.manifest.verification_lock_digest
                 || binding.bundle_digest != archive.commitment.bundle_digest
@@ -3869,25 +3325,111 @@ fn validate_publication_snapshot(
     publication: &MusubiPublicationV1,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let snapshot = &publication.resolution.snapshot;
-    let current_height = u64::try_from(state_transaction.block_hashes().len())
-        .map_err(|_| invariant("Musubi finalized height overflows u64"))?;
-    let snapshot_index = snapshot
-        .finalized_height
+    validate_musubi_registry_snapshot_history_v1(
+        &publication.resolution.snapshot,
+        state_transaction,
+    )
+}
+
+/// Require a canonical finalized Musubi registry ancestor whose resolver
+/// revision was active at the claimed height.
+///
+/// Daemon-side publication adapters should use this helper instead of
+/// duplicating the consensus-owned resolver-revision activation rules.
+///
+/// # Errors
+///
+/// Returns an instruction execution error when the snapshot is malformed, is
+/// not on the current finalized chain, or claims a resolver revision outside
+/// that revision's recorded activation interval.
+pub fn validate_musubi_registry_snapshot_history_v1(
+    snapshot: &MusubiRegistrySnapshotV1,
+    state_ro: &impl StateReadOnly,
+) -> Result<(), Error> {
+    validate_publication_snapshot_history(
+        snapshot,
+        state_ro.world(),
+        state_ro.block_hashes(),
+        state_ro.world().musubi_resolver_index_revision(),
+    )
+}
+
+fn canonical_finalized_hash(
+    block_hashes: &[HashOf<BlockHeader>],
+    finalized_height: u64,
+) -> Option<[u8; 32]> {
+    finalized_height
         .checked_sub(1)
-        .and_then(|index| usize::try_from(index).ok());
-    let finalized_hash = snapshot_index.and_then(|index| {
-        state_transaction
-            .block_hashes()
-            .get(index)
-            .map(|hash| *hash.as_ref())
-    });
-    let current_revision = state_transaction
-        .world
-        .musubi_resolver_index_revision
-        .get()
-        .get();
-    validate_publication_snapshot_anchor(snapshot, current_height, finalized_hash, current_revision)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| block_hashes.get(index))
+        .map(|hash| *hash.as_ref())
+}
+
+fn validate_publication_snapshot_history(
+    snapshot: &MusubiRegistrySnapshotV1,
+    world: &impl WorldReadOnly,
+    block_hashes: &[HashOf<BlockHeader>],
+    current_revision: u64,
+) -> Result<(), Error> {
+    let current_height = u64::try_from(block_hashes.len())
+        .map_err(|_| invariant("Musubi finalized height overflows u64"))?;
+    validate_publication_snapshot_anchor(
+        snapshot,
+        current_height,
+        canonical_finalized_hash(block_hashes, snapshot.finalized_height),
+        current_revision,
+    )?;
+
+    let revision = MusubiResolverIndexRevisionV1::new(snapshot.index_revision)
+        .map_err(|error| invariant(error.reason()))?;
+    let checkpoints = world.musubi_resolver_index_checkpoints();
+    let activation = checkpoints.get(&revision).ok_or_else(|| {
+        invariant(
+            "Musubi publication proof snapshot references an unrecorded resolver-index revision",
+        )
+    })?;
+    if activation.index_revision != revision.get() {
+        return Err(invariant(
+            "Musubi resolver checkpoint key does not match its embedded revision",
+        ));
+    }
+    validate_publication_snapshot_anchor(
+        activation,
+        current_height,
+        canonical_finalized_hash(block_hashes, activation.finalized_height),
+        current_revision,
+    )?;
+    if activation.finalized_height > snapshot.finalized_height {
+        return Err(invariant(
+            "Musubi publication proof snapshot predates its resolver revision activation",
+        ));
+    }
+
+    if let Some((successor_revision, successor)) = checkpoints
+        .range((
+            std::ops::Bound::Excluded(revision),
+            std::ops::Bound::Unbounded,
+        ))
+        .next()
+    {
+        if successor.index_revision != successor_revision.get() {
+            return Err(invariant(
+                "Musubi resolver checkpoint key does not match its embedded revision",
+            ));
+        }
+        validate_publication_snapshot_anchor(
+            successor,
+            current_height,
+            canonical_finalized_hash(block_hashes, successor.finalized_height),
+            current_revision,
+        )?;
+        if successor.finalized_height <= snapshot.finalized_height {
+            return Err(invariant(
+                "Musubi publication proof snapshot is outside its resolver revision activation interval",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_publication_snapshot_anchor(
@@ -3915,6 +3457,7 @@ fn validate_publication_snapshot_anchor(
 fn validate_resolution_proof(
     publication: &MusubiPublicationV1,
     world: &impl WorldReadOnly,
+    block_hashes: &[HashOf<BlockHeader>],
 ) -> Result<(), Error> {
     let nodes = publication
         .resolution
@@ -3933,6 +3476,55 @@ fn validate_resolution_proof(
                     node.release
                 ))
             })?;
+        row.validate().map_err(|error| {
+            invariant(format!(
+                "Musubi proof release '{}' has an invalid resolver row: {}",
+                node.release,
+                error.reason()
+            ))
+        })?;
+        let snapshot = &publication.resolution.snapshot;
+        let storage = &row.selection.storage;
+        if storage.index_revision > snapshot.index_revision {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage revision is newer than the claimed resolver snapshot",
+                node.release
+            )));
+        }
+        if row.index_revision > snapshot.index_revision {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' is newer than the claimed resolver snapshot",
+                node.release
+            )));
+        }
+        if storage.finalized_height > snapshot.finalized_height {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage state is newer than the claimed finalized snapshot",
+                node.release
+            )));
+        }
+        if storage.finalized_height == snapshot.finalized_height
+            && storage.finalized_block_hash != snapshot.finalized_block_hash
+        {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage state does not match the claimed finalized block",
+                node.release
+            )));
+        }
+        if canonical_finalized_hash(block_hashes, storage.finalized_height)
+            != Some(storage.finalized_block_hash)
+        {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' storage state is not anchored to its canonical finalized block",
+                node.release
+            )));
+        }
+        if row.selection.yank.changed_at_height > snapshot.finalized_height {
+            return Err(invariant(format!(
+                "Musubi proof release '{}' yank state is newer than the claimed finalized snapshot",
+                node.release
+            )));
+        }
         if !row.selection.fresh_selectable()
             || row.release_digest != node.release_digest
             || row.archive_id != node.archive_id
@@ -4026,7 +3618,7 @@ pub(crate) fn current_location_providers(
     location: &MusubiArchiveLocationV1,
     world: &impl WorldReadOnly,
 ) -> Option<Vec<iroha_data_model::sorafs::capacity::ProviderId>> {
-    if location.state == MusubiArchiveLocationStateV1::Retired {
+    if location.state == MusubiArchiveLocationStateV1::Retired || location.validate().is_err() {
         return None;
     }
     let key = location.key();
@@ -4042,6 +3634,7 @@ pub(crate) fn current_location_providers(
         return None;
     }
     let archive = world.musubi_archives().get(&location.archive_id)?;
+    archive.validate().ok()?;
     let pin = world.pin_manifests().get(&location.pin_manifest)?;
     if !pin.status.is_active()
         || pin.root_cid != archive.commitment.root_cid
@@ -4062,11 +3655,21 @@ pub(crate) fn current_location_providers(
     {
         return None;
     }
+    let mut completion_providers = order
+        .provider_completions
+        .iter()
+        .map(|completion| completion.provider_id)
+        .collect::<Vec<_>>();
+    completion_providers.sort();
+    if completion_providers != location.providers {
+        return None;
+    }
+    let records = load_location_provider_attestations(archive, location, world).ok()?;
     let providers = location
         .providers
         .iter()
-        .zip(&location.provider_attestations)
-        .filter_map(|(provider, attestation)| {
+        .zip(&records)
+        .filter_map(|(provider, record)| {
             let reverse_key = MusubiProviderLocationKeyV1::new(*provider, key);
             if world
                 .musubi_locations_by_provider()
@@ -4077,7 +3680,7 @@ pub(crate) fn current_location_providers(
             }
             let owner = world.provider_owners().get(provider)?;
             let completion = order.provider_completion(*provider)?;
-            let binding = &attestation.payload.binding;
+            let binding = &record.attestation.payload.binding;
             (completion.completed_by == *owner
                 && completion.completion_authority.provider_owner == *owner
                 && binding.provider_id == *provider
@@ -4092,7 +3695,7 @@ pub(crate) fn current_location_providers(
     Some(providers)
 }
 
-/// Prevent a direct SoraFS lifecycle change from removing the last fetchable
+/// Prevent an explicit lifecycle change from removing the last quorum-healthy
 /// location of an active or yanked release.
 pub(crate) fn ensure_locations_may_be_invalidated(
     locations: &[MusubiArchiveLocationKeyV1],
@@ -4111,18 +3714,23 @@ pub(crate) fn ensure_locations_may_be_invalidated(
             .musubi_archives()
             .get(&archive_id)
             .ok_or_else(|| archive_not_found(archive_id))?;
-        let has_remaining = archive.location_ids.iter().any(|location_id| {
+        let mut remaining_providers = BTreeSet::new();
+        for location_id in &archive.location_ids {
             let key = MusubiArchiveLocationKeyV1::new(archive_id, *location_id);
-            !excluded.contains(&key)
-                && world
-                    .musubi_archive_locations()
-                    .get(&key)
-                    .and_then(|location| current_location_providers(location, world))
-                    .is_some_and(|providers| !providers.is_empty())
-        });
-        if !has_remaining {
+            if excluded.contains(&key) {
+                continue;
+            }
+            if let Some(providers) = world
+                .musubi_archive_locations()
+                .get(&key)
+                .and_then(|location| current_location_providers(location, world))
+            {
+                remaining_providers.extend(providers);
+            }
+        }
+        if !provider_count_is_healthy(remaining_providers.len()) {
             return Err(invariant(
-                "Musubi active or yanked releases must retain a valid fetchable archive location",
+                "Musubi active or yanked releases must retain a quorum-healthy archive location",
             ));
         }
     }
@@ -4163,6 +3771,10 @@ pub(crate) fn ensure_provider_may_be_removed(
         }
     }
     Ok(())
+}
+
+const fn provider_count_is_healthy(provider_count: usize) -> bool {
+    provider_count >= MUSUBI_MIN_HEALTHY_REPLICAS_V1 as usize
 }
 
 /// Recompute location and universal resolver projections after an underlying
@@ -4212,6 +3824,9 @@ pub(crate) fn refresh_musubi_locations(
             location: key,
             pin_manifest: location.pin_manifest,
             replication_order: location.replication_order,
+            provider_attestation_set_digest: location.provider_attestation_set_digest,
+            provider_count: u8::try_from(location.providers.len())
+                .map_err(|_| invariant("Musubi archive location provider count overflows u8"))?,
             transition: MusubiArchiveLocationTransitionV1::EvidenceRefreshed,
             state: location.state,
             revision: location.revision,
@@ -4805,5 +4420,6 @@ fn emit_musubi_event(event: MusubiEvent, state_transaction: &mut StateTransactio
 #[cfg(test)]
 mod tests {
     include!("musubi/archive_replay_tests.rs");
+
     include!("musubi/governance_tests.rs");
 }

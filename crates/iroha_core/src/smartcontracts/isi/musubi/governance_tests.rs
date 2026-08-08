@@ -1,4 +1,3 @@
-// Governance and package tests included from the parent module.
 #[test]
 fn concurrent_pending_invitations_rebase_and_accept_independently() {
     let state = State::new_for_testing(

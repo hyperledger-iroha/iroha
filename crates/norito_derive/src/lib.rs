@@ -1171,20 +1171,8 @@ impl VariantAttr {
 }
 
 #[cfg(test)]
-mod variant_attr_tests {
-    use super::*;
-
-    #[test]
-    fn unknown_variant_attribute_is_rejected() {
-        let variant: Variant = syn::parse_quote! {
-            #[norito(other)]
-            Unknown
-        };
-
-        let error = VariantAttr::parse(&variant.attrs).expect_err("unknown key must reject");
-        assert_eq!(error.to_string(), "unknown `norito` variant attribute");
-    }
-}
+#[path = "tests/variant_attrs.rs"]
+mod variant_attr_tests;
 
 /// Generate `NoritoSerialize` implementation for a struct.
 ///
@@ -3926,6 +3914,7 @@ fn derive_fast_json_struct_flatten(
                 w: &mut norito::json::TapeWalker<'a>,
                 _arena: &'arena mut norito::json::Arena,
             ) -> ::core::result::Result<Self, norito::Error> {
+                w.ensure_document_depth()?;
                 let mut parser = norito::json::Parser::new_at(w.input(), w.raw_pos());
                 let value = norito::json::Value::json_deserialize(&mut parser)?;
                 w.sync_to_raw(parser.position());
@@ -4515,6 +4504,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                         quote! {
                             impl<'a> norito::json::FastFromJson<'a> for #ident {
                                 fn parse<'arena>(w: &mut norito::json::TapeWalker<'a>, arena: &'arena mut norito::json::Arena) -> ::core::result::Result<Self, norito::Error> {
+                                    w.ensure_document_depth()?;
                                     w.expect_object_start()?;
                                     #(#inits)*
                                     let mut __seen: u128 = 0;
@@ -4864,6 +4854,7 @@ pub fn derive_fast_json(input: TokenStream) -> TokenStream {
                         w: &mut norito::json::TapeWalker<'a>,
                         arena: &'arena mut norito::json::Arena,
                     ) -> ::core::result::Result<Self, norito::Error> {
+                        w.ensure_document_depth()?;
                         let __input = w.input();
                         w.expect_object_start()?;
                         let mut __variant_idx: ::core::option::Option<u8> = ::core::option::Option::None;
@@ -6023,6 +6014,7 @@ fn derive_fast_from_json_fallback(input: &DeriveInput) -> TokenStream2 {
                 w: &mut norito::json::TapeWalker<'a>,
                 _arena: &'arena mut norito::json::Arena,
             ) -> ::core::result::Result<Self, norito::Error> {
+                w.ensure_document_depth()?;
                 let input = w.input();
                 let mut parser = norito::json::Parser::new_at(input, w.raw_pos());
                 let value = <Self as norito::json::JsonDeserialize>::json_deserialize(&mut parser)

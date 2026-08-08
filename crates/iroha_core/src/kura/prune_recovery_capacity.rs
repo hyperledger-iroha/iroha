@@ -1,5 +1,7 @@
 // Canonical prune recovery stages that consume the capacity admission sealed in
-// `KuraPruneIntentV2`. This fragment is included inside `impl Kura`.
+// `KuraPruneIntentV2`.
+
+impl Kura {
 
 fn truncate_pipeline_sidecars_for_prune(&self, intent: &KuraPruneIntentV2) -> Result<()> {
     let target_height = intent.target_height;
@@ -238,4 +240,5 @@ fn complete_recovered_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<
     }
     self.validate_completed_prune_intent(intent)?;
     self.finish_prune_intent()
+}
 }

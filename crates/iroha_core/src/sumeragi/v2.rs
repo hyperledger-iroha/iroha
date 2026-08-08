@@ -64,6 +64,14 @@ const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 /// retained-batch contract without inflating either queue.
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
 
+/// Maximum validation-marker identities which can be authoritative at restart.
+///
+/// The replayed adapter contributes at most one durable lock and one durable
+/// decision in addition to its already-bounded startup effect batch. Historical
+/// view-local markers outside this frontier remain body-availability evidence,
+/// but cannot force synchronous execution or restore vote authority.
+const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 2;
+
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
 /// The witness is locally formed `InstallTimeout`: one local TimeoutVote
@@ -246,6 +254,59 @@ impl LocalProposalDirective {
     /// Subject already decided at this height, if application is pending.
     pub(crate) const fn decided_subject(self) -> Option<wire::BlockSubject> {
         self.decided_subject
+    }
+}
+
+/// Opaque authenticated frontier for restoring validation-marker authority.
+///
+/// Construction is restricted to a fully replayed adapter, so a checksummed
+/// body-store marker cannot select itself for recovery. The bounded key set is
+/// derived only from the durable lock/decision and the adapter's first replay
+/// batch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RecoveredValidationAuthority {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    keys: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
+}
+
+impl RecoveredValidationAuthority {
+    /// Whether this capability belongs to the exact immutable height context.
+    pub(crate) fn authorizes_context(&self, context: &wire::HeightContext) -> bool {
+        self.context_id == context.id() && self.height == context.height
+    }
+
+    /// Whether one exact proposal origin belongs to the authenticated frontier.
+    pub(crate) fn authorizes(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        self.keys.contains(&(round, subject))
+    }
+
+    /// Number of exact identities in the bounded replay frontier.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Construct a bounded exact frontier for body-store seam tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        context: &wire::HeightContext,
+        keys: impl IntoIterator<Item = (wire::ConsensusRound, wire::BlockSubject)>,
+    ) -> Self {
+        let keys = keys.into_iter().collect::<BTreeSet<_>>();
+        assert!(keys.len() <= MAX_RECOVERED_VALIDATION_AUTHORITIES);
+        assert!(keys.iter().all(|(round, _)| {
+            round.context_id == context.id() && round.height == context.height
+        }));
+        Self {
+            context_id: context.id(),
+            height: context.height,
+            keys,
+        }
     }
 }
 
@@ -3517,6 +3578,10 @@ pub(crate) enum AdapterError {
     /// No fsynced deterministic execution result exists for a signable vote or QC.
     #[error("missing validated Sumeragi v2 execution commitment")]
     MissingExecutionCommitment,
+    /// WAL replay named more validation-marker identities than the reviewed
+    /// startup frontier can contain.
+    #[error("Sumeragi v2 recovered validation authority exceeded its bounded replay frontier")]
+    RecoveredValidationCapacityExceeded,
     /// One immutable subject was bound to different execution results.
     #[error("conflicting Sumeragi v2 execution commitments for one immutable subject")]
     ConflictingExecutionCommitment,
@@ -4195,6 +4260,86 @@ impl SumeragiV2Adapter {
             locked_round,
             locked_subject,
             decided_subject,
+        })
+    }
+
+    /// Mint the bounded validation-marker frontier authorized by WAL replay.
+    ///
+    /// Marker files from superseded views remain checksummed local data, not
+    /// restart authority. Only the active durable lock/decision and exact body
+    /// identities referenced by the first replay batch can be rebound before
+    /// live ingress opens.
+    pub(crate) fn recovered_validation_authority(
+        &self,
+        startup_effects: &[AdapterEffect],
+    ) -> Result<RecoveredValidationAuthority, AdapterError> {
+        self.ensure_ingress()?;
+        if startup_effects.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP {
+            return Err(AdapterError::RecoveredValidationCapacityExceeded);
+        }
+        let context_id = self.wire_context.id();
+        let height = self.wire_context.height;
+        let mut keys = BTreeSet::new();
+        let mut retain = |round: wire::ConsensusRound,
+                          subject: wire::BlockSubject|
+         -> Result<(), AdapterError> {
+            if round.context_id != context_id || round.height != height {
+                return Err(AdapterError::DurableBodyMismatch);
+            }
+            keys.insert((round, subject));
+            Ok(())
+        };
+
+        if let Some(certificate) = self.reducer.durable_state().locked() {
+            retain(
+                self.registry.round_to_wire(certificate.proposal_round()),
+                self.registry.subject(certificate.subject())?,
+            )?;
+        }
+        if let Some((_, proposal_round, subject, _)) = self.replayed_decision_key()? {
+            retain(proposal_round, subject)?;
+        }
+        for effect in startup_effects {
+            match effect {
+                AdapterEffect::Sign { request, .. } => {
+                    if let Some((round, subject)) = request.body_round().zip(request.subject()) {
+                        retain(round, subject)?;
+                    }
+                }
+                AdapterEffect::FetchBody { round, subject, .. }
+                | AdapterEffect::StoreBody { round, subject, .. }
+                | AdapterEffect::ValidateBody { round, subject, .. } => {
+                    retain(*round, *subject)?;
+                }
+                AdapterEffect::Apply {
+                    subject,
+                    certificate,
+                    ..
+                } => {
+                    retain(certificate.proposal_round, *subject)?;
+                }
+                AdapterEffect::EnterView {
+                    protected_body: Some((round, subject)),
+                    ..
+                } => {
+                    retain(*round, *subject)?;
+                }
+                AdapterEffect::Broadcast(_)
+                | AdapterEffect::EnterView {
+                    protected_body: None,
+                    ..
+                }
+                | AdapterEffect::ReportEquivocation { .. }
+                | AdapterEffect::ReportInvalidCertifiedBody { .. } => {}
+            }
+        }
+        if keys.len() > MAX_RECOVERED_VALIDATION_AUTHORITIES {
+            return Err(AdapterError::RecoveredValidationCapacityExceeded);
+        }
+        Ok(RecoveredValidationAuthority {
+            context_id,
+            height,
+            keys,
         })
     }
 
@@ -11158,6 +11303,7 @@ mod tests {
 
     use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
     use super::*;
+    use crate::sumeragi::v2_chunks::encode_payload;
 
     #[derive(Debug)]
     struct TestAggregator;
@@ -11569,16 +11715,13 @@ mod tests {
             height: successor.height,
             view: 0,
         };
-        let proposal_subject = subject(0x72);
+        let mut proposal_subject = subject(0x72);
         let proposal_body = b"parent-auth-body".to_vec();
-        let manifest = wire::PayloadManifest::derive(
-            &successor,
-            proposal_round,
-            proposal_subject,
-            u64::try_from(proposal_body.len()).expect("fixture body length fits u64"),
-            &[proposal_body],
-        )
-        .expect("valid successor manifest");
+        proposal_subject.payload_hash = Hash::new(&proposal_body);
+        let manifest = encode_payload(&successor, proposal_round, proposal_subject, &proposal_body)
+            .expect("encode successor fixture payload")
+            .manifest()
+            .clone();
         let proposer = successor.leader(0);
         let mut proposal = wire::Proposal {
             round: proposal_round,
@@ -11856,14 +11999,12 @@ mod tests {
             view: 1,
         };
         let locked_subject = subject(0x32);
-        let exact_manifest = wire::PayloadManifest::derive(
-            &context,
-            locked_round,
-            locked_subject,
-            5,
-            &[b"chunk".to_vec()],
-        )
-        .expect("exact locked manifest");
+        let locked_payload = [0x32, 2];
+        let exact_manifest =
+            encode_payload(&context, locked_round, locked_subject, &locked_payload)
+                .expect("encode exact locked payload")
+                .manifest()
+                .clone();
         let exact = wire::Proposal {
             round: locked_round,
             proposer: context.leader(locked_round.view),
@@ -11887,14 +12028,10 @@ mod tests {
         let later = wire::Proposal {
             round: later_round,
             proposer: context.leader(later_round.view),
-            manifest: wire::PayloadManifest::derive(
-                &context,
-                later_round,
-                locked_subject,
-                5,
-                &[b"chunk".to_vec()],
-            )
-            .expect("later same-subject manifest"),
+            manifest: encode_payload(&context, later_round, locked_subject, &locked_payload)
+                .expect("encode later same-subject payload")
+                .manifest()
+                .clone(),
             ..exact
         };
         assert!(proposal_is_safe_for_lock(
@@ -11912,6 +12049,7 @@ mod tests {
             view: prepared_round.view + 1,
             ..prepared_round
         };
+        let prepared_payload = [0x33, 2];
         let highest_prepare = wire::QuorumCertificate {
             round: prepared_round,
             proposal_round: prepared_round,
@@ -11925,14 +12063,15 @@ mod tests {
             round: proposal_round,
             proposer: context.leader(proposal_round.view),
             subject: prepared_subject,
-            manifest: wire::PayloadManifest::derive(
+            manifest: encode_payload(
                 &context,
                 proposal_round,
                 prepared_subject,
-                5,
-                &[b"chunk".to_vec()],
+                &prepared_payload,
             )
-            .expect("prepared-subject manifest"),
+            .expect("encode prepared-subject payload")
+            .manifest()
+            .clone(),
             justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
                 timeout_certificate: wire::TimeoutCertificate {
                     round: prepared_round,
@@ -12064,9 +12203,17 @@ mod tests {
             height: context.height,
             view: 0,
         };
-        let manifest =
-            wire::PayloadManifest::derive(context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("valid fixture manifest");
+        let payload = b"chunk";
+        let chunks = wire::encode_payload_chunks(context.da_layout, payload)
+            .expect("encode complete canonical fixture chunks");
+        let manifest = wire::PayloadManifest::derive(
+            context,
+            round,
+            subject,
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &chunks,
+        )
+        .expect("valid fixture manifest");
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
             round,
             proposer,
@@ -13267,14 +13414,11 @@ mod tests {
             view: tag.view(),
         };
         let subject = subject(0x4A);
-        let manifest = wire::PayloadManifest::derive(
-            &adapter.wire_context,
-            round,
-            subject,
-            5,
-            &[b"producer-retirement-body".to_vec()],
-        )
-        .expect("derive body manifest");
+        let payload = [0x4A, 2];
+        let manifest = encode_payload(&adapter.wire_context, round, subject, &payload)
+            .expect("encode producer-retirement payload")
+            .manifest()
+            .clone();
         adapter
             .defer_body_pipeline_stage_for_test(
                 tag,
@@ -13957,14 +14101,16 @@ mod tests {
 
         let proposal_round = wire::ConsensusRound { view: 1, ..round };
         let proposal_subject = subject(0xC3);
-        let manifest = wire::PayloadManifest::derive(
+        let proposal_payload = [0xC3, 2];
+        let manifest = encode_payload(
             &adapter.wire_context,
             proposal_round,
             proposal_subject,
-            5,
-            &[b"chunk".to_vec()],
+            &proposal_payload,
         )
-        .expect("derive proposal manifest");
+        .expect("encode proposal payload")
+        .manifest()
+        .clone();
         let mut proposal_key = None;
         for (variant, signers) in signer_subsets.iter().enumerate() {
             let marker = u8::try_from(variant).expect("small carrier variant");
@@ -14266,415 +14412,7 @@ mod tests {
         assert!(!adapter.fail_closed);
     }
 
-    #[test]
-    fn replay_resigns_a_durable_proposal_before_prepare() {
-        let directory = TempDir::new().expect("temporary directory");
-        {
-            let (mut adapter, _) = open_test_as_leader(&directory).expect("open leader");
-            let subject = subject(10);
-            let leader = adapter.wire_context.leader(0);
-            let proposal = proposal(&adapter.wire_context, leader, subject);
-            let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
-                unreachable!("proposal helper returns a proposal")
-            };
-            let (durable, validated) =
-                validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
-            let proposal_tag = adapter.current_tag();
-            let sign = adapter
-                .local_proposal_ready(proposal_tag, proposal.manifest, &durable, &validated)
-                .expect("persist proposal intent");
-            assert!(matches!(
-                sign.effects(),
-                [AdapterEffect::Sign {
-                    request: SignRequest::Proposal(_),
-                    ..
-                }]
-            ));
-        }
-
-        let (adapter, startup) = open_test_as_leader(&directory).expect("replay leader");
-        assert!(adapter.ingress_ready());
-        assert!(matches!(
-            startup.as_slice(),
-            [AdapterEffect::Sign {
-                request: SignRequest::Proposal(_),
-                ..
-            }]
-        ));
-        assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
-    }
-
-    #[test]
-    fn proposal_signed_callback_is_restart_scoped_before_control_delivery() {
-        let directory = TempDir::new().expect("temporary directory");
-        let proposal_signature = vec![0xD1; 96];
-        {
-            let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
-            assert!(startup.is_empty());
-            let proposed_subject = subject(0xA8);
-            let proposal = proposal(
-                &adapter.wire_context,
-                adapter.wire_context.leader(0),
-                proposed_subject,
-            );
-            let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
-                unreachable!("proposal fixture")
-            };
-            let (durable, validated) =
-                validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
-            let sign = adapter
-                .local_proposal_ready(
-                    adapter.current_tag(),
-                    proposal.manifest,
-                    &durable,
-                    &validated,
-                )
-                .expect("persist proposal intent before signing");
-            let sign_tag = match sign.effects() {
-                [
-                    AdapterEffect::Sign {
-                        tag,
-                        request: SignRequest::Proposal(_),
-                    },
-                ] => *tag,
-                effects => panic!("unexpected proposal sign effects: {effects:?}"),
-            };
-            let retained = adapter.serviced_candidate_count_for_test();
-            let signed = adapter
-                .signature_completed(sign_tag, proposal_signature.clone())
-                .expect("complete proposal signature before simulated control loss");
-            assert!(signed.effects().iter().any(|effect| matches!(
-                effect,
-                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                    payload: wire::ConsensusMessageV2Payload::Proposal(_),
-                    ..
-                })
-            )));
-            assert!(signed.effects().iter().any(|effect| matches!(
-                effect,
-                AdapterEffect::Sign {
-                    request: SignRequest::Vote(vote),
-                    ..
-                } if vote.phase == wire::GlobalPhase::Prepare
-            )));
-            assert_eq!(
-                adapter.serviced_candidate_count_for_test(),
-                retained,
-                "a Signed callback is not a durable candidate tombstone"
-            );
-            // Drop both returned controls: the WAL contains ProposalIntent and
-            // PrepareIntent, while neither broadcast reached transport.
-        }
-
-        let context = context();
-        let leader = context.leader(0);
-        let (mut recovered, startup) = SumeragiV2Adapter::open_with_aggregator(
-            directory.path().join("leader-safety.wal"),
-            verified_genesis(context),
-            Some(leader),
-            reducer::Generation::new(2),
-            [0x22; 32],
-            fingerprints(),
-            Box::new(TestAggregator),
-            deferred_admission_ordinals(),
-        )
-        .expect("recover proposal and Prepare intents");
-        let proposal_tag = match startup.as_slice() {
-            [
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::Proposal(_),
-                },
-            ] => *tag,
-            effects => panic!("unexpected recovered proposal frontier: {effects:?}"),
-        };
-        let retained = recovered.serviced_candidate_count_for_test();
-        let replayed = recovered
-            .signature_completed(proposal_tag, proposal_signature)
-            .expect("new generation accepts the replay-issued proposal callback");
-        assert!(replayed.effects().iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::Proposal(_),
-                ..
-            })
-        )));
-        let prepare_tag = replayed
-            .effects()
-            .iter()
-            .find_map(|effect| match effect {
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::Vote(vote),
-                } if vote.phase == wire::GlobalPhase::Prepare => Some(*tag),
-                _ => None,
-            })
-            .expect("recovered proposal releases its durable Prepare signature");
-        assert_eq!(recovered.serviced_candidate_count_for_test(), retained);
-        let prepare_signature = vec![0xD2; 96];
-        let prepared = recovered
-            .signature_completed(prepare_tag, prepare_signature.clone())
-            .expect("complete replayed Prepare signature");
-        assert!(prepared.effects().iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::Vote(vote),
-                ..
-            }) if vote.phase == wire::GlobalPhase::Prepare
-        )));
-        assert_eq!(
-            recovered
-                .signature_completed(prepare_tag, prepare_signature)
-                .expect("same-episode duplicate is reducer-idempotent")
-                .disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
-        );
-    }
-
-    #[test]
-    fn vote_signed_callback_is_restart_scoped_before_control_delivery() {
-        let directory = TempDir::new().expect("temporary directory");
-        let vote_signature = vec![0xE1; 96];
-        let prepared_subject = subject(0xA9);
-        {
-            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
-            assert!(startup.is_empty());
-            let proposer = adapter.status().expect("status").leader;
-            let fetch = adapter
-                .receive_verified(proposal(&adapter.wire_context, proposer, prepared_subject))
-                .expect("accept remote proposal");
-            let (tag, manifest) = match fetch.effects() {
-                [
-                    AdapterEffect::FetchBody {
-                        tag,
-                        manifest: Some(manifest),
-                        ..
-                    },
-                ] => (*tag, manifest.clone()),
-                effects => panic!("unexpected proposal effects: {effects:?}"),
-            };
-            let round = manifest.round;
-            adapter
-                .body_available(tag, manifest)
-                .expect("make remote body available");
-            let receipt = durable_body_receipt(&adapter, round, prepared_subject);
-            adapter
-                .body_stored(tag, round, prepared_subject, &receipt)
-                .expect("acknowledge durable body");
-            let validated = ValidatedBodyReceipt::for_test(receipt);
-            let sign = adapter
-                .validation_succeeded(tag, round, prepared_subject, &validated)
-                .expect("persist Prepare intent");
-            let sign_tag = match sign.effects() {
-                [
-                    AdapterEffect::Sign {
-                        tag,
-                        request: SignRequest::Vote(vote),
-                    },
-                ] if vote.phase == wire::GlobalPhase::Prepare => *tag,
-                effects => panic!("unexpected Prepare sign effects: {effects:?}"),
-            };
-            let retained = adapter.serviced_candidate_count_for_test();
-            let signed = adapter
-                .signature_completed(sign_tag, vote_signature.clone())
-                .expect("complete Prepare signature before simulated transport loss");
-            assert!(signed.effects().iter().any(|effect| matches!(
-                effect,
-                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                    payload: wire::ConsensusMessageV2Payload::Vote(vote),
-                    ..
-                }) if vote.phase == wire::GlobalPhase::Prepare
-            )));
-            assert_eq!(adapter.serviced_candidate_count_for_test(), retained);
-        }
-
-        let (mut recovered, startup) = SumeragiV2Adapter::open_with_aggregator(
-            directory.path().join("safety.wal"),
-            verified_genesis(context()),
-            Some(0),
-            reducer::Generation::new(2),
-            [0x11; 32],
-            fingerprints(),
-            Box::new(TestAggregator),
-            deferred_admission_ordinals(),
-        )
-        .expect("recover durable Prepare intent");
-        let sign_tag = match startup.as_slice() {
-            [
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::Vote(vote),
-                },
-            ] if vote.phase == wire::GlobalPhase::Prepare && vote.subject == prepared_subject => {
-                *tag
-            }
-            effects => panic!("unexpected recovered Prepare frontier: {effects:?}"),
-        };
-        let signed = recovered
-            .signature_completed(sign_tag, vote_signature.clone())
-            .expect("new generation accepts the replay-issued Prepare callback");
-        assert!(signed.effects().iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::Vote(vote),
-                ..
-            }) if vote.phase == wire::GlobalPhase::Prepare
-                && vote.subject == prepared_subject
-        )));
-        assert_eq!(
-            recovered
-                .signature_completed(sign_tag, vote_signature)
-                .expect("same-episode duplicate is reducer-idempotent")
-                .disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
-        );
-    }
-
-    #[test]
-    fn timeout_signed_callback_is_restart_scoped_before_control_delivery() {
-        let directory = TempDir::new().expect("temporary directory");
-        let timeout_signature = vec![0xF1; 96];
-        {
-            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
-            assert!(startup.is_empty());
-            let sign = adapter
-                .timeout_elapsed(adapter.current_tag())
-                .expect("persist Timeout intent");
-            let sign_tag = match sign.effects() {
-                [
-                    AdapterEffect::Sign {
-                        tag,
-                        request: SignRequest::TimeoutVote(_),
-                    },
-                ] => *tag,
-                effects => panic!("unexpected Timeout sign effects: {effects:?}"),
-            };
-            let retained = adapter.serviced_candidate_count_for_test();
-            let signed = adapter
-                .signature_completed(sign_tag, timeout_signature.clone())
-                .expect("complete Timeout signature before simulated transport loss");
-            assert!(signed.effects().iter().any(|effect| matches!(
-                effect,
-                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                    payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
-                    ..
-                })
-            )));
-            assert_eq!(adapter.serviced_candidate_count_for_test(), retained);
-        }
-
-        let (mut recovered, startup) = SumeragiV2Adapter::open_with_aggregator(
-            directory.path().join("safety.wal"),
-            verified_genesis(context()),
-            Some(0),
-            reducer::Generation::new(2),
-            [0x11; 32],
-            fingerprints(),
-            Box::new(TestAggregator),
-            deferred_admission_ordinals(),
-        )
-        .expect("recover durable Timeout intent");
-        let sign_tag = match startup.as_slice() {
-            [
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::TimeoutVote(_),
-                },
-            ] => *tag,
-            effects => panic!("unexpected recovered Timeout frontier: {effects:?}"),
-        };
-        let signed = recovered
-            .signature_completed(sign_tag, timeout_signature.clone())
-            .expect("new generation accepts the replay-issued Timeout callback");
-        assert!(signed.effects().iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
-                ..
-            })
-        )));
-        assert_eq!(
-            recovered
-                .signature_completed(sign_tag, timeout_signature)
-                .expect("same-episode duplicate is reducer-idempotent")
-                .disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
-        );
-    }
-
-    #[test]
-    fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
-        let _guard = crate::sumeragi::status::rbc_status_test_guard();
-        crate::sumeragi::status::clear_v2_status();
-        let directory = TempDir::new().expect("temporary directory");
-        {
-            let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
-            assert!(startup.is_empty());
-            let proposal = proposal(
-                &adapter.wire_context,
-                adapter.wire_context.leader(0),
-                subject(10),
-            );
-            let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
-                unreachable!("proposal helper returns a proposal")
-            };
-            let (durable, validated) =
-                validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
-            let proposal_tag = adapter.current_tag();
-            let sign = adapter
-                .local_proposal_ready(proposal_tag, proposal.manifest, &durable, &validated)
-                .expect("persist proposal intent");
-            assert!(matches!(
-                sign.effects(),
-                [AdapterEffect::Sign {
-                    request: SignRequest::Proposal(_),
-                    ..
-                }]
-            ));
-        }
-
-        crate::sumeragi::status::clear_v2_status();
-        let context = context();
-        let leader = context.leader(0);
-        let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
-            directory.path().join("leader-safety.wal"),
-            verified_genesis(context),
-            Some(leader),
-            reducer::Generation::new(1),
-            [0x22; 32],
-            fingerprints(),
-            deferred_admission_ordinals(),
-        )
-        .expect("replay leader without publishing status");
-        assert!(matches!(
-            startup.as_slice(),
-            [AdapterEffect::Sign {
-                request: SignRequest::Proposal(_),
-                ..
-            }]
-        ));
-        assert!(
-            crate::sumeragi::status::v2_status().is_none(),
-            "nonempty startup work must not publish the prepared successor"
-        );
-        let prepared = adapter
-            .successor_activation_status()
-            .expect("prepare reducer-owned activation snapshot");
-        assert_eq!(prepared.height, 1);
-        assert!(matches!(
-            prepared.liveness.last_progress,
-            Some(wire::SumeragiV2ProgressTransitionStatus {
-                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-                ..
-            })
-        ));
-        assert!(
-            crate::sumeragi::status::v2_status().is_none(),
-            "snapshot construction must remain separate from publication"
-        );
-        crate::sumeragi::status::clear_v2_status();
-    }
-
+    include!("tests/v2_adapter_replay_signing.rs");
     include!("tests/v2_adapter_01_replay_and_registry.rs");
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -15012,14 +14750,16 @@ mod tests {
                 && certificate.phase == wire::GlobalPhase::Prepare
         )));
 
-        let manifest = wire::PayloadManifest::derive(
+        let locked_payload = [0xBE, 2];
+        let manifest = encode_payload(
             &adapter.wire_context,
             wire_round,
             locked_subject,
-            5,
-            &[b"chunk".to_vec()],
+            &locked_payload,
         )
-        .expect("derive the certified body manifest");
+        .expect("encode the certified body payload")
+        .manifest()
+        .clone();
         let (durable, _) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
         let validated = ValidatedBodyReceipt::for_test_with_commitment(
             durable.clone(),
@@ -17634,14 +17374,16 @@ mod tests {
             view: 0,
         };
         let locally_validated_subject = subject(0x87);
-        let locally_validated_manifest = wire::PayloadManifest::derive(
+        let locally_validated_payload = [0x87, 2];
+        let locally_validated_manifest = encode_payload(
             &context,
             round,
             locally_validated_subject,
-            5,
-            &[b"local".to_vec()],
+            &locally_validated_payload,
         )
-        .expect("derive locally validated manifest");
+        .expect("encode locally validated payload")
+        .manifest()
+        .clone();
         let (_, locally_validated_receipt) =
             validated_receipts_for_manifest(&context, &locally_validated_manifest);
         let locally_validated_commitment = locally_validated_receipt.execution_commitment();
@@ -17903,14 +17645,11 @@ mod tests {
         let proposal_round = wire::ConsensusRound { view: 2, ..round };
         let proposal_subject = bound_subject;
         let proposal_body = vec![0x83, 2];
-        let proposal_manifest = wire::PayloadManifest::derive(
-            &context,
-            proposal_round,
-            proposal_subject,
-            u64::try_from(proposal_body.len()).expect("proposal body length"),
-            &[proposal_body],
-        )
-        .expect("derive later-view proposal manifest");
+        let proposal_manifest =
+            encode_payload(&context, proposal_round, proposal_subject, &proposal_body)
+                .expect("encode later-view proposal payload")
+                .manifest()
+                .clone();
         let proposer = context.leader(proposal_round.view);
         let mut conflicting_proposal = wire::Proposal {
             round: proposal_round,
@@ -18227,9 +17966,11 @@ mod tests {
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&prepare_refs)
                 .expect("aggregate PrepareQC"),
         };
-        let manifest =
-            wire::PayloadManifest::derive(&context, round, subject, 5, &[b"chunk".to_vec()])
-                .expect("valid protected-body manifest");
+        let protected_payload = [13, 2];
+        let manifest = encode_payload(&context, round, subject, &protected_payload)
+            .expect("encode protected-body payload")
+            .manifest()
+            .clone();
         let core_manifest = adapter
             .registry
             .manifest_to_core(&manifest, &context)

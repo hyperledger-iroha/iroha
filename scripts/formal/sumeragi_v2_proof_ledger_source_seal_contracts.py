@@ -315,6 +315,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/retained_finality_replica_authority.rs",
     "kura/durable_block_and_atomic_sidecar_io.rs",
     "kura/prune_intent_publication.rs",
+    "kura/prune_recovery_capacity.rs",
     "kura/block_store_definition_and_test_controls.rs",
     "kura/pipeline_and_lane_artifacts.rs",
     "kura/autonomous_terminal_capacity.rs",
@@ -336,18 +337,23 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
 )
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    "crates/iroha_core/src/commit_roster_journal.rs": (
+        "commit_roster_journal/tests.rs",
+    ),
     "crates/iroha_config/src/parameters/actual.rs": (
         "actual/runtime_tail_tests.rs",
         "actual/tests.rs",
     ),
     "crates/iroha_config/src/parameters/user.rs": (
         "user/kura.rs",
+        "user/governance_dag_head_mode_tests.rs",
         "user/kura_and_snapshot_tests.rs",
         "user/runtime_tail_tests.rs",
     ),
     "crates/iroha_core/src/kura.rs": (
         *_KURA_PRODUCTION_COMPONENT_FILES,
         "kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs",
+        "kura/tests/01_prune_capacity_support.rs",
         "kura/tests/01a_retained_eviction_and_rewrite_tail.rs",
         "kura/tests/02_replacement_and_preflight.rs",
         "kura/tests/02a_unauthenticated_preflight.rs",
@@ -381,10 +387,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "kura/tests/09_lane_artifacts_and_fastpq.rs",
         "kura/tests/10_native_amx_and_roster.rs",
         "kura/tests/10b_native_amx_prepublication_transition.rs",
-        "kura/tests/10c_native_amx_latest_index_support_and_bounds.rs",
         "kura/tests/11_roster_and_progress_sidecars.rs",
         "kura/tests/12_sidecar_index_and_pruning.rs",
         "kura/tests/13_manifests_and_fsync.rs",
+    ),
+    "crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs": (
+        "10c_native_amx_latest_index_support_and_bounds.rs",
     ),
     "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs": (
         "autonomous_merge_bundle_support.rs",
@@ -404,6 +412,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "lane_geometry_tests/01_retirement_and_recovery.rs",
         "lane_geometry_tests/02_geometry_moves_and_journal.rs",
         "lane_geometry_tests/03_gc_and_startup.rs",
+    ),
+    "crates/iroha_core/src/merge_sidecar.rs": (
+        "merge_sidecar_signing_guard_tests.rs",
     ),
     "crates/iroha_core/src/queue.rs": (
         "queue/canonical_terminal_cleanup.rs",
@@ -430,6 +441,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     "crates/iroha_core/src/state.rs": (
         "state/vpn_lease_validation.rs",
+        "state/zk_asset_state.rs",
         "state/diagnostic_state_generation.rs",
         "state/autonomous_predecessor_application.rs",
         "state/state_commit_lock_order_tests.rs",
@@ -448,6 +460,26 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/sumeragi/evidence.rs": (
         "evidence/missing_signer_pop_test.rs",
         "evidence/signature_missing_test.rs",
+        "evidence/roundtrip_matrix_test.rs",
+    ),
+    "crates/iroha_p2p/src/network.rs": (
+        "network/handle_update_tests.rs",
+        "network/queue_depth_tests.rs",
+    ),
+    "crates/iroha_p2p/src/peer.rs": (
+        "peer_handshake_config_tests.rs",
+        "peer_state_tests.rs",
+        "peer_consensus_mode_test.rs",
+        "peer_tests.rs",
+    ),
+    "crates/irohad/src/main.rs": (
+        "main/runtime_deps.rs",
+        "main/governance_dag_launcher_tests.rs",
+        "main/runtime_budget_and_config_tests.rs",
+        "main/startup_tail_tests.rs",
+    ),
+    "integration_tests/tests/taira_public_localnet.rs": (
+        "taira_public_localnet_config_digest_test.rs",
     ),
     "crates/iroha_core/src/sumeragi/mod.rs": (
         "tests/mod_authoritative_runtime_gate_01_support.rs",
@@ -467,6 +499,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/sumeragi/v2.rs": (
         "tests/v2_adapter_activation_context.rs",
         "v2/persistence_and_deferred_tests.rs",
+        "tests/v2_adapter_replay_signing.rs",
         "tests/v2_adapter_01_replay_and_registry.rs",
         "tests/v2_adapter_02_view_and_lock_progress.rs",
         "tests/v2_adapter_03_tc_and_terminal_ingress.rs",
@@ -474,15 +507,18 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
         "v2_worker/exact_output_rollover_claim.rs",
         "v2_worker/kura_replica_advert_refresh.rs",
+        "v2_worker/current_lane_output_rollover_claim.rs",
         "tests/v2_worker_reply_route_cases.rs",
         "tests/v2_worker_backpressure_cases.rs",
         "v2_worker/applied_height_handoff_tests.rs",
         "v2_worker/upstream_reply_route_test.rs",
+        "tests/v2_worker_nonzero_view_restart.rs",
         "tests/v2_worker_serve_unsealed_cases.rs",
         "tests/v2_worker_serve_decision_restart_cases.rs",
         "tests/v2_worker_certified_serve_budget_cases.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_runtime.rs": (
+        "v2_runtime/effect_ownership.rs",
         "v2_runtime/dormant_producer_ownership.rs",
         "v2_runtime/adapter_runtime.rs",
         "tests/v2_runtime_unsealed_00.rs",
@@ -499,6 +535,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "v2_runner/lifecycle_terminal_recovery.rs",
         "v2_runner/finalized_output_rollover.rs",
         "v2_runner/canonical_recovery_ingress.rs",
+        "v2_runner/reply_route_retention.rs",
         "v2_runner/merge_sidecar_recovery.rs",
         "v2_runner_error.rs",
     ),
@@ -535,6 +572,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "tests/v2_core_terminal_transactionality.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
+        "tests/v2_effects_kura_tip_replay.rs",
         "tests/v2_effects_terminal_and_body_pipeline.rs",
         "tests/v2_effects_serialized_rebind.rs",
         "tests/v2_effects_01_view_churn_and_runtime_steps.rs",
@@ -545,6 +583,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         "v2_lane_work/certificate_execution_role.rs",
         "v2_lane_work/canonical_executed_block_application_repair.rs",
         "v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs",
+        "v2_lane_work/typed_finality_handoff_tests.rs",
+        "v2_lane_work/frozen_context_pop_tests.rs",
         "v2_lane_work/recovery_and_rollover_budget_cases.rs",
         "tests/v2_lane_work_native_signing_guard.rs",
         "v2_lane_work/native_amx_route_and_receipt_tests.rs",
@@ -573,6 +613,7 @@ def _read_reviewed_rust_source(
     relative: str,
     errors: list[str],
     description: str,
+    expanded_components: tuple[str, ...] | None = None,
 ) -> tuple[Path, str]:
     """Read one Rust source after authenticating and expanding its include closure."""
 
@@ -589,6 +630,17 @@ def _read_reviewed_rust_source(
     manifest = _REVIEWED_RUST_INCLUDE_MANIFESTS.get(relative)
     if manifest is None:
         return path, source
+    if expanded_components is not None:
+        unknown_components = tuple(
+            component
+            for component in expanded_components
+            if component not in manifest
+        )
+        if unknown_components:
+            errors.append(
+                f"{path}: requested unknown reviewed Rust include components "
+                f"{unknown_components!r}"
+            )
 
     masked_source = mask_rust_comments(source)
     include_invocations = tuple(
@@ -631,7 +683,12 @@ def _read_reviewed_rust_source(
     def expand(match: re.Match[str]) -> str:
         component_relative = match.group("relative")
         component_source = component_sources.get(component_relative)
-        return match.group(0) if component_source is None else component_source
+        if component_source is None or (
+            expanded_components is not None
+            and component_relative not in expanded_components
+        ):
+            return match.group(0)
+        return component_source
 
     return path, include_pattern.sub(expand, source)
 
@@ -1146,13 +1203,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 834
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 835
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 86
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "2f818f6a1174b77a9078b9e80b000671a44d045f23088fdf0da271b91ff2ea12"
+    "3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "029b3d93c941a6d9383cd199c1b7b1d5cf44b59c94858b7d12fd09f9105fa66c"
+    "8f8f4c71940ec62d50f84fe5b90de7c628f4cc6e1bb3a9b651f259c64ec23981"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
@@ -1163,10 +1220,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 474
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 475
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 524
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 525
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "e74381ab01530611cb6ae2c7c8080af4a60024bf2b090e073a0d5c00b84d2989"
+    "de9ab0da201d361e912b935d1349c584ba78fb52f70acd3c91e8d4a7c76fab24"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -1226,10 +1283,10 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "79c2caea8dfd6f17885ff3d72253a41cb34db7a99d7976b52d5fdab45c0e9a89"
     ),
     "successor_context_requires_the_durable_cryptographic_parent": (
-        "07aa14d187145445218084edfccf2c0675cb97b10969f58065b75c9567779cd6"
+        "f7ff90422e2b67a0d696eecd7da5ca64fcc692cf13f69779c2ea74f58da4e7a3"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
-        "414c5f5bf9c7156f38222f256673c42e1ce2394293193487fe9d5d2d24044286"
+        "423991082e2c3a6151fdd80b69b643d56b56d2cb7963331024453b2fab7c037c"
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
@@ -1279,7 +1336,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-v2-lifecycle-recovery",
         "sumeragi::v2_lifecycle_recovery::tests",
-        4,
+        5,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
@@ -1350,6 +1407,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULES = tuple(
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "kura::tests::lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered",
     "sumeragi::v2_lifecycle_recovery::tests::generation_takeover_runs_crash_recover_and_rehydrate_then_stutters",
+    "sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart",
     "sumeragi::v2_lifecycle_recovery::tests::prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side",
     "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
     "sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner",
@@ -1373,7 +1431,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_effects::tests::effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains",
     "sumeragi::v2_effects::tests::retained_live_retry_consumes_decision_retirement_terminal_same_cycle",
     "sumeragi::v2_effects::tests::retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle",
-    "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+    "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner",
     "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
     "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
     "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",

@@ -15,11 +15,9 @@ that workflow for local release verification.
 
 ## Prerequisites
 
-- A macOS host with the reviewed Xcode command line tools installed.
-- An absolute canonical Python 3.12 executable.
-- The exact Rust toolchain pinned by `rust-toolchain.toml` (currently 1.93.1).
-- The `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`,
-  `aarch64-apple-darwin`, and `x86_64-apple-darwin` Rust targets.
+- A macOS host with the latest stable Xcode command line tools installed.
+- Exact Rust 1.93.1 `cargo`, `rustc`, and `rustdoc`.
+- Python 3.12.
 - Swift toolchain 5.9 or newer.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
 
@@ -38,69 +36,110 @@ that workflow for local release verification.
    directories outside the repository and invoke the helper:
 
    ```bash
-   cargo fetch --locked
-   mkdir -p /absolute/path/apple-artifacts /absolute/path/apple-build
-   MOBILE_SDK_PYTHON_BINARY=/absolute/path/python3.12 \
-   NORITO_BRIDGE_OUT_DIR=/absolute/path/apple-artifacts \
-   NORITO_BRIDGE_BUILD_DIR=/absolute/path/apple-build \
-   NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 \
-     ./scripts/build_norito_xcframework.sh --privacy-production-enabled
+   export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
+   mkdir -p "$CARGO_TARGET_DIR"
+   export CARGO_BUILD_JOBS=1
+   export CARGO_INCREMENTAL=0
+   export CARGO_NET_OFFLINE=true
+   export RUSTC_BOOTSTRAP=1
+   export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
+   export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+   export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
+   export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+   export NORITO_BRIDGE_OUT_DIR=/absolute/cache/iroha-apple-artifacts
+   export NORITO_BRIDGE_BUILD_DIR=/absolute/cache/iroha-apple-build
+   export NORITO_BRIDGE_ARCHIVE_OUTPUT=/absolute/cache/NoritoBridge.xcframework.zip
+   mkdir -p \
+     "$NORITO_BRIDGE_OUT_DIR" \
+     "$NORITO_BRIDGE_BUILD_DIR" \
+     "$(dirname "$NORITO_BRIDGE_ARCHIVE_OUTPUT")"
+   ./scripts/build_norito_xcframework.sh \
+     --privacy-production-enabled \
+     --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
    ```
 
-   The release command requires a clean dependency-closure source tree, compiles
-   the Rust bridge for the iOS device plus arm64 and x86_64 variants of both the
-   iOS simulator and macOS, and writes the XCFramework under the selected
-   artifact directory. The
-   architecture-specific libraries are combined into the canonical
-   `ios-arm64_x86_64-simulator` and `macos-arm64_x86_64` slices. The manifest
-   is embedded at `NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the
-   companion `NoritoBridge.artifacts.json` path is a stable relative symlink to
-   that file, so one atomic XCFramework exchange publishes the binaries and
-   manifest together. The
+   The release command requires a clean dependency-closure source tree, compiles the Rust
+   bridge for the iOS device, arm64 and x86_64 iOS simulator, and arm64 macOS targets,
+   and writes `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework`. The canonical manifest is embedded at
+   `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
+   `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
+   one atomic XCFramework exchange publishes the binaries and manifest together. The
    manifest binds exact native bridge ABI 21, the privacy-production feature state,
    source commit and fingerprint, header digest, required-symbol inventory, and
    per-slice SHA-256 hashes. Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
-   checker failure leaves the live generation unchanged. Override only the
-   recorded bridge version with `--bridge-version <version>` when needed.
-   `--allow-dirty-source` is for local integration artifacts and must not be
-   used for a release artifact. Never relabel an older ABI artifact.
+   checker or `xcodebuild` failure leaves the live generation unchanged. The
+   first-release builder has no skip-build, preserved-target, alternate-lock, or
+   manual XCFramework fallback mode. Override only the recorded bridge version with
+   `--bridge-version <version>` when needed. `--allow-dirty-source` is for local
+   integration artifacts and must not be used for a release artifact.
+   `scripts/update_norito_bridge_swift_pins.py` has no in-place update mode: use
+   `--check` for a read-only repository verification or `--output` with the exact
+   `--expected-preimage-sha256` to exclusively create a reviewed projection in an
+   external directory. The owner never rewrites `NativeBridge.swift`; incorporate an
+   approved projection through the normal guarded source-edit workflow.
+   The Cargo target, artifact, build, and archive-parent directories must already
+   exist as owned, writable, non-symbolic canonical directories. The archive output
+   itself must be absent, and the external build directory used for retained archive
+   snapshots must be outside both the repository and archive-parent tree. An existing
+   generation is accepted only
+   with its embedded manifest and canonical public manifest symlink already in
+   the first-release layout; the builder does not migrate an older layout.
 
-2. Reauthenticate the published pair and run Swift against the same external
-   artifact:
-
-   ```bash
-   MOBILE_SDK_PYTHON_BINARY=/absolute/path/python3.12 \
-   MOBILE_SDK_APPLE_ARTIFACT_DIR=/absolute/path/apple-artifacts \
-     bash scripts/check_mobile_sdk_artifacts.sh --apple-only
-
-   MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1 \
-   MOBILE_SDK_APPLE_ARTIFACT_DIR=/absolute/path/apple-artifacts \
-     swift test --package-path IrohaSwift \
-       --disable-automatic-resolution \
-       --scratch-path /absolute/path/swift-build
-   ```
-
-   `IrohaSwift/Package.swift` admits only an artifact with readable embedded
-   metadata declaring exact ABI 21. It does not use a remote URL/checksum binary
-   target. The external directory must be canonical, exist already, and remain
-   outside the reviewed repository.
-
-3. Create the versioned archive, copied manifest, checksum inventory, and
-   package manifest with the repository helper:
+2. Confirm the builder-owned archive publication:
 
    ```bash
-   MOBILE_SDK_PYTHON_BINARY=/absolute/path/python3.12 \
-   MOBILE_SDK_APPLE_ARTIFACT_DIR=/absolute/path/apple-artifacts \
-   MOBILE_SDK_PACKAGE_OUT_DIR=/absolute/path/mobile-sdk-release \
-     bash scripts/package_mobile_sdk_artifacts.sh \
-       --apple --version <release-version>
+   test -f "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
+   /usr/bin/unzip -t "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
+   zipinfo -1 "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
    ```
 
-4. Inspect the package manifest and checksum inventory, then tag the clean source
-   commit. Generated `dist/*` and external build/package outputs remain untracked;
-   only `dist/.gitkeep` belongs in Git. The tag workflow rebuilds and publishes
-   its own authenticated release assets.
+   Before releasing its authenticated artifact-publication lock, the builder invokes
+   the sole archive owner on the generation it just published. The owner retains a
+   unique source snapshot and re-authenticates the exact ABI-21 inventory,
+   recomputes source and tool provenance, verifies each Mach-O architecture and the
+   required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
+   stores them without host-zlib variance, normalizes modes and ZIP timestamps from
+   `SOURCE_DATE_EPOCH`, and fsyncs a temporary archive while retaining its open file
+   descriptor and authenticated inode identity. Publication uses one atomic
+   no-replace rename. The owner never creates or removes an archive-destination lock,
+   and any pre-existing or concurrently created destination is rejected and left
+   untouched. Failed runs retain their uniquely named snapshot and archive residue
+   for inspection instead of deleting a path that another process may have swapped.
+   A concurrent builder or archiver is rejected; do not invoke `ditto` or `zip`
+   directly. CI also feeds the published ZIP to a fresh local SwiftPM binary target
+   and compiles a consumer against `NoritoBridge`.
+
+3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
+   version and checksum:
+
+   ```bash
+   swift package compute-checksum "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
+   ```
+
+   Record the checksum in `Package.swift` when defining the binary target.
+
+4. Update `IrohaSwift/IrohaSwift.podspec` with the new version, checksum, and archive
+   URL.
+
+5. **Regenerate headers if the bridge gained new exports.** The Swift bridge now exposes
+   `connect_norito_set_acceleration_config` so `AccelerationSettings` can toggle Metal /
+   GPU backends. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
+   matches `crates/connect_norito_bridge/include/connect_norito_bridge.h` before zipping.
+
+6. Run the Swift validation suite before tagging:
+
+   ```bash
+   swift test --package-path IrohaSwift --disable-automatic-resolution
+   make swift-ci
+   ```
+
+   The first command ensures the Swift package (including `AccelerationSettings`) stays
+   green; the second validates fixture parity, renders the parity/CI dashboards, and
+   exercises the same telemetry checks enforced in Buildkite (including the
+   `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
+
+7. Commit the generated artifacts in a release branch and tag the commit.
 
 ## Publishing
 

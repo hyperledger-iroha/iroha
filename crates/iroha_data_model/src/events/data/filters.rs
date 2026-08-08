@@ -48,8 +48,6 @@ mod model {
         Executor(ExecutorEventFilter),
         /// Matches proof verification events
         Proof(ProofEventFilter),
-        /// Matches confidential asset events
-        Confidential(ConfidentialEventFilter),
         /// Matches verifying key registry lifecycle events
         VerifyingKey(VerifyingKeyEventFilter),
         /// Matches runtime upgrade lifecycle events
@@ -83,16 +81,6 @@ mod model {
         pub(super) id_matcher: Option<crate::proof::ProofId>,
         /// Matches only events from this set
         pub(super) event_set: super::proof::ProofEventSet,
-    }
-
-    /// An event filter for [`super::confidential::ConfidentialEvent`] values.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    pub struct ConfidentialEventFilter {
-        /// If specified, matches only events for this asset definition id
-        pub(super) asset_matcher: Option<AssetDefinitionId>,
-        /// Matches only events from this set
-        pub(super) event_set: super::confidential::ConfidentialEventSet,
     }
 
     /// An event filter for [`super::verifying_keys::VerifyingKeyEvent`] values.
@@ -392,33 +380,6 @@ impl ProofEventFilter {
     }
 }
 
-impl ConfidentialEventFilter {
-    /// Creates a new [`ConfidentialEventFilter`] accepting all [`ConfidentialEvent`]s.
-    pub const fn new() -> Self {
-        Self {
-            asset_matcher: None,
-            event_set: super::confidential::ConfidentialEventSet::all(),
-        }
-    }
-
-    /// Filter by asset definition identifier.
-    #[must_use]
-    pub fn for_asset_definition(mut self, id: AssetDefinitionId) -> Self {
-        self.asset_matcher = Some(id);
-        self
-    }
-
-    /// Filter by confidential event kinds.
-    #[must_use]
-    pub const fn for_events(
-        mut self,
-        event_set: super::confidential::ConfidentialEventSet,
-    ) -> Self {
-        self.event_set = event_set;
-        self
-    }
-}
-
 impl VerifyingKeyEventFilter {
     /// Creates a new [`VerifyingKeyEventFilter`] accepting all [`super::verifying_keys::VerifyingKeyEvent`] values.
     pub const fn new() -> Self {
@@ -697,12 +658,6 @@ impl Default for ProofEventFilter {
     }
 }
 
-impl Default for ConfidentialEventFilter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Default for SorafsGatewayEventFilter {
     fn default() -> Self {
         Self::new()
@@ -827,20 +782,6 @@ impl super::EventFilter for ProofEventFilter {
             });
 
         id_ok && self.event_set.matches(event)
-    }
-}
-
-#[cfg(feature = "transparent_api")]
-impl super::EventFilter for ConfidentialEventFilter {
-    type Event = super::confidential::ConfidentialEvent;
-
-    fn matches(&self, event: &Self::Event) -> bool {
-        let asset_ok = self.asset_matcher.as_ref().is_none_or(|id| match event {
-            super::confidential::ConfidentialEvent::Shielded(e) => id == &e.asset_definition,
-            super::confidential::ConfidentialEvent::Transferred(e) => id == &e.asset_definition,
-            super::confidential::ConfidentialEvent::Unshielded(e) => id == &e.asset_definition,
-        });
-        asset_ok && self.event_set.matches(event)
     }
 }
 
@@ -1753,10 +1694,6 @@ impl EventFilter for DataEventFilter {
                 filter.matches(proof_event)
             }
             (
-                DataEventFilter::Confidential(filter),
-                DataEvent::Confidential(confidential_event),
-            ) => filter.matches(confidential_event),
-            (
                 DataEventFilter::VerifyingKey(filter),
                 DataEvent::VerifyingKey(verifying_key_event),
             ) => filter.matches(verifying_key_event),
@@ -1847,11 +1784,11 @@ pub mod prelude {
     pub use super::GovernanceEventFilter;
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
-        ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
-        EscrowEventFilter, ExecutorEventFilter, MusubiEventFilter, NftEventFilter,
-        OracleEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter,
-        SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
-        TriggerEventFilter, VerifyingKeyEventFilter,
+        ConfigurationEventFilter, DataEventFilter, DomainEventFilter, EscrowEventFilter,
+        ExecutorEventFilter, MusubiEventFilter, NftEventFilter, OracleEventFilter, PeerEventFilter,
+        ProofEventFilter, RoleEventFilter, RwaEventFilter, SocialEventFilter,
+        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
+        VerifyingKeyEventFilter,
     };
 }
 #[cfg(test)]

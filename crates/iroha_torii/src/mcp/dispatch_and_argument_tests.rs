@@ -1,0 +1,2537 @@
+// MCP dispatch, route, governance, and argument regressions.
+
+#[test]
+fn tool_registry_skips_ws_and_sse_routes() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    assert!(!tools.is_empty(), "tool registry must not be empty");
+    assert!(tools.iter().all(|tool| {
+        tool.path_template != iroha_torii_shared::uri::SUBSCRIPTION
+            && tool.path_template != iroha_torii_shared::uri::BLOCKS_STREAM
+            && !tool.path_template.ends_with("/sse")
+    }));
+    assert!(tools.iter().any(|tool| tool.name == "connect.ws.ticket"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "connect.session.create_and_ticket")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.connect.session.create")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.connect.session.create_and_ticket")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.health"));
+    assert!(tools.iter().all(|tool| tool.name != "iroha.status"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.parameters.get"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.node.capabilities")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.node.query_projection_checkpoint_plan")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.node.query_projection_checkpoint_publish")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.node.query_projection_shard_catalog")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.node.query_projection_checkpoint")
+    );
+    assert!(tools.iter().all(|tool| tool.name != "iroha.time.now"));
+    assert!(tools.iter().all(|tool| tool.name != "iroha.time.status"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "torii.get_v1_api_version")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.commit_certificates")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.validator_sets.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.validator_sets.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.pacemaker")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.phases")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.params")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.status")
+    );
+    for retired in [
+        "iroha.sumeragi.rbc",
+        "iroha.sumeragi.rbc.sessions",
+        "iroha.sumeragi.rbc.delivered",
+        "iroha.sumeragi.rbc.sample",
+        "iroha.sumeragi.collectors",
+    ] {
+        assert!(
+            tools.iter().all(|tool| tool.name != retired),
+            "retired MCP tool {retired} leaked"
+        );
+    }
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.leader")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.sumeragi.qc"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.checkpoints")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.consensus_keys")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.bls_keys")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.key_lifecycle")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.telemetry")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.commit_qc.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.evidence.count")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.evidence.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.vrf.penalties")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.sumeragi.vrf.epoch")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.da.ingest"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.proof_policies")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.proof_policy_snapshot")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.manifests.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.commitments.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.commitments.prove")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.commitments.verify")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.pin_intents.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.pin_intents.prove")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.da.pin_intents.verify")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.runtime.abi.active")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.runtime.abi.hash")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.runtime.metrics")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.runtime.upgrades.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.runtime.upgrades.propose")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.runtime.upgrades.activate")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.runtime.upgrades.cancel")
+    );
+    assert!(tools.iter().all(|tool| tool.name != "iroha.ledger.headers"));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.name != "iroha.ledger.state_root")
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.name != "iroha.ledger.state_proof")
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.name != "iroha.ledger.block_proof")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.bridge.finality.proof")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.bridge.finality.bundle")
+    );
+    assert!(tools.iter().all(|tool| tool.name != "iroha.proofs.get"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.proofs.query"));
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool.name != "iroha.proofs.retention")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.contract.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.proposals.deploy_contract")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.proposals.get")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.gov.locks.get"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.referenda.get")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.gov.tally.get"));
+    assert!(tools.iter().all(|tool| tool.name != "iroha.gov.ballots.zk"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.ballots.zk_v1")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.ballots.zk_v1.ballot_proof")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.ballots.plain")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.protected_namespaces.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.protected_namespaces.update")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.unlocks.stats")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.council.current")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.citizens.count")
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.council.audit")
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.council.derive_vrf")
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.council.persist")
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name == "iroha.gov.council.replace")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.gov.enact"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.gov.finalize"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.aliases.resolve")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.aliases.resolve_index")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.aliases.by_account")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.contracts.code.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.contracts.code.bytes.get")
+    );
+    for retired in [
+        "iroha.contracts.deploy",
+        "iroha.contracts.deploy_bundle",
+        "iroha.contracts.deploy_bundles.get",
+    ] {
+        assert!(
+            tools.iter().all(|tool| tool.name != retired),
+            "retired server-side deployment tool leaked into MCP: {retired}"
+        );
+    }
+    assert!(tools.iter().any(|tool| tool.name == "iroha.contracts.call"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.contracts.call_and_wait")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.contracts.state.get")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.list"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.get"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.qr"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.query"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.accounts.onboard")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.transactions.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.transactions.submit_and_wait")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.transactions.wait")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.accounts.assets")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.accounts.permissions")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.accounts.transactions.query")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.accounts.history")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.accounts.assets.query")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.accounts.portfolio")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.domains.list"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.domains.get"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.domains.query"));
+    for definition in MUSUBI_V1_TOOL_DEFINITIONS {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == definition.name)
+            .unwrap_or_else(|| panic!("missing Musubi V1 tool `{}`", definition.name));
+        assert_eq!(tool.method, Method::POST);
+        assert_eq!(tool.path_template, definition.path);
+        assert_eq!(tool.effect, definition.effect);
+    }
+    assert!(!tools.iter().any(|tool| {
+        matches!(
+            tool.name.as_str(),
+            "iroha.musubi.search"
+                | "iroha.musubi.release.get"
+                | "iroha.musubi.package.releases"
+                | "iroha.musubi.package.versions"
+                | "iroha.musubi.alias.resolve"
+                | "iroha.musubi.instructions.publish_release"
+                | "iroha.musubi.instructions.yank_release"
+                | "iroha.musubi.instructions.set_alias"
+                | "iroha.musubi.instructions.assert_release_exists"
+        )
+    }));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.plans.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.plans.create")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.create")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.pause")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.resume")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.cancel")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.keep")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.usage")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.subscriptions.charge_now")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.assets.definitions")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.assets.definitions.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.assets.definitions.query")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.assets.holders"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.assets.holders.query")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.assets.list"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.assets.get"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.nfts.chain.list")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.nfts.list"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.nfts.get"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.nfts.query"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.rwas.chain.list")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.rwas.list"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.rwas.get"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.rwas.query"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.pacs008.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.pacs009.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.pacs002.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.pacs004.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.camt056.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.sese023.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.sese024.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.sese025.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.colr012.submit")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.iso20022.status.get")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.queries.submit"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.transactions.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.transactions.get")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.instructions.list")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool.name == "iroha.instructions.get")
+    );
+    assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.list"));
+    assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.get"));
+}
+
+#[test]
+fn find_tool_spec_by_name_accepts_only_listed_exact_names() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+
+    assert!(find_tool_spec_by_name(&tools, "torii.healthCheck").is_none());
+    let tool = find_tool_spec_by_name(&tools, "torii.get_health")
+        .expect("the exact tools/list name should resolve to the health tool");
+    assert_eq!(tool.path_template, "/health");
+    assert_eq!(tool.method, Method::GET);
+}
+
+#[test]
+fn find_tool_spec_by_name_rejects_removed_post_transaction_alias() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+
+    assert!(find_tool_spec_by_name(&tools, "torii.post_transaction").is_none());
+    let tool = find_tool_spec_by_name(&tools, "iroha.transactions.submit")
+        .expect("canonical transaction submit tool must remain available");
+    assert_eq!(tool.path_template, iroha_torii_shared::uri::TRANSACTION);
+    assert_eq!(tool.method, Method::POST);
+}
+
+#[tokio::test]
+async fn dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_checks() {
+    let mut app = mk_app_state_for_tests();
+    install_remote_addr_probe_router(&mut app);
+
+    let mut inbound_headers = HeaderMap::new();
+    inbound_headers.insert(
+        HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+        HeaderValue::from_static("198.51.100.23"),
+    );
+
+    let result = dispatch_route(
+        &app,
+        &inbound_headers,
+        Method::GET,
+        "/v1/remote-probe",
+        None,
+        Vec::new(),
+        None,
+        None,
+    )
+    .await
+    .expect("dispatch succeeds");
+
+    assert_eq!(result.get("status").and_then(Value::as_u64), Some(200));
+    let body = result
+        .get("body")
+        .and_then(Value::as_object)
+        .expect("response body");
+    assert_eq!(
+        body.get("allowed_header_only").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        body.get("allowed_with_remote").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        body.get("remote").and_then(Value::as_str),
+        Some("198.51.100.23")
+    );
+    assert_eq!(
+        body.get("header").and_then(Value::as_str),
+        Some("198.51.100.23")
+    );
+}
+
+#[tokio::test]
+async fn governance_mcp_rejects_noncanonical_ids_before_inner_dispatch() {
+    let mut app = mk_app_state_for_tests();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
+    let headers = HeaderMap::new();
+
+    let proposal = norito::json!({ "proposal_id": ("AA".repeat(32)) });
+    dispatch_iroha_gov_proposals_get(
+        &app,
+        &headers,
+        proposal.as_object().expect("proposal arguments"),
+    )
+    .await
+    .expect_err("uppercase proposal id must fail before routing");
+
+    let locks = norito::json!({ "rid": "referendum/alias" });
+    dispatch_iroha_gov_locks_get(&app, &headers, locks.as_object().expect("lock arguments"))
+        .await
+        .expect_err("aliased lock selector must fail before routing");
+    let referendum = norito::json!({ "referendum_id": ".hidden" });
+    dispatch_iroha_gov_referenda_get(
+        &app,
+        &headers,
+        referendum.as_object().expect("referendum arguments"),
+    )
+    .await
+    .expect_err("hidden referendum selector must fail before routing");
+    let tally = norito::json!({ "tally_id": "tally%2Falias" });
+    dispatch_iroha_gov_tally_get(&app, &headers, tally.as_object().expect("tally arguments"))
+        .await
+        .expect_err("escaped tally selector must fail before routing");
+
+    let invalid_election = norito::json!({ "body": { "election_id": "vote/alias" } });
+    for result in [
+        dispatch_iroha_gov_ballots_zk_v1(
+            &app,
+            &headers,
+            invalid_election.as_object().expect("ZK ballot arguments"),
+        )
+        .await,
+        dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
+            &app,
+            &headers,
+            invalid_election
+                .as_object()
+                .expect("ZK proof ballot arguments"),
+        )
+        .await,
+    ] {
+        result.expect_err("invalid election selector must fail before routing");
+    }
+    let plain = norito::json!({ "body": { "referendum_id": "vote alias" } });
+    dispatch_iroha_gov_ballots_plain(
+        &app,
+        &headers,
+        plain.as_object().expect("plain ballot arguments"),
+    )
+    .await
+    .expect_err("invalid plain selector must fail before routing");
+    let enact = norito::json!({ "body": { "proposal_id": ("AA".repeat(32)) } });
+    dispatch_iroha_gov_enact(&app, &headers, enact.as_object().expect("enact arguments"))
+        .await
+        .expect_err("invalid enact proposal id must fail before routing");
+    let finalize = norito::json!({
+        "body": {
+            "referendum_id": ("11".repeat(32)),
+            "proposal_id": ("22".repeat(32))
+        }
+    });
+    dispatch_iroha_gov_finalize(
+        &app,
+        &headers,
+        finalize.as_object().expect("finalize arguments"),
+    )
+    .await
+    .expect_err("mismatched finalization ids must fail before routing");
+    let non_digest_finalize = norito::json!({
+        "body": {
+            "referendum_id": "referendum-1",
+            "proposal_id": ("11".repeat(32))
+        }
+    });
+    dispatch_iroha_gov_finalize(
+        &app,
+        &headers,
+        non_digest_finalize
+            .as_object()
+            .expect("non-digest finalize arguments"),
+    )
+    .await
+    .expect_err("non-digest finalization referendum id must fail before routing");
+
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "invalid governance tool calls must not reach the inner Torii router"
+    );
+}
+
+#[tokio::test]
+async fn openapi_governance_mcp_rejects_noncanonical_ids_before_inner_dispatch() {
+    let mut app = mk_app_state_for_tests();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
+    let headers = HeaderMap::new();
+
+    for (path, arguments) in [
+        (
+            "/v1/gov/proposals/{id}",
+            norito::json!({ "path": { "id": ("AA".repeat(32)) } }),
+        ),
+        (
+            "/v1/gov/locks/{rid}",
+            norito::json!({ "path": { "rid": "referendum/alias" } }),
+        ),
+        (
+            "/v1/gov/referenda/{id}",
+            norito::json!({ "path": { "id": ".hidden" } }),
+        ),
+        (
+            "/v1/gov/tally/{id}",
+            norito::json!({ "path": { "id": "tally%2Falias" } }),
+        ),
+    ] {
+        let tool = sample_tool_at("torii.test", Method::GET, path, ToolEffect::Read);
+        dispatch_openapi_tool(
+            &app,
+            &headers,
+            &tool,
+            arguments.as_object().expect("GET arguments"),
+        )
+        .await
+        .unwrap_err();
+    }
+
+    for (path, arguments) in [
+        (
+            "/v1/zk/vote/tally",
+            norito::json!({ "body": { "election_id": "vote/alias" } }),
+        ),
+        (
+            "/v1/gov/ballots/zk-v1",
+            norito::json!({ "body": { "election_id": "vote alias" } }),
+        ),
+        (
+            "/v1/gov/ballots/zk-v1/ballot-proof",
+            norito::json!({ "body": { "election_id": "投票" } }),
+        ),
+        (
+            "/v1/gov/ballots/plain",
+            norito::json!({ "body": { "referendum_id": ".hidden" } }),
+        ),
+        (
+            "/v1/gov/enact",
+            norito::json!({ "body": { "proposal_id": ("AA".repeat(32)) } }),
+        ),
+        (
+            "/v1/gov/finalize",
+            norito::json!({
+                "body": {
+                    "referendum_id": ("11".repeat(32)),
+                    "proposal_id": ("22".repeat(32))
+                }
+            }),
+        ),
+        (
+            "/v1/gov/finalize",
+            norito::json!({
+                "body": {
+                    "referendum_id": "referendum-1",
+                    "proposal_id": ("11".repeat(32))
+                }
+            }),
+        ),
+    ] {
+        let tool = sample_tool_at("torii.test", Method::POST, path, ToolEffect::Write);
+        dispatch_openapi_tool(
+            &app,
+            &headers,
+            &tool,
+            arguments.as_object().expect("POST arguments"),
+        )
+        .await
+        .unwrap_err();
+    }
+
+    let opaque = norito::json!({
+        "body": { "election_id": "valid-election" },
+        "body_base64": "YQ=="
+    });
+    let tool = sample_tool_at(
+        "torii.test",
+        Method::POST,
+        "/v1/gov/ballots/zk-v1",
+        ToolEffect::Write,
+    );
+    dispatch_openapi_tool(
+        &app,
+        &headers,
+        &tool,
+        opaque.as_object().expect("opaque arguments"),
+    )
+    .await
+    .expect_err("opaque body must not bypass identifier preflight");
+
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "invalid OpenAPI-derived governance calls must not reach the inner Torii router"
+    );
+}
+
+#[tokio::test]
+async fn canonical_governance_mcp_ids_reach_inner_dispatch_once_per_call() {
+    let mut app = mk_app_state_for_tests();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    install_request_counting_router(&mut app, std::sync::Arc::clone(&calls));
+    let headers = HeaderMap::new();
+    let proposal_id = "ab".repeat(32);
+    let maximum_selector = "a".repeat(128);
+
+    let proposal = norito::json!({ "proposal_id": (proposal_id.clone()) });
+    dispatch_iroha_gov_proposals_get(
+        &app,
+        &headers,
+        proposal.as_object().expect("proposal arguments"),
+    )
+    .await
+    .expect("canonical proposal GET dispatches");
+    let locks = norito::json!({ "rid": "a" });
+    dispatch_iroha_gov_locks_get(&app, &headers, locks.as_object().expect("lock arguments"))
+        .await
+        .expect("one-byte lock selector dispatches");
+    let referendum = norito::json!({ "referendum_id": (maximum_selector.clone()) });
+    dispatch_iroha_gov_referenda_get(
+        &app,
+        &headers,
+        referendum.as_object().expect("referendum arguments"),
+    )
+    .await
+    .expect("128-byte referendum selector dispatches");
+    let tally = norito::json!({ "tally_id": "A9_selector~with.dots" });
+    dispatch_iroha_gov_tally_get(&app, &headers, tally.as_object().expect("tally arguments"))
+        .await
+        .expect("canonical tally selector dispatches");
+
+    let zk = norito::json!({ "body": { "election_id": "election-1" } });
+    dispatch_iroha_gov_ballots_zk_v1(&app, &headers, zk.as_object().expect("ZK ballot arguments"))
+        .await
+        .expect("canonical ZK selector dispatches");
+    let zk_proof = norito::json!({ "election_id": (maximum_selector.clone()) });
+    dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
+        &app,
+        &headers,
+        zk_proof.as_object().expect("ZK proof arguments"),
+    )
+    .await
+    .expect("canonical flat ZK proof selector dispatches");
+    let plain = norito::json!({ "referendum_id": "referendum-1" });
+    dispatch_iroha_gov_ballots_plain(
+        &app,
+        &headers,
+        plain.as_object().expect("plain ballot arguments"),
+    )
+    .await
+    .expect("canonical flat plain selector dispatches");
+    let enact = norito::json!({ "proposal_id": (proposal_id.clone()) });
+    dispatch_iroha_gov_enact(&app, &headers, enact.as_object().expect("enact arguments"))
+        .await
+        .expect("canonical flat enactment proposal dispatches");
+    let finalize = norito::json!({
+        "referendum_id": (proposal_id.clone()),
+        "proposal_id": (proposal_id.clone())
+    });
+    dispatch_iroha_gov_finalize(
+        &app,
+        &headers,
+        finalize.as_object().expect("finalize arguments"),
+    )
+    .await
+    .expect("canonical flat finalization ids dispatch");
+
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        9,
+        "each canonical purpose-built governance call must dispatch exactly once"
+    );
+
+    calls.store(0, std::sync::atomic::Ordering::SeqCst);
+    for (path, arguments) in [
+        (
+            "/v1/gov/proposals/{id}",
+            norito::json!({ "path": { "id": (proposal_id.clone()) } }),
+        ),
+        (
+            "/v1/gov/locks/{rid}",
+            norito::json!({ "path": { "rid": "a" } }),
+        ),
+        (
+            "/v1/gov/referenda/{id}",
+            norito::json!({ "path": { "id": (maximum_selector.clone()) } }),
+        ),
+        (
+            "/v1/gov/tally/{id}",
+            norito::json!({ "path": { "id": "A9_selector~with.dots" } }),
+        ),
+    ] {
+        let tool = sample_tool_at("torii.test", Method::GET, path, ToolEffect::Read);
+        dispatch_openapi_tool(
+            &app,
+            &headers,
+            &tool,
+            arguments.as_object().expect("OpenAPI GET arguments"),
+        )
+        .await
+        .expect("canonical OpenAPI-derived GET dispatches");
+    }
+
+    for (path, arguments) in [
+        (
+            "/v1/zk/vote/tally",
+            norito::json!({ "body": { "election_id": "a" } }),
+        ),
+        (
+            "/v1/gov/ballots/zk-v1",
+            norito::json!({ "body": { "election_id": "election-1" } }),
+        ),
+        (
+            "/v1/gov/ballots/zk-v1/ballot-proof",
+            norito::json!({
+                "body": { "election_id": (maximum_selector.clone()) }
+            }),
+        ),
+        (
+            "/v1/gov/ballots/plain",
+            norito::json!({ "body": { "referendum_id": "referendum-1" } }),
+        ),
+        (
+            "/v1/gov/enact",
+            norito::json!({ "body": { "proposal_id": (proposal_id.clone()) } }),
+        ),
+    ] {
+        let tool = sample_tool_at("torii.test", Method::POST, path, ToolEffect::Write);
+        dispatch_openapi_tool(
+            &app,
+            &headers,
+            &tool,
+            arguments.as_object().expect("OpenAPI POST arguments"),
+        )
+        .await
+        .expect("canonical OpenAPI-derived POST dispatches");
+    }
+    let finalize_arguments = norito::json!({
+        "body": {
+            "referendum_id": (proposal_id.clone()),
+            "proposal_id": proposal_id
+        }
+    });
+    let finalize_tool = sample_tool_at(
+        "torii.test",
+        Method::POST,
+        "/v1/gov/finalize",
+        ToolEffect::Write,
+    );
+    dispatch_openapi_tool(
+        &app,
+        &headers,
+        &finalize_tool,
+        finalize_arguments
+            .as_object()
+            .expect("OpenAPI finalize arguments"),
+    )
+    .await
+    .expect("canonical OpenAPI-derived finalization dispatches");
+
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        10,
+        "each canonical OpenAPI-derived governance call must dispatch exactly once"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
+    let mut app = mk_app_state_for_tests();
+    install_remote_addr_probe_router(&mut app);
+
+    let mut extra_headers = Map::new();
+    extra_headers.insert(
+        crate::limits::REMOTE_ADDR_HEADER.to_owned(),
+        Value::String("127.0.0.1".to_owned()),
+    );
+    let extra_headers = Value::Object(extra_headers);
+
+    let result = dispatch_route(
+        &app,
+        &HeaderMap::new(),
+        Method::GET,
+        "/v1/remote-probe",
+        Some(&extra_headers),
+        Vec::new(),
+        None,
+        None,
+    )
+    .await
+    .expect("dispatch succeeds");
+
+    assert_eq!(result.get("status").and_then(Value::as_u64), Some(200));
+    let body = result
+        .get("body")
+        .and_then(Value::as_object)
+        .expect("response body");
+    assert_eq!(
+        body.get("allowed_header_only").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        body.get("allowed_with_remote").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(body.get("remote").and_then(Value::as_str), Some("0.0.0.0"));
+    assert!(body.get("header").is_some_and(Value::is_null));
+}
+
+#[tokio::test]
+async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured() {
+    let mut app = mk_app_state_for_tests();
+    install_api_token_probe_router(&mut app, &[]);
+
+    let result = dispatch_route(
+        &app,
+        &HeaderMap::new(),
+        Method::GET,
+        "/v1/api-token-probe",
+        None,
+        Vec::new(),
+        None,
+        None,
+    )
+    .await
+    .expect("inner router returns the authentication response");
+
+    assert_eq!(result.get("status").and_then(Value::as_u64), Some(503));
+}
+
+#[tokio::test]
+async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
+    let mut app = mk_app_state_for_tests();
+    install_api_token_probe_router(&mut app, &["configured-token"]);
+    let extra_headers = norito::json!({
+        "x-api-token": "configured-token"
+    });
+
+    let rejected = dispatch_route(
+        &app,
+        &HeaderMap::new(),
+        Method::GET,
+        "/v1/api-token-probe",
+        Some(&extra_headers),
+        Vec::new(),
+        None,
+        None,
+    )
+    .await
+    .expect("inner router returns the authentication response");
+    assert_eq!(rejected.get("status").and_then(Value::as_u64), Some(401));
+
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        HEADER_X_API_TOKEN,
+        HeaderValue::from_static("configured-token"),
+    );
+    let accepted = dispatch_route(
+        &app,
+        &inbound,
+        Method::GET,
+        "/v1/api-token-probe",
+        None,
+        Vec::new(),
+        None,
+        None,
+    )
+    .await
+    .expect("single trusted outer token dispatches");
+    assert_eq!(accepted.get("status").and_then(Value::as_u64), Some(204));
+}
+
+#[test]
+fn fill_path_template_substitutes_required_values() {
+    let args = norito::json!({
+        "sid": "abc",
+        "role": "wallet"
+    });
+    let path = fill_path_template("/v1/connect/session/{sid}/{role}", Some(&args)).expect("filled");
+    assert_eq!(path, "/v1/connect/session/abc/wallet");
+}
+
+#[test]
+fn ws_ticket_uses_ws_url_and_protocol_token() {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, HeaderValue::from_static("node.example"));
+    let args = norito::json!({
+        "sid": "Z2Fr",
+        "role": "app",
+        "token": "my-token"
+    });
+    let ticket =
+        build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
+    let ws_url = ticket
+        .get("ws_url")
+        .and_then(Value::as_str)
+        .expect("ws url");
+    assert!(ws_url.starts_with("ws://node.example/v1/connect/ws?"));
+    assert_eq!(
+        ticket
+            .get("sec_websocket_protocol")
+            .and_then(Value::as_str)
+            .expect("protocol"),
+        "iroha-connect.token.v1.bXktdG9rZW4"
+    );
+}
+
+#[test]
+fn ws_ticket_accepts_role_specific_token_aliases() {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, HeaderValue::from_static("node.example"));
+    let args = norito::json!({
+        "sid": "YWJj",
+        "role": "wallet",
+        "token_wallet": "wallet-token"
+    });
+    let ticket =
+        build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
+    assert_eq!(
+        ticket
+            .get("authorization_header")
+            .and_then(Value::as_str)
+            .expect("authorization"),
+        "Bearer wallet-token"
+    );
+}
+
+#[test]
+fn ws_ticket_accepts_session_id_alias() {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, HeaderValue::from_static("node.example"));
+    let args = norito::json!({
+        "session_id": "YWJj",
+        "role": "app",
+        "token": "app-token"
+    });
+    let ticket =
+        build_connect_ws_ticket(args.as_object().expect("object"), &headers).expect("ticket");
+    let ws_url = ticket
+        .get("ws_url")
+        .and_then(Value::as_str)
+        .expect("ws url");
+    assert!(ws_url.contains("sid=YWJj"));
+}
+
+#[test]
+fn build_connect_session_create_body_generates_sid_when_missing() {
+    let args = norito::json!({
+        "node": "https://node.example"
+    });
+    let body =
+        build_connect_session_create_body(args.as_object().expect("object")).expect("create body");
+    let payload = body.as_object().expect("object");
+    let sid = payload
+        .get("sid")
+        .and_then(Value::as_str)
+        .expect("generated sid");
+    assert_eq!(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(sid)
+            .expect("base64url sid")
+            .len(),
+        32
+    );
+    assert_eq!(
+        payload.get("node").and_then(Value::as_str),
+        Some("https://node.example")
+    );
+}
+
+#[test]
+fn build_connect_session_create_body_reports_sid_rng_failure() {
+    let args = norito::json!({
+        "node": "https://node.example"
+    });
+    let err = build_connect_session_create_body_with_rng(
+        args.as_object().expect("object"),
+        &mut FailingMcpRng,
+    )
+    .expect_err("Connect SID RNG failure");
+    assert!(err.contains("Connect session sid RNG failed"));
+    assert!(err.contains("failing MCP RNG"));
+}
+
+#[test]
+fn build_connect_session_create_body_preserves_sid_in_body() {
+    let args = norito::json!({
+        "sid": "ignored-shortcut",
+        "body": {
+            "sid": "body-sid",
+            "node": "https://in-body.example"
+        }
+    });
+    let body =
+        build_connect_session_create_body(args.as_object().expect("object")).expect("create body");
+    let payload = body.as_object().expect("object");
+    assert_eq!(payload.get("sid").and_then(Value::as_str), Some("body-sid"));
+    assert_eq!(
+        payload.get("node").and_then(Value::as_str),
+        Some("https://in-body.example")
+    );
+}
+
+#[test]
+fn build_connect_session_create_body_accepts_session_id_shortcut() {
+    let args = norito::json!({
+        "session_id": "shortcut-sid"
+    });
+    let body =
+        build_connect_session_create_body(args.as_object().expect("object")).expect("create body");
+    let payload = body.as_object().expect("object");
+    assert_eq!(
+        payload.get("sid").and_then(Value::as_str),
+        Some("shortcut-sid")
+    );
+}
+
+#[test]
+fn extract_connect_sid_argument_accepts_path_session_id_alias() {
+    let args = norito::json!({
+        "path": {
+            "session_id": "nested-sid"
+        }
+    });
+    let sid = extract_connect_sid_argument(args.as_object().expect("object")).expect("sid alias");
+    assert_eq!(sid, "nested-sid");
+}
+
+#[test]
+fn connect_management_headers_maps_token_to_authorization() {
+    let args = norito::json!({
+        "token_management": "management-token",
+        "headers": {
+            "Accept": "application/json"
+        }
+    });
+    let headers = connect_management_headers(args.as_object().expect("object"))
+        .expect("headers")
+        .expect("headers value");
+    let headers = headers.as_object().expect("headers object");
+    assert_eq!(
+        headers.get("Authorization").and_then(Value::as_str),
+        Some("Bearer management-token")
+    );
+    assert_eq!(
+        headers.get("Accept").and_then(Value::as_str),
+        Some("application/json")
+    );
+}
+
+#[test]
+fn vpn_tool_factories_expose_expected_names_and_routes() {
+    let profile = iroha_vpn_profile_tool();
+    assert_eq!(profile.name, "iroha.vpn.profile");
+    assert_eq!(profile.path_template, "/v1/vpn/profile");
+
+    let quote = iroha_vpn_quotes_create_tool();
+    assert_eq!(quote.name, "iroha.vpn.quotes.create");
+    assert_eq!(quote.path_template, "/v1/vpn/quotes");
+    let quote_schema = quote.input_schema.as_object().expect("quote schema");
+    let quote_properties = quote_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("quote properties");
+    assert!(!quote_properties.contains_key("metering_public_key_hex"));
+    assert!(!quote_properties.contains_key("headers"));
+    assert!(quote_properties.contains_key("canonical_auth"));
+    let quote_required = quote_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("quote required fields");
+    assert!(
+        quote_required
+            .iter()
+            .any(|field| field.as_str() == Some("body"))
+    );
+    assert!(
+        quote_required
+            .iter()
+            .any(|field| field.as_str() == Some("canonical_auth"))
+    );
+    let quote_body = quote_properties
+        .get("body")
+        .and_then(Value::as_object)
+        .expect("quote body schema");
+    assert_eq!(
+        quote_body
+            .get("additionalProperties")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        quote_body
+            .get("properties")
+            .and_then(Value::as_object)
+            .is_some_and(|properties| properties.contains_key("metering_public_key_hex"))
+    );
+    let quote_body_description = quote_properties
+        .get("body")
+        .and_then(Value::as_object)
+        .and_then(|body| body.get("description"))
+        .and_then(Value::as_str)
+        .expect("quote body description");
+    assert!(quote_body_description.contains("open_lease_instruction"));
+    assert!(!quote_body_description.contains("tx_instructions"));
+
+    let create = iroha_vpn_sessions_create_tool();
+    assert_eq!(create.name, "iroha.vpn.sessions.create");
+    assert_eq!(create.path_template, "/v1/vpn/sessions");
+
+    let get = iroha_vpn_sessions_get_tool();
+    assert_eq!(get.name, "iroha.vpn.sessions.get");
+    assert_eq!(get.path_template, "/v1/vpn/sessions/{session_id}");
+    let get_schema = get.input_schema.as_object().expect("session get schema");
+    let get_properties = get_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("session get properties");
+    assert!(get_properties.contains_key("session_id"));
+    assert!(get_properties.contains_key("canonical_auth"));
+    assert!(!get_properties.contains_key("id"));
+    assert!(!get_properties.contains_key("path"));
+    assert!(!get_properties.contains_key("headers"));
+    assert_eq!(
+        get_properties
+            .get("session_id")
+            .and_then(|schema| schema.get("pattern"))
+            .and_then(Value::as_str),
+        Some("^[0-9a-f]{64}$")
+    );
+
+    let delete = iroha_vpn_sessions_delete_tool();
+    assert_eq!(delete.name, "iroha.vpn.sessions.delete");
+    assert_eq!(delete.path_template, "/v1/vpn/sessions/{session_id}");
+
+    let receipts = iroha_vpn_receipts_list_tool();
+    assert_eq!(receipts.name, "iroha.vpn.receipts.list");
+    assert_eq!(receipts.path_template, "/v1/vpn/receipts");
+
+    let receipt_submit = iroha_vpn_receipts_submit_tool();
+    assert_eq!(receipt_submit.name, "iroha.vpn.receipts.submit");
+    assert_eq!(receipt_submit.path_template, "/v1/vpn/receipts");
+    let schema = receipt_submit
+        .input_schema
+        .as_object()
+        .expect("receipt submit schema");
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("receipt submit properties");
+    assert!(!properties.contains_key("lease_id_hex"));
+    assert!(!properties.contains_key("headers"));
+    assert!(properties.contains_key("canonical_auth"));
+    assert!(
+        properties
+            .get("body")
+            .and_then(|body| body.get("properties"))
+            .and_then(Value::as_object)
+            .is_some_and(|body| body.contains_key("lease_id_hex"))
+    );
+    let receipt_body_description = properties
+        .get("body")
+        .and_then(Value::as_object)
+        .and_then(|body| body.get("description"))
+        .and_then(Value::as_str)
+        .expect("receipt body description");
+    assert!(receipt_body_description.contains("settle_lease_instruction"));
+    assert!(!receipt_body_description.contains("tx_instructions"));
+
+    for tool in [quote, create, get, delete, receipts, receipt_submit] {
+        let descriptor = tool.descriptor();
+        let schema = descriptor
+            .get("inputSchema")
+            .and_then(Value::as_object)
+            .expect("published VPN input schema");
+        assert!(!schema.contains_key(MCP_STRICT_BODY_SCHEMA_EXTENSION));
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("published VPN required fields");
+        assert!(
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("canonical_auth")),
+            "{} must require an inner-target proof",
+            tool.name
+        );
+        let canonical_auth = schema
+            .get("properties")
+            .and_then(|properties| properties.get("canonical_auth"))
+            .expect("canonical_auth schema");
+        assert_eq!(
+            canonical_auth
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            canonical_auth
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+}
+
+#[test]
+fn extract_vpn_session_id_argument_requires_exact_field() {
+    let expected = "ab".repeat(32);
+    let args = norito::json!({ "session_id": expected.clone() });
+    let session_id = extract_vpn_session_id_argument(args.as_object().expect("object"))
+        .expect("exact VPN session id");
+    assert_eq!(session_id, expected);
+}
+
+#[test]
+fn extract_vpn_session_id_argument_rejects_aliases() {
+    for args in [
+        norito::json!({ "id": "top-level-vpn-session" }),
+        norito::json!({ "path": { "session_id": "nested-vpn-session" } }),
+        norito::json!({ "session_id": "AB".repeat(32) }),
+        norito::json!({ "session_id": "ab" }),
+    ] {
+        assert!(extract_vpn_session_id_argument(args.as_object().expect("object")).is_err());
+    }
+}
+
+#[test]
+fn collect_query_map_accepts_flat_query_fields_when_query_absent() {
+    let args = norito::json!({
+        "account_id": TEST_ACCOUNT_I105,
+        "limit": 20,
+        "offset": 0,
+        "headers": {"x": "1"}
+    });
+    let map = collect_query_map(
+        args.as_object().expect("object"),
+        &["account_id", "headers", "accept", "query"],
+    )
+    .expect("query map");
+    assert_eq!(map.get("limit").and_then(Value::as_u64), Some(20));
+    assert_eq!(map.get("offset").and_then(Value::as_u64), Some(0));
+    assert!(!map.contains_key("account_id"));
+    assert!(!map.contains_key("headers"));
+}
+
+#[test]
+fn collect_query_map_rejects_non_object_query() {
+    let args = norito::json!({
+        "query": "not-an-object"
+    });
+    let err = collect_query_map(args.as_object().expect("object"), &["query"]).expect_err("error");
+    assert!(err.contains("`query` must be an object"));
+}
+
+#[test]
+fn extract_account_id_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "account_id": TEST_ACCOUNT_I105
+    });
+    let account_id =
+        extract_account_id_argument(args.as_object().expect("object")).expect("account id");
+    assert_eq!(account_id, TEST_ACCOUNT_I105);
+}
+
+#[test]
+fn extract_uaid_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    });
+    let uaid = extract_uaid_argument(args.as_object().expect("object")).expect("uaid");
+    assert_eq!(
+        uaid,
+        "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    );
+}
+
+#[test]
+fn extract_domain_id_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "domain_id": "wonderland"
+    });
+    let domain_id = extract_domain_id_argument(args.as_object().expect("object")).expect("domain");
+    assert_eq!(domain_id, "wonderland");
+}
+
+#[test]
+fn extract_subscription_id_argument_accepts_alias_shortcut() {
+    let args = norito::json!({
+        "id": "sub-001"
+    });
+    let subscription_id =
+        extract_subscription_id_argument(args.as_object().expect("object")).expect("subscription");
+    assert_eq!(subscription_id, "sub-001");
+}
+
+#[test]
+fn subscription_draft_arguments_reject_aliases_and_missing_body() {
+    for args in [
+        norito::json!({ "id": "sub-001", "body": { "authority": TEST_ACCOUNT_I105 } }),
+        norito::json!({
+            "path": { "subscription_id": "sub-001" },
+            "body": { "authority": TEST_ACCOUNT_I105 }
+        }),
+    ] {
+        assert!(extract_exact_subscription_id_argument(args.as_object().expect("object")).is_err());
+    }
+
+    let exact = norito::json!({
+        "subscription_id": "sub-001",
+        "body": { "authority": TEST_ACCOUNT_I105 }
+    });
+    let exact = exact.as_object().expect("object");
+    assert_eq!(
+        extract_exact_subscription_id_argument(exact).unwrap(),
+        "sub-001"
+    );
+    assert!(build_required_object_body(exact).is_ok());
+    assert!(
+        build_required_exact_object_body(
+            exact,
+            &["authority"],
+            &["authority"],
+            "subscription action draft body",
+        )
+        .is_ok()
+    );
+
+    let missing_body = norito::json!({ "subscription_id": "sub-001" });
+    assert!(build_required_object_body(missing_body.as_object().expect("object")).is_err());
+    let private_key = norito::json!({
+        "subscription_id": "sub-001",
+        "body": {
+            "authority": TEST_ACCOUNT_I105,
+            "private_key": "forbidden"
+        }
+    });
+    assert!(
+        build_required_exact_object_body(
+            private_key.as_object().expect("object"),
+            &["authority"],
+            &["authority"],
+            "subscription action draft body",
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn subscription_draft_tools_publish_exact_secret_free_inputs() {
+    let create = iroha_subscriptions_create_tool();
+    let create_schema = create.input_schema.as_object().expect("create schema");
+    let create_required = create_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("create required");
+    assert_eq!(create_required, &[Value::String("body".to_owned())]);
+    let create_body = create_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("body"))
+        .and_then(Value::as_object)
+        .expect("create body schema");
+    assert_eq!(
+        create_body.get("additionalProperties"),
+        Some(&Value::Bool(false))
+    );
+    assert!(
+        !create_body
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("create body properties")
+            .contains_key("private_key")
+    );
+
+    for tool in [
+        iroha_subscriptions_pause_tool(),
+        iroha_subscriptions_resume_tool(),
+        iroha_subscriptions_cancel_tool(),
+        iroha_subscriptions_keep_tool(),
+        iroha_subscriptions_charge_now_tool(),
+    ] {
+        assert!(tool.description.contains("unsigned"));
+        let schema = tool.input_schema.as_object().expect("action schema");
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("action properties");
+        assert!(properties.contains_key("subscription_id"));
+        assert!(properties.contains_key("body"));
+        assert!(!properties.contains_key("id"));
+        assert!(!properties.contains_key("path"));
+        let body_properties = properties
+            .get("body")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("properties"))
+            .and_then(Value::as_object)
+            .expect("action body properties");
+        assert!(body_properties.contains_key("authority"));
+        assert!(!body_properties.contains_key("private_key"));
+    }
+}
+
+#[test]
+fn extract_iso20022_message_id_argument_accepts_alias_shortcut() {
+    let args = norito::json!({
+        "message_id": "msg-001"
+    });
+    let msg_id = extract_iso20022_message_id_argument(args.as_object().expect("object"))
+        .expect("message id");
+    assert_eq!(msg_id, "msg-001");
+}
+
+#[test]
+fn extract_ticket_argument_accepts_id_alias_shortcut() {
+    let args = norito::json!({
+        "id": "manifest-ticket-001"
+    });
+    let ticket = extract_ticket_argument(args.as_object().expect("object")).expect("ticket");
+    assert_eq!(ticket, "manifest-ticket-001");
+}
+
+#[test]
+fn extract_proof_record_id_argument_accepts_proof_id_alias_shortcut() {
+    let args = norito::json!({
+        "proof_id": "proof-001"
+    });
+    let proof_id = extract_proof_record_id_argument(args.as_object().expect("object")).expect("id");
+    assert_eq!(proof_id, "proof-001");
+}
+
+#[test]
+fn governance_entity_arguments_are_exact_and_unambiguous() {
+    let proposal_id = "ab".repeat(32);
+    let proposal_args = norito::json!({
+        "proposal_id": (proposal_id.clone())
+    });
+    assert_eq!(
+        extract_governance_proposal_id_argument(
+            proposal_args.as_object().expect("proposal object")
+        )
+        .expect("proposal id"),
+        proposal_id
+    );
+
+    let referendum_args = norito::json!({
+        "referendum_id": "referendum-001"
+    });
+    assert_eq!(
+        extract_governance_selector_argument(
+            referendum_args.as_object().expect("referendum object"),
+            &["id"],
+            &["id", "referendum_id"],
+            "referendum id",
+        )
+        .expect("referendum id"),
+        "referendum-001"
+    );
+
+    let tally_args = norito::json!({
+        "tally_id": "tally-001"
+    });
+    assert_eq!(
+        extract_governance_selector_argument(
+            tally_args.as_object().expect("tally object"),
+            &["id"],
+            &["id", "tally_id"],
+            "tally id",
+        )
+        .expect("tally id"),
+        "tally-001"
+    );
+
+    let lock_args = norito::json!({
+        "rid": "referendum-002"
+    });
+    assert_eq!(
+        extract_governance_selector_argument(
+            lock_args.as_object().expect("lock object"),
+            &["rid"],
+            &["rid", "id", "referendum_id"],
+            "referendum id",
+        )
+        .expect("lock id"),
+        "referendum-002"
+    );
+
+    let conflicting = norito::json!({
+        "rid": "referendum-001",
+        "referendum_id": "referendum-002"
+    });
+    assert!(
+        extract_governance_selector_argument(
+            conflicting.as_object().expect("conflicting object"),
+            &["rid"],
+            &["rid", "id", "referendum_id"],
+            "referendum id",
+        )
+        .expect_err("conflicting aliases must fail")
+        .contains("conflicting referendum id aliases")
+    );
+
+    let matching_path_and_flat = norito::json!({
+        "path": { "rid": "referendum-003" },
+        "referendum_id": "referendum-003"
+    });
+    assert_eq!(
+        extract_governance_selector_argument(
+            matching_path_and_flat
+                .as_object()
+                .expect("matching path object"),
+            &["rid"],
+            &["rid", "id", "referendum_id"],
+            "referendum id",
+        )
+        .expect("matching aliases"),
+        "referendum-003"
+    );
+
+    for invalid in [
+        norito::json!({
+            "path": {},
+            "referendum_id": "referendum-003"
+        }),
+        norito::json!({
+            "path": { "id": "referendum-003" },
+            "referendum_id": "referendum-003"
+        }),
+        norito::json!({
+            "rid": "referendum-003",
+            "unexpected": "ignored"
+        }),
+    ] {
+        extract_governance_selector_argument(
+            invalid.as_object().expect("invalid exact arguments"),
+            &["rid"],
+            &["rid", "id", "referendum_id"],
+            "referendum id",
+        )
+        .expect_err("non-schema governance aliases must fail closed");
+    }
+}
+
+#[test]
+fn governance_mcp_id_validators_match_first_release_grammars() {
+    let maximum = "a".repeat(128);
+    for selector in ["a", maximum.as_str(), "A9_selector~with.dots"] {
+        require_governance_selector_v1("selector", selector).expect("canonical selector must pass");
+    }
+    let overlong = "a".repeat(129);
+    for selector in [
+        "",
+        ".",
+        ".hidden",
+        "a/b",
+        "a%2Fb",
+        "a b",
+        "a\0b",
+        "投票",
+        overlong.as_str(),
+    ] {
+        require_governance_selector_v1("selector", selector)
+            .expect_err("noncanonical selector must fail");
+    }
+
+    require_governance_proposal_id_v1("proposal_id", &"ab".repeat(32))
+        .expect("exact lowercase hash must pass");
+    for proposal_id in [
+        "ab".repeat(31),
+        "AB".repeat(32),
+        format!("0x{}", "ab".repeat(32)),
+        format!("{}g", "ab".repeat(31)),
+    ] {
+        require_governance_proposal_id_v1("proposal_id", &proposal_id)
+            .expect_err("noncanonical proposal id must fail");
+    }
+}
+
+#[test]
+fn governance_mcp_catalog_publishes_exact_id_grammars() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    let tool_schema = |name: &str| {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing governance MCP tool `{name}`"));
+        sanitize_tool_input_schema(&tool.input_schema)
+    };
+    let assert_grammar = |schema: &Value, path: &[&str], pattern: &str, max_length: u64| {
+        let field = schema_value_at(schema, path);
+        assert_eq!(field.get("pattern").and_then(Value::as_str), Some(pattern));
+        assert_eq!(
+            field.get("maxLength").and_then(Value::as_u64),
+            Some(max_length)
+        );
+    };
+
+    let proposal = tool_schema("iroha.gov.proposals.get");
+    for path in [
+        &["properties", "id"][..],
+        &["properties", "proposal_id"][..],
+        &["properties", "path", "properties", "id"][..],
+    ] {
+        assert_grammar(&proposal, path, GOVERNANCE_PROPOSAL_ID_V1_PATTERN, 64);
+    }
+
+    for (tool, field, path_field) in [
+        ("iroha.gov.locks.get", "rid", "rid"),
+        ("iroha.gov.referenda.get", "referendum_id", "id"),
+        ("iroha.gov.tally.get", "tally_id", "id"),
+    ] {
+        let schema = tool_schema(tool);
+        assert_grammar(
+            &schema,
+            &["properties", field],
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN,
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64,
+        );
+        assert_grammar(
+            &schema,
+            &["properties", "path", "properties", path_field],
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN,
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64,
+        );
+    }
+
+    for (tool, field, pattern, max_length) in [
+        (
+            "iroha.gov.ballots.zk_v1",
+            "election_id",
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN,
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64,
+        ),
+        (
+            "iroha.gov.ballots.zk_v1.ballot_proof",
+            "election_id",
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN,
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64,
+        ),
+        (
+            "iroha.gov.ballots.plain",
+            "referendum_id",
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN,
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES as u64,
+        ),
+        (
+            "iroha.gov.enact",
+            "proposal_id",
+            GOVERNANCE_PROPOSAL_ID_V1_PATTERN,
+            64,
+        ),
+        (
+            "iroha.gov.finalize",
+            "referendum_id",
+            GOVERNANCE_PROPOSAL_ID_V1_PATTERN,
+            64,
+        ),
+        (
+            "iroha.gov.finalize",
+            "proposal_id",
+            GOVERNANCE_PROPOSAL_ID_V1_PATTERN,
+            64,
+        ),
+    ] {
+        let schema = tool_schema(tool);
+        assert_grammar(&schema, &["properties", field], pattern, max_length);
+        assert_grammar(
+            &schema,
+            &["properties", "body", "properties", field],
+            pattern,
+            max_length,
+        );
+    }
+}
+
+#[test]
+fn governance_mcp_catalog_preserves_required_body_or_flat_forms() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+    let tool_schema = |name: &str| {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing governance MCP tool `{name}`"));
+        sanitize_tool_input_schema(&tool.input_schema)
+    };
+    let assert_required = |schema: &Value, path: &[&str], fields: &[&str]| {
+        let expected = fields
+            .iter()
+            .map(|field| Value::String((*field).to_owned()))
+            .collect::<Vec<_>>();
+        let actual = schema_value_at(schema, path)
+            .as_array()
+            .unwrap_or_else(|| panic!("required fields at {path:?} are not an array"));
+        assert_eq!(
+            actual.as_slice(),
+            expected.as_slice(),
+            "required fields at {path:?}"
+        );
+    };
+
+    let proposal = tool_schema("iroha.gov.proposals.get");
+    assert_required(&proposal, &["if", "required"], &["path"]);
+    assert_required(&proposal, &["else", "if", "required"], &["id"]);
+    assert_required(&proposal, &["else", "else", "required"], &["proposal_id"]);
+
+    let locks = tool_schema("iroha.gov.locks.get");
+    assert_required(&locks, &["if", "required"], &["path"]);
+    assert_required(&locks, &["else", "if", "required"], &["rid"]);
+    assert_required(&locks, &["else", "else", "if", "required"], &["id"]);
+    assert_required(
+        &locks,
+        &["else", "else", "else", "required"],
+        &["referendum_id"],
+    );
+
+    for (name, primary, alias) in [
+        ("iroha.gov.referenda.get", "id", "referendum_id"),
+        ("iroha.gov.tally.get", "id", "tally_id"),
+    ] {
+        let schema = tool_schema(name);
+        assert_required(&schema, &["if", "required"], &["path"]);
+        assert_required(&schema, &["else", "if", "required"], &[primary]);
+        assert_required(&schema, &["else", "else", "required"], &[alias]);
+    }
+
+    for (name, fields) in [
+        ("iroha.gov.ballots.zk_v1", &["election_id"][..]),
+        ("iroha.gov.ballots.zk_v1.ballot_proof", &["election_id"][..]),
+        ("iroha.gov.ballots.plain", &["referendum_id"][..]),
+        ("iroha.gov.enact", &["proposal_id"][..]),
+        ("iroha.gov.finalize", &["referendum_id", "proposal_id"][..]),
+    ] {
+        let schema = tool_schema(name);
+        assert_required(&schema, &["if", "required"], &["body"]);
+        assert_required(&schema, &["then", "properties", "body", "required"], fields);
+        assert_required(&schema, &["else", "required"], fields);
+    }
+}
+
+#[test]
+fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
+    let cfg = iroha_config::parameters::actual::ToriiMcp::default();
+    let tools = build_tool_specs(&cfg);
+
+    for path in [
+        "/v1/zk/vote/tally",
+        "/v1/gov/ballots/zk-v1",
+        "/v1/gov/ballots/zk-v1/ballot-proof",
+        "/v1/gov/ballots/plain",
+        "/v1/gov/enact",
+        "/v1/gov/finalize",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| {
+                tool.name.starts_with("torii.")
+                    && tool.method == Method::POST
+                    && tool.path_template == path
+            })
+            .unwrap_or_else(|| panic!("missing OpenAPI-derived governance tool for {path}"));
+        let schema = sanitize_tool_input_schema(&tool.input_schema);
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("OpenAPI-derived governance required fields");
+        assert!(
+            required.iter().any(|field| field.as_str() == Some("body")),
+            "{path} must require the inspected JSON body"
+        );
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("OpenAPI-derived governance properties");
+        assert!(
+            !properties.contains_key("body_base64"),
+            "{path} must not advertise an opaque body bypass"
+        );
+        assert_eq!(
+            properties
+                .get("content_type")
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("application/json")
+        );
+        let body = properties
+            .get("body")
+            .expect("typed governance body schema");
+        let body_is_closed = body.get("additionalProperties").and_then(Value::as_bool)
+            == Some(false)
+            || body
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .is_some_and(|branches| {
+                    !branches.is_empty()
+                        && branches.iter().all(|branch| {
+                            branch.get("additionalProperties").and_then(Value::as_bool)
+                                == Some(false)
+                        })
+                });
+        assert!(
+            body_is_closed,
+            "{path} must preserve its closed typed body schema"
+        );
+    }
+}
+
+#[test]
+fn extract_runtime_upgrade_id_argument_accepts_upgrade_id_alias_shortcut() {
+    let args = norito::json!({
+        "upgrade_id": "upgrade-001"
+    });
+    let upgrade_id =
+        extract_runtime_upgrade_id_argument(args.as_object().expect("object")).expect("id");
+    assert_eq!(upgrade_id, "upgrade-001");
+}
+
+#[test]
+fn extract_height_argument_accepts_block_height_alias_shortcut() {
+    let args = norito::json!({
+        "block_height": 7
+    });
+    let height = extract_height_argument(args.as_object().expect("object")).expect("height");
+    assert_eq!(height, "7");
+}
+
+#[test]
+fn extract_view_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "view": 3
+    });
+    let view = extract_view_argument(args.as_object().expect("object")).expect("view");
+    assert_eq!(view, "3");
+}
+
+#[test]
+fn extract_epoch_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "epoch": 11
+    });
+    let epoch = extract_epoch_argument(args.as_object().expect("object")).expect("epoch");
+    assert_eq!(epoch, "11");
+}
+
+#[test]
+fn extract_entry_hash_argument_accepts_alias_shortcut() {
+    let args = norito::json!({
+        "tx_hash": "abc123"
+    });
+    let entry_hash =
+        extract_entry_hash_argument(args.as_object().expect("object")).expect("entry hash");
+    assert_eq!(entry_hash, "abc123");
+}
+
+#[test]
+fn build_iso20022_payload_body_accepts_xml_shortcut() {
+    let args = norito::json!({
+        "message_xml": "<Document>ok</Document>"
+    });
+    let (body, content_type) =
+        build_iso20022_payload_body(args.as_object().expect("object")).expect("iso body");
+    assert_eq!(body, b"<Document>ok</Document>".to_vec());
+    assert_eq!(content_type.as_deref(), Some("application/xml"));
+}
+
+#[test]
+fn extract_definition_id_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+    });
+    let definition_id =
+        extract_definition_id_argument(args.as_object().expect("object")).expect("definition");
+    assert_eq!(definition_id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+}
+
+#[test]
+fn extract_asset_id_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "asset_id": TEST_ASSET_ID
+    });
+    let asset_id = extract_asset_id_argument(args.as_object().expect("object")).expect("asset id");
+    assert_eq!(asset_id, TEST_ASSET_ID);
+}
+
+#[test]
+fn extract_nft_id_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "nft_id": "nft-001"
+    });
+    let nft_id = extract_nft_id_argument(args.as_object().expect("object")).expect("nft id");
+    assert_eq!(nft_id, "nft-001");
+}
+
+#[test]
+fn extract_rwa_id_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "rwa_id": "rwa-001"
+    });
+    let rwa_id = extract_rwa_id_argument(args.as_object().expect("object")).expect("rwa id");
+    assert_eq!(rwa_id, "rwa-001");
+}
+
+#[test]
+fn extract_bundle_id_hex_argument_accepts_alias_shortcut() {
+    let args = norito::json!({
+        "bundle_id": "deadbeef"
+    });
+    let bundle_id =
+        extract_bundle_id_hex_argument(args.as_object().expect("object")).expect("bundle id");
+    assert_eq!(bundle_id, "deadbeef");
+}
+
+#[test]
+fn extract_certificate_id_hex_argument_accepts_id_alias_shortcut() {
+    let args = norito::json!({
+        "id": "cafe1234"
+    });
+    let certificate_id = extract_certificate_id_hex_argument(args.as_object().expect("object"))
+        .expect("certificate id");
+    assert_eq!(certificate_id, "cafe1234");
+}
+
+#[test]
+fn extract_transaction_hash_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "hash": "deadbeef"
+    });
+    let hash = extract_transaction_hash_argument(args.as_object().expect("object")).expect("hash");
+    assert_eq!(hash, "deadbeef");
+}
+
+#[test]
+fn extract_transaction_hash_argument_accepts_path_alias_shortcut() {
+    let args = norito::json!({
+        "path": {
+            "transaction_hash": "deadbeef"
+        }
+    });
+    let hash = extract_transaction_hash_argument(args.as_object().expect("object")).expect("hash");
+    assert_eq!(hash, "deadbeef");
+}
+
+#[test]
+fn extract_block_hash_argument_uses_only_the_canonical_name() {
+    for args in [
+        norito::json!({ "block_hash": "deadbeef" }),
+        norito::json!({ "path": { "block_hash": "deadbeef" } }),
+    ] {
+        let block_hash = extract_block_hash_argument(args.as_object().expect("object"))
+            .expect("canonical block hash");
+        assert_eq!(block_hash, "deadbeef");
+    }
+
+    for retired in [
+        norito::json!({ "hash": "deadbeef" }),
+        norito::json!({ "path": { "hash": "deadbeef" } }),
+    ] {
+        assert!(
+            extract_block_hash_argument(retired.as_object().expect("object")).is_err(),
+            "retired hash aliases must not survive the first-release cutover"
+        );
+    }
+}
+
+#[test]
+fn extract_optional_transaction_hash_argument_accepts_alias_shortcut() {
+    let args = norito::json!({
+        "transaction_hash": "deadbeef"
+    });
+    let hash = extract_optional_transaction_hash_argument(args.as_object().expect("object"))
+        .expect("hash");
+    assert_eq!(hash, "deadbeef");
+}
+
+#[test]
+fn extract_optional_transaction_hash_argument_accepts_query_alias_shortcut() {
+    let args = norito::json!({
+        "query": {
+            "transaction_hash": "deadbeef"
+        }
+    });
+    let hash = extract_optional_transaction_hash_argument(args.as_object().expect("object"))
+        .expect("hash");
+    assert_eq!(hash, "deadbeef");
+}
+
+#[test]
+fn extract_transaction_hash_from_submit_result_accepts_encoded_submission_receipt() {
+    let key_pair = checked_submission_receipt_signer_fixture();
+    let tx_hash =
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xAB; 32]));
+    let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
+        tx_hash: tx_hash.clone(),
+        entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(
+            tx_hash.clone(),
+        )),
+        signed_transaction_hash: Some(tx_hash.clone()),
+        submitted_at_ms: 1,
+        submitted_at_height: 1,
+        signer: key_pair.public_key().clone(),
+    };
+    let receipt =
+        iroha_data_model::transaction::TransactionSubmissionReceipt::sign(payload, &key_pair);
+    let receipt_bytes = norito::to_bytes(&receipt).expect("receipt bytes");
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, receipt_bytes);
+    let submit_result = norito::json!({
+        "status": 202,
+        "body": encoded
+    });
+
+    let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
+    assert_eq!(hash, tx_hash.to_string());
+}
+
+#[test]
+fn extract_transaction_hash_from_submit_result_accepts_tx_hash_hex_field() {
+    let submit_result = norito::json!({
+        "status": 202,
+        "body": {
+            "ok": true,
+            "tx_hash_hex": "deadbeef"
+        }
+    });
+    let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
+    assert_eq!(hash, "deadbeef");
+}
+
+#[test]
+fn extract_transaction_hash_from_submit_result_accepts_json_receipt_payload() {
+    let submit_result = norito::json!({
+        "status": 202,
+        "body": {
+            "payload": {
+                "tx_hash": "feedface"
+            },
+            "signature": "ignored"
+        }
+    });
+
+    let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
+    assert_eq!(hash, "feedface");
+}
+
+#[test]
+fn extract_transaction_hash_from_submit_result_normalizes_json_receipt_literal_hash() {
+    let hash_body = "AB".repeat(iroha_crypto::Hash::LENGTH);
+    let hash_literal = norito::literal::format("hash", &hash_body);
+    let submit_result = norito::json!({
+        "status": 202,
+        "body": {
+            "payload": {
+                "tx_hash": hash_literal
+            },
+            "signature": "ignored"
+        }
+    });
+
+    let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
+    assert_eq!(hash, hash_body.to_ascii_lowercase());
+}
+
+#[test]
+fn normalize_submission_receipt_hash_preserves_bare_hash() {
+    let hash = normalize_submission_receipt_hash("deadbeef").expect("hash");
+    assert_eq!(hash, "deadbeef");
+}
+
+#[test]
+fn extract_pipeline_status_kind_reads_top_level_status() {
+    let status_result = norito::json!({
+        "status": 200,
+        "body": {
+            "hash": "deadbeef",
+            "status": {
+                "kind": "Committed"
+            }
+        }
+    });
+    assert_eq!(
+        extract_pipeline_status_kind(&status_result),
+        Some("Committed")
+    );
+}
+
+#[test]
+fn resolve_submit_wait_terminal_statuses_accepts_custom_values() {
+    let args = norito::json!({
+        "terminal_statuses": ["Applied", "Rejected"]
+    });
+    let statuses =
+        resolve_submit_wait_terminal_statuses(args.as_object().expect("object")).expect("ok");
+    assert_eq!(statuses, vec!["Applied", "Rejected"]);
+}
+
+#[test]
+fn resolve_submit_wait_terminal_statuses_defaults_to_applied_only() {
+    let args = norito::json!({});
+    let statuses =
+        resolve_submit_wait_terminal_statuses(args.as_object().expect("object")).expect("ok");
+    assert_eq!(statuses, vec!["Applied"]);
+}
+
+#[test]
+fn resolve_submit_wait_terminal_statuses_rejects_unsupported_values() {
+    let args = norito::json!({
+        "terminal_statuses": ["Unknown"]
+    });
+    let err = resolve_submit_wait_terminal_statuses(args.as_object().expect("object"))
+        .expect_err("unsupported terminal status should fail");
+    assert!(err.contains("unsupported terminal status"));
+}
+
+#[test]
+fn unrequested_terminal_failure_errors_only_when_not_configured() {
+    let default_terminal = vec!["Applied".to_owned()];
+    assert!(should_error_on_unrequested_terminal_failure(
+        "Rejected",
+        &default_terminal
+    ));
+    assert!(should_error_on_unrequested_terminal_failure(
+        "Expired",
+        &default_terminal
+    ));
+
+    let rejected_terminal = vec!["Rejected".to_owned()];
+    assert!(!should_error_on_unrequested_terminal_failure(
+        "Rejected",
+        &rejected_terminal
+    ));
+
+    let expired_terminal = vec!["Expired".to_owned()];
+    assert!(!should_error_on_unrequested_terminal_failure(
+        "Expired",
+        &expired_terminal
+    ));
+}
+
+#[test]
+fn extract_code_hash_argument_accepts_alias_shortcut() {
+    let args = norito::json!({
+        "hash": "cafebabe"
+    });
+    let hash = extract_code_hash_argument(args.as_object().expect("object")).expect("hash");
+    assert_eq!(hash, "cafebabe");
+}
+
+#[test]
+fn extract_contract_address_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    });
+    let contract_address = extract_contract_address_argument(args.as_object().expect("object"))
+        .expect("contract address");
+    assert_eq!(
+        contract_address,
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    );
+}
+
+#[test]
+fn extract_instruction_index_argument_accepts_top_level_shortcut() {
+    let args = norito::json!({
+        "index": 3
+    });
+    let index =
+        extract_instruction_index_argument(args.as_object().expect("object")).expect("index");
+    assert_eq!(index, "3");
+}
+
+#[test]
+fn extract_instruction_index_argument_accepts_alias_shortcut() {
+    let args = norito::json!({
+        "instruction_index": 7
+    });
+    let index =
+        extract_instruction_index_argument(args.as_object().expect("object")).expect("index");
+    assert_eq!(index, "7");
+}
+
+#[test]
+fn extract_block_identifier_argument_accepts_height_alias() {
+    let args = norito::json!({
+        "block_height": 7
+    });
+    let identifier =
+        extract_block_identifier_argument(args.as_object().expect("object")).expect("id");
+    assert_eq!(identifier, "7");
+}

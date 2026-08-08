@@ -1,3 +1,4 @@
+impl ProductionV2Services {
 fn current_lane_output_rollover_claim(
     &self,
     message: &BlockMessage,
@@ -76,4 +77,5 @@ fn current_lane_output_rollover_claim(
         );
     }
     Ok(ExactOutputRolloverClaim::Lane(self.exact_output_scope()))
+}
 }

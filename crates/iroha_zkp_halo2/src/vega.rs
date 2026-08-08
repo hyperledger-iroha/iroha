@@ -209,6 +209,15 @@ pub use zk_ams::{
     zk_ams_t256_rotation_exponent_for_direction_v1, zk_ams_t256_rotation_exponent_v1,
     zk_ams_t256_rotation_key_plan_v1, zk_ams_t256_rotation_v1,
 };
+pub use zk_ams::{
+    ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
+    ZkAmsMkheDirectObjectCasPublicationV1, ZkAmsMkheDirectObjectKindV1,
+    ZkAmsMkheDirectObjectPointerV1, ZkAmsMkheDirectObjectPublicationReceiptV1,
+    ZkAmsMkheDirectObjectPublicationTransactionV1, ZkAmsMkheDirectObjectPublishedBindingV1,
+    ZkAmsMkheDirectObjectReadAtProviderV1, ZkAmsMkheDirectObjectReadReceiptV1,
+    ZkAmsMkheDirectObjectSealTokenV1, ZkAmsMkheDirectObjectStagingTokenV1,
+    validate_zk_ams_mkhe_direct_object_v1,
+};
 
 /// Exact canonical COSE `Sig_structure` width in the released Figure 9 relation.
 pub const VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1: usize = 368;
@@ -262,6 +271,16 @@ pub enum VegaFieldError {
 ///
 /// Construction is deliberately non-reducing: byte strings at or above the
 /// modulus are rejected rather than silently mapped into the field.
+/// Secret scalars must be converted to explicit wire types before crossing a
+/// serialization boundary:
+///
+/// ```compile_fail
+/// use iroha_zkp_halo2::vega::VegaT256ScalarV1;
+/// use norito::codec::Encode as _;
+///
+/// let secret = VegaT256ScalarV1::from_u64(42);
+/// let _encoded = secret.encode();
+/// ```
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VegaT256ScalarV1(Fq);
 
@@ -361,6 +380,17 @@ impl VegaT256ScalarV1 {
     pub fn square(self) -> Self {
         Self(self.0.square())
     }
+
+    /// Replace this scalar instance with exact zero using a safe best-effort wipe.
+    ///
+    /// This scalar is [`Copy`]; callers must separately clear every independent
+    /// copy that contains secret material. Rust also does not guarantee erasure
+    /// of compiler-created temporaries.
+    pub fn clear_secret(&mut self) {
+        *self = Self::zero();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *self);
+    }
 }
 
 impl Default for VegaT256ScalarV1 {
@@ -421,10 +451,7 @@ impl Neg for VegaT256ScalarV1 {
 
 impl fmt::Debug for VegaT256ScalarV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_tuple("VegaT256ScalarV1")
-            .field(&hex::encode(self.to_be_bytes()))
-            .finish()
+        formatter.write_str("VegaT256ScalarV1(REDACTED)")
     }
 }
 
@@ -463,5 +490,27 @@ mod tests {
             assert_eq!(scalar.to_be_bytes(), expected);
             assert_eq!(VegaT256ScalarV1::from_be_bytes_exact(expected), Ok(scalar));
         }
+    }
+
+    #[test]
+    fn t256_scalar_clear_secret_replaces_nonzero_with_exact_zero() {
+        let mut secret = VegaT256ScalarV1::from_be_bytes_exact([0x5a; 32])
+            .expect("fixture is below the T256 scalar modulus");
+        assert!(!secret.is_zero());
+
+        secret.clear_secret();
+
+        assert!(secret.is_zero());
+        assert_eq!(secret, VegaT256ScalarV1::zero());
+        assert_eq!(secret.to_be_bytes(), [0; 32]);
+    }
+
+    #[test]
+    fn t256_scalar_debug_does_not_expose_secret_material() {
+        let secret = VegaT256ScalarV1::from_u64(0x0123_4567_89ab_cdef);
+        let rendered = format!("{secret:?}");
+
+        assert_eq!(rendered, "VegaT256ScalarV1(REDACTED)");
+        assert!(!rendered.contains("0123456789abcdef"));
     }
 }

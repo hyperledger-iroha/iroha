@@ -150,6 +150,7 @@ impl KuraPruneSidecarRewriteProjectionV2 {
 
 /// Exact live capacity admission retained as forward-recovery authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 struct KuraPruneCapacityAdmissionV2 {
     /// Physical Kura bytes before the intent is published.
     source_physical_bytes: u64,
@@ -226,6 +227,7 @@ impl KuraPruneCapacityAdmissionV2 {
 
 /// Durable forward-recovery record for a canonical Kura prune transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 struct KuraPruneIntentV2 {
     /// Intent schema version. Only version two is accepted.
     version: u8,

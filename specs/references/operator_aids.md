@@ -27,11 +27,10 @@ Evidence (audit; non-consensus)
   - Examples:
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
-- POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - CLI helpers:
     - `iroha --output-format text ops sumeragi evidence list`
     - `iroha --output-format text ops sumeragi evidence count`
-    - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (or `--evidence-hex-file <path>`)
+  - Evidence admission is consensus-authenticated; Torii has no mutation endpoint.
 
 Operator authentication (WebAuthn/mTLS)
 - POST `/v1/operator/auth/registration/options`

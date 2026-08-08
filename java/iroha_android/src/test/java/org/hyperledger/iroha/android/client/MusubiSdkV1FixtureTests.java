@@ -1,7 +1,9 @@
 package org.hyperledger.iroha.android.client;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.math.BigInteger;
@@ -22,18 +24,24 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.AliasQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveCommitment;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveLocationQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionPage;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ArchiveRetentionQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ChunkerProfileHandle;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ComparatorOp;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.Digest32;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactPackageQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ExactReleaseQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.FinalizedCursor;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.MaintainerDirectoryEntry;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.Namespace;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.OrderedPrefixQuery;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageName;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageId;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackagePageQuery;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationKey;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.PrereleaseIdentifier;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.RegistrySnapshot;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ReleaseId;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ResolverIndexQuery;
@@ -55,6 +63,7 @@ public final class MusubiSdkV1FixtureTests {
           Arrays.asList(
               MusubiToriiClientV1.EXACT_PACKAGE_PATH,
               MusubiToriiClientV1.EXACT_RELEASE_PATH,
+              MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH,
               MusubiToriiClientV1.RESOLVER_INDEX_PATH,
               MusubiToriiClientV1.VERSIONS_PATH,
               MusubiToriiClientV1.MAINTAINERS_PATH,
@@ -96,6 +105,93 @@ public final class MusubiSdkV1FixtureTests {
       final VersionReq requirement = VersionReq.parse((String) item.get("requirement"));
       final Version candidate = Version.parse((String) item.get("candidate"));
       assertEquals(item.get("matches"), Boolean.valueOf(requirement.matches(candidate)));
+    }
+  }
+
+  @Test
+  public void archiveCommitmentUsesTheFullBundlePayloadCeiling() {
+    final BigInteger sourceCeilingPlusOne =
+        BigInteger.valueOf(64L * 1024L * 1024L + 1L);
+    final BigInteger bundleCeiling =
+        BigInteger.valueOf(MusubiModelsV1.MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1);
+
+    assertEquals(
+        96L * 1024L * 1024L, MusubiModelsV1.MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1);
+    assertEquals(
+        sourceCeilingPlusOne, archiveCommitment(sourceCeilingPlusOne).contentLength());
+    assertEquals(bundleCeiling, archiveCommitment(bundleCeiling).contentLength());
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> archiveCommitment(bundleCeiling.add(BigInteger.ONE)));
+  }
+
+  @Test
+  public void finalizedCursorAcceptsMaximumVersionAndMaintainerKeys() {
+    final BigInteger maximumU64 = new BigInteger("18446744073709551615");
+    final PrereleaseIdentifier maximumIdentifier =
+        PrereleaseIdentifier.alphaNumeric(repeatedText("z", 64));
+    final Version maximumVersion =
+        new Version(
+            maximumU64,
+            maximumU64,
+            maximumU64,
+            Collections.nCopies(16, maximumIdentifier));
+    assertEquals(
+        Integer.valueOf(1_102),
+        Integer.valueOf(maximumVersion.canonicalText().getBytes(StandardCharsets.UTF_8).length));
+
+    final byte[] snapshotHash = new byte[32];
+    Arrays.fill(snapshotHash, (byte) 7);
+    final RegistrySnapshot snapshot =
+        new RegistrySnapshot(BigInteger.ONE, snapshotHash, BigInteger.ONE);
+    final byte[] queryHashBytes = new byte[32];
+    Arrays.fill(queryHashBytes, (byte) 8);
+    final MusubiModelsV1.Digest32 queryHash =
+        MusubiModelsV1.Digest32.fromBytes(queryHashBytes);
+    new FinalizedCursor(snapshot, queryHash, maximumVersion.canonicalText(), null);
+
+    final String maximumMaintainerKey =
+        repeatedText("ab", 8_192) + "|pending-" + repeatedText("cd", 32);
+    assertEquals(16_457, MusubiModelsV1.MUSUBI_MAX_CURSOR_KEY_BYTES_V1);
+    assertEquals(
+        MusubiModelsV1.MUSUBI_MAX_CURSOR_KEY_BYTES_V1,
+        maximumMaintainerKey.getBytes(StandardCharsets.UTF_8).length);
+    new FinalizedCursor(snapshot, queryHash, maximumMaintainerKey, null);
+    expectFailure(
+        () -> new FinalizedCursor(snapshot, queryHash, maximumMaintainerKey + "0", null));
+  }
+
+  @Test
+  public void orderedPrefixUsesExactStructuralMaximumAndPortablePackagePrefix() {
+    final String maximumPrefix = repeatedText("n", 255) + "/" + repeatedText("p", 64);
+    assertEquals(320, MusubiModelsV1.MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1);
+    assertEquals(
+        MusubiModelsV1.MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1,
+        maximumPrefix.getBytes(StandardCharsets.UTF_8).length);
+    new OrderedPrefixQuery(maximumPrefix, new MusubiModelsV1.PageRequest());
+    new OrderedPrefixQuery("sora/", new MusubiModelsV1.PageRequest());
+    new OrderedPrefixQuery("sora/pkg-", new MusubiModelsV1.PageRequest());
+
+    final String overlong = repeatedText("n", 255) + "/" + repeatedText("p", 65);
+    assertEquals(
+        MusubiModelsV1.MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1 + 1,
+        overlong.getBytes(StandardCharsets.UTF_8).length);
+    expectFailure(
+        () -> new OrderedPrefixQuery(overlong, new MusubiModelsV1.PageRequest()));
+
+    for (final String malformed :
+        Arrays.asList(
+            "sora",
+            "/pkg",
+            "a.b.c/pkg",
+            "sora/pkg/extra",
+            "sora/-pkg",
+            "sora/pkg--extra",
+            "sora/Pkg",
+            "sora/pkg_name",
+            "sora/päkg")) {
+      expectFailure(
+          () -> new OrderedPrefixQuery(malformed, new MusubiModelsV1.PageRequest()));
     }
   }
 
@@ -148,7 +244,7 @@ public final class MusubiSdkV1FixtureTests {
       assertWireEquals(route.get("request"), request);
       assertWireEquals(route.get("response"), response);
     }
-    assertEquals(11, routes.size());
+    assertEquals(12, routes.size());
     assertEquals(EXPECTED_PATHS, actualPaths);
   }
 
@@ -204,6 +300,10 @@ public final class MusubiSdkV1FixtureTests {
             MusubiJsonV1.decodeResponse(MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH, valid);
     assertEquals(2, page.items().size());
     assertEquals(BigInteger.valueOf(49L), page.items().get(0).finalizedHeight());
+    assertEquals(1, page.items().get(0).providers().size());
+    assertArrayEquals(
+        repeatedBytes((byte) 63),
+        page.items().get(0).providerAttestationSetDigest().bytes());
 
     assertArchiveLocationRejected(
         valid,
@@ -254,6 +354,21 @@ public final class MusubiSdkV1FixtureTests {
         valid,
         response ->
             object(array(response.get("items")).get(0)).put("revision", Long.valueOf(3L)));
+    assertArchiveLocationRejected(
+        valid,
+        response -> object(array(response.get("items")).get(0))
+            .put("providers", Collections.emptyList()));
+    assertArchiveLocationRejected(
+        valid,
+        response -> object(array(response.get("items")).get(0))
+            .put("provider_attestation_set_digest", digestWire(0)));
+    assertArchiveLocationRejected(
+        valid,
+        response -> {
+          final Map<String, Object> first = object(array(response.get("items")).get(0));
+          first.remove("provider_attestation_set_digest");
+          first.put("provider_attestations", Collections.emptyList());
+        });
   }
 
   @Test
@@ -287,6 +402,54 @@ public final class MusubiSdkV1FixtureTests {
   }
 
   @Test
+  public void maintainerCursorUsesOpaqueAccountEqualityAndCanonicalShape() throws Exception {
+    final Map<String, Object> route = route(MusubiToriiClientV1.MAINTAINERS_PATH);
+    final MusubiModelsV1.Page<MaintainerDirectoryEntry> page =
+        MusubiJsonV1.parseMaintainerPage(
+            JsonEncoder.encode(route.get("response")).getBytes(StandardCharsets.UTF_8));
+
+    final String acceptedKey = MusubiModelsV1.maintainerCursorKey(page.items().get(0));
+    final String pendingKey = MusubiModelsV1.maintainerCursorKey(page.items().get(1));
+    final String accountToken = acceptedKey.substring(0, acceptedKey.indexOf('|'));
+    MusubiJsonV1.decodeResponse(
+        MusubiToriiClientV1.MAINTAINERS_PATH,
+        maintainerResponseWithBoundary(
+            route, 0, accountToken + "|pending-" + repeatedText("01", 32)));
+    MusubiJsonV1.decodeResponse(
+        MusubiToriiClientV1.MAINTAINERS_PATH,
+        maintainerResponseWithBoundary(route, 1, accountToken + "|accepted"));
+
+    for (int index = 0; index < page.items().size(); index++) {
+      expectDecodeFailure(
+          MusubiToriiClientV1.MAINTAINERS_PATH,
+          maintainerResponseWithBoundary(
+              route,
+              index,
+              MusubiModelsV1.maintainerCursorKey(page.items().get(index))));
+    }
+    final Map<String, Object> repeatedLater =
+        object(deepMutableCopy(route.get("response")));
+    object(object(repeatedLater.get("query")).get("page"))
+        .put("cursor", finalizedCursorWire(repeatedLater.get("snapshot"), pendingKey, 1));
+    expectDecodeFailure(MusubiToriiClientV1.MAINTAINERS_PATH, repeatedLater);
+    expectDecodeFailure(
+        MusubiToriiClientV1.MAINTAINERS_PATH,
+        maintainerResponseWithBoundary(route, 0, "00|accepted"));
+    expectDecodeFailure(
+        MusubiToriiClientV1.MAINTAINERS_PATH,
+        maintainerResponseWithBoundary(
+            route, 0, accountToken.substring(0, accountToken.length() - 2) + "|accepted"));
+    expectDecodeFailure(
+        MusubiToriiClientV1.MAINTAINERS_PATH,
+        maintainerResponseWithBoundary(
+            route, 0, repeatedText("ab", 8_193) + "|accepted"));
+    expectDecodeFailure(
+        MusubiToriiClientV1.MAINTAINERS_PATH,
+        maintainerResponseWithBoundary(
+            route, 1, "ff|pending-" + repeatedText("00", 32)));
+  }
+
+  @Test
   public void readOnlyClientPostsEachTypedQueryToItsExactV1Route() throws Exception {
     final List<Map<String, Object>> routes = routes();
     final Map<String, byte[]> responses = new LinkedHashMap<>();
@@ -310,6 +473,7 @@ public final class MusubiSdkV1FixtureTests {
       assertEquals("POST", captured.method());
       assertEquals(path, captured.uri().getPath());
       assertEquals(route.get("request"), parseJson(captured.body()));
+      assertEquals(Long.valueOf(32L * 1024L * 1024L), captured.maximumResponseBytes());
     }
     final Set<String> actualPaths = new LinkedHashSet<>();
     for (final TransportRequest request : executor.requests) {
@@ -328,6 +492,13 @@ public final class MusubiSdkV1FixtureTests {
         request ->
             object(object(request.get("release")).get("package"))
                 .put("name", Collections.singletonList("another-package")));
+    assertClientRejected(
+        MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH,
+        request ->
+            request.put(
+                "provider_id",
+                Collections.singletonList(
+                    String.join("", Collections.nCopies(32, "FE")))));
     for (final String path :
         Arrays.asList(
             MusubiToriiClientV1.RESOLVER_INDEX_PATH,
@@ -527,6 +698,68 @@ public final class MusubiSdkV1FixtureTests {
   }
 
   @Test
+  public void resolverIndexAcceptsShortByteBudgetPageAndBindsContinuationTail()
+      throws Exception {
+    final Map<String, Object> resolverRoute =
+        route(MusubiToriiClientV1.RESOLVER_INDEX_PATH);
+    final Map<String, Object> response =
+        object(deepMutableCopy(resolverRoute.get("response")));
+    final Map<String, Object> releaseResponse =
+        object(route(MusubiToriiClientV1.EXACT_RELEASE_PATH).get("response"));
+    response.put(
+        "items",
+        Collections.singletonList(deepMutableCopy(releaseResponse.get("universal_release"))));
+
+    final Map<String, Object> page = object(object(response.get("query")).get("page"));
+    page.put("limit", Long.valueOf(2L));
+    page.put("cursor", finalizedCursorWire(response.get("snapshot"), "1.2.2", 19));
+    response.put(
+        "next_cursor", finalizedCursorWire(response.get("snapshot"), "1.2.3", 19));
+
+    MusubiJsonV1.decodeResponse(MusubiToriiClientV1.RESOLVER_INDEX_PATH, response);
+
+    final Map<String, Object> duplicateAliases =
+        object(deepMutableCopy(response));
+    final Map<String, Object> resolverRow =
+        object(array(duplicateAliases.get("items")).get(0));
+    final Map<String, Object> packageTemplate =
+        object(object(resolverRow.get("release")).get("package"));
+    final Object requirementTemplate =
+        object(array(object(fixture().get("canonical")).get("requirements")).get(0)).get("wire");
+    final Map<String, Object> firstPackage =
+        object(deepMutableCopy(packageTemplate));
+    firstPackage.put("name", Collections.singletonList("alpha-dependency"));
+    final Map<String, Object> secondPackage =
+        object(deepMutableCopy(packageTemplate));
+    secondPackage.put("name", Collections.singletonList("beta-dependency"));
+    final Map<String, Object> firstDependency = new LinkedHashMap<>();
+    firstDependency.put("alias", "shared");
+    firstDependency.put("package", firstPackage);
+    firstDependency.put("requirement", deepMutableCopy(requirementTemplate));
+    final Map<String, Object> secondDependency = new LinkedHashMap<>();
+    secondDependency.put("alias", "shared");
+    secondDependency.put("package", secondPackage);
+    secondDependency.put("requirement", deepMutableCopy(requirementTemplate));
+    resolverRow.put("dependencies", Arrays.asList(firstDependency, secondDependency));
+    final IllegalArgumentException duplicateAliasError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                MusubiJsonV1.decodeResponse(
+                    MusubiToriiClientV1.RESOLVER_INDEX_PATH, duplicateAliases));
+    assertTrue(duplicateAliasError.getMessage().contains("unique parent-local aliases"));
+
+    final Map<String, Object> wrongTail = object(deepMutableCopy(response));
+    object(wrongTail.get("next_cursor")).put("last_key", "1.2.4");
+    expectDecodeFailure(MusubiToriiClientV1.RESOLVER_INDEX_PATH, wrongTail);
+
+    final Map<String, Object> wrongPriorHash = object(deepMutableCopy(response));
+    object(object(object(wrongPriorHash.get("query")).get("page")).get("cursor"))
+        .put("query_hash", digestWire(20));
+    expectDecodeFailure(MusubiToriiClientV1.RESOLVER_INDEX_PATH, wrongPriorHash);
+  }
+
+  @Test
   public void versionMaintainerAliasHistoryAndResolverPagesRequireStrictOrder()
       throws Exception {
     final Map<String, Object> versionsRoute = route(MusubiToriiClientV1.VERSIONS_PATH);
@@ -591,10 +824,12 @@ public final class MusubiSdkV1FixtureTests {
         new ResolverReleaseRow(
             new ReleaseId(resolverRequest.packageId(), Version.parse("1.0.0")),
             BigInteger.ONE,
+            BigInteger.ONE,
             Collections.emptyMap());
     final ResolverReleaseRow second =
         new ResolverReleaseRow(
             new ReleaseId(resolverRequest.packageId(), Version.parse("2.0.0")),
+            BigInteger.ONE,
             BigInteger.ONE,
             Collections.emptyMap());
     final byte[] genesisHash = new byte[32];
@@ -640,31 +875,228 @@ public final class MusubiSdkV1FixtureTests {
     final Map<String, Object> exactRelease = route(MusubiToriiClientV1.EXACT_RELEASE_PATH);
     final Map<String, Object> canonical =
         object(deepMutableCopy(exactRelease.get("response")));
+    final Map<String, Object> homeRelease = object(canonical.get("home_release"));
     final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("action_digest", canonical.get("release_digest"));
+    payload.put("action_digest", homeRelease.get("release_digest"));
     payload.put("reason", Collections.singletonList("security response"));
     payload.put("applied_at_height", Long.valueOf(50L));
     final Map<String, Object> governance = new LinkedHashMap<>();
     governance.put("kind", "TakenDown");
     governance.put("value", payload);
-    canonical.put("artifact_governance", governance);
-    object(canonical.get("revisions"))
+    homeRelease.put("artifact_governance", governance);
+    object(homeRelease.get("revisions"))
         .put("artifact_governance", Long.valueOf(2L));
+    object(object(canonical.get("universal_release")).get("selection"))
+        .put("governance", deepMutableCopy(governance));
     MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, canonical);
 
     final Map<String, Object> legacy = object(deepMutableCopy(canonical));
     final Map<String, Object> legacyPayload =
-        object(object(legacy.get("artifact_governance")).get("value"));
+        object(
+            object(object(legacy.get("home_release")).get("artifact_governance"))
+                .get("value"));
     legacyPayload.put("enacted_at_height", legacyPayload.remove("applied_at_height"));
     expectFailure(
         () -> MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, legacy));
 
     final Map<String, Object> zeroHeight = object(deepMutableCopy(canonical));
     final Map<String, Object> zeroPayload =
-        object(object(zeroHeight.get("artifact_governance")).get("value"));
+        object(
+            object(object(zeroHeight.get("home_release")).get("artifact_governance"))
+                .get("value"));
     zeroPayload.put("applied_at_height", Long.valueOf(0L));
     expectFailure(
         () -> MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, zeroHeight));
+  }
+
+  @Test
+  public void exactReleaseRejectsSubstitutedProjectionsAndNonfinalAnchors()
+      throws Exception {
+    final Map<String, Object> exactRelease = route(MusubiToriiClientV1.EXACT_RELEASE_PATH);
+
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(response.get("universal_release"))
+                .put("release_digest", digestWire(64)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Object replacement = digestWire(64);
+          object(response.get("home_release"))
+              .put("release_digest", deepMutableCopy(replacement));
+          object(response.get("universal_release"))
+              .put("release_digest", deepMutableCopy(replacement));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> object(response.get("home_release")).put("published_by", "not-an-account"));
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(response.get("home_release"))
+                .put("published_at_height", Long.valueOf(0L)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(response.get("universal_release"))
+                .put("archive_id", digestWire(65)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(response.get("universal_release"))
+                .put("interface_digest", digestWire(66)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(object(response.get("universal_release")).get("abi"))
+                .put("abi_hash", new ArrayList<Object>(Collections.nCopies(32, Long.valueOf(67L)))));
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> home = object(response.get("home_release"));
+          final Map<String, Object> release =
+              object(object(home.get("manifest")).get("release"));
+          final Map<String, Object> dependencyPackage =
+              object(deepMutableCopy(release.get("package")));
+          dependencyPackage.put("name", Collections.singletonList("dependency"));
+          final Map<String, Object> requirement = new LinkedHashMap<>();
+          requirement.put("kind", "Any");
+          requirement.put("value", null);
+          final Map<String, Object> dependency = new LinkedHashMap<>();
+          dependency.put("alias", "dependency");
+          dependency.put("package", dependencyPackage);
+          dependency.put("requirement", requirement);
+          object(response.get("universal_release"))
+              .put("dependencies", Collections.singletonList(dependency));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> selection =
+              object(object(response.get("universal_release")).get("selection"));
+          object(selection.get("yank"))
+              .put("reason", Collections.singletonList("substituted state"));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> home = object(response.get("home_release"));
+          final Map<String, Object> takedown = new LinkedHashMap<>();
+          takedown.put("action_digest", deepMutableCopy(home.get("release_digest")));
+          takedown.put("reason", Collections.singletonList("substituted governance"));
+          takedown.put("applied_at_height", Long.valueOf(50L));
+          final Map<String, Object> governed = new LinkedHashMap<>();
+          governed.put("kind", "TakenDown");
+          governed.put("value", takedown);
+          object(object(response.get("universal_release")).get("selection"))
+              .put("governance", governed);
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> home = object(response.get("home_release"));
+          final Map<String, Object> selection =
+              object(object(response.get("universal_release")).get("selection"));
+          object(home.get("yank")).put("revision", Long.valueOf(10L));
+          object(home.get("revisions")).put("yank", Long.valueOf(10L));
+          object(selection.get("yank")).put("revision", Long.valueOf(10L));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> home = object(response.get("home_release"));
+          final Map<String, Object> selection =
+              object(object(response.get("universal_release")).get("selection"));
+          object(home.get("yank")).put("changed_at_height", Long.valueOf(42L));
+          object(selection.get("yank")).put("changed_at_height", Long.valueOf(42L));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> home = object(response.get("home_release"));
+          final Map<String, Object> selection =
+              object(object(response.get("universal_release")).get("selection"));
+          object(home.get("yank")).put("changed_at_height", Long.valueOf(51L));
+          object(selection.get("yank")).put("changed_at_height", Long.valueOf(51L));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(object(response.get("home_release")).get("revisions"))
+                .put("artifact_governance", Long.valueOf(10L)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> home = object(response.get("home_release"));
+          final Map<String, Object> takedown = new LinkedHashMap<>();
+          takedown.put("action_digest", deepMutableCopy(home.get("release_digest")));
+          takedown.put("reason", Collections.singletonList("premature takedown"));
+          takedown.put("applied_at_height", Long.valueOf(42L));
+          final Map<String, Object> governed = new LinkedHashMap<>();
+          governed.put("kind", "TakenDown");
+          governed.put("value", takedown);
+          home.put("artifact_governance", governed);
+          object(home.get("revisions"))
+              .put("artifact_governance", Long.valueOf(2L));
+          object(object(response.get("universal_release")).get("selection"))
+              .put("governance", deepMutableCopy(governed));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          final Map<String, Object> home = object(response.get("home_release"));
+          final Map<String, Object> takedown = new LinkedHashMap<>();
+          takedown.put("action_digest", deepMutableCopy(home.get("release_digest")));
+          takedown.put("reason", Collections.singletonList("nonfinal takedown"));
+          takedown.put("applied_at_height", Long.valueOf(51L));
+          final Map<String, Object> governed = new LinkedHashMap<>();
+          governed.put("kind", "TakenDown");
+          governed.put("value", takedown);
+          home.put("artifact_governance", governed);
+          object(home.get("revisions"))
+              .put("artifact_governance", Long.valueOf(2L));
+          object(object(response.get("universal_release")).get("selection"))
+              .put("governance", deepMutableCopy(governed));
+        });
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(response.get("home_release"))
+                .put("published_at_height", Long.valueOf(51L)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(response.get("universal_release"))
+                .put("index_revision", Long.valueOf(10L)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(
+                    object(object(response.get("universal_release")).get("selection"))
+                        .get("storage"))
+                .put("finalized_height", Long.valueOf(51L)));
+    assertExactReleaseRejected(
+        exactRelease,
+        response ->
+            object(
+                    object(object(response.get("universal_release")).get("selection"))
+                        .get("storage"))
+                .put(
+                    "finalized_block_hash",
+                    new ArrayList<Object>(Collections.nCopies(32, Long.valueOf(6L)))));
+    assertExactReleaseRejected(
+        exactRelease,
+        response -> {
+          object(response.get("snapshot")).put("finalized_height", Long.valueOf(1L));
+          final Map<String, Object> home = object(response.get("home_release"));
+          home.put("published_at_height", Long.valueOf(1L));
+          object(home.get("yank")).put("changed_at_height", Long.valueOf(1L));
+          final Map<String, Object> selection =
+              object(object(response.get("universal_release")).get("selection"));
+          object(selection.get("yank")).put("changed_at_height", Long.valueOf(1L));
+          object(selection.get("storage")).put("finalized_height", Long.valueOf(1L));
+        });
   }
 
   @Test
@@ -700,12 +1132,33 @@ public final class MusubiSdkV1FixtureTests {
 
     final Map<String, Object> exactRelease = route(MusubiToriiClientV1.EXACT_RELEASE_PATH);
     final Map<String, Object> response = object(deepMutableCopy(exactRelease.get("response")));
-    final Map<String, Object> manifest = object(response.get("manifest"));
+    final Map<String, Object> manifest =
+        object(object(response.get("home_release")).get("manifest"));
     final Map<String, Object> abi = object(manifest.get("abi"));
     abi.put("abi_version", Long.valueOf(2L));
     expectFailure(
         () ->
             MusubiJsonV1.decodeResponse(MusubiToriiClientV1.EXACT_RELEASE_PATH, response));
+
+    final Map<String, Object> futureStorage =
+        object(deepMutableCopy(exactRelease.get("response")));
+    object(futureStorage.get("universal_release"))
+        .put("index_revision", Long.valueOf(8L));
+    expectFailure(
+        () ->
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.EXACT_RELEASE_PATH, futureStorage));
+
+    final Map<String, Object> providerRoute =
+        route(MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH);
+    final Map<String, Object> substitutedAttestationDigest =
+        object(deepMutableCopy(providerRoute.get("response")));
+    substitutedAttestationDigest.put("attestation_digest", digestWire(64));
+    expectFailure(
+        () ->
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH,
+                substitutedAttestationDigest));
 
     final Map<String, Object> archiveRoute = route(MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH);
     final Map<String, Object> archiveResponse =
@@ -720,6 +1173,32 @@ public final class MusubiSdkV1FixtureTests {
                 MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH, archiveResponse));
   }
 
+  private static ArchiveCommitment archiveCommitment(final BigInteger contentLength) {
+    final byte[] rootCid = new byte[36];
+    Arrays.fill(rootCid, (byte) 7);
+    rootCid[0] = 1;
+    rootCid[1] = 113;
+    rootCid[2] = 31;
+    rootCid[3] = 32;
+    final byte[] digestBytes = new byte[32];
+    Arrays.fill(digestBytes, (byte) 9);
+    final Digest32 digest = Digest32.fromBytes(digestBytes);
+    return new ArchiveCommitment(
+        rootCid,
+        new ChunkerProfileHandle(
+            1L, "sorafs", "sf1", "1.0.0", BigInteger.valueOf(31L)),
+        digest,
+        digest,
+        contentLength,
+        digest,
+        BigInteger.valueOf(MusubiModelsV1.MUSUBI_MAX_CAR_BYTES_V1),
+        digest,
+        digest,
+        digest,
+        1L,
+        1L);
+  }
+
   private static void invoke(
       final MusubiToriiClientV1 client, final String path, final WireValue request) {
     switch (path) {
@@ -728,6 +1207,9 @@ public final class MusubiSdkV1FixtureTests {
         break;
       case MusubiToriiClientV1.EXACT_RELEASE_PATH:
         client.findExactRelease((ExactReleaseQuery) request).join();
+        break;
+      case MusubiToriiClientV1.PROVIDER_BUNDLE_ATTESTATION_PATH:
+        client.findProviderBundleAttestation((ProviderBundleAttestationKey) request).join();
         break;
       case MusubiToriiClientV1.RESOLVER_INDEX_PATH:
         client.findResolverIndex((ResolverIndexQuery) request).join();
@@ -839,8 +1321,12 @@ public final class MusubiSdkV1FixtureTests {
     location.put("archive_id", deepMutableCopy(archiveId));
     location.put("pin_manifest", digestWire(61));
     location.put("replication_order", digestWire(62));
-    location.put("providers", Collections.emptyList());
-    location.put("provider_attestations", Collections.emptyList());
+    location.put(
+        "providers",
+        Collections.<Object>singletonList(
+            Collections.<Object>singletonList(
+                String.join("", Collections.nCopies(32, "3F")))));
+    location.put("provider_attestation_set_digest", digestWire(63));
     location.put("renew_after_epoch", Long.valueOf(1L));
     location.put("expires_at_epoch", Long.valueOf(2L));
     location.put("finalized_height", Long.valueOf(finalizedHeight));
@@ -855,6 +1341,18 @@ public final class MusubiSdkV1FixtureTests {
     return Collections.singletonList(bytes);
   }
 
+  private static byte[] repeatedBytes(final byte value) {
+    final byte[] bytes = new byte[32];
+    Arrays.fill(bytes, value);
+    return bytes;
+  }
+
+  private static String repeatedText(final String value, final int count) {
+    final StringBuilder result = new StringBuilder(value.length() * count);
+    for (int index = 0; index < count; index++) result.append(value);
+    return result.toString();
+  }
+
   private static Map<String, Object> finalizedCursorWire(
       final Object snapshot, final String lastKey, final int queryHashByte) {
     final Map<String, Object> cursor = new LinkedHashMap<>();
@@ -863,6 +1361,17 @@ public final class MusubiSdkV1FixtureTests {
     cursor.put("last_key", lastKey);
     cursor.put("caller", null);
     return cursor;
+  }
+
+  private static Map<String, Object> maintainerResponseWithBoundary(
+      final Map<String, Object> route, final int firstItem, final String lastKey) {
+    final Map<String, Object> response = object(deepMutableCopy(route.get("response")));
+    response.put(
+        "items",
+        Collections.singletonList(deepMutableCopy(array(response.get("items")).get(firstItem))));
+    object(object(response.get("query")).get("page"))
+        .put("cursor", finalizedCursorWire(response.get("snapshot"), lastKey, 1));
+    return response;
   }
 
   private static void expectDecodeFailure(
@@ -879,6 +1388,17 @@ public final class MusubiSdkV1FixtureTests {
         () ->
             MusubiJsonV1.decodeResponse(
                 MusubiToriiClientV1.ARCHIVE_LOCATIONS_PATH, response));
+  }
+
+  private static void assertExactReleaseRejected(
+      final Map<String, Object> route,
+      final Consumer<Map<String, Object>> mutation) {
+    final Map<String, Object> response = object(deepMutableCopy(route.get("response")));
+    mutation.accept(response);
+    expectFailure(
+        () ->
+            MusubiJsonV1.decodeResponse(
+                MusubiToriiClientV1.EXACT_RELEASE_PATH, response));
   }
 
   private static List<Map<String, Object>> routes() throws Exception {

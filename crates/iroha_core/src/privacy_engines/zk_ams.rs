@@ -71,6 +71,39 @@ use super::{
     prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
 };
 
+#[allow(
+    dead_code,
+    reason = "the native filesystem CAS remains private until CPK admission wiring is complete"
+)]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
+#[path = "zk_ams/direct_object_filesystem_cas.rs"]
+mod direct_object_filesystem_cas;
+
+#[allow(
+    dead_code,
+    reason = "unsupported hosts retain only an explicit fail-closed CAS constructor"
+)]
+#[cfg(not(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+)))]
+mod direct_object_filesystem_cas {
+    use std::path::Path;
+
+    use iroha_zkp_halo2::vega::ZkAmsMkheErrorV1;
+
+    pub(super) struct ZkAmsMkheDirectObjectFilesystemCasV1;
+
+    impl ZkAmsMkheDirectObjectFilesystemCasV1 {
+        pub(super) fn open(_root: impl AsRef<Path>) -> Result<Self, ZkAmsMkheErrorV1> {
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        }
+    }
+}
+
 /// Deterministic worker configuration for the canonical masked admission prover.
 pub use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
 

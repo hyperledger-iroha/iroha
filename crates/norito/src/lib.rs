@@ -2978,6 +2978,73 @@ pub mod json {
         }
 
         #[test]
+        fn canonical_document_depth_scan_is_quote_aware_and_caps_at_first_failure() {
+            assert_eq!(document_json_value_depth("   \n\t"), 0);
+            assert_eq!(document_json_value_depth("null"), 1);
+            assert_eq!(document_json_value_depth("{}"), 1);
+            assert_eq!(
+                document_json_value_depth(r#"{"text":"[[[{{{]]]}}}"}"#),
+                2,
+                "container punctuation inside a JSON string must not affect depth"
+            );
+            assert_eq!(
+                document_json_value_depth(r#"{"text":"\\\"[[["}"#),
+                2,
+                "an escaped quote must keep following punctuation inside the string"
+            );
+            assert_eq!(
+                document_json_value_depth(r#"{"text":"\\\\","nested":[null]}"#),
+                3,
+                "an even backslash run must leave the following quote unescaped"
+            );
+
+            let far_over_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH + 64),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH + 64)
+            );
+            assert_eq!(
+                document_json_value_depth(&far_over_limit),
+                MAX_JSON_VALUE_NESTING_DEPTH + 1,
+                "depth errors must report the first forbidden level"
+            );
+        }
+
+        #[test]
+        fn reader_enforces_complete_document_depth() {
+            let at_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
+            );
+            let mut reader = Reader::new(&at_limit);
+            let mut token_count = 0_usize;
+            while reader
+                .next_token()
+                .expect("Reader must accept a document at the depth limit")
+                .is_some()
+            {
+                token_count += 1;
+            }
+            assert_eq!(token_count, 2 * MAX_JSON_VALUE_NESTING_DEPTH - 1);
+
+            let over_limit = format!(
+                "{}null{}",
+                "[".repeat(MAX_JSON_VALUE_NESTING_DEPTH),
+                "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH)
+            );
+            let mut reader = Reader::new(&over_limit);
+            assert!(matches!(
+                reader.next_token(),
+                Err(Error::NestingDepthExceeded {
+                    depth,
+                    limit: MAX_JSON_VALUE_NESTING_DEPTH,
+                    context: "JSON value",
+                }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1
+            ));
+        }
+
+        #[test]
         fn strict_validator_accounts_for_an_enclosing_document_depth() {
             let root_depth = 4;
             let wrappers = MAX_JSON_VALUE_NESTING_DEPTH - root_depth;
@@ -7298,6 +7365,68 @@ pub mod json {
         }
     }
 
+    fn document_json_value_depth(input: &str) -> usize {
+        let bytes = input.as_bytes();
+        let mut container_depth = 0_usize;
+        let mut maximum_depth = usize::from(
+            bytes
+                .iter()
+                .any(|byte| !matches!(byte, b' ' | b'\n' | b'\r' | b'\t')),
+        );
+        let first_forbidden_depth = MAX_JSON_VALUE_NESTING_DEPTH.saturating_add(1);
+        let mut in_string = false;
+        let mut escaped = false;
+
+        for (offset, &byte) in bytes.iter().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            if byte == b'"' {
+                in_string = true;
+                continue;
+            }
+
+            let matching_close = match byte {
+                b'{' => Some(b'}'),
+                b'[' => Some(b']'),
+                b'}' | b']' => {
+                    container_depth = container_depth.saturating_sub(1);
+                    None
+                }
+                _ => None,
+            };
+            let Some(matching_close) = matching_close else {
+                continue;
+            };
+
+            container_depth = container_depth.saturating_add(1);
+            maximum_depth = maximum_depth.max(container_depth);
+            if maximum_depth >= first_forbidden_depth {
+                return first_forbidden_depth;
+            }
+
+            let mut next = offset.saturating_add(1);
+            while matches!(bytes.get(next), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+                next = next.saturating_add(1);
+            }
+            if bytes.get(next).copied() != Some(matching_close) {
+                maximum_depth = maximum_depth.max(container_depth.saturating_add(1));
+                if maximum_depth >= first_forbidden_depth {
+                    return first_forbidden_depth;
+                }
+            }
+        }
+
+        maximum_depth
+    }
+
     /// A light walker over the structural index.
     pub struct TapeWalker<'a> {
         input: &'a str,
@@ -7306,6 +7435,7 @@ pub mod json {
         raw: usize,
         last_key_lo: usize,
         last_key_hi: usize,
+        document_value_depth: usize,
     }
 
     /// Reset cached dynamic libraries used by the Stage-1 GPU/Metal accelerators.
@@ -7322,14 +7452,26 @@ pub mod json {
     }
     impl<'a> TapeWalker<'a> {
         pub fn new(input: &'a str) -> Self {
+            let tape = build_struct_index(input);
+            // Depth enforcement is consensus-facing, so derive it from one
+            // canonical scalar scan independently of the selected hardware
+            // Stage-1 implementation.
+            let document_value_depth = document_json_value_depth(input);
             Self {
                 input,
                 idx: 0,
-                tape: build_struct_index(input),
+                tape,
                 raw: 0,
                 last_key_lo: 0,
                 last_key_hi: 0,
+                document_value_depth,
             }
+        }
+        /// Reject a structurally over-deep enclosing document before a fast
+        /// typed parser enters generated or custom recursive code.
+        #[doc(hidden)]
+        pub fn ensure_document_depth(&self) -> Result<(), Error> {
+            ensure_json_value_depth(self.document_value_depth)
         }
         pub fn input(&self) -> &'a str {
             self.input
@@ -7380,6 +7522,7 @@ pub mod json {
         }
         /// Expect the next structural to be `{` and advance past it.
         pub fn expect_object_start(&mut self) -> Result<(), Error> {
+            self.ensure_document_depth()?;
             match self.next_struct() {
                 Some((off, b'{')) => {
                     self.raw = off + 1;
@@ -7418,6 +7561,7 @@ pub mod json {
         }
         /// Expect the next structural to be `[` and advance past it.
         pub fn expect_array_start(&mut self) -> Result<(), Error> {
+            self.ensure_document_depth()?;
             match self.next_struct() {
                 Some((off, b'[')) => {
                     self.raw = off + 1;
@@ -7981,6 +8125,7 @@ pub mod json {
 
         /// Skip over the next JSON value using the structural index when possible.
         pub fn skip_value(&mut self) -> Result<(), Error> {
+            self.ensure_document_depth()?;
             self.skip_ws_raw();
             let bytes = self.input.as_bytes();
             if self.raw >= bytes.len() {
@@ -7989,9 +8134,9 @@ pub mod json {
             }
             // Reuse the iterative parser walk so an unknown value cannot use
             // mismatched delimiters, malformed container syntax, duplicate
-            // keys, or an unbounded skipped subtree. `TapeWalker` does not
-            // currently track its enclosing structural depth, so this applies
-            // the nesting ceiling to the value rooted at `raw`.
+            // keys, or an unbounded skipped subtree. The complete document's
+            // global depth was checked above, so the local walk only needs to
+            // validate the exact subtree grammar while advancing `raw`.
             let mut parser = Parser::new_at(self.input, self.raw);
             parser.skip_value()?;
             self.sync_to_raw(parser.position());
@@ -8538,6 +8683,7 @@ pub mod json {
 
         /// Return the next token or None at end of input.
         pub fn next_token(&mut self) -> Result<Option<Token<'a>>, Error> {
+            self.w.ensure_document_depth()?;
             self.skip_commas();
             let s = self.w.input();
             let bytes = s.as_bytes();
@@ -8857,6 +9003,10 @@ pub mod json {
 
     /// Deserialize `T` from JSON using the generic `JsonDeserialize` path.
     pub fn from_json<T: JsonDeserialize>(s: &str) -> Result<T, Error> {
+        // Preflight the complete document once, before a generated typed
+        // decoder can recurse or skip a subtree with a locally rooted Parser.
+        // Internal Parser::new_at calls deliberately do not repeat this scan.
+        ensure_json_value_depth(document_json_value_depth(s))?;
         let mut p = Parser::new(s);
         p.skip_ws();
         let v = T::json_deserialize(&mut p)?;
@@ -8876,6 +9026,7 @@ pub mod json {
     {
         // Tape-first path: build structural index, then invoke the type's fast parser.
         let mut w = TapeWalker::new(s);
+        w.ensure_document_depth()?;
         let mut arena = Arena::new();
         let value = T::parse(&mut w, &mut arena).map_err(|e| Error::Message(e.to_string()))?;
 
@@ -10135,276 +10286,7 @@ where
     })
 }
 
-#[cfg(test)]
-mod canonical_codec_tests {
-    use super::*;
-
-    #[test]
-    fn canonical_scalar_and_unit_roundtrip() {
-        let scalar = encode_canonical(&1_u8).expect("encode canonical scalar");
-        assert_eq!(
-            decode_canonical_with_limits::<u8>(&scalar, canonical_decode_limits(scalar.len()),)
-                .expect("decode canonical scalar"),
-            1
-        );
-
-        let unit = encode_canonical(&()).expect("encode canonical unit");
-        decode_canonical_with_limits::<()>(&unit, canonical_decode_limits(unit.len()))
-            .expect("decode canonical unit");
-    }
-
-    #[test]
-    fn canonical_allocation_budget_covers_large_signed_genesis() {
-        // A production signed-genesis payload of this size accounts for slightly
-        // more than the former 32x-plus-64-KiB allocation envelope while it is
-        // reconstructed into owned containers.
-        const PAYLOAD_BYTES: usize = 55_766;
-        const ACCOUNTED_ALLOCATION_BYTES: usize = 1_850_832;
-
-        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
-
-        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
-        assert!(allocation_budget >= ACCOUNTED_ALLOCATION_BYTES);
-    }
-
-    #[test]
-    fn canonical_allocation_budget_covers_large_resultless_genesis_candidate() {
-        // The canonical resultless projection has a smaller frame than its
-        // result-bearing signed genesis, but reconstructing its owned graph
-        // crosses the 33x-plus-64-KiB envelope used by the former policy.
-        const PAYLOAD_BYTES: usize = 54_586;
-        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_867_001;
-
-        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
-
-        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
-        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
-    }
-
-    #[test]
-    fn canonical_allocation_budget_covers_live_consensus_peer_payload() {
-        // Exact first rejected reserve observed for a legitimate high-stream
-        // consensus frame. This proves the former 34x policy insufficient; it
-        // is not a measurement of the allocation required to complete decode.
-        const PAYLOAD_BYTES: usize = 42_241;
-        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_543_396;
-        const LEGACY_ALLOCATION_BUDGET: usize = PAYLOAD_BYTES * 34 + 64 * 1024;
-
-        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
-
-        assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_501_730);
-        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
-        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
-        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
-    }
-
-    #[test]
-    fn canonical_allocation_policy_exceeds_rejected_live_consensus_reserve() {
-        // Exact first rejected reserve from the legitimate consensus value
-        // carried by the 42,716-byte P2P frame. This observation proves that the
-        // former 35x policy was insufficient; it is not a measurement of the
-        // allocation required to complete the decode.
-        const PAYLOAD_BYTES: usize = 42_241;
-        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_584_958;
-        const LEGACY_ALLOCATION_BUDGET: usize = PAYLOAD_BYTES * 35 + 64 * 1024;
-
-        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
-
-        assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_543_971);
-        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
-        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
-        assert_eq!(allocation_budget, 2_768_960);
-        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
-    }
-
-    #[test]
-    fn canonical_allocation_policy_exceeds_rejected_queue_journal_reserve() {
-        // Exact first rejected reserve from peer 2's legitimate queue-plan Put.
-        // This independently proves the former 35x policy insufficient for the
-        // durable journal path, but does not claim that the rejected reserve was
-        // the decoder's final allocation.
-        const PAYLOAD_BYTES: usize = 43_074;
-        const FIRST_REJECTED_ALLOCATION_BYTES: usize = 1_614_849;
-        const LEGACY_ALLOCATION_BUDGET: usize = PAYLOAD_BYTES * 35 + 64 * 1024;
-
-        let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
-
-        assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_573_126);
-        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
-        assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
-        assert_eq!(allocation_budget, 2_822_272);
-        assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
-    }
-
-    #[test]
-    fn generic_canonical_policy_is_linear_and_rejects_forged_resources() {
-        const POLICY_PROBE_BYTES: usize = 1024;
-        let limits = canonical_decode_limits(POLICY_PROBE_BYTES);
-        assert_eq!(
-            limits.max_total_allocated_bytes(),
-            POLICY_PROBE_BYTES * 64 + 64 * 1024
-        );
-
-        const FORGED_LENGTH: u64 = 1 << 40;
-        let bare = FORGED_LENGTH.to_le_bytes();
-        let frame =
-            core::frame_bare_with_header_flags::<Vec<u64>>(&bare, core::default_encode_flags())
-                .expect("frame forged vector with a valid checksum");
-
-        assert!(matches!(
-            decode_canonical::<Vec<u64>>(&frame),
-            Err(Error::SequenceLengthExceeded { .. }) | Err(Error::TotalElementsExceeded { .. })
-        ));
-
-        let forged_allocation = limits
-            .max_total_allocated_bytes()
-            .checked_add(1)
-            .expect("bounded policy probe fits usize");
-        let forged_allocation_u64 =
-            u64::try_from(forged_allocation).expect("bounded policy probe fits u64");
-        let allocation_limit_u64 = u64::try_from(limits.max_total_allocated_bytes())
-            .expect("bounded policy limit fits u64");
-        let error = with_decode_limits(limits, || {
-            core::reserve_decode_allocation(forged_allocation)
-        })
-        .expect_err("one byte beyond the linear allocation policy must fail before allocation");
-        assert!(matches!(
-            error,
-            Error::TotalAllocationExceeded { attempted, limit }
-                if attempted == forged_allocation_u64 && limit == allocation_limit_u64
-        ));
-    }
-
-    #[test]
-    fn canonical_allocation_policy_caps_amplified_extra() {
-        const LAST_UNCAPPED_PAYLOAD_BYTES: usize = CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES
-            / CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER;
-        const FIRST_CAPPED_PAYLOAD_BYTES: usize = LAST_UNCAPPED_PAYLOAD_BYTES + 1;
-        const ONE_GIB: usize = 1024 * 1024 * 1024;
-
-        let last_uncapped_extra = LAST_UNCAPPED_PAYLOAD_BYTES
-            .checked_mul(CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER)
-            .expect("cap-transition fixture fits usize");
-        let first_uncapped_extra = FIRST_CAPPED_PAYLOAD_BYTES
-            .checked_mul(CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER)
-            .expect("cap-transition fixture fits usize");
-        assert!(last_uncapped_extra <= CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES);
-        assert!(first_uncapped_extra > CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES);
-        assert_eq!(
-            canonical_decode_limits(LAST_UNCAPPED_PAYLOAD_BYTES).max_total_allocated_bytes(),
-            LAST_UNCAPPED_PAYLOAD_BYTES
-                + last_uncapped_extra
-                + CANONICAL_DECODE_FIXED_ALLOCATION_BYTES
-        );
-        assert_eq!(
-            canonical_decode_limits(FIRST_CAPPED_PAYLOAD_BYTES).max_total_allocated_bytes(),
-            FIRST_CAPPED_PAYLOAD_BYTES
-                + CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES
-                + CANONICAL_DECODE_FIXED_ALLOCATION_BYTES
-        );
-        assert_eq!(
-            canonical_decode_limits(ONE_GIB).max_total_allocated_bytes(),
-            ONE_GIB
-                + CANONICAL_DECODE_MAX_EXTRA_ALLOCATION_BYTES
-                + CANONICAL_DECODE_FIXED_ALLOCATION_BYTES
-        );
-    }
-
-    #[test]
-    fn schema_limits_tighten_the_payload_derived_default() {
-        let value = vec![1_u64, 2, 3, 4];
-        let frame = encode_canonical(&value).expect("encode canonical vector");
-        let limits = DecodeLimits::new(3, frame.len(), 3, frame.len() * 32, 16);
-        assert!(matches!(
-            decode_canonical_with_limits::<Vec<u64>>(&frame, limits),
-            Err(Error::SequenceLengthExceeded {
-                length: 4,
-                limit: 3
-            }) | Err(Error::TotalElementsExceeded {
-                attempted: 4,
-                limit: 3
-            })
-        ));
-    }
-
-    #[test]
-    fn canonical_decode_restores_ambient_flags_and_payload_context() {
-        let value = vec!["first".to_owned(), "second".to_owned()];
-        let canonical = encode_canonical(&value).expect("encode canonical fixture");
-        let alternate_flags = core::default_encode_flags() ^ core::header_flags::COMPACT_LEN;
-        let alternate = {
-            let _alternate = core::DecodeFlagsGuard::enter(alternate_flags);
-            core::to_bytes(&value).expect("encode alternate fixture")
-        };
-        assert_ne!(alternate, canonical);
-
-        let _ambient = core::DecodeFlagsGuard::enter(alternate_flags);
-        let ambient_payload = b"ambient outer payload";
-        let _ambient_payload = core::PayloadCtxGuard::enter(ambient_payload);
-        let payload_context_before = core::payload_ctx();
-        let encoding_before = core::to_bytes(&value).expect("encode ambient fixture");
-        assert_eq!(
-            decode_canonical::<Vec<String>>(&canonical).expect("decode canonical fixture"),
-            value
-        );
-        assert!(matches!(
-            decode_canonical::<Vec<String>>(&alternate),
-            Err(Error::NonCanonicalEncoding)
-        ));
-        assert_eq!(core::payload_ctx(), payload_context_before);
-        assert_eq!(
-            core::to_bytes(&vec!["first".to_owned(), "second".to_owned()])
-                .expect("encode after canonical decode"),
-            encoding_before
-        );
-    }
-
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
-    #[test]
-    fn canonical_decode_classifies_valid_compression_as_noncanonical() {
-        let value = vec!["compressed".to_owned(); 64];
-        let compressed = to_compressed_bytes(&value, Some(CompressionConfig::default()))
-            .expect("encode compressed fixture");
-
-        assert!(matches!(
-            decode_canonical::<Vec<String>>(&compressed),
-            Err(Error::NonCanonicalEncoding)
-        ));
-    }
-
-    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
-    #[test]
-    fn canonical_decode_rejects_compression_before_decode_allocation_budget() {
-        let value = vec!["compressed expansion".to_owned(); 4096];
-        let compressed = to_compressed_bytes(&value, Some(CompressionConfig::default()))
-            .expect("encode compressed expansion fixture");
-        let no_decode_resources = DecodeLimits::new(0, 0, 0, 0, 0);
-
-        assert!(matches!(
-            decode_canonical_with_limits::<Vec<String>>(&compressed, no_decode_resources),
-            Err(Error::NonCanonicalEncoding)
-        ));
-    }
-
-    #[test]
-    fn canonical_decode_preserves_schema_and_malformed_errors() {
-        let wrong_schema = encode_canonical(&42_u64).expect("encode wrong-schema fixture");
-        assert!(matches!(
-            decode_canonical::<Vec<u64>>(&wrong_schema),
-            Err(Error::SchemaMismatch)
-        ));
-
-        let mut bad_checksum = encode_canonical(&vec![42_u64]).expect("encode checksum fixture");
-        let last = bad_checksum
-            .last_mut()
-            .expect("canonical frame has a payload byte");
-        *last ^= 0x80;
-        assert!(matches!(
-            decode_canonical::<Vec<u64>>(&bad_checksum),
-            Err(Error::ChecksumMismatch)
-        ));
-    }
-}
+include!("canonical_codec_tests.rs");
 
 /// Convenience helper identical to `decode_from_bytes`.
 /// Accepts either compressed or uncompressed Norito payloads and returns `T`.

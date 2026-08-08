@@ -22,8 +22,8 @@ mod tests {
         FailingRngV1, FcmpNativeErrorV1,
         field::{Field25519, SelenePoint},
         proof_math::{
-            ProofGeneratorView, ProofScalar, ProverTranscript, SeleneSuite, VerifierTranscript,
-            multiexp, selene_bp_generators,
+            ProofGeneratorView, ProofScalar, ProverTranscript, SecretMultiexpBuilder, SeleneSuite,
+            VerifierTranscript, selene_bp_generators,
         },
     };
     use iroha_zkp_halo2::generalized_bulletproof::{
@@ -93,15 +93,32 @@ mod tests {
         generators: ProofGeneratorView<'_, SeleneSuite>,
         opening: &VectorCommitmentOpening<Field25519>,
     ) -> SelenePoint {
-        let mut terms = opening
+        let mut terms = SecretMultiexpBuilder::<SeleneSuite>::new(opening.values.len() + 1)
+            .expect("fixed test commitment capacity");
+        for (scalar, point) in opening
             .values
             .0
             .iter()
             .copied()
             .zip(generators.g_bold.iter().copied())
-            .collect::<Vec<_>>();
-        terms.push((opening.mask, generators.h));
-        multiexp::<SeleneSuite>(&terms)
+        {
+            terms
+                .push(scalar, point)
+                .expect("test commitment stays within its fixed capacity");
+        }
+        terms
+            .push(opening.mask, generators.h)
+            .expect("test commitment mask fits its fixed capacity");
+        terms.evaluate().expect("complete test commitment")
+    }
+
+    fn duplicate_test_openings(
+        openings: &[VectorCommitmentOpening<Field25519>],
+    ) -> Vec<VectorCommitmentOpening<Field25519>> {
+        openings
+            .iter()
+            .map(|opening| VectorCommitmentOpening::new(opening.values.0.clone(), opening.mask))
+            .collect()
     }
 
     fn verify_test_circuit(context: [u8; 32], proof: &[u8]) -> Result<(), FcmpNativeErrorV1> {
@@ -153,7 +170,7 @@ mod tests {
         let witness = ArithmeticCircuitWitness::<SeleneSuite>::new(
             vec![Field25519::from_u64(3), Field25519::from_u64(5)],
             vec![Field25519::from_u64(4), Field25519::from_u64(6)],
-            openings.clone(),
+            duplicate_test_openings(&openings),
         )
         .expect("witness");
         let mut transcript = ProverTranscript::new(context);
@@ -197,7 +214,7 @@ mod tests {
         let invalid_gate_witness = ArithmeticCircuitWitness::<SeleneSuite>::new(
             vec![Field25519::from_u64(4), Field25519::from_u64(5)],
             vec![Field25519::from_u64(4), Field25519::from_u64(6)],
-            openings.clone(),
+            duplicate_test_openings(&openings),
         )
         .expect("shape-valid witness");
         let mut bad_gate_transcript = ProverTranscript::new(context);

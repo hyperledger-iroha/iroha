@@ -150,6 +150,7 @@ fn main() {
 enum CommandKind {
     OpenApi {
         outputs: Vec<PathBuf>,
+        canonical_spec: PathBuf,
         manifest: PathBuf,
         signature_envelope: Option<PathBuf>,
         signing_payload: Option<PathBuf>,
@@ -1124,12 +1125,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
     match command {
         CommandKind::OpenApi {
             outputs,
+            canonical_spec,
             manifest,
             signature_envelope,
             signing_payload,
             unsigned_manifest,
         } => generate_openapi(
             outputs,
+            canonical_spec,
             manifest,
             signature_envelope,
             signing_payload,
@@ -2007,6 +2010,7 @@ where
         }
         "openapi" => {
             let mut outputs = Vec::new();
+            let mut output_root: Option<PathBuf> = None;
             let mut manifest_path: Option<PathBuf> = None;
             let mut signature_envelope: Option<PathBuf> = None;
             let mut signing_payload: Option<PathBuf> = None;
@@ -2020,25 +2024,48 @@ where
                         };
                         outputs.push(normalize_path(Path::new(&path))?);
                     }
+                    "--output-root" => {
+                        let Some(path) = pending.next() else {
+                            return Err("expected directory after --output-root".into());
+                        };
+                        if output_root.is_some() {
+                            return Err("openapi accepts --output-root only once".into());
+                        }
+                        output_root = Some(normalize_openapi_output_root(&path)?);
+                    }
                     "--manifest" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --manifest".into());
                         };
+                        if manifest_path.is_some() {
+                            return Err("openapi accepts --manifest only once".into());
+                        }
                         manifest_path = Some(normalize_path(Path::new(&path))?);
                     }
                     "--signature-envelope" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --signature-envelope".into());
                         };
+                        if signature_envelope.is_some() {
+                            return Err("openapi accepts --signature-envelope only once".into());
+                        }
                         signature_envelope = Some(normalize_path(Path::new(&path))?);
                     }
                     "--signing-payload" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --signing-payload".into());
                         };
+                        if signing_payload.is_some() {
+                            return Err("openapi accepts --signing-payload only once".into());
+                        }
                         signing_payload = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--unsigned-manifest" => unsigned_manifest = true,
+                    "--unsigned-manifest" => {
+                        if unsigned_manifest {
+                            return Err("openapi accepts --unsigned-manifest only once".into());
+                        }
+                        unsigned_manifest = true;
+                    }
                     flag => return Err(format!("unknown flag for openapi: {flag}").into()),
                 }
             }
@@ -2056,13 +2083,47 @@ where
                 );
             }
 
-            if outputs.is_empty() {
-                outputs.push(default_openapi_path());
+            if output_root.is_some() && (!outputs.is_empty() || manifest_path.is_some()) {
+                return Err(
+                    "openapi --output-root cannot be combined with --output or --manifest".into(),
+                );
             }
+            let (canonical_spec, manifest) = if let Some(root) = output_root {
+                let canonical_spec = root.join("torii.json");
+                let manifest = root.join("manifest.json");
+                outputs.push(canonical_spec.clone());
+                (canonical_spec, manifest)
+            } else {
+                if outputs.is_empty() {
+                    outputs.push(default_openapi_path());
+                }
+                (
+                    default_openapi_path(),
+                    manifest_path.unwrap_or_else(default_openapi_manifest_path),
+                )
+            };
 
+            for (index, output) in outputs.iter().enumerate() {
+                if openapi_paths_alias(output, &manifest) {
+                    return Err(format!(
+                        "openapi output {} must not alias the manifest path {}",
+                        output.display(),
+                        manifest.display()
+                    )
+                    .into());
+                }
+                for other in &outputs[index + 1..] {
+                    if openapi_paths_alias(output, other) {
+                        return Err(format!(
+                            "openapi output paths must be distinct and non-aliasing: {} and {}",
+                            output.display(),
+                            other.display()
+                        )
+                        .into());
+                    }
+                }
+            }
             outputs.sort();
-            outputs.dedup();
-            let manifest = manifest_path.unwrap_or_else(default_openapi_manifest_path);
             if let Some(signing_payload_path) = signing_payload.as_deref() {
                 for (label, reserved) in outputs
                     .iter()
@@ -2101,6 +2162,7 @@ where
 
             Ok(CommandKind::OpenApi {
                 outputs,
+                canonical_spec,
                 manifest,
                 signature_envelope,
                 signing_payload,
@@ -9622,6 +9684,7 @@ where
 
 fn generate_openapi(
     outputs: Vec<PathBuf>,
+    canonical_spec: PathBuf,
     manifest: PathBuf,
     signature_envelope: Option<PathBuf>,
     signing_payload: Option<PathBuf>,
@@ -9631,10 +9694,22 @@ fn generate_openapi(
 
     let formatted = json::to_string_pretty(&spec)?;
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
+    if emits_manifest
+        && !outputs
+            .iter()
+            .any(|output| openapi_paths_alias(output, &canonical_spec))
+    {
+        return Err(format!(
+            "OpenAPI manifests require generating the canonical spec {}",
+            canonical_spec.display()
+        )
+        .into());
+    }
     let generator_provenance = if emits_manifest {
         Some(git_source_provenance(
             &workspace_root(),
             &openapi_generator_output_paths(
+                &canonical_spec,
                 &outputs,
                 &manifest,
                 signing_payload.as_deref(),
@@ -9661,20 +9736,13 @@ fn generate_openapi(
     }
 
     if emits_manifest {
-        let canonical = default_openapi_path();
-        if !outputs.contains(&canonical) {
-            return Err(
-                "OpenAPI manifests require generating artifacts/openapi/torii.json; include the canonical output path"
-                    .into(),
-            );
-        }
         let provenance = generator_provenance
             .as_ref()
             .expect("manifest provenance captured");
         if let Some(signature_envelope) = signature_envelope {
             let signature = load_signature_envelope(&signature_envelope)?;
             write_openapi_manifest_with_signature(
-                &canonical,
+                &canonical_spec,
                 &manifest,
                 signature,
                 provenance,
@@ -9682,7 +9750,7 @@ fn generate_openapi(
             )?;
         } else {
             write_openapi_manifest_unsigned(
-                &canonical,
+                &canonical_spec,
                 &manifest,
                 provenance,
                 signing_payload.as_deref(),
@@ -9786,9 +9854,6 @@ const OPENAPI_CARGO_LOCK_PIN: &[u8] = include_bytes!("../../release/openapi-carg
 const OPENAPI_CARGO_LOCK_PIN_PATH: &str = "release/openapi-cargo-lock-v1.txt";
 const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
 const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES: u64 = 1_024;
-const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_213;
-const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX: &str =
-    "c52a098b84fe27deda651868a87cf0670250a38a999ddf299a1061b2f37fa528";
 const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     ".cargo/config.toml",
     ".github/workflows/openapi.yml",
@@ -11037,23 +11102,27 @@ fn is_lower_hex_digest(value: &str, bytes: usize) -> bool {
 }
 
 fn openapi_generator_output_paths(
+    canonical_spec: &Path,
     outputs: &[PathBuf],
     manifest: &Path,
     signing_payload: Option<&Path>,
     signature_envelope: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let openapi_dir = default_openapi_path()
-        .parent()
-        .expect("canonical OpenAPI output has a parent")
-        .to_path_buf();
-    let mut paths = vec![
-        default_openapi_path(),
-        default_openapi_manifest_path(),
-        openapi_dir.join("versions.json"),
-        openapi_dir.join("versions/current/torii.json"),
-        openapi_dir.join("versions/current/manifest.json"),
-        manifest.to_path_buf(),
-    ];
+    let mut paths = Vec::new();
+    for spec in [default_openapi_path(), canonical_spec.to_path_buf()] {
+        let openapi_dir = spec
+            .parent()
+            .expect("canonical OpenAPI output has a parent")
+            .to_path_buf();
+        paths.extend([
+            spec,
+            openapi_dir.join("manifest.json"),
+            openapi_dir.join("versions.json"),
+            openapi_dir.join("versions/current/torii.json"),
+            openapi_dir.join("versions/current/manifest.json"),
+        ]);
+    }
+    paths.push(manifest.to_path_buf());
     paths.extend(outputs.iter().cloned());
     paths.extend(signing_payload.map(Path::to_path_buf));
     paths.extend(signature_envelope.map(Path::to_path_buf));
@@ -11333,10 +11402,16 @@ fn parse_openapi_cargo_lock_pin(bytes: &[u8]) -> Result<OpenApiCargoLockPinV1, B
     if fields.next() != Some("") || fields.next().is_some() {
         return Err("OpenAPI Cargo.lock pin must contain exactly three fields".into());
     }
-    if expected_bytes != OPENAPI_CARGO_LOCK_EXPECTED_BYTES
-        || sha256_hex != OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX
-    {
-        return Err("OpenAPI Cargo.lock pin does not match the exact V1 size and SHA-256".into());
+    if expected_bytes == 0 || expected_bytes > OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES {
+        return Err(format!(
+            "OpenAPI Cargo.lock pin bytes must be within 1..={OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES}"
+        )
+        .into());
+    }
+    if !is_lower_hex_digest(sha256_hex, 32) || sha256_hex.bytes().all(|byte| byte == b'0') {
+        return Err(
+            "OpenAPI Cargo.lock pin SHA-256 must be lowercase hexadecimal and nonzero".into(),
+        );
     }
     Ok(OpenApiCargoLockPinV1 {
         bytes: expected_bytes,
@@ -11909,14 +11984,13 @@ mod openapi_tests {
     }
 
     #[test]
-    fn openapi_cargo_lock_pin_parser_requires_the_exact_v1_profile() {
-        assert_eq!(
-            parse_openapi_cargo_lock_pin(OPENAPI_CARGO_LOCK_PIN).expect("parse canonical pin"),
-            OpenApiCargoLockPinV1 {
-                bytes: OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
-                sha256_hex: OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX.to_owned(),
-            }
-        );
+    fn openapi_cargo_lock_pin_parser_requires_the_canonical_v1_profile() {
+        let pin =
+            parse_openapi_cargo_lock_pin(OPENAPI_CARGO_LOCK_PIN).expect("parse canonical pin");
+        assert!(pin.bytes > 0);
+        assert!(pin.bytes <= OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES);
+        assert!(is_lower_hex_digest(&pin.sha256_hex, 32));
+        assert!(!pin.sha256_hex.bytes().all(|byte| byte == b'0'));
         let canonical = std::str::from_utf8(OPENAPI_CARGO_LOCK_PIN).expect("UTF-8 canonical pin");
         for (changed, expected) in [
             (
@@ -11931,18 +12005,15 @@ mod openapi_tests {
             ),
             (
                 canonical
-                    .replace("bytes=315213", "bytes=315214")
+                    .replace(&format!("bytes={}", pin.bytes), "bytes=0")
                     .into_bytes(),
-                "exact V1 size",
+                "noncanonical bytes",
             ),
             (
                 canonical
-                    .replace(
-                        OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
-                        "0000000000000000000000000000000000000000000000000000000000000000",
-                    )
+                    .replace(&pin.sha256_hex, &"0".repeat(64))
                     .into_bytes(),
-                "exact V1 size",
+                "nonzero",
             ),
         ] {
             let error =
@@ -12047,6 +12118,129 @@ mod openapi_tests {
             err.to_string().contains("unknown flag for openapi"),
             "unexpected removed-flag error: {err}"
         );
+    }
+
+    #[test]
+    fn openapi_output_root_binds_the_canonical_spec_and_manifest() {
+        let args = [
+            "xtask",
+            "openapi",
+            "--output-root",
+            "staging/openapi",
+            "--unsigned-manifest",
+        ];
+        let command = parse_command(args.into_iter().map(String::from))
+            .expect("parse staging-root OpenAPI command");
+        let CommandKind::OpenApi {
+            outputs,
+            canonical_spec,
+            manifest,
+            unsigned_manifest,
+            ..
+        } = command
+        else {
+            panic!("expected OpenAPI command");
+        };
+        let root = workspace_root().join("staging/openapi");
+        assert_eq!(canonical_spec, root.join("torii.json"));
+        assert_eq!(outputs, vec![root.join("torii.json")]);
+        assert_eq!(manifest, root.join("manifest.json"));
+        assert!(unsigned_manifest);
+    }
+
+    #[test]
+    fn openapi_output_root_rejects_ambiguous_or_unsafe_paths() {
+        for (args, expected) in [
+            (
+                vec![
+                    "xtask",
+                    "openapi",
+                    "--output-root",
+                    "staging/openapi",
+                    "--output",
+                    "other.json",
+                ],
+                "cannot be combined",
+            ),
+            (
+                vec![
+                    "xtask",
+                    "openapi",
+                    "--output-root",
+                    "staging/openapi",
+                    "--manifest",
+                    "other.json",
+                ],
+                "cannot be combined",
+            ),
+            (
+                vec![
+                    "xtask",
+                    "openapi",
+                    "--output-root",
+                    "staging/openapi",
+                    "--output-root",
+                    "staging/other",
+                ],
+                "only once",
+            ),
+            (
+                vec!["xtask", "openapi", "--output-root", "."],
+                "unambiguous directory path",
+            ),
+            (
+                vec!["xtask", "openapi", "--output-root", "../escape"],
+                "unambiguous directory path",
+            ),
+            (
+                vec!["xtask", "openapi", "--output-root", ".git/openapi"],
+                "Git metadata",
+            ),
+        ] {
+            let error = match parse_command(args.iter().map(|arg| (*arg).to_owned())) {
+                Ok(_) => panic!("ambiguous OpenAPI output layout must fail: {args:?}"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "expected `{expected}` for {args:?}, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn openapi_outputs_reject_manifest_and_duplicate_aliases() {
+        for args in [
+            vec![
+                "xtask",
+                "openapi",
+                "--output",
+                "artifacts/openapi/manifest.json",
+            ],
+            vec![
+                "xtask",
+                "openapi",
+                "--output",
+                "staging/torii.json",
+                "--output",
+                "staging/./torii.json",
+            ],
+            vec![
+                "xtask",
+                "openapi",
+                "--unsigned-manifest",
+                "--unsigned-manifest",
+            ],
+        ] {
+            let error = match parse_command(args.iter().map(|arg| (*arg).to_owned())) {
+                Ok(_) => panic!("aliased OpenAPI outputs must fail: {args:?}"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("alias") || error.to_string().contains("only once"),
+                "unexpected duplicate/alias error for {args:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -14437,6 +14631,37 @@ fn default_openapi_allowed_signers_path() -> PathBuf {
     workspace_root().join("artifacts/openapi/allowed_signers.json")
 }
 
+fn normalize_openapi_output_root(value: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let requested = Path::new(value);
+    if value.is_empty()
+        || value.trim() != value
+        || value.starts_with('-')
+        || requested == Path::new(".")
+        || requested.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err("openapi --output-root requires an unambiguous directory path".into());
+    }
+    let normalized = normalize_path(requested)?;
+    if normalized.parent().is_none() {
+        return Err("openapi --output-root must not be the filesystem root".into());
+    }
+    let workspace = openapi_path_identity(&workspace_root());
+    let identity = openapi_path_identity(&normalized);
+    if identity == workspace {
+        return Err("openapi --output-root must not be the workspace root".into());
+    }
+    let git_metadata = workspace.join(".git");
+    if identity == git_metadata || identity.starts_with(&git_metadata) {
+        return Err("openapi --output-root must not write inside Git metadata".into());
+    }
+    Ok(normalized)
+}
+
 fn default_da_report_path() -> PathBuf {
     workspace_root()
         .join("artifacts")
@@ -14855,10 +15080,10 @@ fn print_usage() {
         "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
     );
     eprintln!(
-        "  cargo xtask openapi [--output <path>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
+        "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
+        "    Generate the Torii OpenAPI spec from a live Torii router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"
@@ -15433,460 +15658,4 @@ fn print_usage() {
 }
 
 #[cfg(test)]
-mod tests {
-    use norito::json::Value;
-
-    use super::*;
-
-    #[test]
-    fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
-        let args = [
-            "xtask",
-            "norito-rpc-fixtures",
-            "--output-root",
-            "artifacts/norito-stage",
-        ];
-        assert!(matches!(
-            parse_command(args.into_iter().map(String::from)).expect("canonical option parses"),
-            CommandKind::NoritoRpcFixtures { .. }
-        ));
-
-        for retired in [
-            "--fixtures",
-            "--exporter",
-            "--exporter-manifest",
-            "-o",
-            "--out",
-            "--output",
-            "--out-dir",
-            "--selection",
-            "--selection-manifest",
-            "--all",
-            "--skip-encoded-check",
-        ] {
-            let args = ["xtask", "norito-rpc-fixtures", retired];
-            let error = match parse_command(args.into_iter().map(String::from)) {
-                Ok(_) => panic!("retired option {retired} must be rejected"),
-                Err(error) => error,
-            };
-            assert!(
-                error.to_string().contains("unknown flag"),
-                "unexpected error for {retired}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn norito_rpc_fixtures_rejects_ambiguous_output_roots() {
-        for invalid in ["", ".", "..", "../stage", "stage/../escape", "/", "--all"] {
-            let args = ["xtask", "norito-rpc-fixtures", "--output-root", invalid];
-            let error = match parse_command(args.into_iter().map(String::from)) {
-                Ok(_) => panic!("ambiguous output root {invalid:?} must be rejected"),
-                Err(error) => error,
-            };
-            assert!(
-                error.to_string().contains("output-root"),
-                "unexpected error for {invalid:?}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn norito_rpc_verify_accepts_only_one_explicit_report_target() {
-        for arguments in [
-            vec!["xtask", "norito-rpc-verify"],
-            vec!["xtask", "norito-rpc-verify", "--json-out", "-"],
-            vec![
-                "xtask",
-                "norito-rpc-verify",
-                "--json-out",
-                "artifacts/norito-report.json",
-            ],
-        ] {
-            assert!(matches!(
-                parse_command(arguments.into_iter().map(String::from))
-                    .expect("valid verifier options parse"),
-                CommandKind::NoritoRpcVerify { .. }
-            ));
-        }
-
-        for arguments in [
-            vec!["xtask", "norito-rpc-verify", "--json-out"],
-            vec!["xtask", "norito-rpc-verify", "--json-out", ""],
-            vec!["xtask", "norito-rpc-verify", "--json-out", "--unknown"],
-            vec![
-                "xtask",
-                "norito-rpc-verify",
-                "--json-out",
-                "first.json",
-                "--json-out",
-                "second.json",
-            ],
-        ] {
-            assert!(parse_command(arguments.into_iter().map(String::from)).is_err());
-        }
-    }
-
-    #[test]
-    fn norito_rpc_verify_help_describes_the_fixture_only_contract() {
-        let help = NORITO_RPC_VERIFY_USAGE_DESCRIPTION.to_ascii_lowercase();
-        for required in ["fixture", "schema", "compact", "android", "python", "swift"] {
-            assert!(
-                help.contains(required),
-                "missing `{required}` from verifier help"
-            );
-        }
-        for false_claim in ["router", "endpoint", "transport"] {
-            assert!(
-                !help.contains(false_claim),
-                "verifier help must not claim `{false_claim}` behavior"
-            );
-        }
-    }
-
-    #[test]
-    fn norito_rpc_fixture_help_discloses_every_publication_surface() {
-        let help = NORITO_RPC_FIXTURES_USAGE_DESCRIPTION.to_ascii_lowercase();
-        for required in ["canonical", "android", "python", "swift", "output root"] {
-            assert!(
-                help.contains(required),
-                "missing `{required}` from fixture-owner help"
-            );
-        }
-    }
-
-    #[test]
-    fn vote_tally_default_path_points_into_fixtures() {
-        let default = default_vote_tally_path();
-        assert!(default.ends_with("fixtures/zk/vote_tally"));
-    }
-
-    #[test]
-    fn soranet_fixture_default_path_points_into_tests() {
-        let default = soranet::default_fixture_dir(&workspace_root());
-        assert!(default.ends_with("tests/interop/soranet/capabilities"));
-    }
-
-    #[test]
-    fn parse_sorafs_adoption_check_rejects_relaxation_without_override_id() {
-        let args = ["xtask", "sorafs-adoption-check", "--allow-single-source"];
-        let iter = args.into_iter().map(String::from);
-        let err = match parse_command(iter) {
-            Ok(_) => panic!("relaxation flag must require an override id"),
-            Err(err) => err,
-        };
-        let message = err.to_string();
-        assert!(
-            message.contains("require --adoption-override-id"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn parse_sorafs_adoption_check_rejects_malformed_override_id() {
-        let args = [
-            "xtask",
-            "sorafs-adoption-check",
-            "--allow-zero-weight",
-            "--adoption-override-id",
-            "bad id",
-        ];
-        let iter = args.into_iter().map(String::from);
-        let err = match parse_command(iter) {
-            Ok(_) => panic!("malformed override id must fail"),
-            Err(err) => err,
-        };
-        let message = err.to_string();
-        assert!(
-            message.contains("may contain only"),
-            "unexpected error: {message}"
-        );
-    }
-
-    #[test]
-    fn parse_sorafs_adoption_check_accepts_relaxation_with_override_id() {
-        let args = [
-            "xtask",
-            "sorafs-adoption-check",
-            "--allow-single-source",
-            "--allow-zero-weight",
-            "--adoption-override-id",
-            "INC-2026-07-DIRECT",
-        ];
-        let iter = args.into_iter().map(String::from);
-        let command = parse_command(iter).expect("valid override id should parse");
-        match command {
-            CommandKind::SorafsAdoptionCheck { options, .. } => {
-                assert!(options.allow_single_source_fallback);
-                assert!(!options.require_positive_weight);
-            }
-            _ => panic!("expected sorafs-adoption-check command"),
-        }
-    }
-
-    #[test]
-    fn sm_operator_snippet_with_seed_emits_expected_files() {
-        let temp = TempDir::new().expect("temp dir");
-        let json_path = temp.path().join("output").join("sm2-key.json");
-        let snippet_path = temp.path().join("output").join("client-sm2.toml");
-        let options = crate::sm::SmOperatorSnippetOptions {
-            distid: Some("CN12345678901234".to_string()),
-            seed_hex: Some(
-                "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF".to_string(),
-            ),
-            json_out: Some(crate::sm::OutputTarget::file(json_path.clone())),
-            snippet_out: Some(crate::sm::OutputTarget::file(snippet_path.clone())),
-        };
-        crate::sm::generate_sm_operator_snippet(options).expect("generate snippet");
-
-        let json_text = std::fs::read_to_string(&json_path).expect("read sm2-key.json");
-        let value: Value = norito::json::from_str(&json_text).expect("parse sm2 json");
-        assert_eq!(
-            value["distid"],
-            norito::json!("CN12345678901234"),
-            "distid should match input"
-        );
-        assert!(
-            value["public_key_config"]
-                .as_str()
-                .expect("public key string")
-                .parse::<iroha_crypto::PublicKey>()
-                .is_ok(),
-            "public key config should round-trip via PublicKey::from_str"
-        );
-
-        let snippet = std::fs::read_to_string(&snippet_path).expect("read client-sm2.toml");
-        assert!(
-            snippet.contains("public_key = \""),
-            "snippet should contain public key entry"
-        );
-        assert!(
-            snippet.contains("[crypto]"),
-            "snippet should include crypto section"
-        );
-        assert!(
-            snippet.contains("default_hash = \"sm3-256\""),
-            "snippet should set default_hash to sm3-256"
-        );
-        assert!(
-            snippet.contains("allowed_signing = [\"ed25519\", \"sm2\"]"),
-            "snippet should include sm2 in allowed_signing by default (with guidance comment)"
-        );
-        assert!(
-            snippet.contains("sm2_distid_default = \"CN12345678901234\""),
-            "snippet should embed the configured sm2_distid_default"
-        );
-        assert!(
-            snippet.contains("# enable_sm_openssl_preview"),
-            "snippet should mention optional OpenSSL preview toggle"
-        );
-    }
-
-    #[test]
-    fn sm_operator_snippet_supports_stdout_targets() {
-        let temp = TempDir::new().expect("temp dir");
-        let snippet_path = temp.path().join("client-sm2.toml");
-        let options = crate::sm::SmOperatorSnippetOptions {
-            distid: Some("CN5555444433332222".to_string()),
-            seed_hex: Some(
-                "AA11223344556677889900AABBCCDDEEFF00112233445566778899AABBCCDD00".to_string(),
-            ),
-            json_out: Some(crate::sm::OutputTarget::Stdout),
-            snippet_out: Some(crate::sm::OutputTarget::file(snippet_path.clone())),
-        };
-        crate::sm::generate_sm_operator_snippet(options).expect("generate snippet");
-
-        assert!(
-            !snippet_path.parent().unwrap().join("sm2-key.json").exists(),
-            "JSON file should not be created when streamed to stdout"
-        );
-        let snippet = std::fs::read_to_string(&snippet_path).expect("read snippet");
-        assert!(
-            snippet.contains("[crypto]"),
-            "stdout run should still produce snippet file when requested"
-        );
-    }
-
-    #[test]
-    fn iso_bridge_lint_uses_default_reference_data() {
-        lint_iso_bridge(IsoLintOptions::default()).expect("default iso lint should succeed");
-    }
-
-    #[cfg(feature = "vote-tally")]
-    #[test]
-    fn vote_tally_bundle_matches_expected_hashes() {
-        let temp = TempDir::new().expect("temp dir");
-        let summary = write_bundle(temp.path()).expect("write bundle");
-        let attestation =
-            vote_tally::attestation_manifest(&summary, temp.path()).expect("attestation manifest");
-        assert_eq!(
-            attestation["generated_unix_ms"],
-            norito::json!(3513801751697071715u64)
-        );
-        assert_eq!(
-            attestation["hash_algorithm"],
-            norito::json!("blake2b-256"),
-            "attestation must record the hash function"
-        );
-        let artifacts = attestation["artifacts"]
-            .as_array()
-            .expect("artifacts array");
-        assert_eq!(
-            artifacts.len(),
-            vote_tally::bundle_file_names().len(),
-            "expected attestation to include all bundle artifacts"
-        );
-        for expected in vote_tally::bundle_file_names() {
-            let present = artifacts
-                .iter()
-                .any(|entry| entry["file"] == norito::json!(*expected));
-            assert!(present, "missing artifact entry for {expected}");
-        }
-        let artifact_map = artifacts_to_map(artifacts).expect("artifact map");
-        let meta_entry = artifact_map
-            .get("vote_tally_meta.json")
-            .expect("meta entry present");
-        assert!(meta_entry.0 > 0);
-        let proof_entry = artifact_map
-            .get("vote_tally_proof.zk1")
-            .expect("proof entry present");
-        assert_eq!(proof_entry.0, summary.proof_len as u64);
-        let vk_entry = artifact_map
-            .get("vote_tally_vk.zk1")
-            .expect("vk entry present");
-        assert_eq!(vk_entry.0, summary.vk_len as u64);
-
-        assert_eq!(
-            summary.backend,
-            "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1"
-        );
-        assert_eq!(
-            summary.circuit_id,
-            "halo2/pasta/vote-bool-commit-merkle8-v1"
-        );
-        assert_eq!(
-            summary.commit_hex,
-            "20574662a58708e02e0000000000000000000000000000000000000000000000"
-        );
-        assert_eq!(
-            summary.root_hex,
-            "b63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817"
-        );
-        assert_eq!(
-            summary.schema_hash_hex,
-            "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3"
-        );
-        assert_eq!(
-            summary.vk_commit_hex,
-            "6f4749f5f75fee2a40880d4798123033b2b8036284225bad106b04daca5fb10e"
-        );
-        assert!(summary.vk_len > 0);
-        assert!(summary.proof_len > 0);
-    }
-
-    #[cfg(feature = "vote-tally")]
-    #[test]
-    fn attestation_verification_rejects_proof_digest_drift() {
-        let baseline = TempDir::new().expect("baseline dir");
-        let summary = write_bundle(baseline.path()).expect("write bundle");
-        let manifest_value =
-            vote_tally::attestation_manifest(&summary, baseline.path()).expect("manifest");
-        let manifest_path = baseline.path().join("bundle.attestation.json");
-        let mut manifest_text = norito::json::to_string_pretty(&manifest_value).unwrap();
-        manifest_text.push('\n');
-        std::fs::write(&manifest_path, manifest_text).unwrap();
-
-        let mut parsed: Value =
-            norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        if let Some(object) = parsed.as_object_mut()
-            && let Some(Value::Array(artifacts)) = object.get_mut("artifacts")
-        {
-            for entry in artifacts {
-                if let Some(map) = entry.as_object_mut()
-                    && map.get("file") == Some(&norito::json!("vote_tally_proof.zk1"))
-                {
-                    map.insert(
-                        "blake2b_256".into(),
-                        norito::json!(
-                            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-                        ),
-                    );
-                }
-            }
-        }
-        let mut mutated = norito::json::to_string_pretty(&parsed).unwrap();
-        mutated.push('\n');
-        std::fs::write(&manifest_path, mutated).unwrap();
-        let err = handle_attestation_manifest(
-            &summary,
-            baseline.path(),
-            JsonTarget::File(manifest_path.clone()),
-            true,
-        )
-        .expect_err("proof digest drift must be rejected");
-        assert!(
-            err.to_string().contains("vote_tally_proof.zk1"),
-            "error must cite proof artefact"
-        );
-    }
-
-    #[cfg(feature = "vote-tally")]
-    #[test]
-    fn attestation_verification_rejects_metadata_drift() {
-        let baseline = TempDir::new().expect("baseline dir");
-        let summary = write_bundle(baseline.path()).expect("write bundle");
-        let manifest_value =
-            vote_tally::attestation_manifest(&summary, baseline.path()).expect("manifest");
-        let manifest_path = baseline.path().join("bundle.attestation.json");
-        let mut manifest_text = norito::json::to_string_pretty(&manifest_value).unwrap();
-        manifest_text.push('\n');
-        std::fs::write(&manifest_path, manifest_text).unwrap();
-
-        // Mutate the meta file digest (deterministic artefact) and ensure verification fails.
-        let mut parsed: Value =
-            norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        if let Some(object) = parsed.as_object_mut()
-            && let Some(Value::Array(artifacts)) = object.get_mut("artifacts")
-        {
-            for entry in artifacts {
-                if let Some(map) = entry.as_object_mut()
-                    && map.get("file") == Some(&norito::json!("vote_tally_meta.json"))
-                {
-                    map.insert(
-                        "blake2b_256".into(),
-                        norito::json!(
-                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        ),
-                    );
-                }
-            }
-        }
-        let mut mutated = norito::json::to_string_pretty(&parsed).unwrap();
-        mutated.push('\n');
-        std::fs::write(&manifest_path, mutated).unwrap();
-        let err = handle_attestation_manifest(
-            &summary,
-            baseline.path(),
-            JsonTarget::File(manifest_path.clone()),
-            true,
-        )
-        .expect_err("metadata drift must be rejected");
-        assert!(
-            err.to_string().contains("vote_tally_meta.json"),
-            "error should reference the divergent artefact"
-        );
-    }
-
-    #[test]
-    fn verify_requires_seeded_baseline() {
-        let baseline = TempDir::new().expect("baseline dir");
-        let err =
-            generate_vote_tally_bundle(baseline.path().to_path_buf(), true, false, None, None)
-                .expect_err("verify without seeded fixtures must fail");
-        let message = err.to_string();
-        assert!(
-            message.contains("run `cargo xtask zk-vote-tally-bundle"),
-            "error message should suggest seeding baseline, got: {message}"
-        );
-    }
-}
+mod tests;

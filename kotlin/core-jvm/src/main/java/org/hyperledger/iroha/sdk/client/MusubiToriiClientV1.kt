@@ -15,6 +15,7 @@ import org.hyperledger.iroha.sdk.musubi.MusubiArchiveLocationQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiArchiveRetentionPageV1
 import org.hyperledger.iroha.sdk.musubi.MusubiArchiveRetentionQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiExactPackageQueryV1
+import org.hyperledger.iroha.sdk.musubi.MusubiExactReleaseSnapshotV1
 import org.hyperledger.iroha.sdk.musubi.MusubiExactReleaseQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiJsonV1
 import org.hyperledger.iroha.sdk.musubi.MusubiMaintainerDirectoryEntryV1
@@ -23,14 +24,15 @@ import org.hyperledger.iroha.sdk.musubi.MusubiOrderedPrefixQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiPackagePageQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiPackageRecordV1
 import org.hyperledger.iroha.sdk.musubi.MusubiPageV1
-import org.hyperledger.iroha.sdk.musubi.MusubiReleaseRecordV1
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleAttestationKeyV1
+import org.hyperledger.iroha.sdk.musubi.MusubiProviderBundleAttestationRecordV1
 import org.hyperledger.iroha.sdk.musubi.MusubiResolverIndexQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiResolverIndexPageV1
 import org.hyperledger.iroha.sdk.musubi.MusubiSearchPageV1
 import org.hyperledger.iroha.sdk.musubi.MusubiSearchQueryV1
 import org.hyperledger.iroha.sdk.musubi.MusubiVersionV1
 
-/** Read-only client for the eleven typed first-release Musubi registry queries. */
+/** Read-only client for the twelve typed first-release Musubi registry queries. */
 class MusubiToriiClientV1 private constructor(builder: Builder) {
     private val executor: HttpTransportExecutor =
         builder.executor ?: PlatformHttpTransportExecutor.createDefault()
@@ -48,12 +50,22 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
             MusubiJsonV1.parseExactPackage(payload).also { it.requireMatches(request) }
         }
 
-    /** Fetches one exact immutable release and its mutable projections. */
+    /** Fetches paired home and universal projections for one exact release at finality. */
     fun findExactRelease(
         request: MusubiExactReleaseQueryV1,
-    ): CompletableFuture<MusubiReleaseRecordV1> =
+    ): CompletableFuture<MusubiExactReleaseSnapshotV1> =
         executePost(EXACT_RELEASE_PATH, request.toJsonBytes()) { payload ->
             MusubiJsonV1.parseExactRelease(payload).also { it.requireMatches(request) }
+        }
+
+    /** Fetches one immutable provider proof by its archive/order/provider identity. */
+    fun findProviderBundleAttestation(
+        request: MusubiProviderBundleAttestationKeyV1,
+    ): CompletableFuture<MusubiProviderBundleAttestationRecordV1> =
+        executePost(PROVIDER_BUNDLE_ATTESTATION_PATH, request.toJsonBytes()) { payload ->
+            MusubiJsonV1.parseProviderBundleAttestation(payload).also {
+                it.requireMatches(request)
+            }
         }
 
     /** Reads the finalized universal sparse resolver index. */
@@ -255,6 +267,8 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
     companion object {
         const val EXACT_PACKAGE_PATH = "/v1/musubi/queries/exact-package"
         const val EXACT_RELEASE_PATH = "/v1/musubi/queries/exact-release"
+        const val PROVIDER_BUNDLE_ATTESTATION_PATH =
+            "/v1/musubi/queries/provider-bundle-attestation"
         const val RESOLVER_INDEX_PATH = "/v1/musubi/queries/resolver-index"
         const val VERSIONS_PATH = "/v1/musubi/queries/versions"
         const val MAINTAINERS_PATH = "/v1/musubi/queries/maintainers"
@@ -266,7 +280,8 @@ class MusubiToriiClientV1 private constructor(builder: Builder) {
         const val SEARCH_PATH = "/v1/musubi/queries/search"
 
         private const val REQUEST_MAX_BYTES = 64 * 1024
-        private const val RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+        // Exact-release JSON repeats the bounded dependency vector in both registry projections.
+        private const val RESPONSE_MAX_BYTES = 32 * 1024 * 1024
 
         @JvmStatic fun builder(): Builder = Builder()
 

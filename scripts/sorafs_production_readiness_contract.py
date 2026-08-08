@@ -498,8 +498,13 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "metric_count_values",
             "metrics",
             "valid_checkpoint_digests",
+            "valid_kubo_ingress_binding_digests",
             "valid_policy_digests",
             "valid_public_head_cids",
+            "valid_receiver_policy_digests",
+            "valid_replay_namespace_digests",
+            "valid_replica_set_digests",
+            "valid_signed_head_ingress_binding_digests",
         }
     ),
     "hedging_billing": frozenset(
@@ -678,6 +683,7 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
         "valid_failure_bundle_digests",
         "valid_governance_archive_handoff_digests",
         "valid_handoff_digests",
+        "valid_kubo_ingress_binding_digests",
         "valid_notification_manifest_digests",
         "valid_policy_digests",
         "valid_pop_snapshot_digests",
@@ -689,6 +695,9 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
         "valid_reputation_weight_digests",
         "valid_reputation_weight_policy_digests",
         "valid_repair_handoff_digests",
+        "valid_receiver_policy_digests",
+        "valid_replay_namespace_digests",
+        "valid_replica_set_digests",
         "valid_reference_decision_ids",
         "valid_archive_index_digests",
         "valid_ffi_contract_digests",
@@ -706,6 +715,7 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
         "valid_roster_digests",
         "valid_seed_replay_digests",
         "valid_source_batch_digests",
+        "valid_signed_head_ingress_binding_digests",
         "valid_staging_report_digests",
         "valid_suite_report_digests",
         "valid_workflow_digests",
@@ -903,6 +913,7 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
         "governance_archive_handoff_digest_hex"
     ),
     "valid_handoff_digests": "handoff_digest_hex",
+    "valid_kubo_ingress_binding_digests": "kubo_ingress_binding_digest_hex",
     "valid_notification_manifest_digests": "manifest_body_blake3_hex",
     "valid_policy_digests": "policy_digest_hex",
     "valid_pop_snapshot_digests": "pop_snapshot_digest_hex",
@@ -914,6 +925,9 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_reputation_weight_digests": "weights_digest_hex",
     "valid_reputation_weight_policy_digests": "reputation_weight_policy_digest_hex",
     "valid_repair_handoff_digests": "repair_handoff_digest_hex",
+    "valid_receiver_policy_digests": "receiver_policy_digest_hex",
+    "valid_replay_namespace_digests": "replay_namespace_digest_hex",
+    "valid_replica_set_digests": "replica_set_digest_hex",
     "valid_reference_decision_ids": "decision_id_hex",
     "valid_archive_index_digests": "archive_index_digest_hex",
     "valid_ffi_contract_digests": "ffi_contract_digest_hex",
@@ -931,6 +945,9 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_roster_digests": "roster_digest_hex",
     "valid_seed_replay_digests": "seed_replay_digest_hex",
     "valid_source_batch_digests": "source_batch_digest_hex",
+    "valid_signed_head_ingress_binding_digests": (
+        "signed_head_ingress_binding_digest_hex"
+    ),
     "valid_staging_report_digests": "staging_report_digest_hex",
     "valid_suite_report_digests": "suite_report_digest_hex",
     "valid_workflow_digests": "workflow_digest_hex",
@@ -950,8 +967,17 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ("gateway_load", "valid_staging_report_digests"): ("staging_load",),
     ("gateway_load", "valid_suite_report_digests"): ("local_conformance",),
     ("governance_dag", "valid_checkpoint_digests"): ("operator_recovery",),
+    ("governance_dag", "valid_kubo_ingress_binding_digests"): (
+        "publisher_service",
+    ),
     ("governance_dag", "valid_policy_digests"): ("publisher_service",),
     ("governance_dag", "valid_public_head_cids"): ("publisher_service",),
+    ("governance_dag", "valid_receiver_policy_digests"): ("publisher_service",),
+    ("governance_dag", "valid_replay_namespace_digests"): ("publisher_service",),
+    ("governance_dag", "valid_replica_set_digests"): ("publisher_service",),
+    ("governance_dag", "valid_signed_head_ingress_binding_digests"): (
+        "publisher_service",
+    ),
     ("hedging_billing", "valid_policy_digests"): ("billing_cycle",),
     ("hedging_billing", "valid_reference_decision_ids"): ("reference_price",),
     ("moderation_panel", "valid_case_digests"): ("appeal_intake",),
@@ -1456,4 +1482,3 @@ __all__ = (
     "DEFAULT_REQUIRED_GATES",
     "GATE_REQUIRED_KIND_SCHEMAS",
 )
-

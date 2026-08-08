@@ -1542,7 +1542,8 @@ pub mod sorafs {
                 /// outside the completion transaction payload.
                 pub const COMPLETION_CHAIN_ID_MAX_BYTES_V1: usize = 255;
                 /// Maximum canonical bytes for each retained completion account identity.
-                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 = 8 * 1024;
+                pub const COMPLETION_ACCOUNT_ID_MAX_CANONICAL_BYTES_V1: u64 =
+                    iroha_data_model::musubi::MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 as u64;
                 /// Canonical reserve for one immutable finalized authorization.
                 ///
                 /// The provider-ingest runtime validates the largest variable
@@ -1698,20 +1699,12 @@ pub mod sorafs {
             pub const DNS_TIMEOUT_MS: u64 = 2_000;
             /// Maximum accepted remote response body.
             pub const MAX_RESPONSE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
-            /// Maximum local block, head, or CAR payload sent in one request.
+            /// Maximum local block, head, CAR, or block-prefix archive request.
             ///
-            /// Keep this synchronized with
-            /// `sorafs_manifest::GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1`:
-            /// the canonical block ceiling plus a 1 MiB canonical archive
-            /// wrapper and 64 KiB multipart allowance.
-            pub const MAX_REQUEST_BYTES: Bytes<u64> =
-                Bytes((128 * 1024 * 1024) + (64 * 1024) + (1024 * 1024) + (64 * 1024));
-            /// Maximum entries retained in the deterministic local IPLD mirror.
-            pub const MIRROR_MAX_ENTRIES: usize = 65_536;
-            /// Maximum canonical block bytes retained by the mirror.
-            pub const MIRROR_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
-            /// Maximum age accepted for a newly published signed head.
-            pub const MAX_HEAD_AGE_SECS: u64 = 15 * 60;
+            /// Covers the canonical block ceiling (128 MiB plus a 64 KiB
+            /// signature allowance), the 1 MiB archive wrapper, and 64 KiB
+            /// of deterministic multipart framing.
+            pub const MAX_REQUEST_BYTES: Bytes<u64> = Bytes((129 * 1024 * 1024) + (128 * 1024));
             /// Maximum future clock skew accepted for blocks and heads.
             pub const MAX_FUTURE_SKEW_SECS: u64 = 60;
             /// Maximum lifetime accepted for one signed outbound request envelope.

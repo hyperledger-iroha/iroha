@@ -19,12 +19,14 @@ fn axt_gas(payload_len: usize) -> u64 {
 }
 
 #[test]
-fn default_host_unknown_syscall_returns_unknown() {
-    let mut vm = IVM::new(1000);
-    let mut host = DefaultHost::new();
-    match host.syscall(0xDF, &mut vm) {
-        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, 0xDF),
-        other => panic!("expected UnknownSyscall, got {other:?}"),
+fn default_host_unknown_syscalls_return_unknown() {
+    for number in [0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xBF, 0xDF] {
+        let mut vm = IVM::new(1000);
+        let mut host = DefaultHost::new();
+        match host.syscall(number, &mut vm) {
+            Err(VMError::UnknownSyscall(actual)) => assert_eq!(actual, number),
+            other => panic!("expected UnknownSyscall({number:#x}), got {other:?}"),
+        }
     }
 }
 

@@ -432,12 +432,12 @@ impl ApplyFixture {
             nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::Plain,
+                encoding: wire::PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 2 * 1024 * 1024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 2 * 1024 * 1024,
-                max_chunk_count: 1,
+                max_chunk_count: 2,
             },
             leader_seed: [0x63; 32],
         };

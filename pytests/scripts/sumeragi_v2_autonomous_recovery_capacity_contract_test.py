@@ -165,6 +165,42 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             errors,
         )
 
+    def test_prune_roster_generation_peak_edge_is_required(self) -> None:
+        mutated = self.model.replace(
+            '(Mode # "PrunePeakDropsRosterGeneration")',
+            "TRUE",
+            1,
+        )
+        self.assertNotEqual(mutated, self.model)
+        errors: list[str] = []
+        self.checker._validate_model_source(mutated, errors)
+        self.assertTrue(
+            any(
+                "AdmitPruneCapacityPeak" in error
+                and "PrunePeakDropsRosterGeneration" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_prune_reservation_envelope_peak_edge_is_required(self) -> None:
+        mutated = self.model.replace(
+            '(Mode # "PrunePeakDropsReservationEnvelope")',
+            "TRUE",
+            1,
+        )
+        self.assertNotEqual(mutated, self.model)
+        errors: list[str] = []
+        self.checker._validate_model_source(mutated, errors)
+        self.assertTrue(
+            any(
+                "AdmitPruneCapacityPeak" in error
+                and "PrunePeakDropsReservationEnvelope" in error
+                for error in errors
+            ),
+            errors,
+        )
+
     def test_autonomous_predecessor_binding_excludes_hash_only_helpers(self) -> None:
         path = (
             ROOT_DIR
@@ -284,6 +320,77 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "            let before = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;",
             "            let before = before_recovery;",
             "lane_history_compaction_recovery_before_capacity",
+        )
+
+    def test_prune_peak_cannot_drop_commit_roster_generation(self) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/commit_roster_journal.rs",
+            "                self.generation_allocation_bytes\n"
+            "                    .checked_add(publication_peak)",
+            "                publication_peak.checked_add(0)",
+            "prune_roster_generation_peak_projection",
+        )
+
+    def test_prune_peak_cannot_drop_reservation_envelope(self) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura/prune_commit_merge_support.rs",
+            "        self.source_physical_bytes\n"
+            "            .checked_add(self.reserved_bytes()?)",
+            "        self.source_physical_bytes.checked_add(0)",
+            "prune_absolute_peak_projection",
+        )
+
+    def test_prune_intent_cannot_publish_before_exact_capacity_is_sealed(self) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura.rs",
+            "        let intent =\n"
+            "            self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {",
+            "        let intent = KuraPruneIntentV2 {",
+            "prune_live_capacity_before_intent",
+        )
+
+    def test_prune_startup_cannot_repair_before_capacity_recheck(self) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura.rs",
+            "        if let Some(intent) = prune_intent.as_ref() {\n"
+            "            kura.preflight_recovered_prune_capacity_before_mutation(intent)?;\n"
+            "        }\n"
+            "        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
+            "\n"
+            "        if !provisional_open {\n"
+            "            kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;",
+            "        kura.audit_retained_autonomous_lifecycle_cursor_generations()?;\n"
+            "\n"
+            "        if !provisional_open {\n"
+            "            kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;\n"
+            "            if let Some(intent) = prune_intent.as_ref() {\n"
+            "                kura.preflight_recovered_prune_capacity_before_mutation(intent)?;\n"
+            "            }",
+            "prune_startup_capacity_before_repair",
+        )
+
+    def test_prune_roster_mutation_cannot_bypass_authorized_projection(self) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura/prune_recovery_capacity.rs",
+            ".truncate_to_height_with_projection(height, intent.capacity.roster)",
+            ".truncate_to_height(height)",
+            "prune_roster_authorized_mutation",
+        )
+
+    def test_prune_roster_publication_cannot_skip_generation_namespace_sync(self) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/commit_roster_journal.rs",
+            "                sync_dir(&generations).map_err(|source| {",
+            "                acknowledge_generation_without_sync(&generations).map_err(|source| {",
+            "prune_roster_deterministic_publication",
+        )
+
+    def test_prune_recovery_split_cannot_lose_kura_include_owner(self) -> None:
+        self.assert_source_mutation_rejected(
+            "crates/iroha_core/src/kura.rs",
+            'include!("kura/prune_recovery_capacity.rs");',
+            'include!("kura/prune_recovery_capacity_unbound.rs");',
+            "prune_recovery_capacity.rs",
         )
 
     def test_certified_bundle_split_cannot_lose_kura_include_owner(self) -> None:

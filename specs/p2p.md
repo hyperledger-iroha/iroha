@@ -485,9 +485,10 @@ binding.
 - Current status: inbound QUIC listener is implemented and spawns peers for accepted bidirectional streams. Outbound dialing can attempt QUIC to hostnames (with TCP fallback).
 - Authentication: nodes use self-signed transport certificates. Rustls verifies
   the TLS `CertificateVerify` proof, then the Iroha identity handshake signs the
-  certificate fingerprint together with the active SoraNet/Noise session
-  binding. A certificate issued by an untrusted root is therefore acceptable,
-  but replaying another node's certificate without its private key is not.
+  certificate fingerprint together with the active SoraNet session and v3
+  transport-delegation binding. A certificate issued by an untrusted root is
+  therefore acceptable, but replaying another node's certificate without its
+  private key is not.
 - Best-effort datagrams: when `[network].quic_datagrams_enabled = true` (default), small best-effort topics (`TxGossip`, `PeerGossip`, `TrustGossip`, `Health`) may be sent over QUIC DATAGRAM instead of streams. This avoids retransmission/head-of-line blocking for "green" traffic and is safe to drop. Reliable topics remain stream-only.
   - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
   - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers **per active QUIC connection** (default: 1 MiB each; both must be non-zero to enable the extension). Their process-level memory term is `max_total_connections × (receive + send)`, in addition to the bounded actor, connected-stream, deferred-frame, and subscriber owners; they are not aggregate endpoint-wide caps.
@@ -502,11 +503,6 @@ binding.
   - `tls_inbound_only` (bool; default `false`): disable the plaintext listener and accept inbound P2P only via TLS-over-TCP. When enabled, TLS binds on `tls_listen_address` when set, otherwise on `[network].address`.
   - Certificates are self‑signed per process; authentication is enforced at the application handshake.
 
-### Noise XX handshake (feature-gated)
-
-- Build-time: enable `iroha_p2p/noise_handshake` to derive the session key from a Noise XX exchange.
-- Behavior: peers still perform the SoraNet handshake (PoW + capability negotiation). After that, they run a Noise XX handshake over the same framing and derive a 32-byte session key from the handshake hash for message encryption. The signed identity payload uses the Noise-derived binding when this feature is active, so terminating two different Noise sessions cannot preserve the peer signature.
-
 ### WebSocket Fallback (p2p_ws)
 
 - `iroha_p2p::NetworkHandle::accept_stream(read, write, remote_addr)` allows accepting externally provided duplex streams and spawning a peer, applying the same caps/throttle as TCP accepts.
@@ -519,15 +515,58 @@ binding.
 - Preference knob: set `[network].prefer_ws_fallback = true` to try WS/WSS first for any peer address (useful for constrained environments and CI).
 - Status: server-side route and outbound fallback implemented behind `p2p_ws`. An end‑to‑end test exercises the Torii `/p2p` route.
 
-### Pre‑Handshake Header (defense‑in‑depth)
+### Nonce-bound SoraNet transport delegation (v3)
 
-- Before the cryptographic handshake begins, peers exchange a 5‑byte preface (`"I2P2"` + version byte).
-  This allows early rejection of garbage before incurring expensive crypto. Outbound writes then reads;
-  inbound reads then writes, preventing deadlock.
-  - Hello frames carry identity, consensus caps, and confidential caps (enabled/assume_valid/backend plus the `ConfidentialFeatureDigest`
-  containing `vk_set_hash`, `poseidon_params_id`, `pedersen_params_id`, and `conf_rules_version`). The encrypted payload is length-prefixed with a `u16`,
-  so metadata larger than `65_535` bytes is rejected with a deterministic
-  `HandshakeMessageTooLarge` error rather than panicking.
+The first release has two mandatory, non-interchangeable identity roles:
+
+- the application/consensus `PeerId` is a BLS-normal key;
+- the top-level `soranet_transport_public_key` and
+  `soranet_transport_private_key` settings form a distinct Ed25519 key used
+  only by the SoraNet relay handshake. Reusing the streaming identity is
+  rejected during configuration parsing.
+
+There is no v1/v2 compatibility list or classical fallback. Every direct TCP,
+TLS, QUIC, and externally supplied stream uses this exact v3 transcript before
+the admission puzzle or ML-KEM handshake:
+
+1. The initiator seeds a CSPRNG from operating-system entropy, generates a
+   fresh 32-byte challenge, and sends `"I2P2" || 0x03 || challenge` (37 bytes).
+2. The responder validates the magic and exact version before signing anything,
+   then confirms `"I2P2" || 0x03` (5 bytes).
+3. For this connection only, the responder constructs a canonical Norito
+   delegation statement containing the exact v3 version, challenge, chain ID,
+   BLS-normal node `PeerId`, and Ed25519 transport public key. The node key signs
+   the domain-separated canonical statement. The responder sends the resulting
+   canonical frame behind a big-endian `u16` length; empty frames and frames
+   above 512 bytes are rejected.
+4. The initiator performs bounded canonical decoding and verifies the exact
+   version, fresh challenge, chain, peer, key algorithms and lengths, and BLS
+   signature. Any failure terminates the connection before puzzle minting,
+   admission-ticket exchange, client-hello construction, or ML-KEM work.
+5. Both sides hash the exact canonical signed frame under the v3 delegation
+   binding domain. The final mutual BLS application hello signs that binding
+   together with the full SoraNet session binding and any TLS/QUIC certificate
+   binding. The mandatory SoraNet ML-KEM-derived session key remains the sole
+   P2P content-encryption key.
+
+A captured delegation is therefore useless on a new connection: the fresh
+challenge differs, and verification returns an exact challenge mismatch. This
+replay property requires neither wall clocks nor mutable replay/legacy lists.
+
+The deliberate cost is one BLS signature for every syntactically valid v3
+client preface. It is performed before the admission puzzle because the client
+must authenticate the responder's Ed25519 transport key before doing that work.
+Malformed headers are rejected before signing, and existing listener admission,
+connection-count, per-IP/prefix rate, and handshake-timeout bounds cap this
+unauthenticated work; operators should size and monitor those bounds as a BLS
+signing DoS budget.
+
+After v3 delegation and SoraNet key establishment, hello frames carry identity,
+consensus caps, and confidential caps (enabled/assume_valid/backend plus the
+`ConfidentialFeatureDigest` containing `vk_set_hash`, `poseidon_params_id`,
+`pedersen_params_id`, and `conf_rules_version`). The encrypted payload is
+length-prefixed with a `u16`, so metadata larger than `65_535` bytes is rejected
+with a deterministic `HandshakeMessageTooLarge` error rather than panicking.
 
 #### Confidential Capability Outcomes
 

@@ -1079,11 +1079,11 @@ impl Kura {
             .capacity
             .remaining_required_bytes(used, remaining_roster, remaining_sidecar)
             .ok_or_else(|| {
-            Self::invalid_canonical_prune_intent_artifact(
-                &self.store_root,
-                "recovered prune-capacity accounting overflowed",
-            )
-        })?;
+                Self::invalid_canonical_prune_intent_artifact(
+                    &self.store_root,
+                    "recovered prune-capacity accounting overflowed",
+                )
+            })?;
         if required > self.max_disk_usage_bytes {
             return Err(Error::StorageBudgetExceeded {
                 limit: self.max_disk_usage_bytes,

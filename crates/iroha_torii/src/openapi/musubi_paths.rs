@@ -1,5 +1,3 @@
-// Musubi V1 OpenAPI path construction.
-
 fn musubi_paths() -> Map {
     let mut paths = Map::new();
     for (path, summary, description, request_type, response_type) in [
@@ -13,9 +11,16 @@ fn musubi_paths() -> Map {
         (
             musubi_routes::EXACT_RELEASE.path(),
             "Fetch an exact Musubi V1 release.",
-            "Execute a bounded exact structural release query.",
+            "Execute one bounded exact query that returns coherent home and universal release projections from the same finalized state view.",
             "MusubiExactReleaseQueryV1",
-            "MusubiReleaseRecordV1",
+            "MusubiExactReleaseSnapshotV1",
+        ),
+        (
+            musubi_routes::PROVIDER_BUNDLE_ATTESTATION.path(),
+            "Audit an exact Musubi V1 provider bundle attestation.",
+            "Return one immutable full provider proof by its exact archive, replication-order, and provider key.",
+            "MusubiProviderBundleAttestationKeyV1",
+            "MusubiProviderBundleAttestationRecordV1",
         ),
         (
             musubi_routes::RESOLVER_INDEX.path(),
@@ -114,6 +119,11 @@ fn musubi_paths() -> Map {
             musubi_routes::ARCHIVE_REGISTER.path(),
             "Build a Musubi V1 archive registration.",
             "RegisterMusubiArchiveV1",
+        ),
+        (
+            musubi_routes::PROVIDER_BUNDLE_ATTESTATION_REGISTER.path(),
+            "Build an immutable Musubi V1 provider bundle-attestation registration.",
+            "RegisterMusubiProviderBundleAttestationV1",
         ),
         (
             musubi_routes::ARCHIVE_LOCATION_ADD.path(),

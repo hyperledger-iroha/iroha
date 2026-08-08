@@ -108,12 +108,11 @@ lanes. Swift package admission also requires the XCFramework's embedded
 rejects a parsed manifest whose ABI is missing or differs from the binary
 identifier's required ABI before accepting its hash.
 
-These gates deliberately reject the repository's current dirty-source Node
-artifact and the ignored local Swift XCFramework, which lacks the required
-embedded ABI metadata while its sibling manifest declares ABI 19. They do not
-constitute a rebuilt release inventory. Clean native artifacts still must be
-produced and exercised for Linux x86_64, Linux aarch64, macOS x86_64, macOS
-aarch64, and Windows x86_64 before this lane can close.
+These gates deliberately do not qualify ignored, dirty-source, or locally
+rebuilt artifacts. No checked-in, clean-source, five-target ABI-21 release
+inventory or authenticated execution record currently exists. Clean native
+artifacts still must be produced and exercised for Linux x86_64, Linux aarch64,
+macOS x86_64, macOS aarch64, and Windows x86_64 before this lane can close.
 
 The C# NuGet source path now consumes exactly those five target-host
 `iroha.native-sdk-abi21-artifact.v1` manifests, maps them to `linux-x64`,
@@ -466,11 +465,11 @@ convert decoded or raw Norito payloads into the shared validation functions.
   bridge or required symbols are absent; a source-contract regression gate pins
   those fail-closed markers, and the Python lane additionally rejects any
   skipped reference test.
-  These are source and workflow contracts, not freshness evidence. The
-  available Node, Python, C/JNI, Swift, and C# outputs are stale or mixed, so no
-  native-dependent suite is qualified. Qualification requires one clean
-  pinned-commit ABI-21 rebuild and skip-free parity replay across the five
-  native release targets.
+  These are source and workflow contracts, not freshness evidence. No
+  checked-in, clean-source, five-target ABI-21 inventory or authenticated
+  native replay record exists, so no native-dependent suite is qualified.
+  Qualification requires one clean pinned-commit rebuild and skip-free parity
+  replay across the five native release targets.
 - **Release packaging:** `scripts/package_sorafs_validate_release.sh` builds or
   packages `sorafs-validate`, stages `include/sorafs_reference.h`, runs fixture
   smoke checks, records per-file, binary, FFI-header, archive, and manifest

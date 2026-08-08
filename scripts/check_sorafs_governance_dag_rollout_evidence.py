@@ -61,7 +61,6 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_object_array,
     required_evidence_kind_names,
     require_passed_status,
-    require_policy_digest,
     require_positive_int,
     require_recent_timestamp,
     require_string,
@@ -95,6 +94,17 @@ DEFAULT_MAX_HEAD_AGE_SECS = 30 * 60
 DEFAULT_MIN_BLOCKS = 4
 DEFAULT_MIN_PAYLOAD_KINDS = 6
 HEX64_LEN = 64
+KUBO_UNIXFS_PROFILE = "kubo_unixfs_v1_balanced_raw_leaves"
+KUBO_UNIXFS_CHUNK_SIZE_BYTES = 1024 * 1024
+KUBO_UNIXFS_MAX_LINKS_PER_NODE = 1024
+KUBO_CID_VERSION = 1
+KUBO_CID_MULTIHASH = "sha2-256"
+MIRROR_RETENTION_MAX_ENTRIES = 65_536
+MIRROR_RETENTION_MAX_BYTES = 512 * 1024 * 1024
+STEADY_AUDIT_MAX_ENTRIES_PER_POLL = 64
+STEADY_AUDIT_MAX_BYTES_PER_POLL = 16 * 1024 * 1024
+INGRESS_ENFORCEMENT = "exclusive_authenticated_receiver"
+REPLAY_POSTURE = "shared_sealed_atomic_consume_until_expiry"
 BLOCK_REF_LABEL_PATTERN = re.compile(
     r"^governance-dag-block-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
@@ -144,7 +154,7 @@ REQUIRED_METRICS = (
     "sorafs_governance_dag_backlog",
     "sorafs_governance_dag_head_age_seconds",
     "sorafs_governance_dag_ipfs_pin_lag_seconds",
-    "sorafs_governance_dag_ipns_update_total",
+    "sorafs_governance_dag_validation_failure_total",
     "sorafs_governance_dag_mirror_drift",
 )
 PUBLIC_HEAD_BOUND_KINDS = (
@@ -152,10 +162,20 @@ PUBLIC_HEAD_BOUND_KINDS = (
     "operator_recovery",
     "dashboard_api",
     "observability",
-    "ipfs_ipns_e2e",
+    "publication_e2e",
     "governance_approval",
 )
 POLICY_BOUND_KINDS = ("governance_approval",)
+INGRESS_QUALIFICATION_BOUND_KINDS = ("governance_approval",)
+INGRESS_QUALIFICATION_DIGEST_FIELDS = (
+    "receiver_policy_digest_hex",
+    "replay_namespace_digest_hex",
+    "replica_set_digest_hex",
+)
+INGRESS_BINDING_DIGEST_FIELDS = (
+    "kubo_ingress_binding_digest_hex",
+    "signed_head_ingress_binding_digest_hex",
+)
 REQUIRED_PAYLOAD_KIND_SET = frozenset(REQUIRED_PAYLOAD_KINDS)
 
 SENSITIVE_KEYS = {
@@ -208,7 +228,7 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
     EvidenceKind("operator_recovery", "sorafs.governance_dag.operator_recovery_canary.v1"),
     EvidenceKind("dashboard_api", "sorafs.governance_dag.dashboard_api_canary.v1"),
     EvidenceKind("observability", "sorafs.governance_dag.observability_canary.v1"),
-    EvidenceKind("ipfs_ipns_e2e", "sorafs.governance_dag.ipfs_ipns_e2e_canary.v1"),
+    EvidenceKind("publication_e2e", "sorafs.governance_dag.publication_e2e_canary.v1"),
     EvidenceKind("governance_approval", "sorafs.governance_dag.governance_approval.v1"),
 )
 
@@ -238,11 +258,29 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "publisher_service": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "dag_builder_daemonized",
-        "ipfs_cluster_pinning_enabled",
-        "ipns_head_publication_enabled",
+        "kubo_unixfs_profile",
+        "unixfs_chunk_size_bytes",
+        "unixfs_raw_leaves",
+        "unixfs_balanced_layout",
+        "unixfs_max_links_per_node",
+        "cid_version",
+        "cid_multihash",
+        "locally_derived_cids_verified",
+        "signed_http_head_cas_enabled",
+        "strong_single_etag_verified",
+        "conditional_cas_readback_verified",
         "signed_head_verified",
         "parent_chain_verified",
-        "car_segments_pinned",
+        "objects_pinned",
+        "authenticated_ingress_qualified",
+        "ingress_enforcement",
+        "replay_posture",
+        "ingress_scope_binding_verified",
+        "receiver_policy_digest_hex",
+        "replay_namespace_digest_hex",
+        "replica_set_digest_hex",
+        "kubo_ingress_binding_digest_hex",
+        "signed_head_ingress_binding_digest_hex",
         "public_head_cid_hex",
         "policy_digest_hex",
         "pin_lag_seconds",
@@ -252,18 +290,22 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "payload_kind_count",
         "payload_kinds",
         "raw_head_included",
-        "raw_car_included",
     ),
     "mirror_datastore": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "public_head_cid_hex",
-        "rocksdb_ipld_enabled",
+        "sealed_typed_store_enabled",
         "query_service_enabled",
         "mirror_index_verified",
         "head_lookup_verified",
         "block_lookup_verified",
         "node_lookup_verified",
         "digest_lookup_verified",
+        "retention_max_entries",
+        "retention_max_bytes",
+        "exact_retained_source_suffix_verified",
+        "fresh_checkpoint_coherent_reads_verified",
+        "liveness_bound_reader_verified",
         "mirror_drift_detected",
         "missing_block_count",
         "raw_blocks_included",
@@ -274,8 +316,12 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "live_head_fetch_verified",
         "public_checkpoint_published",
         "checkpoint_recovery_verified",
-        "public_recovery_cli_verified",
+        "derived_mirror_recovery_verified",
         "recovered_head_matches_public_head",
+        "post_loss_repair_verified",
+        "head_object_repaired_with_same_cid",
+        "block_object_repaired_with_same_cid",
+        "public_head_unchanged_during_repair",
         "checkpoint_digest_hex",
         "raw_checkpoint_included",
     ),
@@ -285,7 +331,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "route_count",
         "passed_route_count",
         "routes",
-        "runtime_ipfs_backed",
+        "service_mirror_capability_installed",
+        "fresh_checkpoint_coherent_reads_verified",
+        "liveness_bound_reader_verified",
+        "unready_reader_rejected",
+        "reader_withdrawal_verified",
         "response_bodies_included",
     ),
     "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -294,21 +344,33 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "metrics_scrape_success",
         "dashboard_provisioned",
         "alert_rules_installed",
-        "ipfs_ipns_metrics_present",
+        "publication_metrics_present",
+        "first_full_audit_verified",
+        "readiness_withheld_until_full_audit",
+        "bounded_rotating_audit_verified",
+        "audit_max_entries_per_poll",
+        "audit_max_bytes_per_poll",
         "critical_alerts_firing",
         "metrics",
         "metric_count",
         "response_bodies_included",
     ),
-    "ipfs_ipns_e2e": COMMON_EVIDENCE_REQUIRED_FIELDS
+    "publication_e2e": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "public_head_cid_hex",
-        "local_ipfs_backed_tests_passed",
-        "public_head_resolved",
+        "local_kubo_tests_passed",
+        "deterministic_unixfs_profile_verified",
+        "signed_http_head_resolved",
+        "strong_single_etag_cas_verified",
+        "authenticated_ingress_qualification_verified",
+        "replay_attack_rejected",
         "block_replay_verified",
         "duplicate_payload_rejected",
         "invalid_parent_quarantined",
-        "pinning_outage_tested",
+        "post_loss_same_cid_repair_verified",
+        "bounded_rotating_audit_verified",
+        "fresh_torii_reads_verified",
+        "stopped_service_reads_rejected",
         "publisher_key_failure_tested",
         "block_count",
         "block_refs",
@@ -323,9 +385,17 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "governance_vote_recorded",
         "iroha_config_bound",
         "publisher_keys_governed",
-        "ipns_name_governed",
-        "mirror_retention_policy_bound",
-        "emergency_pause_tested",
+        "signed_http_head_endpoint_governed",
+        "ingress_receiver_policy_governed",
+        "replay_namespace_governed",
+        "fixed_retention_contract_bound",
+        "receiver_policy_digest_hex",
+        "replay_namespace_digest_hex",
+        "replica_set_digest_hex",
+        "kubo_ingress_binding_digest_hex",
+        "signed_head_ingress_binding_digest_hex",
+        "retention_max_entries",
+        "retention_max_bytes",
         "config_source",
         "policy_digest_hex",
     ),
@@ -355,13 +425,83 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "public_head_cid_hex",
     "checkpoint_digest_hex",
     "policy_digest_hex",
+    "receiver_policy_digest_hex",
+    "replay_namespace_digest_hex",
+    "replica_set_digest_hex",
+    "kubo_ingress_binding_digest_hex",
+    "signed_head_ingress_binding_digest_hex",
     "metric_count",
     "metrics",
 )
 
 
+ROUTE_REQUIRED_FIELDS = frozenset(
+    {
+        "name",
+        "passed",
+        "status_code",
+        "body_blake3_hex",
+        "latency_ms",
+        "publisher_identity_present",
+        "verification_valid",
+    }
+)
+
+
+def require_exact_fields(
+    payload: dict[str, Any],
+    expected: tuple[str, ...] | frozenset[str],
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Reject missing and unknown fields in a schema-closed object."""
+
+    expected_set = frozenset(expected)
+    actual = frozenset(payload)
+    missing = sorted(expected_set - actual)
+    unknown = sorted(actual - expected_set)
+    if missing:
+        errors.append(f"{path} is missing required fields: {', '.join(missing)}")
+    if unknown:
+        errors.append(f"{path} contains unknown fields: {', '.join(unknown)}")
+
+
+def require_exact_positive_int(
+    payload: dict[str, Any],
+    field: str,
+    expected: int,
+    errors: list[str],
+) -> None:
+    """Require a positive integer to equal one first-release protocol constant."""
+
+    value = require_positive_int(payload, field, errors)
+    if value is not None and value != expected:
+        errors.append(f"{field} must equal the V1 protocol value {expected}")
+
+
+def require_nonzero_digest(
+    payload: dict[str, Any],
+    field: str,
+    errors: list[str],
+) -> str:
+    """Require one exact lowercase digest with a non-zero identity."""
+
+    value = require_hex(payload, field, HEX64_LEN, errors)
+    if value and value == "0" * HEX64_LEN:
+        errors.append(f"{field} must not be the zero digest")
+        return ""
+    return value
+
+
 def validate_routes(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
     for index, record in require_object_array(payload, "routes", errors):
+        require_exact_fields(
+            record,
+            ROUTE_REQUIRED_FIELDS,
+            errors,
+            path=f"routes[{index}]",
+        )
         require_bool_true(record, "passed", errors, path=f"routes[{index}].passed")
         require_2xx_status(
             record,
@@ -479,13 +619,38 @@ def validate_publisher_service(
     options: ValidationOptions,
 ) -> None:
     require_bool_true(payload, "dag_builder_daemonized", errors)
-    require_bool_true(payload, "ipfs_cluster_pinning_enabled", errors)
-    require_bool_true(payload, "ipns_head_publication_enabled", errors)
+    require_string_equal(payload, "kubo_unixfs_profile", KUBO_UNIXFS_PROFILE, errors)
+    require_exact_positive_int(
+        payload,
+        "unixfs_chunk_size_bytes",
+        KUBO_UNIXFS_CHUNK_SIZE_BYTES,
+        errors,
+    )
+    require_bool_true(payload, "unixfs_raw_leaves", errors)
+    require_bool_true(payload, "unixfs_balanced_layout", errors)
+    require_exact_positive_int(
+        payload,
+        "unixfs_max_links_per_node",
+        KUBO_UNIXFS_MAX_LINKS_PER_NODE,
+        errors,
+    )
+    require_exact_positive_int(payload, "cid_version", KUBO_CID_VERSION, errors)
+    require_string_equal(payload, "cid_multihash", KUBO_CID_MULTIHASH, errors)
+    require_bool_true(payload, "locally_derived_cids_verified", errors)
+    require_bool_true(payload, "signed_http_head_cas_enabled", errors)
+    require_bool_true(payload, "strong_single_etag_verified", errors)
+    require_bool_true(payload, "conditional_cas_readback_verified", errors)
     require_bool_true(payload, "signed_head_verified", errors)
     require_bool_true(payload, "parent_chain_verified", errors)
-    require_bool_true(payload, "car_segments_pinned", errors)
+    require_bool_true(payload, "objects_pinned", errors)
+    require_bool_true(payload, "authenticated_ingress_qualified", errors)
+    require_string_equal(payload, "ingress_enforcement", INGRESS_ENFORCEMENT, errors)
+    require_string_equal(payload, "replay_posture", REPLAY_POSTURE, errors)
+    require_bool_true(payload, "ingress_scope_binding_verified", errors)
+    for field in INGRESS_QUALIFICATION_DIGEST_FIELDS + INGRESS_BINDING_DIGEST_FIELDS:
+        require_nonzero_digest(payload, field, errors)
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
-    require_policy_digest(payload, errors)
+    require_nonzero_digest(payload, "policy_digest_hex", errors)
     require_maximum_int(payload, "pin_lag_seconds", options.max_pin_lag_secs, errors)
     require_maximum_int(payload, "head_age_seconds", options.max_head_age_secs, errors)
     require_minimum_int(payload, "block_count", options.min_blocks, errors)
@@ -517,18 +682,32 @@ def validate_publisher_service(
         errors,
     )
     require_false(payload, "raw_head_included", errors)
-    require_false(payload, "raw_car_included", errors)
 
 
 def validate_mirror_datastore(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
-    require_bool_true(payload, "rocksdb_ipld_enabled", errors)
+    require_bool_true(payload, "sealed_typed_store_enabled", errors)
     require_bool_true(payload, "query_service_enabled", errors)
     require_bool_true(payload, "mirror_index_verified", errors)
     require_bool_true(payload, "head_lookup_verified", errors)
     require_bool_true(payload, "block_lookup_verified", errors)
     require_bool_true(payload, "node_lookup_verified", errors)
     require_bool_true(payload, "digest_lookup_verified", errors)
+    require_exact_positive_int(
+        payload,
+        "retention_max_entries",
+        MIRROR_RETENTION_MAX_ENTRIES,
+        errors,
+    )
+    require_exact_positive_int(
+        payload,
+        "retention_max_bytes",
+        MIRROR_RETENTION_MAX_BYTES,
+        errors,
+    )
+    require_bool_true(payload, "exact_retained_source_suffix_verified", errors)
+    require_bool_true(payload, "fresh_checkpoint_coherent_reads_verified", errors)
+    require_bool_true(payload, "liveness_bound_reader_verified", errors)
     require_false(payload, "mirror_drift_detected", errors)
     require_zero_count(payload, "missing_block_count", errors)
     require_false(payload, "raw_blocks_included", errors)
@@ -539,8 +718,12 @@ def validate_operator_recovery(payload: dict[str, Any], errors: list[str]) -> No
     require_bool_true(payload, "live_head_fetch_verified", errors)
     require_bool_true(payload, "public_checkpoint_published", errors)
     require_bool_true(payload, "checkpoint_recovery_verified", errors)
-    require_bool_true(payload, "public_recovery_cli_verified", errors)
+    require_bool_true(payload, "derived_mirror_recovery_verified", errors)
     require_bool_true(payload, "recovered_head_matches_public_head", errors)
+    require_bool_true(payload, "post_loss_repair_verified", errors)
+    require_bool_true(payload, "head_object_repaired_with_same_cid", errors)
+    require_bool_true(payload, "block_object_repaired_with_same_cid", errors)
+    require_bool_true(payload, "public_head_unchanged_during_repair", errors)
     require_hex(payload, "checkpoint_digest_hex", HEX64_LEN, errors)
     require_false(payload, "raw_checkpoint_included", errors)
 
@@ -562,7 +745,11 @@ def validate_dashboard_api(
         field="name",
         allow_scalar_items=False,
     )
-    require_bool_true(payload, "runtime_ipfs_backed", errors)
+    require_bool_true(payload, "service_mirror_capability_installed", errors)
+    require_bool_true(payload, "fresh_checkpoint_coherent_reads_verified", errors)
+    require_bool_true(payload, "liveness_bound_reader_verified", errors)
+    require_bool_true(payload, "unready_reader_rejected", errors)
+    require_bool_true(payload, "reader_withdrawal_verified", errors)
     require_false(payload, "response_bodies_included", errors)
     validate_routes(payload, errors, options)
 
@@ -572,7 +759,22 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "metrics_scrape_success", errors)
     require_bool_true(payload, "dashboard_provisioned", errors)
     require_bool_true(payload, "alert_rules_installed", errors)
-    require_bool_true(payload, "ipfs_ipns_metrics_present", errors)
+    require_bool_true(payload, "publication_metrics_present", errors)
+    require_bool_true(payload, "first_full_audit_verified", errors)
+    require_bool_true(payload, "readiness_withheld_until_full_audit", errors)
+    require_bool_true(payload, "bounded_rotating_audit_verified", errors)
+    require_exact_positive_int(
+        payload,
+        "audit_max_entries_per_poll",
+        STEADY_AUDIT_MAX_ENTRIES_PER_POLL,
+        errors,
+    )
+    require_exact_positive_int(
+        payload,
+        "audit_max_bytes_per_poll",
+        STEADY_AUDIT_MAX_BYTES_PER_POLL,
+        errors,
+    )
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
     require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
@@ -581,18 +783,25 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_false(payload, "response_bodies_included", errors)
 
 
-def validate_ipfs_ipns_e2e(
+def validate_publication_e2e(
     payload: dict[str, Any],
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
-    require_bool_true(payload, "local_ipfs_backed_tests_passed", errors)
-    require_bool_true(payload, "public_head_resolved", errors)
+    require_bool_true(payload, "local_kubo_tests_passed", errors)
+    require_bool_true(payload, "deterministic_unixfs_profile_verified", errors)
+    require_bool_true(payload, "signed_http_head_resolved", errors)
+    require_bool_true(payload, "strong_single_etag_cas_verified", errors)
+    require_bool_true(payload, "authenticated_ingress_qualification_verified", errors)
+    require_bool_true(payload, "replay_attack_rejected", errors)
     require_bool_true(payload, "block_replay_verified", errors)
     require_bool_true(payload, "duplicate_payload_rejected", errors)
     require_bool_true(payload, "invalid_parent_quarantined", errors)
-    require_bool_true(payload, "pinning_outage_tested", errors)
+    require_bool_true(payload, "post_loss_same_cid_repair_verified", errors)
+    require_bool_true(payload, "bounded_rotating_audit_verified", errors)
+    require_bool_true(payload, "fresh_torii_reads_verified", errors)
+    require_bool_true(payload, "stopped_service_reads_rejected", errors)
     require_bool_true(payload, "publisher_key_failure_tested", errors)
     require_minimum_int(payload, "block_count", options.min_blocks, errors)
     require_string_inventory_count_match(
@@ -629,10 +838,25 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
     require_config_backed_governance_approval(payload, errors)
     require_bool_true(payload, "publisher_keys_governed", errors)
-    require_bool_true(payload, "ipns_name_governed", errors)
-    require_bool_true(payload, "mirror_retention_policy_bound", errors)
-    require_bool_true(payload, "emergency_pause_tested", errors)
-    require_policy_digest(payload, errors)
+    require_bool_true(payload, "signed_http_head_endpoint_governed", errors)
+    require_bool_true(payload, "ingress_receiver_policy_governed", errors)
+    require_bool_true(payload, "replay_namespace_governed", errors)
+    require_bool_true(payload, "fixed_retention_contract_bound", errors)
+    for field in INGRESS_QUALIFICATION_DIGEST_FIELDS + INGRESS_BINDING_DIGEST_FIELDS:
+        require_nonzero_digest(payload, field, errors)
+    require_exact_positive_int(
+        payload,
+        "retention_max_entries",
+        MIRROR_RETENTION_MAX_ENTRIES,
+        errors,
+    )
+    require_exact_positive_int(
+        payload,
+        "retention_max_bytes",
+        MIRROR_RETENTION_MAX_BYTES,
+        errors,
+    )
+    require_nonzero_digest(payload, "policy_digest_hex", errors)
 
 
 def validate_kind_specific(
@@ -641,6 +865,12 @@ def validate_kind_specific(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
+    require_exact_fields(
+        payload,
+        EVIDENCE_REQUIRED_FIELDS[kind.name],
+        errors,
+        path=f"{kind.name} payload",
+    )
     require_passed_status(payload, errors)
     require_recent_timestamp(
         payload,
@@ -662,8 +892,8 @@ def validate_kind_specific(
         validate_dashboard_api(payload, errors, options)
     elif kind.name == "observability":
         validate_observability(payload, errors)
-    elif kind.name == "ipfs_ipns_e2e":
-        validate_ipfs_ipns_e2e(payload, errors, options)
+    elif kind.name == "publication_e2e":
+        validate_publication_e2e(payload, errors, options)
     elif kind.name == "governance_approval":
         validate_governance_approval(payload, errors)
 
@@ -715,6 +945,12 @@ def build_summary(
     public_head_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_digests: set[str] = set()
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_receiver_policy_digests: set[str] = set()
+    valid_replay_namespace_digests: set[str] = set()
+    valid_replica_set_digests: set[str] = set()
+    valid_kubo_ingress_binding_digests: set[str] = set()
+    valid_signed_head_ingress_binding_digests: set[str] = set()
+    ingress_qualification_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_checkpoint_digests: set[str] = set()
     metric_counts: set[int] = set()
     metric_names: set[str] = set()
@@ -759,6 +995,27 @@ def build_summary(
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
                     valid_policy_digests.add(policy_digest)
+                receiver_policy_digest = fingerprint.get("receiver_policy_digest_hex")
+                if isinstance(receiver_policy_digest, str):
+                    valid_receiver_policy_digests.add(receiver_policy_digest)
+                replay_namespace_digest = fingerprint.get("replay_namespace_digest_hex")
+                if isinstance(replay_namespace_digest, str):
+                    valid_replay_namespace_digests.add(replay_namespace_digest)
+                replica_set_digest = fingerprint.get("replica_set_digest_hex")
+                if isinstance(replica_set_digest, str):
+                    valid_replica_set_digests.add(replica_set_digest)
+                kubo_ingress_binding_digest = fingerprint.get(
+                    "kubo_ingress_binding_digest_hex"
+                )
+                if isinstance(kubo_ingress_binding_digest, str):
+                    valid_kubo_ingress_binding_digests.add(kubo_ingress_binding_digest)
+                signed_head_ingress_binding_digest = fingerprint.get(
+                    "signed_head_ingress_binding_digest_hex"
+                )
+                if isinstance(signed_head_ingress_binding_digest, str):
+                    valid_signed_head_ingress_binding_digests.add(
+                        signed_head_ingress_binding_digest
+                    )
             if kind_name == "operator_recovery":
                 checkpoint_digest = fingerprint.get("checkpoint_digest_hex")
                 if isinstance(checkpoint_digest, str):
@@ -767,6 +1024,8 @@ def build_summary(
                 public_head_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
+            if kind_name in INGRESS_QUALIFICATION_BOUND_KINDS:
+                ingress_qualification_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
     valid_public_head_cids = require_single_active_digest(
@@ -784,10 +1043,35 @@ def build_summary(
         errors,
         label="valid_checkpoint_digests",
     )
+    valid_receiver_policy_digests = require_single_active_digest(
+        valid_receiver_policy_digests,
+        errors,
+        label="valid_receiver_policy_digests",
+    )
+    valid_replay_namespace_digests = require_single_active_digest(
+        valid_replay_namespace_digests,
+        errors,
+        label="valid_replay_namespace_digests",
+    )
+    valid_replica_set_digests = require_single_active_digest(
+        valid_replica_set_digests,
+        errors,
+        label="valid_replica_set_digests",
+    )
+    valid_kubo_ingress_binding_digests = require_single_active_digest(
+        valid_kubo_ingress_binding_digests,
+        errors,
+        label="valid_kubo_ingress_binding_digests",
+    )
+    valid_signed_head_ingress_binding_digests = require_single_active_digest(
+        valid_signed_head_ingress_binding_digests,
+        errors,
+        label="valid_signed_head_ingress_binding_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
-        missing_anchor_required_kinds=PUBLIC_HEAD_BOUND_KINDS,
+        missing_anchor_required_kinds=DEFAULT_REQUIRED_KINDS,
         bound_artifacts=public_head_bound_artifacts,
         valid_anchor_digests=valid_public_head_cids,
         digest_field="public_head_cid_hex",
@@ -802,9 +1086,36 @@ def build_summary(
         ),
     )
 
+    for digest_field, valid_digests in (
+        ("receiver_policy_digest_hex", valid_receiver_policy_digests),
+        ("replay_namespace_digest_hex", valid_replay_namespace_digests),
+        ("replica_set_digest_hex", valid_replica_set_digests),
+        ("kubo_ingress_binding_digest_hex", valid_kubo_ingress_binding_digests),
+        (
+            "signed_head_ingress_binding_digest_hex",
+            valid_signed_head_ingress_binding_digests,
+        ),
+    ):
+        validate_bound_evidence_digest_references(
+            required_kinds=required_kinds,
+            missing_anchor_required_kinds=DEFAULT_REQUIRED_KINDS,
+            bound_artifacts=ingress_qualification_bound_artifacts,
+            valid_anchor_digests=valid_digests,
+            digest_field=digest_field,
+            errors=errors,
+            binding_error_template=(
+                f"{{kind_name}} {digest_field} must match a valid "
+                f"publisher_service {digest_field}"
+            ),
+            missing_anchor_error_template=(
+                f"{{kind_name}} {digest_field} requires a valid "
+                f"publisher_service {digest_field}"
+            ),
+        )
+
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
-        missing_anchor_required_kinds=("publisher_service",),
+        missing_anchor_required_kinds=DEFAULT_REQUIRED_KINDS,
         bound_artifacts=policy_bound_artifacts,
         valid_anchor_digests=valid_policy_digests,
         digest_field="policy_digest_hex",
@@ -845,6 +1156,15 @@ def build_summary(
         "valid_checkpoint_digests": sorted(valid_checkpoint_digests),
         "valid_public_head_cids": sorted(valid_public_head_cids),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "valid_receiver_policy_digests": sorted(valid_receiver_policy_digests),
+        "valid_replay_namespace_digests": sorted(valid_replay_namespace_digests),
+        "valid_replica_set_digests": sorted(valid_replica_set_digests),
+        "valid_kubo_ingress_binding_digests": sorted(
+            valid_kubo_ingress_binding_digests
+        ),
+        "valid_signed_head_ingress_binding_digests": sorted(
+            valid_signed_head_ingress_binding_digests
+        ),
         "metrics": sorted(metric_names),
         "metric_count_values": sorted(metric_counts),
         "required": required,

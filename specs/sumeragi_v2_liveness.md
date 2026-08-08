@@ -815,7 +815,12 @@ The Sumeragi exact-output corridor applies the same isolation above the P2P
 actor. It preserves FIFO order for each target while round-robin service lets
 later responsive targets and fan-outs proceed during another target's
 backpressure. Completion and reducer work continue to run while such output is
-pending. The corridor freezes `roster × {Safety, Lane, Bulk}` reservations for
+pending. If the corridor cannot accept an exact fanout and returns
+`SourceRetained`, the reducer keeps the retransmittable semantic source and an
+active proposal keeps its producer fence; only exact service acceptance may
+release that fence. A timeout therefore cannot prune a proposal merely because
+its first fanout met bounded corridor pressure. The corridor freezes
+`roster × {Safety, Lane, Bulk}` reservations for
 the height, one `SidecarTopologyProgress` Lane reservation for topology-routed
 Request/Close traffic, and one independent `SidecarReplyControl` Lane
 reservation for exact-reply CloseAck/GenerationHint traffic at every frozen
@@ -994,7 +999,12 @@ exactly one of:
 - `timeout_certificate_missing`
 - `scheduler_starvation`
 - `application_pending`
+- `successor_activation_pending`
 - `local_control_pending`
+
+`successor_activation_pending` identifies a durably applied predecessor whose
+verified successor construction, service startup, or authenticated handoff has
+not completed.
 
 `local_control_pending` distinguishes a reducer blocked on safety-WAL
 persistence or consensus signing from scheduler starvation. Queued outbound
@@ -1222,8 +1232,8 @@ pre-runtime ownership, and reconstructed-chunk terminality regressions bring
 the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
 high-water regressions bring the inventory to the 831-test checkpoint. Retiring
 five obsolete peer-genesis protocol regressions brings the 826-test checkpoint.
-Six autonomous-lifecycle terminal-outcome and startup-recovery regressions
-bring the current source-bound inventory to 834 exact tests across
+Nine autonomous-lifecycle terminal-outcome and startup-recovery regressions
+bring the current source-bound inventory to 835 exact tests across
 39 modules and 86 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1232,11 +1242,11 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`2f818f6a1174b77a9078b9e80b000671a44d045f23088fdf0da271b91ff2ea12`.
-Nine of those legs execute the separate 474-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 475 TSV lines and has SHA-256
-`e74381ab01530611cb6ae2c7c8080af4a60024bf2b090e073a0d5c00b84d2989`.
-The 268-test core group includes grouped Native prevote-budget rejection before
+`3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb`.
+Nine of those legs execute the separate 524-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 525 TSV lines and has SHA-256
+`de9ab0da201d361e912b935d1349c584ba78fb52f70acd3c91e8d4a7c76fab24`.
+The 318-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1491,7 +1501,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 834-test inventory is a mechanically checked
+The current 835-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1681,9 +1691,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 834 exact production
+Before those longer scenarios, the PR gate inventories 835 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 474-test
+profile additionally records nine G-UNIT legs executing a separate 524-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1833,8 +1843,8 @@ the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
 high-water regressions bring the inventory to the 831-test checkpoint, again
 without adding a module or leg. Retiring five obsolete peer-genesis protocol
 regressions brings the inventory to the 826-test checkpoint and removes one
-owning module and one leg overall. Six autonomous-lifecycle terminal-outcome
-and startup-recovery regressions then bring the current inventory to 834 tests,
+owning module and one leg overall. Nine autonomous-lifecycle terminal-outcome
+and startup-recovery regressions then bring the current inventory to 835 tests,
 adding one owning module and one leg. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -2119,7 +2129,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 86 pre-network corridor legs and
-their exact 834-test production inventory, the separate 474-test G-UNIT
+their exact 835-test production inventory, the separate 524-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

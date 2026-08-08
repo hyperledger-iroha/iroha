@@ -61,15 +61,24 @@ import {
 } from "./toriiCompatibility.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
 import {
+  parseStrictLosslessIntegerJson,
+  stringifyStrictLosslessIntegerJson,
+} from "./strictLosslessJson.js";
+import {
   buildCanonicalRequestHeaders,
   requireCanonicalAuthAccount,
 } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
+import { decodeCanonicalVerifyingKeyTransactionPayload } from "./transactionCodec.js";
+import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
+import {
+  createToriiGovernanceNormalizers,
+  VERIFYING_KEY_PRIVATE_KEY_FIELDS,
+} from "./toriiGovernanceNormalizers.js";
 import {
   KotodamaQuantity,
   NumericV1,
   NumericV1Error,
-  parseStrictLosslessIntegerJson,
 } from "./numericV1.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
 import {
@@ -456,9 +465,22 @@ const EVIDENCE_KIND_VALUES = new Set([
   "InvalidQc",
   "InvalidProposal",
   "Censorship",
+  "SumeragiV2Equivocation",
 ]);
 
 const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
+const EVIDENCE_EQUIVOCATION_CLASS_VALUES = new Set([
+  "proposal",
+  "phase_vote",
+  "timeout_vote",
+]);
+const EVIDENCE_BASE_FIELDS = Object.freeze([
+  "kind",
+  "recorded_height",
+  "recorded_view",
+  "recorded_ms",
+  "consensus_admitted_height",
+]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
@@ -7269,7 +7291,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceProposal(proposalId, options) {
-    const normalized = requireNonEmptyString(proposalId, "proposalId");
+    const normalized = requireExactLowerHex32String(proposalId, "proposalId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceProposal");
     const response = await this._request(
       "GET",
@@ -7309,7 +7331,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceReferendum(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceReferendum");
     const response = await this._request(
       "GET",
@@ -7349,7 +7371,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceTally(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceTally");
     const response = await this._request(
       "GET",
@@ -7376,7 +7398,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceTallyResult>}
    */
   async getGovernanceTallyTyped(referendumId, options) {
-    const normalizedId = requireNonEmptyString(referendumId, "referendumId");
+    const normalizedId = requireGovernanceSelectorString(referendumId, "referendumId");
     const payload = await this.getGovernanceTally(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceTallyResult(normalizedId);
@@ -7391,7 +7413,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getGovernanceLocks(referendumId, options) {
-    const normalized = requireNonEmptyString(referendumId, "referendumId");
+    const normalized = requireGovernanceSelectorString(referendumId, "referendumId");
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceLocks");
     const response = await this._request(
       "GET",
@@ -7418,7 +7440,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiGovernanceLocksResult>}
    */
   async getGovernanceLocksTyped(referendumId, options) {
-    const normalizedId = requireNonEmptyString(referendumId, "referendumId");
+    const normalizedId = requireGovernanceSelectorString(referendumId, "referendumId");
     const payload = await this.getGovernanceLocks(normalizedId, options);
     if (!payload) {
       return createEmptyGovernanceLocksResult(normalizedId);
@@ -7481,7 +7503,10 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown>>}
    */
   async draftMinistryAgendaProposal(payload, options = {}) {
-    const body = JSON.stringify(normalizeMinistryAgendaProposalDraftRequest(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeMinistryAgendaProposalDraftRequest(payload),
+      "draftMinistryAgendaProposal request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "draftMinistryAgendaProposal",
@@ -7535,11 +7560,14 @@ export class ToriiClient {
 
   /**
    * Finalise a referendum (`POST /v1/gov/finalize`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceFinalizeRequest} payload
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async governanceFinalizeReferendum(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceFinalizePayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceFinalizePayload(payload),
+      "governance finalize request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceFinalizeReferendum",
@@ -7566,11 +7594,14 @@ export class ToriiClient {
 
   /**
    * Enact a governance proposal (`POST /v1/gov/enact`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceEnactRequest} payload
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async governanceEnactProposal(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceEnactPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceEnactPayload(payload),
+      "governance enact request",
+    );
     const { signal } = normalizeSignalOnlyOption(options, "governanceEnactProposal");
     const response = await this._request("POST", "/v1/gov/enact", {
       headers: JSON_REQUEST_HEADERS,
@@ -7594,7 +7625,7 @@ export class ToriiClient {
 
   /**
    * Draft a governance deployment proposal (`POST /v1/gov/proposals/deploy-contract`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceDeployContractProposalRequest} payload
    * @returns {Promise<ToriiGovernanceDraftResponse>}
    */
   async governanceProposeDeployContract(payload, options = {}) {
@@ -7602,7 +7633,10 @@ export class ToriiClient {
       options,
       "governanceProposeDeployContract",
     );
-    const body = JSON.stringify(normalizeGovernanceDeployContractProposalPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceDeployContractProposalPayload(payload),
+      "governance deploy-contract request",
+    );
     const response = await this._request("POST", "/v1/gov/proposals/deploy-contract", {
       headers: JSON_REQUEST_HEADERS,
       body,
@@ -7618,11 +7652,14 @@ export class ToriiClient {
 
   /**
    * Submit a plain governance ballot (`POST /v1/gov/ballots/plain`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernancePlainBallotRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitPlainBallot(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernancePlainBallotPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernancePlainBallotPayload(payload),
+      "governance plain-ballot request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceSubmitPlainBallot",
@@ -7641,14 +7678,20 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a ZK governance ballot (`POST /v1/gov/ballots/zk`).
-   * @param {Record<string, unknown>} payload
+   * Submit an equal Parliament stage ballot (`POST /v1/gov/parliament/ballots`).
+   * @param {ToriiGovernanceParliamentBallotRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
-  async governanceSubmitZkBallot(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotPayload(payload));
-    const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallot");
-    const response = await this._request("POST", "/v1/gov/ballots/zk", {
+  async governanceSubmitParliamentBallot(payload, options = {}) {
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceParliamentBallotPayload(payload),
+      "governance Parliament-ballot request",
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "governanceSubmitParliamentBallot",
+    );
+    const response = await this._request("POST", "/v1/gov/parliament/ballots", {
       headers: JSON_REQUEST_HEADERS,
       body,
       signal,
@@ -7656,18 +7699,24 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const draft = await this._maybeJson(response);
     if (!draft) {
-      throw new Error("governance zk ballot endpoint returned no payload");
+      throw new Error("governance Parliament ballot endpoint returned no payload");
     }
-    return normalizeGovernanceBallotResponse(draft, "governance zk ballot response");
+    return normalizeGovernanceBallotResponse(
+      draft,
+      "governance Parliament ballot response",
+    );
   }
 
   /**
    * Submit a ZK ballot using the v1 envelope DTO (`POST /v1/gov/ballots/zk-v1`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceZkBallotV1Request} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitZkBallotV1(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotV1Payload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceZkBallotV1Payload(payload),
+      "governance ZK-v1 ballot request",
+    );
     const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallotV1");
     const response = await this._request("POST", "/v1/gov/ballots/zk-v1", {
       headers: JSON_REQUEST_HEADERS,
@@ -7684,11 +7733,14 @@ export class ToriiClient {
 
   /**
    * Submit a BallotProof payload (`POST /v1/gov/ballots/zk-v1/ballot-proof`).
-   * @param {Record<string, unknown>} payload
+   * @param {ToriiGovernanceZkBallotProofRequest} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
    */
   async governanceSubmitZkBallotProofV1(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceZkBallotProofPayload(payload));
+    const body = stringifyStrictLosslessIntegerJson(
+      normalizeGovernanceZkBallotProofPayload(payload),
+      "governance BallotProof request",
+    );
     const { signal } = normalizeSignalOnlyOption(
       options,
       "governanceSubmitZkBallotProofV1",
@@ -8112,43 +8164,6 @@ export class ToriiClient {
       throw new TypeError("sumeragi evidence count response.count must be a non-negative number");
     }
     return { count };
-  }
-
-  /**
-   * Submit consensus evidence (`POST /v1/sumeragi/evidence/submit`).
-   * @param {SumeragiEvidenceSubmitRequest} request
-   * @returns {Promise<SumeragiEvidenceSubmitResponse>}
-   */
-  async submitSumeragiEvidence(request) {
-    const record = ensureRecord(request, "request");
-    const evidenceHex = record.evidence_hex;
-    if (typeof evidenceHex !== "string" || evidenceHex.trim().length === 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_HEX,
-        "request.evidence_hex must be a non-empty hex string",
-        "submitSumeragiEvidence.request.evidence_hex",
-      );
-    }
-    const headers = {
-      "Content-Type": APPLICATION_JSON,
-      Accept: APPLICATION_JSON,
-    };
-    if (record.apiToken) {
-      headers["X-API-Token"] = String(record.apiToken);
-    }
-    const response = await this._request("POST", "/v1/sumeragi/evidence/submit", {
-      headers,
-      body: JSON.stringify({ evidence_hex: evidenceHex }),
-    });
-    await this._expectStatus(response, [202]);
-    const payload = ensureRecord(
-      await this._maybeJson(response),
-      "sumeragi evidence submit response",
-    );
-    return {
-      status: String(payload.status ?? ""),
-      kind: String(payload.kind ?? ""),
-    };
   }
 
   /**
@@ -13752,6 +13767,46 @@ function normalizeUint64DecimalString(value, name, options = {}) {
   return integer.toString(10);
 }
 
+function normalizeGovernanceUint64Integer(value, name) {
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a lossless unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string") {
+    const canonical = requireExactNonEmptyString(value, name);
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(canonical)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a canonical unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(canonical);
+  } else {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a lossless unsigned 64-bit integer`,
+      name,
+    );
+  }
+  if (integer < 0n || integer > MAX_UINT64_BIGINT) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${MAX_UINT64_BIGINT.toString(10)}`,
+      name,
+    );
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
 function normalizeIsoSubmissionResponse(payload, context, options = {}) {
   const record = ToriiClient._requirePlainObject(payload, context);
   const rawMessageId = record.message_id;
@@ -19331,7 +19386,7 @@ function normalizeProtectedNamespaceList(input) {
     throw new TypeError("protected namespaces list must not be empty");
   }
   return values.map((entry, index) =>
-    requireNonEmptyString(entry, `namespaces[${index}]`),
+    requireExactAsciiTokenString(entry, `namespaces[${index}]`),
   );
 }
 
@@ -19351,7 +19406,7 @@ function normalizeProtectedNamespacesGetResponse(payload) {
       record.namespaces,
       "protected namespaces response.namespaces",
     ).map((value, index) =>
-      requireNonEmptyString(value, `protected namespaces response.namespaces[${index}]`),
+      requireExactAsciiTokenString(value, `protected namespaces response.namespaces[${index}]`),
     ),
   };
 }
@@ -22133,6 +22188,30 @@ function requireExactTokenString(value, name) {
   return exact;
 }
 
+function requireGovernanceSelectorString(value, name) {
+  const exact = requireExactTokenString(value, name);
+  if (!isCanonicalGovernanceSelectorV1(exact)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot`,
+      name,
+    );
+  }
+  return exact;
+}
+
+function requireExactAsciiTokenString(value, name) {
+  const exact = requireExactTokenString(value, name);
+  if (!/^[!-~]+$/u.test(exact)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must contain only non-whitespace ASCII characters`,
+      name,
+    );
+  }
+  return exact;
+}
+
 function requireCanonicalQuantity(value, name) {
   if (typeof value !== "string") {
     throw createValidationError(
@@ -22387,7 +22466,7 @@ function requireExactPositiveIntegerLike(value, context) {
 }
 
 function requireEvidencePhase(value, context) {
-  const phase = requireNonEmptyString(value, context);
+  const phase = requireExactNonEmptyString(value, context);
   if (!EVIDENCE_PHASE_VALUES.has(phase)) {
     throw new RangeError(
       `${context} must be one of ${Array.from(EVIDENCE_PHASE_VALUES).join(", ")}`,
@@ -23917,8 +23996,9 @@ function normalizeIrohaHashHex32(value, name) {
 }
 
 function normalizeHex32String(value, name, options = {}) {
-  const allowShort = options.allowShort === true;
-  const allowScheme = options.allowScheme === true;
+    const allowShort = options.allowShort === true;
+    const allowScheme = options.allowScheme === true;
+    const exactString = options.exactString === true;
   const schemeName =
     typeof options.scheme === "string" && options.scheme.trim()
       ? options.scheme.trim().toLowerCase()
@@ -23939,17 +24019,21 @@ function normalizeHex32String(value, name, options = {}) {
   if (Array.isArray(value)) {
     return normalizeHex32String(normalizeByteArray(value, name).toString("hex"), name, options);
   }
-  let normalized = requireNonEmptyString(value, name);
+  let normalized = exactString
+    ? requireExactNonEmptyString(value, name)
+    : requireNonEmptyString(value, name);
   if (allowScheme && normalized.includes(":")) {
-    const [scheme, rest] = normalized.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== schemeName) {
+    const separator = normalized.indexOf(":");
+    const scheme = normalized.slice(0, separator);
+    const rest = normalized.slice(separator + 1);
+    if (!scheme || scheme.toLowerCase() !== schemeName) {
       throw createValidationError(
         ValidationErrorCode.INVALID_HEX,
         `${name} must be a 32-byte hex string`,
         name,
       );
     }
-    normalized = rest.trim();
+    normalized = exactString ? rest : rest.trim();
   }
   const hex =
     normalized.startsWith("0x") || normalized.startsWith("0X")
@@ -24603,745 +24687,43 @@ function normalizeAppApiTransactionDraft(
   };
 }
 
-function normalizeGovernanceFinalizePayload(input) {
-  const record = ensureRecord(input, "governanceFinalizeReferendum payload");
-  const referendumId = record.referendum_id ?? record.referendumId;
-  if (referendumId === undefined || referendumId === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.referendum_id is required",
-      "governanceFinalizeReferendum.referendum_id",
-    );
-  }
-  const proposalId = record.proposal_id ?? record.proposalId;
-  if (proposalId === undefined || proposalId === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      "governanceFinalizeReferendum.proposal_id is required",
-      "governanceFinalizeReferendum.proposal_id",
-    );
-  }
-  return {
-    referendum_id: requireNonEmptyString(
-      referendumId,
-      "governanceFinalizeReferendum.referendum_id",
-    ),
-    proposal_id: normalizeHex32String(
-      proposalId,
-      "governanceFinalizeReferendum.proposal_id",
-    ),
-  };
-}
-
-function normalizeGovernanceEnactPayload(input) {
-  const record = ensureRecord(input, "governanceEnactProposal payload");
-  const payload = {
-    proposal_id: normalizeHex32String(
-      record.proposal_id ?? record.proposalId,
-      "governanceEnactProposal.proposal_id",
-    ),
-  };
-  const preimageValue = record.preimage_hash ?? record.preimageHash;
-  if (preimageValue !== undefined && preimageValue !== null) {
-    payload.preimage_hash = normalizeHex32String(
-      preimageValue,
-      "governanceEnactProposal.preimage_hash",
-    );
-  }
-  const windowValue =
-    record.window;
-  if (windowValue !== undefined && windowValue !== null) {
-    payload.window = normalizeGovernanceWindow(
-      windowValue,
-      "governanceEnactProposal.window",
-    );
-  }
-  return payload;
-}
-
-function normalizeMinistryAgendaProposalDraftRequest(input) {
-  const record = ensureRecord(input, "draftMinistryAgendaProposal payload");
-  return {
-    proposal: ensureRecord(
-      record.proposal,
-      "draftMinistryAgendaProposal.proposal",
-    ),
-    authority: requireNonEmptyString(
-      record.authority,
-      "draftMinistryAgendaProposal.authority",
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalRecord(
-  payload,
-  context = "ministry agenda proposal record",
-) {
-  const record = ensureRecord(payload, context);
-  return {
-    proposal: ensureRecord(record.proposal, `${context}.proposal`),
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-    submitted_tx_hash_hex: normalizeHex32String(
-      record.submitted_tx_hash_hex,
-      `${context}.submitted_tx_hash_hex`,
-    ),
-    submitted_height: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_height,
-      `${context}.submitted_height`,
-      { allowZero: true },
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalDraftResponse(
-  payload,
-  context = "ministry agenda proposal draft response",
-) {
-  const record = ensureRecord(payload, context);
-  const base = normalizeGovernanceDraftResponse(
-    {
-      ok: record.ok,
-      tx_instructions: record.tx_instructions ?? [],
-    },
-    context,
-  );
-  return {
-    ok: base.ok,
-    agenda_proposal_id: requireNonEmptyString(
-      record.agenda_proposal_id,
-      `${context}.agenda_proposal_id`,
-    ),
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
-    tx_instructions: base.tx_instructions,
-    signable_transaction_b64: requireNonEmptyString(
-      record.signable_transaction_b64,
-      `${context}.signable_transaction_b64`,
-    ),
-  };
-}
-
-function normalizeMinistryAgendaProposalGetResponse(
-  payload,
-  context = "ministry agenda proposal lookup response",
-) {
-  const record = ensureRecord(payload, context);
-  const found = Boolean(record.found);
-  const proposalRecord =
-    record.record === undefined || record.record === null
-      ? null
-      : normalizeMinistryAgendaProposalRecord(record.record, `${context}.record`);
-  return {
-    found,
-    record: proposalRecord,
-  };
-}
-
-function normalizeGovernanceWindow(value, name) {
-  const record = ensureRecord(value, name);
-  const lowerValue = record.lower;
-  const upperValue = record.upper;
-  if (lowerValue === undefined || upperValue === undefined) {
-    const basePath = normalizeErrorPath(name);
-    if (lowerValue === undefined) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        `${name}.lower is required`,
-        `${basePath}.lower`,
-      );
-    }
-    throw createValidationError(
-      ValidationErrorCode.INVALID_NUMERIC,
-      `${name}.upper is required`,
-      `${basePath}.upper`,
-    );
-  }
-  const lower = ToriiClient._normalizeUnsignedInteger(lowerValue, `${name}.lower`, {
-    allowZero: true,
-  });
-  const upper = ToriiClient._normalizeUnsignedInteger(upperValue, `${name}.upper`, {
-    allowZero: true,
-  });
-  if (upper < lower) {
-    throw createValidationError(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name}.upper must be greater than or equal to lower`,
-      `${normalizeErrorPath(name)}.upper`,
-    );
-  }
-  return { lower, upper };
-}
-
-function normalizeGovernanceVotingMode(value, name) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (normalized === "zk" || normalized === "zkballot" || normalized === "zk_vote") {
-    return "Zk";
-  }
-  if (normalized === "plain" || normalized === "plainballot") {
-    return "Plain";
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be either 'Zk' or 'Plain'`,
-    normalizeErrorPath(name),
-  );
-}
-
-function normalizeGovernanceDraftResponse(
-  payload,
-  context = "governance draft response",
-) {
-  const record = ensureRecord(payload, context);
-  const instructionsValue = record.tx_instructions ?? [];
-  if (!Array.isArray(instructionsValue)) {
-    throw new TypeError(`${context}.tx_instructions must be an array`);
-  }
-  const txInstructions = instructionsValue.map((entry, index) => {
-    const item = ensureRecord(entry, `${context}.tx_instructions[${index}]`);
-    const wireId = requireNonEmptyString(
-      item.wire_id,
-      `${context}.tx_instructions[${index}].wire_id`,
-    );
-    const payloadHexValue = item.payload_hex;
-    const normalizedPayload =
-      payloadHexValue === undefined || payloadHexValue === null
-        ? null
-        : normalizeArbitraryHex(
-            payloadHexValue,
-            `${context}.tx_instructions[${index}].payload_hex`,
-          );
-    return normalizedPayload === null
-      ? { wire_id: wireId }
-      : { wire_id: wireId, payload_hex: normalizedPayload };
-  });
-  let proposalId = record.proposal_id ?? null;
-  if (proposalId !== null && proposalId !== undefined) {
-    proposalId = normalizeHex32String(proposalId, `${context}.proposal_id`);
-  } else {
-    proposalId = null;
-  }
-  const normalized = {
-    ok: Boolean(record.ok),
-    proposal_id: proposalId,
-    tx_instructions: txInstructions,
-  };
-  if (record.accepted !== undefined) {
-    normalized.accepted = Boolean(record.accepted);
-  }
-  if (record.reason !== undefined) {
-    normalized.reason =
-      record.reason === null || record.reason === undefined
-        ? null
-        : requireNonEmptyString(record.reason, `${context}.reason`);
-  }
-  return normalized;
-}
-
-function createEmptyGovernanceDraftResponse(context) {
-  return normalizeGovernanceDraftResponse(
-    {
-      ok: true,
-      tx_instructions: [],
-    },
-    context,
-  );
-}
-
-function normalizeTriggerMutationResponse(
-  payload,
-  context = "trigger mutation response",
-) {
-  const record = ensureRecord(payload, context);
-  const base = normalizeGovernanceDraftResponse(record, context);
-  let triggerId = record.trigger_id ?? null;
-  if (triggerId !== null && triggerId !== undefined) {
-    triggerId = requireNonEmptyString(triggerId, `${context}.trigger_id`);
-  } else {
-    triggerId = null;
-  }
-  const messageValue = record.message ?? null;
-  const message =
-    messageValue === null || messageValue === undefined
-      ? null
-      : String(messageValue);
-  const normalized = {
-    ok: base.ok,
-    trigger_id: triggerId,
-    tx_instructions: base.tx_instructions,
-  };
-  if (base.accepted !== undefined) {
-    normalized.accepted = base.accepted;
-  }
-  if (message !== null && message.length > 0) {
-    normalized.message = message;
-  }
-  return normalized;
-}
-
-function normalizeGovernanceBallotResponse(payload, context) {
-  const record = ensureRecord(payload, context);
-  if (record.accepted === undefined) {
-    throw new TypeError(`${context}.accepted is required`);
-  }
-  const base = normalizeGovernanceDraftResponse(record, context);
-  const reason =
-    record.reason === undefined || record.reason === null
-      ? null
-      : requireNonEmptyString(record.reason, `${context}.reason`);
-  return {
-    ok: base.ok,
-    proposal_id: base.proposal_id,
-    tx_instructions: base.tx_instructions,
-    accepted: Boolean(record.accepted),
-    reason,
-  };
-}
-
-function normalizeGovernanceDeployContractProposalPayload(input) {
-  const record = ensureRecord(input, "governanceProposeDeployContract payload");
-  const contractAddressValue = record.contract_address ?? record.contractAddress ?? null;
-  const contractAliasValue = record.contract_alias ?? record.contractAlias ?? null;
-  if ((contractAddressValue == null) === (contractAliasValue == null)) {
-    throw new TypeError(
-      "governanceProposeDeployContract requires exactly one of contract_address or contract_alias",
-    );
-  }
-  const abiVersion = requireNonEmptyString(
-    record.abi_version ?? record.abiVersion ?? "1",
-    "governanceProposeDeployContract.abiVersion",
-  );
-  const codeHashValue =
-    record.code_hash ?? record.codeHash;
-  if (codeHashValue === undefined || codeHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.code_hash is required");
-  }
-  const abiHashValue =
-    record.abi_hash ?? record.abiHash;
-  if (abiHashValue === undefined || abiHashValue === null) {
-    throw new TypeError("governanceProposeDeployContract.abi_hash is required");
-  }
-  const payload = {
-    abi_version: abiVersion,
-    code_hash: normalizeHashLike32(codeHashValue, "governanceProposeDeployContract.code_hash"),
-    abi_hash: normalizeHashLike32(abiHashValue, "governanceProposeDeployContract.abi_hash"),
-  };
-  if (contractAddressValue != null) {
-    payload.contract_address = requireNonEmptyString(
-      contractAddressValue,
-      "governanceProposeDeployContract.contract_address",
-    );
-  } else {
-    payload.contract_alias = requireNonEmptyString(
-      contractAliasValue,
-      "governanceProposeDeployContract.contract_alias",
-    );
-  }
-  const windowValue =
-    record.window;
-  if (windowValue !== undefined && windowValue !== null) {
-    payload.window = normalizeGovernanceWindow(
-      windowValue,
-      "governanceProposeDeployContract.window",
-    );
-  }
-  const modeValue = record.mode;
-  if (modeValue !== undefined && modeValue !== null) {
-    payload.mode = normalizeGovernanceVotingMode(
-      modeValue,
-      "governanceProposeDeployContract.mode",
-    );
-  }
-  if (record.limits !== undefined) {
-    payload.limits = cloneJsonValue(
-      record.limits,
-      "governanceProposeDeployContract.limits",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernancePlainBallotPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitPlainBallot payload");
-  const direction = record.direction;
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitPlainBallot.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitPlainBallot.chainId",
-    ),
-    referendum_id: requireNonEmptyString(
-      record.referendum_id ?? record.referendumId,
-      "governanceSubmitPlainBallot.referendumId",
-    ),
-    owner: ToriiClient._normalizeAccountId(
-      record.owner,
-      "governanceSubmitPlainBallot.owner",
-    ),
-    amount: normalizeQuantityInput(
-      record.amount,
-      "governanceSubmitPlainBallot.amount",
-    ),
-    duration_blocks: ToriiClient._normalizeUnsignedInteger(
-      record.duration_blocks ?? record.durationBlocks,
-      "governanceSubmitPlainBallot.durationBlocks",
-      { allowZero: false },
-    ),
-    direction: normalizeGovernanceBallotDirection(
-      direction,
-      "governanceSubmitPlainBallot.direction",
-    ),
-  };
-  return payload;
-}
-
-function normalizeGovernanceBallotDirection(value, name) {
-  const normalized = requireNonEmptyString(value, name).toLowerCase();
-  if (normalized === "aye") {
-    return "Aye";
-  }
-  if (normalized === "nay") {
-    return "Nay";
-  }
-  if (normalized === "abstain") {
-    return "Abstain";
-  }
-  throw new TypeError(`${name} must be one of Aye, Nay, or Abstain`);
-}
-
-function normalizeGovernancePublicInputs(value, name) {
-  const cloned = cloneJsonValue(value, name);
-  if (!isPlainObject(cloned)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} must be an object`,
-      name,
-    );
-  }
-  const normalized = { ...cloned };
-  rejectGovernancePublicInputKey(
-    normalized,
-    "durationBlocks",
-    "duration_blocks",
-    name,
-  );
-  rejectGovernancePublicInputKey(normalized, "root_hint_hex", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "rootHintHex", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "rootHint", "root_hint", name);
-  rejectGovernancePublicInputKey(normalized, "nullifier_hex", "nullifier", name);
-  rejectGovernancePublicInputKey(normalized, "nullifierHex", "nullifier", name);
-  normalizeGovernancePublicInputHex(normalized, "root_hint", name);
-  normalizeGovernancePublicInputHex(normalized, "nullifier", name);
-  ensureGovernanceLockHintsComplete(normalized, name);
-  if (
-    Object.prototype.hasOwnProperty.call(normalized, "amount") &&
-    normalized.amount !== null
-  ) {
-    normalized.amount = requireCanonicalQuantity(
-      normalized.amount,
-      `${name}.amount`,
-    );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(normalized, "owner") &&
-    normalized.owner !== null
-  ) {
-    normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
-  }
-  return normalized;
-}
-
-function normalizeGovernancePublicInputHex(target, key, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
-  }
-  const value = target[key];
-  if (value === null) {
-    return;
-  }
-  const context = `${name}.${key}`;
-  const raw = requireNonEmptyString(value, context).trim();
-  let body = raw;
-  if (raw.includes(":")) {
-    const [scheme, rest] = raw.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== "blake2b32") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_HEX,
-        `${context} must be a 32-byte hex string`,
-        context,
-      );
-    }
-    body = rest.trim();
-  }
-  if (body.startsWith("0x") || body.startsWith("0X")) {
-    body = body.slice(2);
-  }
-  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_HEX,
-      `${context} must be a 32-byte hex string`,
-      context,
-    );
-  }
-  target[key] = body.toLowerCase();
-}
-
-function rejectGovernancePublicInputKey(target, key, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_OBJECT,
-    `${name} must use ${canonicalKey} (unsupported key ${key})`,
-    name,
-  );
-}
-
-function ensureGovernanceLockHintsComplete(source, name) {
-  const hasOwner = source.owner !== undefined && source.owner !== null;
-  const hasAmount = source.amount !== undefined && source.amount !== null;
-  const hasDuration =
-    source.duration_blocks !== undefined && source.duration_blocks !== null;
-  const hasAnyLockHint = hasOwner || hasAmount || hasDuration;
-  if (hasAnyLockHint && !(hasOwner && hasAmount && hasDuration)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} must include owner, amount, and duration_blocks when providing lock hints`,
-      name,
-    );
-  }
-}
-
-function normalizeGovernanceZkBallotPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallot payload");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitZkBallot.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitZkBallot.chainId",
-    ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
-      "governanceSubmitZkBallot.electionId",
-    ),
-    proof_b64: normalizeRequiredBase64Payload(
-      record.proof ?? record.proof_b64 ?? record.proofB64,
-      "governanceSubmitZkBallot.proofB64",
-    ),
-  };
-  if (record.public !== undefined && record.public !== null) {
-    payload.public = normalizeGovernancePublicInputs(
-      record.public,
-      "governanceSubmitZkBallot.public",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernanceZkBallotV1Payload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallotV1 payload");
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceSubmitZkBallotV1.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitZkBallotV1.chainId",
-    ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
-      "governanceSubmitZkBallotV1.electionId",
-    ),
-    backend: requireNonEmptyString(
-      record.backend,
-      "governanceSubmitZkBallotV1.backend",
-    ),
-    envelope_b64: normalizeRequiredBase64Payload(
-      record.envelope ?? record.envelope_b64 ?? record.envelopeB64,
-      "governanceSubmitZkBallotV1.envelopeB64",
-    ),
-  };
-  rejectGovernancePublicInputKey(
-    record,
-    "root_hint_hex",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "rootHintHex",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "rootHint",
-    "root_hint",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "nullifier_hex",
-    "nullifier",
-    "governanceSubmitZkBallotV1",
-  );
-  rejectGovernancePublicInputKey(
-    record,
-    "nullifierHex",
-    "nullifier",
-    "governanceSubmitZkBallotV1",
-  );
-  const rootHint = record.root_hint;
-  if (rootHint !== undefined && rootHint !== null) {
-    payload.root_hint = normalizeHex32String(
-      rootHint,
-      "governanceSubmitZkBallotV1.root_hint",
-      { allowScheme: true, scheme: "blake2b32" },
-    );
-  }
-  if (record.owner !== undefined && record.owner !== null) {
-    payload.owner = requireNonEmptyString(
-      record.owner,
-      "governanceSubmitZkBallotV1.owner",
-    );
-  }
-  if (record.amount !== undefined && record.amount !== null) {
-    payload.amount = normalizeQuantityInput(
-      record.amount,
-      "governanceSubmitZkBallotV1.amount",
-    );
-  }
-  const durationBlocks = record.duration_blocks ?? record.durationBlocks;
-  if (durationBlocks !== undefined && durationBlocks !== null) {
-    payload.duration_blocks = ToriiClient._normalizeUnsignedInteger(
-      durationBlocks,
-      "governanceSubmitZkBallotV1.durationBlocks",
-      { allowZero: false },
-    );
-  }
-  if (record.direction !== undefined && record.direction !== null) {
-    payload.direction = normalizeGovernanceBallotDirection(
-      record.direction,
-      "governanceSubmitZkBallotV1.direction",
-    );
-  }
-  const nullifier = record.nullifier;
-  if (nullifier !== undefined && nullifier !== null) {
-    payload.nullifier = normalizeHex32String(
-      nullifier,
-      "governanceSubmitZkBallotV1.nullifier",
-      { allowScheme: true, scheme: "blake2b32" },
-    );
-  }
-  ensureGovernanceLockHintsComplete(payload, "governanceSubmitZkBallotV1");
-  if (payload.owner !== undefined && payload.owner !== null) {
-    payload.owner = ensureCanonicalAccountId(
-      payload.owner,
-      "governanceSubmitZkBallotV1.owner",
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernanceZkBallotProofPayload(input) {
-  const record = ensureRecord(input, "governanceSubmitZkBallotProofV1 payload");
-  const ballot = ensureRecord(
-    record.ballot,
-    "governanceSubmitZkBallotProofV1.ballot",
-  );
-  const ballotContext = "governanceSubmitZkBallotProofV1.ballot";
-  const normalizedBallot = { ...ballot };
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "rootHintHex",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "root_hint_hex",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "rootHint",
-    "root_hint",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "nullifierHex",
-    "nullifier",
-    ballotContext,
-  );
-  rejectGovernancePublicInputKey(
-    normalizedBallot,
-    "nullifier_hex",
-    "nullifier",
-    ballotContext,
-  );
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "root_hint")) {
-    const rootHint = normalizedBallot.root_hint;
-    if (rootHint !== null) {
-      normalizedBallot.root_hint = normalizeHex32String(
-        rootHint,
-        `${ballotContext}.root_hint`,
-        { allowScheme: true, scheme: "blake2b32" },
-      );
-    }
-  }
-  if (Object.prototype.hasOwnProperty.call(normalizedBallot, "nullifier")) {
-    const nullifier = normalizedBallot.nullifier;
-    if (nullifier !== null) {
-      normalizedBallot.nullifier = normalizeHex32String(
-        nullifier,
-        `${ballotContext}.nullifier`,
-        { allowScheme: true, scheme: "blake2b32" },
-      );
-    }
-  }
-  ensureGovernanceLockHintsComplete(normalizedBallot, ballotContext);
-  if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "amount") &&
-    normalizedBallot.amount !== null
-  ) {
-    normalizedBallot.amount = normalizeQuantityInput(
-      normalizedBallot.amount,
-      `${ballotContext}.amount`,
-    );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(normalizedBallot, "owner") &&
-    normalizedBallot.owner !== null
-  ) {
-    normalizedBallot.owner = ensureCanonicalAccountId(
-      normalizedBallot.owner,
-      `${ballotContext}.owner`,
-    );
-  }
-  const payload = {
-    authority: requireNonEmptyString(
-      record.authority,
-      "governanceSubmitZkBallotProofV1.authority",
-    ),
-    chain_id: requireNonEmptyString(
-      record.chain_id ?? record.chainId,
-      "governanceSubmitZkBallotProofV1.chainId",
-    ),
-    election_id: requireNonEmptyString(
-      record.election_id ?? record.electionId,
-      "governanceSubmitZkBallotProofV1.electionId",
-    ),
-    ballot: normalizedBallot,
-  };
-  return payload;
-}
+const {
+  createEmptyGovernanceDraftResponse,
+  normalizeGovernanceBallotResponse,
+  normalizeGovernanceDeployContractProposalPayload,
+  normalizeGovernanceDraftResponse,
+  normalizeGovernanceEnactPayload,
+  normalizeGovernanceFinalizePayload,
+  normalizeGovernanceParliamentBallotPayload,
+  normalizeGovernancePlainBallotPayload,
+  normalizeGovernanceZkBallotProofPayload,
+  normalizeGovernanceZkBallotV1Payload,
+  normalizeMinistryAgendaProposalDraftRequest,
+  normalizeMinistryAgendaProposalDraftResponse,
+  normalizeMinistryAgendaProposalGetResponse,
+  normalizeTriggerMutationResponse,
+} = createToriiGovernanceNormalizers({
+  ToriiClient,
+  ValidationErrorCode,
+  assertSupportedOptionKeys,
+  createValidationError,
+  ensureCanonicalAccountId,
+  ensureRecord,
+  isPlainObject,
+  normalizeArbitraryHex,
+  normalizeErrorPath,
+  normalizeGovernanceUint64Integer,
+  normalizeHex32String,
+  normalizeManifestProvenancePayload,
+  normalizeQuantityInput,
+  normalizeRequiredBase64Payload,
+  normalizeUint64DecimalString,
+  requireExactLowerHex32String,
+  requireExactNonEmptyString,
+  requireExactTokenString,
+  requireGovernanceSelectorString,
+  requireNonEmptyString,
+});
 
 function normalizeArbitraryHex(value, name) {
   const normalized = requireHexString(value, name);
@@ -34532,21 +33914,6 @@ function normalizeVerifyingKeySigningChainId(value, context) {
   return chainId;
 }
 
-const VERIFYING_KEY_PRIVATE_KEY_FIELDS = new Set([
-  "private_key",
-  "privateKey",
-  "private_key_hex",
-  "privateKeyHex",
-  "private_key_bytes",
-  "privateKeyBytes",
-  "private_key_seed",
-  "privateKeySeed",
-  "private_key_multihash",
-  "privateKeyMultihash",
-  "private_key_algorithm",
-  "privateKeyAlgorithm",
-]);
-
 function rejectVerifyingKeyPrivateKeyFields(record, context) {
   const fields = Object.keys(record).filter((key) =>
     VERIFYING_KEY_PRIVATE_KEY_FIELDS.has(key),
@@ -34747,77 +34114,149 @@ function normalizeSumeragiEvidenceListResponse(payload) {
   return { total, items };
 }
 
+function assertExactSumeragiEvidenceFields(
+  record,
+  context,
+  requiredVariantFields,
+  optionalVariantFields = [],
+) {
+  const required = new Set([...EVIDENCE_BASE_FIELDS, ...requiredVariantFields]);
+  const allowed = new Set([...required, ...optionalVariantFields]);
+  const missing = Array.from(required).filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  const unexpected = Object.keys(record).filter((field) => !allowed.has(field));
+  if (missing.length > 0 || unexpected.length > 0) {
+    const details = [];
+    if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
+    if (unexpected.length > 0) details.push(`unexpected ${unexpected.join(", ")}`);
+    throw new TypeError(`${context} must use the exact server fields (${details.join("; ")})`);
+  }
+}
+
+function requireSumeragiEvidenceUnsigned(value, context, maximum = Number.MAX_SAFE_INTEGER) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > maximum
+  ) {
+    throw new TypeError(`${context} must be a non-negative JSON safe integer`);
+  }
+  return value;
+}
+
+function requireSumeragiEvidenceHash(value, context) {
+  return requireExactLowerHex32String(value, context);
+}
+
 function normalizeSumeragiEvidenceRecord(value, context) {
   const record = ensureRecord(value, context);
-  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  const kind = requireExactNonEmptyString(record.kind, `${context}.kind`);
+  if (!EVIDENCE_KIND_VALUES.has(kind)) {
+    throw new RangeError(
+      `${context}.kind must be one of ${Array.from(EVIDENCE_KIND_VALUES).join(", ")}`,
+    );
+  }
+  const consensusAdmittedHeight = record.consensus_admitted_height;
   const base = {
     kind,
-    recorded_height: requireNonNegativeIntegerLike(
+    recorded_height: requireSumeragiEvidenceUnsigned(
       record.recorded_height,
       `${context}.recorded_height`,
     ),
-    recorded_view: requireNonNegativeIntegerLike(
+    recorded_view: requireSumeragiEvidenceUnsigned(
       record.recorded_view,
       `${context}.recorded_view`,
     ),
-    recorded_ms: requireNonNegativeIntegerLike(
+    recorded_ms: requireSumeragiEvidenceUnsigned(
       record.recorded_ms,
       `${context}.recorded_ms`,
     ),
+    consensus_admitted_height:
+      consensusAdmittedHeight === null
+        ? null
+        : requireSumeragiEvidenceUnsigned(
+            consensusAdmittedHeight,
+            `${context}.consensus_admitted_height`,
+          ),
   };
   if (
     kind === "DoublePrepare" ||
     kind === "DoubleCommit"
   ) {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "phase",
+      "height",
+      "view",
+      "epoch",
+      "signer",
+      "block_hash_1",
+      "block_hash_2",
+    ]);
     const phase = requireEvidencePhase(
-      pickOverride(record, "phase", "phase"),
+      record.phase,
       `${context}.phase`,
     );
+    const blockHash1 = requireSumeragiEvidenceHash(
+      record.block_hash_1,
+      `${context}.block_hash_1`,
+    );
+    const blockHash2 = requireSumeragiEvidenceHash(
+      record.block_hash_2,
+      `${context}.block_hash_2`,
+    );
+    if (blockHash1 === blockHash2) {
+      throw new RangeError(`${context} block hashes must identify distinct blocks`);
+    }
     return {
       ...base,
       phase,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      signer: requireNonEmptyString(
+      signer: requireSumeragiEvidenceUnsigned(
         record.signer,
         `${context}.signer`,
+        0xffffffff,
       ),
-      block_hash_1: requireHexString(
-        record.block_hash_1,
-        `${context}.block_hash_1`,
-      ),
-      block_hash_2: requireHexString(
-        record.block_hash_2,
-        `${context}.block_hash_2`,
-      ),
+      block_hash_1: blockHash1,
+      block_hash_2: blockHash2,
     };
   }
   if (kind === "InvalidQc") {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "height",
+      "view",
+      "epoch",
+      "subject_block_hash",
+      "phase",
+      "reason",
+    ]);
     return {
       ...base,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      subject_block_hash: requireHexString(
+      subject_block_hash: requireSumeragiEvidenceHash(
         record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
@@ -34825,73 +34264,149 @@ function normalizeSumeragiEvidenceRecord(value, context) {
         record.phase,
         `${context}.phase`,
       ),
-      reason: requireNonEmptyString(
+      reason: requireExactNonEmptyString(
         record.reason,
         `${context}.reason`,
       ),
     };
   }
   if (kind === "InvalidProposal") {
+    assertExactSumeragiEvidenceFields(record, context, [
+      "height",
+      "view",
+      "epoch",
+      "subject_block_hash",
+      "payload_hash",
+      "reason",
+    ]);
     return {
       ...base,
-      height: requireNonNegativeIntegerLike(
+      height: requireSumeragiEvidenceUnsigned(
         record.height,
         `${context}.height`,
       ),
-      view: requireNonNegativeIntegerLike(
+      view: requireSumeragiEvidenceUnsigned(
         record.view,
         `${context}.view`,
       ),
-      epoch: requireNonNegativeIntegerLike(
+      epoch: requireSumeragiEvidenceUnsigned(
         record.epoch,
         `${context}.epoch`,
       ),
-      subject_block_hash: requireHexString(
+      subject_block_hash: requireSumeragiEvidenceHash(
         record.subject_block_hash,
         `${context}.subject_block_hash`,
       ),
-      payload_hash: requireHexString(
+      payload_hash: requireSumeragiEvidenceHash(
         record.payload_hash,
         `${context}.payload_hash`,
       ),
-      reason: requireNonEmptyString(
+      reason: requireExactNonEmptyString(
         record.reason,
         `${context}.reason`,
       ),
     };
   }
   if (kind === "Censorship") {
-    return {
+    assertExactSumeragiEvidenceFields(
+      record,
+      context,
+      ["tx_hash", "receipt_count", "signers"],
+      ["submitted_at_height_min", "submitted_at_height_max"],
+    );
+    const receiptCount = requireSumeragiEvidenceUnsigned(
+      record.receipt_count,
+      `${context}.receipt_count`,
+    );
+    const signers = requireStringArray(record.signers, `${context}.signers`).map(
+      (signer, index) => requireExactNonEmptyString(signer, `${context}.signers[${index}]`),
+    );
+    if (signers.length !== receiptCount) {
+      throw new RangeError(`${context}.receipt_count must equal signers.length`);
+    }
+    const hasMin = Object.prototype.hasOwnProperty.call(
+      record,
+      "submitted_at_height_min",
+    );
+    const hasMax = Object.prototype.hasOwnProperty.call(
+      record,
+      "submitted_at_height_max",
+    );
+    if (hasMin !== hasMax || (receiptCount > 0 && !hasMin) || (receiptCount === 0 && hasMin)) {
+      throw new TypeError(
+        `${context} must include both submitted_at_height bounds exactly when receipts are present`,
+      );
+    }
+    const result = {
       ...base,
-      tx_hash: requireHexString(
+      tx_hash: requireSumeragiEvidenceHash(
         record.tx_hash,
         `${context}.tx_hash`,
       ),
-      receipt_count: requireNonNegativeIntegerLike(
-        record.receipt_count,
-        `${context}.receipt_count`,
-      ),
-      min_height: requireNonNegativeIntegerLike(
-        record.min_height,
-        `${context}.min_height`,
-      ),
-      max_height: requireNonNegativeIntegerLike(
-        record.max_height,
-        `${context}.max_height`,
-      ),
-      signers: requireStringArray(
-        record.signers,
-        `${context}.signers`,
-      ),
+      receipt_count: receiptCount,
+      signers,
+    };
+    if (!hasMin) return result;
+    const submittedAtHeightMin = requireSumeragiEvidenceUnsigned(
+      record.submitted_at_height_min,
+      `${context}.submitted_at_height_min`,
+    );
+    const submittedAtHeightMax = requireSumeragiEvidenceUnsigned(
+      record.submitted_at_height_max,
+      `${context}.submitted_at_height_max`,
+    );
+    if (submittedAtHeightMin > submittedAtHeightMax) {
+      throw new RangeError(
+        `${context}.submitted_at_height_min must be <= submitted_at_height_max`,
+      );
+    }
+    return {
+      ...result,
+      submitted_at_height_min: submittedAtHeightMin,
+      submitted_at_height_max: submittedAtHeightMax,
     };
   }
-  const detailValue = record.detail;
-  if (detailValue === undefined || detailValue === null) {
-    return base;
+  assertExactSumeragiEvidenceFields(record, context, [
+    "class",
+    "height",
+    "view",
+    "epoch",
+    "signer",
+    "context_id",
+    "artifact_hash_1",
+    "artifact_hash_2",
+  ]);
+  const evidenceClass = requireExactNonEmptyString(record.class, `${context}.class`);
+  if (!EVIDENCE_EQUIVOCATION_CLASS_VALUES.has(evidenceClass)) {
+    throw new RangeError(
+      `${context}.class must be one of ${Array.from(EVIDENCE_EQUIVOCATION_CLASS_VALUES).join(", ")}`,
+    );
+  }
+  const artifactHash1 = requireSumeragiEvidenceHash(
+    record.artifact_hash_1,
+    `${context}.artifact_hash_1`,
+  );
+  const artifactHash2 = requireSumeragiEvidenceHash(
+    record.artifact_hash_2,
+    `${context}.artifact_hash_2`,
+  );
+  if (artifactHash1 === artifactHash2) {
+    throw new RangeError(`${context} artifact hashes must identify distinct artifacts`);
   }
   return {
     ...base,
-    detail: requireNonEmptyString(detailValue, `${context}.detail`),
+    class: evidenceClass,
+    height: requireSumeragiEvidenceUnsigned(record.height, `${context}.height`),
+    view: requireSumeragiEvidenceUnsigned(record.view, `${context}.view`),
+    epoch: requireSumeragiEvidenceUnsigned(record.epoch, `${context}.epoch`),
+    signer: requireSumeragiEvidenceUnsigned(
+      record.signer,
+      `${context}.signer`,
+      0xffffffff,
+    ),
+    context_id: requireSumeragiEvidenceHash(record.context_id, `${context}.context_id`),
+    artifact_hash_1: artifactHash1,
+    artifact_hash_2: artifactHash2,
   };
 }
 

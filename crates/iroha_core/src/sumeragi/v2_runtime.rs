@@ -1700,6 +1700,67 @@ impl RuntimeCandidateSemanticStatement {
         }
     }
 
+    /// Compare two carriers for the same physical body-fetch lineage.
+    ///
+    /// The candidate statement deliberately includes quorum authority, while
+    /// the physical fetch is keyed only by its immutable consensus coordinates.
+    /// This relation admits exactly the monotonic authority lattice used by
+    /// that physical task: ordinary, Prepare, then Commit. A weaker carrier
+    /// arriving after a stronger one is stale rather than an authority
+    /// downgrade; callers retain the stronger task state in that case.
+    fn fetch_authority_relation_to(self, incoming: Self) -> Option<RuntimeFetchAuthorityRelation> {
+        if !self.validate_exact()
+            || !incoming.validate_exact()
+            || self.context_id != incoming.context_id
+            || self.round != incoming.round
+            || self.proposal_round != incoming.proposal_round
+            || self.subject != incoming.subject
+        {
+            return None;
+        }
+
+        match (
+            self.phase,
+            self.execution_commitment,
+            incoming.phase,
+            incoming.execution_commitment,
+        ) {
+            (None, None, None, None) => Some(RuntimeFetchAuthorityRelation::Same),
+            (None, None, Some(wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit), Some(_)) => {
+                Some(RuntimeFetchAuthorityRelation::Upgrade)
+            }
+            (
+                Some(wire::GlobalPhase::Prepare),
+                Some(incumbent),
+                Some(wire::GlobalPhase::Prepare),
+                Some(successor),
+            ) if incumbent == successor => Some(RuntimeFetchAuthorityRelation::Same),
+            (
+                Some(wire::GlobalPhase::Prepare),
+                Some(incumbent),
+                Some(wire::GlobalPhase::Commit),
+                Some(successor),
+            ) if incumbent == successor => Some(RuntimeFetchAuthorityRelation::Upgrade),
+            (Some(wire::GlobalPhase::Prepare), Some(_), None, None) => {
+                Some(RuntimeFetchAuthorityRelation::Stale)
+            }
+            (
+                Some(wire::GlobalPhase::Commit),
+                Some(incumbent),
+                Some(wire::GlobalPhase::Commit | wire::GlobalPhase::Prepare),
+                Some(successor),
+            ) if incumbent == successor => Some(if incoming.phase == self.phase {
+                RuntimeFetchAuthorityRelation::Same
+            } else {
+                RuntimeFetchAuthorityRelation::Stale
+            }),
+            (Some(wire::GlobalPhase::Commit), Some(_), None, None) => {
+                Some(RuntimeFetchAuthorityRelation::Stale)
+            }
+            _ => None,
+        }
+    }
+
     fn semantic_identity(self) -> Vec<u8> {
         let mut identity = Vec::new();
         identity.extend_from_slice(b"iroha:sumeragi:v2:tla-candidate-semantic:v2");
@@ -1732,6 +1793,17 @@ enum RuntimeCandidateAuthorityRefinement {
     PromotePrepare,
     /// An exact Commit-authorized retry retained all six coordinates.
     RetainCommit,
+}
+
+/// Authority relation between two exact carriers for one physical FetchBody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RuntimeFetchAuthorityRelation {
+    /// Both carriers have the same authority statement.
+    Same,
+    /// The incoming carrier monotonically strengthens the task authority.
+    Upgrade,
+    /// The incoming carrier is weaker and must not downgrade the task.
+    Stale,
 }
 
 /// Candidate bytes plus the independently retained typed statement which
@@ -1971,468 +2043,7 @@ impl RuntimeEffectCandidateBinding {
     }
 }
 
-/// Sidecar metadata paired positionally with one reducer effect.
-#[derive(Clone, Debug)]
-pub(crate) struct RuntimeEffectOwnership {
-    owner: RuntimeLifecycleOwner,
-    causality: RuntimeEffectCausality,
-    binding: Option<RuntimeEffectCandidateBinding>,
-}
-
-impl PartialEq for RuntimeEffectOwnership {
-    // Equality names the immutable lifecycle owner, not the replaceable
-    // positional effect binding. Fetch-route upgrades and later consumer-stage
-    // rebinds must retain this equality while recomputing and validating the
-    // complete binding before the next asynchronous owner is published.
-    fn eq(&self, other: &Self) -> bool {
-        self.owner == other.owner && self.causality == other.causality
-    }
-}
-
-impl Eq for RuntimeEffectOwnership {}
-
-impl RuntimeEffectOwnership {
-    fn inherited(owner: RuntimeLifecycleOwner) -> Self {
-        Self {
-            owner,
-            causality: RuntimeEffectCausality::Inherit,
-            binding: None,
-        }
-    }
-
-    fn fresh(owner: RuntimeLifecycleOwner, kind: RuntimeFreshRootKind) -> Self {
-        Self {
-            owner,
-            causality: RuntimeEffectCausality::Fresh(kind),
-            binding: None,
-        }
-    }
-
-    fn validate_exact(&self) -> bool {
-        self.owner.validate_exact()
-            && self
-                .binding
-                .as_ref()
-                .is_none_or(|binding| binding.validate_exact(&self.owner, self.causality))
-    }
-
-    fn validate_bound_exact(&self) -> bool {
-        self.validate_exact() && self.binding.is_some()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn bind_runtime_effect(
-        mut self,
-        parent: Option<&RuntimeLifecycleOwner>,
-        effect_kind: u8,
-        effect_semantic_identity: &[u8],
-        candidate: Option<&RuntimeEffectCandidateSemantic>,
-        effect_position: u8,
-        effect_count: u8,
-        candidate_position: u8,
-        candidate_count: u8,
-    ) -> Result<Self, EnqueueError> {
-        if self.binding.is_some() {
-            return Err(EnqueueError::FailClosed);
-        }
-        self.binding = Some(RuntimeEffectCandidateBinding::new(
-            &self.owner,
-            self.causality,
-            parent,
-            effect_kind,
-            effect_semantic_identity,
-            candidate,
-            effect_position,
-            effect_count,
-            candidate_position,
-            candidate_count,
-        )?);
-        self.validate_bound_exact()
-            .then_some(self)
-            .ok_or(EnqueueError::FailClosed)
-    }
-
-    fn binding(&self) -> Option<&RuntimeEffectCandidateBinding> {
-        self.binding.as_ref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn candidate_identity(&self) -> Option<iroha_crypto::Hash> {
-        self.binding
-            .as_ref()
-            .and_then(|binding| binding.candidate_identity)
-    }
-
-    /// Route-neutral semantic lifecycle used by the single-owner admission gate.
-    pub(crate) fn candidate_semantic_identity(&self) -> Option<iroha_crypto::Hash> {
-        self.binding
-            .as_ref()
-            .and_then(|binding| binding.candidate_semantic_identity)
-    }
-
-    /// Typed semantic statement retained through causal completion handoffs.
-    fn candidate_semantic_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
-        self.binding
-            .as_ref()
-            .and_then(|binding| binding.candidate_statement)
-    }
-
-    /// Immutable owner carried into an asynchronous task or completion.
-    pub(crate) const fn owner(&self) -> &RuntimeLifecycleOwner {
-        &self.owner
-    }
-
-    /// Frozen inherit/fresh classification. Retries and rebinds retain it.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn causality(&self) -> RuntimeEffectCausality {
-        self.causality
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fresh_for_test(tag: EventTag, lifecycle_ordinal: u128) -> Self {
-        let kind = RuntimeFreshRootKind::StartupRecovery;
-        let origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
-            tag,
-            CommandClass::Progress,
-            kind,
-            b"test-runtime-effect",
-        );
-        Self::fresh(
-            RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
-                .expect("fresh test owner binds its first lifecycle ordinal"),
-            kind,
-        )
-    }
-}
-
-fn append_optional_runtime_identity_bytes(identity: &mut Vec<u8>, value: Option<Vec<u8>>) {
-    match value {
-        None => identity.push(0),
-        Some(value) => {
-            identity.push(1);
-            append_runtime_identity_field(identity, &value);
-        }
-    }
-}
-
-/// Closed classification of every production adapter effect.
-pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8 {
-    match effect {
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::Proposal(_),
-            ..
-        } => RUNTIME_EFFECT_KIND_SIGN_PROPOSAL,
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::Vote(_),
-            ..
-        } => RUNTIME_EFFECT_KIND_SIGN_VOTE,
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::TimeoutVote(_),
-            ..
-        } => RUNTIME_EFFECT_KIND_SIGN_TIMEOUT,
-        AdapterEffect::FetchBody { .. } => RUNTIME_EFFECT_KIND_FETCH_BODY,
-        AdapterEffect::StoreBody { .. } => RUNTIME_EFFECT_KIND_STORE_BODY,
-        AdapterEffect::ValidateBody { .. } => RUNTIME_EFFECT_KIND_VALIDATE_BODY,
-        AdapterEffect::Apply { .. } => RUNTIME_EFFECT_KIND_APPLY,
-        AdapterEffect::Broadcast(_) => RUNTIME_EFFECT_KIND_BROADCAST,
-        AdapterEffect::EnterView { .. } => RUNTIME_EFFECT_KIND_ENTER_VIEW,
-        AdapterEffect::ReportEquivocation { .. } => RUNTIME_EFFECT_KIND_REPORT_EQUIVOCATION,
-        AdapterEffect::ReportInvalidCertifiedBody { .. } => {
-            RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY
-        }
-    }
-}
-
-/// Canonical exact identity bytes for every field of one production effect.
-///
-/// These bytes are internal evidence only. They are never serialized as a wire
-/// field and do not introduce a runtime configuration surface.
-pub(crate) fn production_adapter_effect_semantic_identity(effect: &AdapterEffect) -> Vec<u8> {
-    let mut identity = Vec::new();
-    identity.extend_from_slice(b"iroha:sumeragi:v2:adapter-effect-semantic:v1");
-    identity.push(production_adapter_effect_kind(effect));
-    match effect {
-        AdapterEffect::Sign { tag, request } => {
-            append_runtime_identity_tag(&mut identity, *tag);
-            append_runtime_identity_field(&mut identity, &request.signature_preimage());
-        }
-        AdapterEffect::Broadcast(message) => {
-            append_runtime_identity_field(&mut identity, &message.encode());
-        }
-        AdapterEffect::FetchBody {
-            tag,
-            round,
-            subject,
-            manifest,
-            certified_sources,
-            certificate,
-        } => {
-            append_runtime_identity_tag(&mut identity, *tag);
-            append_runtime_identity_field(&mut identity, &round.encode());
-            append_runtime_identity_field(&mut identity, &subject.encode());
-            append_optional_runtime_identity_bytes(
-                &mut identity,
-                manifest.as_ref().map(norito::codec::Encode::encode),
-            );
-            append_runtime_identity_field(&mut identity, &certified_sources.encode());
-            append_optional_runtime_identity_bytes(
-                &mut identity,
-                certificate.as_ref().map(norito::codec::Encode::encode),
-            );
-        }
-        AdapterEffect::StoreBody {
-            tag,
-            round,
-            subject,
-        }
-        | AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        } => {
-            append_runtime_identity_tag(&mut identity, *tag);
-            append_runtime_identity_field(&mut identity, &round.encode());
-            append_runtime_identity_field(&mut identity, &subject.encode());
-        }
-        AdapterEffect::Apply {
-            tag,
-            subject,
-            certificate,
-        } => {
-            append_runtime_identity_tag(&mut identity, *tag);
-            append_runtime_identity_field(&mut identity, &subject.encode());
-            append_runtime_identity_field(&mut identity, &certificate.encode());
-        }
-        AdapterEffect::EnterView {
-            tag,
-            certificate,
-            protected_body,
-        } => {
-            append_runtime_identity_tag(&mut identity, *tag);
-            append_runtime_identity_field(&mut identity, &certificate.encode());
-            match protected_body {
-                None => identity.push(0),
-                Some((round, subject)) => {
-                    identity.push(1);
-                    append_runtime_identity_field(&mut identity, &round.encode());
-                    append_runtime_identity_field(&mut identity, &subject.encode());
-                }
-            }
-        }
-        AdapterEffect::ReportEquivocation {
-            offender,
-            round,
-            kind,
-        } => {
-            append_runtime_identity_field(&mut identity, &offender.encode());
-            append_runtime_identity_field(&mut identity, &round.encode());
-            identity.push(match kind {
-                super::v2_core::EquivocationKind::Vote => 1,
-                super::v2_core::EquivocationKind::Timeout => 2,
-                super::v2_core::EquivocationKind::Proposal => 3,
-            });
-        }
-        AdapterEffect::ReportInvalidCertifiedBody {
-            subject,
-            certificate,
-        } => {
-            append_runtime_identity_field(&mut identity, &subject.encode());
-            append_runtime_identity_field(&mut identity, &certificate.encode());
-        }
-    }
-    identity
-}
-
-fn production_adapter_effect_candidate_statement(
-    effect: &AdapterEffect,
-) -> Option<(u8, RuntimeCandidateSemanticStatement)> {
-    Some(match effect {
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::Proposal(proposal),
-            ..
-        } => (
-            RUNTIME_CANDIDATE_KIND_SIGN_PROPOSAL,
-            RuntimeCandidateSemanticStatement::new(
-                proposal.round,
-                proposal.round,
-                Some(proposal.subject),
-                None,
-                None,
-            ),
-        ),
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::Vote(vote),
-            ..
-        } => (
-            RUNTIME_CANDIDATE_KIND_SIGN_VOTE,
-            RuntimeCandidateSemanticStatement::new(
-                vote.round,
-                vote.proposal_round,
-                Some(vote.subject),
-                Some(vote.phase),
-                Some(vote.execution_commitment),
-            ),
-        ),
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::TimeoutVote(vote),
-            ..
-        } => {
-            let highest = vote.highest_prepare_qc.as_ref();
-            (
-                RUNTIME_CANDIDATE_KIND_SIGN_TIMEOUT,
-                RuntimeCandidateSemanticStatement::new(
-                    vote.round,
-                    highest.map_or(vote.round, |certificate| certificate.proposal_round),
-                    highest.map(|certificate| certificate.subject),
-                    highest.map(|certificate| certificate.phase),
-                    highest.map(|certificate| certificate.execution_commitment),
-                ),
-            )
-        }
-        AdapterEffect::FetchBody {
-            round,
-            subject,
-            certificate,
-            ..
-        } => (
-            RUNTIME_CANDIDATE_KIND_FETCH_BODY,
-            RuntimeCandidateSemanticStatement::new(
-                certificate
-                    .as_ref()
-                    .map_or(*round, |certificate| certificate.round),
-                certificate
-                    .as_ref()
-                    .map_or(*round, |certificate| certificate.proposal_round),
-                Some(*subject),
-                certificate.as_ref().map(|certificate| certificate.phase),
-                certificate
-                    .as_ref()
-                    .map(|certificate| certificate.execution_commitment),
-            ),
-        ),
-        AdapterEffect::StoreBody { round, subject, .. } => (
-            RUNTIME_CANDIDATE_KIND_STORE_BODY,
-            RuntimeCandidateSemanticStatement::new(*round, *round, Some(*subject), None, None),
-        ),
-        AdapterEffect::ValidateBody { round, subject, .. } => (
-            RUNTIME_CANDIDATE_KIND_VALIDATE_BODY,
-            RuntimeCandidateSemanticStatement::new(*round, *round, Some(*subject), None, None),
-        ),
-        AdapterEffect::Apply {
-            subject,
-            certificate,
-            ..
-        } => (
-            RUNTIME_CANDIDATE_KIND_APPLY,
-            RuntimeCandidateSemanticStatement::new(
-                certificate.round,
-                certificate.proposal_round,
-                Some(*subject),
-                Some(certificate.phase),
-                Some(certificate.execution_commitment),
-            ),
-        ),
-        AdapterEffect::Broadcast(_)
-        | AdapterEffect::EnterView { .. }
-        | AdapterEffect::ReportEquivocation { .. }
-        | AdapterEffect::ReportInvalidCertifiedBody { .. } => return None,
-    })
-}
-
-/// Bind one production candidate, optionally inheriting the exact body-stage
-/// statement carried by its causal parent.
-fn production_adapter_effect_candidate_binding(
-    effect: &AdapterEffect,
-    inherited: Option<&RuntimeCandidateSemanticStatement>,
-) -> Result<Option<RuntimeEffectCandidateSemantic>, String> {
-    match effect {
-        AdapterEffect::FetchBody {
-            round,
-            subject,
-            certificate: Some(certificate),
-            ..
-        } if certificate.proposal_round != *round || certificate.subject != *subject => {
-            return Err(
-                "Sumeragi v2 certified Fetch disagreed with its proposal-round body key".to_owned(),
-            );
-        }
-        AdapterEffect::Apply {
-            subject,
-            certificate,
-            ..
-        } if certificate.phase != wire::GlobalPhase::Commit || certificate.subject != *subject => {
-            return Err("Sumeragi v2 Apply omitted its exact Commit authority".to_owned());
-        }
-        _ => {}
-    }
-    let Some((kind, mut statement)) = production_adapter_effect_candidate_statement(effect) else {
-        return Ok(None);
-    };
-    if !statement.validate_exact() {
-        return Err(
-            "Sumeragi v2 candidate statement had inconsistent context or height".to_owned(),
-        );
-    }
-    if let Some(parent) = inherited {
-        if !parent.validate_exact() {
-            return Err("Sumeragi v2 causal parent lost its exact candidate statement".to_owned());
-        }
-        match effect {
-            AdapterEffect::StoreBody { round, subject, .. }
-            | AdapterEffect::ValidateBody { round, subject, .. } => {
-                if parent.context_id != round.context_id
-                    || parent.proposal_round != *round
-                    || parent.subject != Some(*subject)
-                {
-                    return Err(
-                        "Sumeragi v2 body successor changed its frozen candidate statement"
-                            .to_owned(),
-                    );
-                }
-                // Store and Validate effects intentionally carry only their
-                // concrete body key. Their abstract phase and execution
-                // commitment remain the exact values frozen by Fetch.
-                statement = *parent;
-            }
-            AdapterEffect::Apply { .. } => {
-                if parent.commit_refinement_to(statement).is_none() {
-                    return Err(
-                        "Sumeragi v2 Apply changed its inherited candidate authority".to_owned(),
-                    );
-                }
-            }
-            AdapterEffect::Sign { .. }
-            | AdapterEffect::FetchBody { .. }
-            | AdapterEffect::Broadcast(_)
-            | AdapterEffect::EnterView { .. }
-            | AdapterEffect::ReportEquivocation { .. }
-            | AdapterEffect::ReportInvalidCertifiedBody { .. } => {}
-        }
-    }
-    let semantic_identity = statement.semantic_identity();
-    Ok(Some(RuntimeEffectCandidateSemantic {
-        kind,
-        semantic_identity,
-        statement: Some(statement),
-    }))
-}
-
-/// Route-neutral TLA work kind and semantic payload for candidate-producing
-/// effects.
-///
-/// The normalized payload is exactly the frozen context, round, proposal
-/// round, optional subject, optional consensus phase, and optional execution
-/// commitment. The candidate kind separately fixes the durable local stage.
-/// Signer carriers, aggregate signatures, routes, manifests, and the
-/// process-local reducer incarnation remain only in concrete effect identity.
-pub(crate) fn production_adapter_effect_candidate_semantic_identity(
-    effect: &AdapterEffect,
-) -> Option<(u8, Vec<u8>)> {
-    let (kind, statement) = production_adapter_effect_candidate_statement(effect)?;
-    statement
-        .validate_exact()
-        .then(|| (kind, statement.semantic_identity()))
-}
+include!("v2_runtime/effect_ownership.rs");
 
 /// Exact non-serialized ownership outcome for one candidate gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2605,6 +2216,175 @@ impl RuntimeEffectOwnership {
                 candidate_count,
             )
             .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
+    }
+
+    /// Bind a later, route-neutral retry to the exact incumbent async owner.
+    ///
+    /// Fair ingress deliberately gives an authenticated retransmission a new
+    /// lifecycle after the first physical command has drained.  The original
+    /// async candidate can still be live at that point.  Once both positional
+    /// bindings prove the same semantic candidate, the retry must retain the
+    /// incumbent task owner instead of replacing it or creating a second
+    /// physical task.  The retry's macro-step positions remain independently
+    /// checked and are copied into the adopted binding.
+    pub(crate) fn adopt_incumbent_candidate_for_retry(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+    ) -> Result<Self, String> {
+        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+            return Err(
+                "Sumeragi v2 candidate retry omitted an exact ownership binding".to_owned(),
+            );
+        }
+        let incumbent_identity = self.candidate_semantic_identity().ok_or_else(|| {
+            "Sumeragi v2 incumbent async owner omitted its candidate identity".to_owned()
+        })?;
+        if incoming.candidate_semantic_identity() != Some(incumbent_identity) {
+            return Err(
+                "Sumeragi v2 candidate retry changed its route-neutral identity".to_owned(),
+            );
+        }
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let inherited = self.candidate_semantic_statement();
+        let candidate = production_adapter_effect_candidate_binding(effect, inherited.as_ref())?
+            .ok_or_else(|| {
+                "Sumeragi v2 candidate retry rebound to a non-candidate effect".to_owned()
+            })?;
+        let rebound_identity =
+            runtime_effect_candidate_semantic_hash(candidate.kind, &candidate.semantic_identity);
+        if rebound_identity != incumbent_identity {
+            return Err(
+                "Sumeragi v2 candidate retry changed its incumbent semantic statement".to_owned(),
+            );
+        }
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                production_adapter_effect_kind(effect),
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 candidate retry could not retain its incumbent owner".to_owned()
+            })
+    }
+
+    /// Bind one exact FetchBody carrier under its incumbent physical owner.
+    ///
+    /// Fetch authority is part of the route-neutral candidate statement, so a
+    /// newly authenticated Prepare/Commit carrier has a different candidate
+    /// identity from an already-live ordinary fetch. The physical fetch task,
+    /// however, keeps one owner and advances authority monotonically. This
+    /// helper validates that narrow authority relation and retains the
+    /// incumbent owner/causality while copying the incoming macro-step
+    /// positions. A stale carrier is still bound exactly here; the returned
+    /// relation tells the task reducer to retain its stronger existing state.
+    pub(crate) fn adopt_incumbent_fetch_for_retry_or_authority(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+    ) -> Result<(Self, RuntimeFetchAuthorityRelation), String> {
+        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+            return Err(
+                "Sumeragi v2 body-fetch carrier omitted an exact ownership binding".to_owned(),
+            );
+        }
+        let incumbent_binding = self
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        if incumbent_binding.effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
+            || incoming_binding.effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
+            || incumbent_binding.candidate_kind != RUNTIME_CANDIDATE_KIND_FETCH_BODY
+            || incoming_binding.candidate_kind != RUNTIME_CANDIDATE_KIND_FETCH_BODY
+        {
+            return Err(
+                "Sumeragi v2 body-fetch lineage changed its effect or candidate kind".to_owned(),
+            );
+        }
+        let incumbent_statement = incumbent_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 incumbent body-fetch omitted its authority statement".to_owned()
+        })?;
+        let incoming_statement = incoming_binding.candidate_statement.ok_or_else(|| {
+            "Sumeragi v2 incoming body-fetch omitted its authority statement".to_owned()
+        })?;
+        let relation = incumbent_statement
+            .fetch_authority_relation_to(incoming_statement)
+            .ok_or_else(|| {
+                "Sumeragi v2 body-fetch carrier changed its coordinates or authority commitment"
+                    .to_owned()
+            })?;
+        let effect_kind = production_adapter_effect_kind(effect);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        if effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
+            || incoming_binding.effect_identity != effect_identity
+        {
+            return Err(
+                "Sumeragi v2 body-fetch carrier changed its exact incoming effect".to_owned(),
+            );
+        }
+        let candidate = production_adapter_effect_candidate_binding(effect, None)?
+            .filter(|candidate| candidate.kind == RUNTIME_CANDIDATE_KIND_FETCH_BODY)
+            .ok_or_else(|| {
+                "Sumeragi v2 body-fetch lineage rebound to a different effect kind".to_owned()
+            })?;
+        if candidate.statement != Some(incoming_statement) {
+            return Err(
+                "Sumeragi v2 body-fetch carrier disagreed with its incoming authority binding"
+                    .to_owned(),
+            );
+        }
+
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => {
+                RuntimeEffectOwnership::inherited(self.owner.clone())
+            }
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        let adopted = ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                effect_kind,
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 body-fetch carrier could not retain its incumbent owner".to_owned()
+            })?;
+        Ok((adopted, relation))
     }
 }
 
@@ -6873,6 +6653,29 @@ impl RuntimeDriver for SumeragiV2Adapter {
         self.preflight_runtime_command_admission(tag, command)
     }
 
+    fn owned_terminal_completion_matches_effect(
+        &self,
+        tag: EventTag,
+        command: &Self::Command,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        let (round, subject) = match command {
+            AdapterCommand::ValidationSucceeded { round, subject, .. }
+            | AdapterCommand::ValidationFailed { round, subject } => (*round, *subject),
+            AdapterCommand::Authenticated(_)
+            | AdapterCommand::LocalProposalReady { .. }
+            | AdapterCommand::BodyAvailable { .. }
+            | AdapterCommand::BodyStored { .. }
+            | AdapterCommand::SignatureCompleted(_)
+            | AdapterCommand::ApplicationCompleted(_) => return false,
+        };
+        ownership.exactly_binds_adapter_effect(&AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        })
+    }
+
     fn dormant_producer_lifecycle(
         &self,
         causal_lifecycle_key: &iroha_crypto::Hash,
@@ -8317,6 +8120,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn owned_preflight_is_coalesced(
         &mut self,
         tag: EventTag,
+        command: &D::Command,
         preflight: RuntimeCommandAdmissionPreflight,
         ownership: &RuntimeEffectOwnership,
     ) -> Result<bool, EnqueueError> {
@@ -8337,6 +8141,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 Ok(true)
             }
             RuntimeCommandAdmissionPreflight::Coalesce if tag != self.driver.current_tag() => {
+                Ok(true)
+            }
+            RuntimeCommandAdmissionPreflight::Coalesce
+                if self
+                    .driver
+                    .owned_terminal_completion_matches_effect(tag, command, ownership) =>
+            {
                 Ok(true)
             }
             RuntimeCommandAdmissionPreflight::Coalesce => {
@@ -8457,7 +8268,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(EnqueueError::FailClosed);
         }
         let preflight = self.command_admission_preflight(tag, class, &command)?;
-        if self.owned_preflight_is_coalesced(tag, preflight, ownership)? {
+        if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {
             return Ok(());
         }
         let mut tagged = match preflight {

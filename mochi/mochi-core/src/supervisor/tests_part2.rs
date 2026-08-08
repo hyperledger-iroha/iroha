@@ -1,3 +1,5 @@
+// Supervisor restore, managed-service, onboarding, and lifecycle regression tests.
+
 #[test]
 fn restore_snapshot_replaces_storage_and_configs() {
     if !ports_available("restore_snapshot_replaces_storage_and_configs") {
@@ -1491,10 +1493,255 @@ fn peer_spec_config_header_includes_lane_paths() {
     assert!(contents.contains(&format!("# mochi.lane[1].merge_log = {lane1_merge}")));
 }
 
+#[cfg(unix)]
+fn onboarding_test_paths(root: &Path, name: &str) -> NetworkPaths {
+    let profile = NetworkProfile::from_preset(ProfilePreset::SinglePeer);
+    let paths = NetworkPaths::from_root(root.join(name), &profile);
+    paths.ensure().expect("create onboarding test paths");
+    paths
+}
+
+#[cfg(unix)]
+fn write_private_test_file(path: &Path, payload: &[u8]) {
+    fs::write(path, payload).expect("write private test file");
+    let mut permissions = fs::metadata(path)
+        .expect("private test file metadata")
+        .permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(path, permissions).expect("set private test file permissions");
+}
+
 #[test]
 #[cfg(unix)]
-fn four_peer_onboarding_bundle_is_private_identical_and_session_path_only() {
-    if !ports_available("four_peer_onboarding_bundle_is_private_identical_and_session_path_only") {
+fn onboarding_bundle_reuses_existing_material_without_rotation() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let paths = onboarding_test_paths(temp.path(), "stable");
+    let authority = localnet_admin_signer().expect("localnet admin");
+    let first =
+        OnboardingRuntimeBundle::create(&paths, authority).expect("create first onboarding bundle");
+    let signer_before = fs::read(&first.private_key_file).expect("read signer");
+    let token_before = fs::read(&first.token_file).expect("read token");
+    let signer_inode = fs::metadata(&first.private_key_file)
+        .expect("signer metadata")
+        .ino();
+    let token_inode = fs::metadata(&first.token_file)
+        .expect("token metadata")
+        .ino();
+
+    let second =
+        OnboardingRuntimeBundle::create(&paths, authority).expect("reuse onboarding bundle");
+
+    assert_eq!(second.token_hash, first.token_hash);
+    assert_eq!(second.private_key_file, first.private_key_file);
+    assert_eq!(second.token_file, first.token_file);
+    assert_eq!(fs::read(&second.private_key_file).unwrap(), signer_before);
+    assert_eq!(fs::read(&second.token_file).unwrap(), token_before);
+    assert_eq!(
+        fs::metadata(&second.private_key_file).unwrap().ino(),
+        signer_inode,
+        "valid signer must not be replaced"
+    );
+    assert_eq!(
+        fs::metadata(&second.token_file).unwrap().ino(),
+        token_inode,
+        "valid token must not be rotated or replaced"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn onboarding_bundle_reuses_dpn_tokens_and_hashes_normalized_body() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let authority = localnet_admin_signer().expect("localnet admin");
+    let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
+    let signer_payload = format!("{private_key}\n");
+    let token_body = format!("nevo-local-{}", "A".repeat(48));
+
+    for (index, terminator) in [b"\n".as_slice(), b"\r\n".as_slice()]
+        .into_iter()
+        .enumerate()
+    {
+        let paths = onboarding_test_paths(temp.path(), &format!("dpn-{index}"));
+        let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+        fs::create_dir(&runtime).expect("create runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("set runtime permissions");
+        let signer = runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
+        let token = runtime.join(LOCAL_ONBOARDING_TOKEN_FILE);
+        write_private_test_file(&signer, signer_payload.as_bytes());
+        let mut persisted_token = token_body.as_bytes().to_vec();
+        persisted_token.extend_from_slice(terminator);
+        write_private_test_file(&token, &persisted_token);
+        let manifest = runtime.join("onboarding.json");
+        write_private_test_file(&manifest, b"legacy DPN-owned manifest\n");
+        let signer_inode = fs::metadata(&signer).unwrap().ino();
+        let token_inode = fs::metadata(&token).unwrap().ino();
+        let manifest_inode = fs::metadata(&manifest).unwrap().ino();
+
+        let bundle = OnboardingRuntimeBundle::create(&paths, authority)
+            .expect("reuse DPN onboarding material");
+
+        assert_eq!(
+            bundle.token_hash,
+            *blake3::hash(token_body.as_bytes()).as_bytes()
+        );
+        assert_eq!(fs::read(&signer).unwrap(), signer_payload.as_bytes());
+        assert_eq!(fs::read(&token).unwrap(), persisted_token);
+        assert_eq!(fs::metadata(&signer).unwrap().ino(), signer_inode);
+        assert_eq!(fs::metadata(&token).unwrap().ino(), token_inode);
+        assert_eq!(fs::read(&manifest).unwrap(), b"legacy DPN-owned manifest\n");
+        assert_eq!(fs::metadata(&manifest).unwrap().ino(), manifest_inode);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn onboarding_bundle_rejects_conflicting_signer_without_mutation() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let paths = onboarding_test_paths(temp.path(), "conflict");
+    let authority = localnet_admin_signer().expect("localnet admin");
+    let first =
+        OnboardingRuntimeBundle::create(&paths, authority).expect("create onboarding bundle");
+    write_private_test_file(
+        &first.private_key_file,
+        b"802620ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n",
+    );
+    let signer_before = fs::read(&first.private_key_file).unwrap();
+    let token_before = fs::read(&first.token_file).unwrap();
+
+    let error = OnboardingRuntimeBundle::create(&paths, authority)
+        .expect_err("conflicting signer must fail");
+
+    assert!(matches!(
+        error,
+        SupervisorError::Config(message) if message.contains("signer conflicts")
+    ));
+    assert_eq!(fs::read(&first.private_key_file).unwrap(), signer_before);
+    assert_eq!(fs::read(&first.token_file).unwrap(), token_before);
+}
+
+#[test]
+#[cfg(unix)]
+fn onboarding_bundle_rejects_partial_material_without_completion() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let authority = localnet_admin_signer().expect("localnet admin");
+    let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
+    let signer_payload = format!("{private_key}\n");
+
+    for signer_only in [true, false] {
+        let paths = onboarding_test_paths(
+            temp.path(),
+            if signer_only {
+                "partial-signer"
+            } else {
+                "partial-token"
+            },
+        );
+        let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+        fs::create_dir(&runtime).expect("create runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("set runtime permissions");
+        let signer = runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
+        let token = runtime.join(LOCAL_ONBOARDING_TOKEN_FILE);
+        if signer_only {
+            write_private_test_file(&signer, signer_payload.as_bytes());
+        } else {
+            write_private_test_file(
+                &token,
+                b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            );
+        }
+
+        let error = OnboardingRuntimeBundle::create(&paths, authority)
+            .expect_err("partial bundle must fail");
+        assert!(matches!(
+            error,
+            SupervisorError::Config(message) if message.contains("must either both exist or both be absent")
+        ));
+        assert_eq!(signer.exists(), signer_only);
+        assert_eq!(token.exists(), !signer_only);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn onboarding_bundle_rejects_unsafe_private_file_modes() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let authority = localnet_admin_signer().expect("localnet admin");
+
+    for target_signer in [true, false] {
+        let paths = onboarding_test_paths(
+            temp.path(),
+            if target_signer {
+                "unsafe-signer"
+            } else {
+                "unsafe-token"
+            },
+        );
+        let bundle =
+            OnboardingRuntimeBundle::create(&paths, authority).expect("create onboarding bundle");
+        let target = if target_signer {
+            &bundle.private_key_file
+        } else {
+            &bundle.token_file
+        };
+        fs::set_permissions(target, fs::Permissions::from_mode(0o644))
+            .expect("make private file unsafe");
+
+        let error = OnboardingRuntimeBundle::create(&paths, authority)
+            .expect_err("unsafe private file must fail");
+        assert!(matches!(
+            error,
+            SupervisorError::Config(message) if message.contains("owner-only 0600")
+        ));
+        assert_eq!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            0o644,
+            "validation must not silently repair an unsafe file"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn onboarding_bundle_rejects_malformed_tokens() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let authority = localnet_admin_signer().expect("localnet admin");
+    let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
+    let signer_payload = format!("{private_key}\n");
+    let malformed_tokens = [
+        b"too-short".as_slice(),
+        b"nevo-local-AAAAAAAAAAAAAAAAAAAA AAAAAAAAAAAAAAAAAAAAAAAAAAA".as_slice(),
+        b"nevo-local-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n".as_slice(),
+    ];
+
+    for (index, malformed_token) in malformed_tokens.into_iter().enumerate() {
+        let paths = onboarding_test_paths(temp.path(), &format!("malformed-{index}"));
+        let runtime = paths.root().join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
+        fs::create_dir(&runtime).expect("create runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("set runtime permissions");
+        write_private_test_file(
+            &runtime.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE),
+            signer_payload.as_bytes(),
+        );
+        write_private_test_file(&runtime.join(LOCAL_ONBOARDING_TOKEN_FILE), malformed_token);
+
+        let error = OnboardingRuntimeBundle::create(&paths, authority)
+            .expect_err("malformed token must fail");
+        assert!(matches!(
+            error,
+            SupervisorError::Config(message) if message.contains("32 through 256 printable")
+        ));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe() {
+    if !ports_available(
+        "four_peer_onboarding_bundle_is_private_identical_and_session_metadata_is_safe",
+    ) {
         return;
     }
     let _env = env_lock().lock().expect("env lock");
@@ -1558,7 +1805,7 @@ fn four_peer_onboarding_bundle_is_private_identical_and_session_path_only() {
             .trim_end(),
         admin_private
     );
-    let expected_digest = format!("blake3:{}", encode_hex(&blake3_256(token.as_bytes())));
+    let expected_digest = format!("blake3:{}", blake3::hash(token.as_bytes()).to_hex());
     let mut expected_onboarding = None;
     for peer in supervisor.peers() {
         let config_text = fs::read_to_string(peer.config_path()).expect("read peer config");

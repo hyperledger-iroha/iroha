@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageId;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageRole;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PackageScope;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.PrereleaseIdentifier;
+import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleAttestationSetDigest;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationApproval;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationAttestation;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.ProviderBundleVerificationBinding;
@@ -185,7 +186,36 @@ public final class MusubiInstructionsV1 {
     }
   }
 
-  /** Add or renew one archive location with bounded provider-distinct verification evidence. */
+  /** Register one immutable provider proof for later location-set commitments. */
+  public static final class RegisterMusubiProviderBundleAttestationV1
+      extends TypedInstructionV1 {
+    public static final String WIRE_ID =
+        "iroha.musubi.v1.provider_bundle_attestation.register";
+    public static final String SCHEMA_NAME =
+        "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1";
+
+    private final ProviderBundleVerificationAttestation attestation;
+    private final BigInteger expectedLocationRevision;
+
+    public RegisterMusubiProviderBundleAttestationV1(
+        final ProviderBundleVerificationAttestation attestation,
+        final BigInteger expectedLocationRevision) {
+      super(WIRE_ID, SCHEMA_NAME);
+      this.attestation = Objects.requireNonNull(attestation, "attestation");
+      this.expectedLocationRevision =
+          requirePositiveRevision(expectedLocationRevision, "expectedLocationRevision");
+    }
+
+    public ProviderBundleVerificationAttestation attestation() { return attestation; }
+    public BigInteger expectedLocationRevision() { return expectedLocationRevision; }
+
+    @Override void encodeBare(final NoritoEncoder encoder) {
+      writeSized(encoder, child -> encodeProviderAttestation(child, attestation));
+      writeSized(encoder, child -> encodeU64(child, expectedLocationRevision));
+    }
+  }
+
+  /** Add or renew one archive location bound to registered provider attestations. */
   public static final class AddMusubiArchiveLocationV1 extends TypedInstructionV1 {
     public static final String WIRE_ID = "iroha.musubi.v1.archive_location.add";
     public static final String SCHEMA_NAME =
@@ -195,7 +225,7 @@ public final class MusubiInstructionsV1 {
     private final Digest32 locationId;
     private final Digest32 pinManifest;
     private final Digest32 replicationOrder;
-    private final List<ProviderBundleVerificationAttestation> providerAttestations;
+    private final ProviderBundleAttestationSetDigest providerAttestationSetDigest;
     private final BigInteger renewAfterEpoch;
     private final BigInteger expiresAtEpoch;
     private final BigInteger expectedLocationRevision;
@@ -205,7 +235,7 @@ public final class MusubiInstructionsV1 {
         final Digest32 locationId,
         final Digest32 pinManifest,
         final Digest32 replicationOrder,
-        final List<ProviderBundleVerificationAttestation> providerAttestations,
+        final ProviderBundleAttestationSetDigest providerAttestationSetDigest,
         final BigInteger renewAfterEpoch,
         final BigInteger expiresAtEpoch,
         final BigInteger expectedLocationRevision) {
@@ -214,12 +244,8 @@ public final class MusubiInstructionsV1 {
       this.locationId = requireNonZeroDigest(locationId, "locationId");
       this.pinManifest = requireNonZeroDigest(pinManifest, "pinManifest");
       this.replicationOrder = requireNonZeroDigest(replicationOrder, "replicationOrder");
-      Objects.requireNonNull(providerAttestations, "providerAttestations");
-      if (providerAttestations.isEmpty() || providerAttestations.size() > 64) {
-        throw new IllegalArgumentException("Musubi provider attestations are out of bounds");
-      }
-      this.providerAttestations = Collections.unmodifiableList(
-          new ArrayList<>(providerAttestations));
+      this.providerAttestationSetDigest =
+          Objects.requireNonNull(providerAttestationSetDigest, "providerAttestationSetDigest");
       MusubiModelsV1.requireU64(renewAfterEpoch, "renewAfterEpoch");
       MusubiModelsV1.requireU64(expiresAtEpoch, "expiresAtEpoch");
       requirePositiveRevision(expectedLocationRevision, "expectedLocationRevision");
@@ -229,39 +255,14 @@ public final class MusubiInstructionsV1 {
       this.renewAfterEpoch = renewAfterEpoch;
       this.expiresAtEpoch = expiresAtEpoch;
       this.expectedLocationRevision = expectedLocationRevision;
-
-      ProviderBundleVerificationBinding previous = null;
-      ProviderBundleVerificationBinding canonical = null;
-      for (final ProviderBundleVerificationAttestation attestation : this.providerAttestations) {
-        Objects.requireNonNull(attestation, "providerAttestation");
-        final ProviderBundleVerificationBinding binding = attestation.payload().binding();
-        if (!binding.archiveId().equals(archiveId)
-            || !binding.replicationOrder().equals(replicationOrder)) {
-          throw new IllegalArgumentException(
-              "Musubi provider attestation targets another archive or replication order");
-        }
-        if (previous != null
-            && compareUnsignedBytes(hexBytes(previous.providerId()), hexBytes(binding.providerId()))
-                >= 0) {
-          throw new IllegalArgumentException(
-              "Musubi provider attestations must be provider-sorted and distinct");
-        }
-        if (canonical == null) {
-          canonical = binding;
-        } else if (!sameBundleCommitments(canonical, binding)) {
-          throw new IllegalArgumentException(
-              "Musubi provider attestations disagree on bundle commitments");
-        }
-        previous = binding;
-      }
     }
 
     public Digest32 archiveId() { return archiveId; }
     public Digest32 locationId() { return locationId; }
     public Digest32 pinManifest() { return pinManifest; }
     public Digest32 replicationOrder() { return replicationOrder; }
-    public List<ProviderBundleVerificationAttestation> providerAttestations() {
-      return providerAttestations;
+    public ProviderBundleAttestationSetDigest providerAttestationSetDigest() {
+      return providerAttestationSetDigest;
     }
     public BigInteger renewAfterEpoch() { return renewAfterEpoch; }
     public BigInteger expiresAtEpoch() { return expiresAtEpoch; }
@@ -272,7 +273,7 @@ public final class MusubiInstructionsV1 {
       writeSized(encoder, child -> encodeDigest32(child, locationId));
       writeSized(encoder, child -> encodeDigest32(child, pinManifest));
       writeSized(encoder, child -> encodeDigest32(child, replicationOrder));
-      writeSized(encoder, child -> encodeProviderAttestations(child, providerAttestations));
+      writeSized(encoder, child -> encodeDigest32(child, providerAttestationSetDigest));
       writeSized(encoder, child -> encodeU64(child, renewAfterEpoch));
       writeSized(encoder, child -> encodeU64(child, expiresAtEpoch));
       writeSized(encoder, child -> encodeU64(child, expectedLocationRevision));
@@ -1156,15 +1157,6 @@ public final class MusubiInstructionsV1 {
     }
   }
 
-  private static void encodeProviderAttestations(
-      final NoritoEncoder encoder,
-      final List<ProviderBundleVerificationAttestation> values) {
-    encoder.writeUInt(values.size(), 64);
-    for (final ProviderBundleVerificationAttestation value : values) {
-      writeSized(encoder, child -> encodeProviderAttestation(child, value));
-    }
-  }
-
   private static void encodeProviderAttestation(
       final NoritoEncoder encoder, final ProviderBundleVerificationAttestation value) {
     writeSized(encoder, child -> encodeProviderPayload(child, value.payload()));
@@ -1651,17 +1643,17 @@ public final class MusubiInstructionsV1 {
     return Integer.compare(left.length, right.length);
   }
 
-  private static boolean sameBundleCommitments(
-      final ProviderBundleVerificationBinding left,
-      final ProviderBundleVerificationBinding right) {
-    return left.chainId().equals(right.chainId())
-        && Arrays.equals(left.genesisBlockHash(), right.genesisBlockHash())
-        && left.archiveId().equals(right.archiveId())
-        && left.bundleDigest().equals(right.bundleDigest())
-        && left.descriptorDigest().equals(right.descriptorDigest())
-        && left.semanticReleaseManifestDigest().equals(right.semanticReleaseManifestDigest())
-        && left.verificationLockDigest().equals(right.verificationLockDigest())
-        && left.sourceTreeDigest().equals(right.sourceTreeDigest());
+  static byte[] providerBundleAttestationDigest(
+      final ProviderBundleVerificationAttestation attestation) {
+    return domainHash(
+        "iroha.musubi.provider-bundle-attestation.digest.v1",
+        encoded(encoder -> encodeProviderAttestation(encoder, attestation)));
+  }
+
+  static byte[] releaseManifestDigest(final ReleaseManifest manifest) {
+    return domainHash(
+        "iroha.musubi.release-digest.v1",
+        encoded(encoder -> encodeReleaseManifest(encoder, manifest)));
   }
 
   private static boolean namespaceMatchesPackage(

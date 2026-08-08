@@ -54,6 +54,9 @@ Options:
 Environment:
   CARGO_TARGET_DIR             Cargo target directory for Rust phases.
                                Defaults to target/sccp-production-corridor.
+                               The swift-sdk phase requires an existing
+                               canonical absolute directory outside the Iroha
+                               source tree and never reuses packaged bridge bytes.
   NORITO_SKIP_BINDINGS_SYNC    Defaults to 1 for focused Rust validation.
   JAVA_HOME                    JDK 21 for Gradle phases. Falls back to
                                target/java/jdk-21/Contents/Home, then
@@ -1303,7 +1306,8 @@ PY
 
 ensure_swift_bridge_artifact() {
   local bridge_dir="$ROOT/dist/NoritoBridge.xcframework"
-  local bridge_zip="$ROOT/dist/NoritoBridge.xcframework.zip"
+  local bridge_manifest="$bridge_dir/NoritoBridge.artifacts.json"
+  local canonical_target installed_targets target
   local rust_targets=(
     aarch64-apple-ios
     aarch64-apple-ios-sim
@@ -1313,31 +1317,44 @@ ensure_swift_bridge_artifact() {
   )
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    if [[ -f "$bridge_zip" ]]; then
-      run_cmd rm -rf "$bridge_dir"
-      run_cmd unzip -q -o "$bridge_zip" -d "$ROOT/dist"
-    else
-      run_cmd rustup target add "${rust_targets[@]}"
-      run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
-    fi
-    return 0
-  fi
-
-  if [[ -f "$bridge_dir/Info.plist" ]]; then
-    return 0
-  fi
-
-  if [[ -f "$bridge_zip" ]]; then
-    run_cmd rm -rf "$bridge_dir"
-    run_cmd unzip -q -o "$bridge_zip" -d "$ROOT/dist"
-  else
-    run_cmd rustup target add "${rust_targets[@]}"
+    run_cmd rustup target list --toolchain 1.93.1 --installed
     run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
+    return 0
   fi
 
-  if [[ ! -f "$bridge_dir/Info.plist" ]]; then
+  if [[ "$CARGO_TARGET_DIR" != /* || ! -d "$CARGO_TARGET_DIR" \
+    || -L "$CARGO_TARGET_DIR" || ! -w "$CARGO_TARGET_DIR" ]]; then
+    echo "swift-sdk requires CARGO_TARGET_DIR to name an existing canonical writable non-symbolic absolute directory." >&2
+    return 1
+  fi
+  canonical_target="$(cd "$CARGO_TARGET_DIR" && pwd -P)"
+  if [[ "$canonical_target" != "$CARGO_TARGET_DIR" ]]; then
+    echo "swift-sdk requires CARGO_TARGET_DIR to be canonical and free of symbolic traversal." >&2
+    return 1
+  fi
+  case "$canonical_target/" in
+    "$ROOT/"*)
+      echo "swift-sdk requires CARGO_TARGET_DIR outside the Iroha source tree." >&2
+      return 1
+      ;;
+  esac
+
+  if ! installed_targets="$(rustup target list --toolchain 1.93.1 --installed)"; then
+    echo "Unable to verify the exact Rust 1.93.1 Apple targets." >&2
+    return 1
+  fi
+  for target in "${rust_targets[@]}"; do
+    if ! grep -Fqx "$target" <<<"$installed_targets"; then
+      echo "swift-sdk requires pre-provisioned Rust 1.93.1 target $target." >&2
+      return 1
+    fi
+  done
+
+  run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
+
+  if [[ ! -f "$bridge_dir/Info.plist" || ! -f "$bridge_manifest" ]]; then
     echo "NoritoBridge.xcframework was not materialized at $bridge_dir." >&2
-    echo "Provide $bridge_zip or ensure scripts/build_norito_xcframework.sh can build it." >&2
+    echo "The first-release corridor accepts only a fresh source-authenticated build." >&2
     return 1
   fi
 }
@@ -1525,8 +1542,12 @@ phase_python_sdk() {
 
 phase_swift_sdk() {
   ensure_swift_bridge_artifact
+  if [[ "$DRY_RUN" -ne 1 && ! -f "$ROOT/IrohaSwift/Package.resolved" ]]; then
+    echo "swift-sdk requires the committed IrohaSwift/Package.resolved." >&2
+    return 1
+  fi
   run_in_dir "$ROOT/IrohaSwift" \
-    swift test --filter SccpV1Tests --disable-swift-testing
+    swift test --disable-automatic-resolution --filter SccpV1Tests --disable-swift-testing
 }
 
 phase_kotlin_sdk() {

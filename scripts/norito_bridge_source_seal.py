@@ -54,9 +54,13 @@ APPLE_ROOT_INPUTS = (
     "IrohaSwift/Package.resolved",
     "IrohaSwift/Sources/IrohaSwift",
     "IrohaSwift/Sources/IrohaSwiftMobileTransports",
+    "scripts/archive_norito_xcframework.py",
     "scripts/build_norito_xcframework.sh",
     "scripts/exec_with_file_lock.py",
+    "scripts/update_norito_bridge_swift_pins.py",
+    "scripts/validate_norito_bridge_xcframework.py",
 )
+APPLE_REQUIRED_ROOT_INPUTS = ("IrohaSwift/Package.resolved",)
 # CBSI consumes these Gradle builds directly through composite substitution, so
 # their shipping JVM sources must be bound alongside the native `.so` closure.
 ANDROID_ROOT_INPUTS = (
@@ -112,6 +116,15 @@ SWIFT_NATIVE_BRIDGE_HASH_KEYS = frozenset(
 SWIFT_NATIVE_BRIDGE_HASH_PIN = re.compile(
     rb'^(?P<prefix>[ \t]+)"(?P<key>macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
     rb': "(?P<digest>[0-9a-f]{64})"(?P<suffix>,?)$',
+    re.MULTILINE,
+)
+SWIFT_NATIVE_BRIDGE_HASH_BLOCK = re.compile(
+    rb'^    private static let expectedHashes: \[String: String\] = \[\n'
+    rb'(?P<body>(?:[ \t]+"(?:macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+    rb': "[0-9a-f]{64}",\n){2}'
+    rb'[ \t]+"(?:macos-arm64_x86_64|ios-arm64|ios-arm64_x86_64-simulator)"'
+    rb': "[0-9a-f]{64}"\n)'
+    rb'^    \]$',
     re.MULTILINE,
 )
 
@@ -198,9 +211,13 @@ def source_seal_home() -> pathlib.Path:
 def selected_lockfile_path(
     root: pathlib.Path, configured: pathlib.Path | None = None
 ) -> pathlib.Path:
-    """Return one canonical, non-symbolic Cargo lock used by the build."""
+    """Return the canonical, non-symbolic root Cargo lock used by the build."""
 
-    candidate = configured if configured is not None else root / "Cargo.lock"
+    candidate = root / "Cargo.lock"
+    if configured is not None and configured != candidate:
+        raise RuntimeError(
+            f"source sealing requires the explicit root Cargo lock: {candidate}"
+        )
     if not candidate.is_absolute():
         raise RuntimeError("selected Cargo lock path must be absolute")
     canonical_spelling = pathlib.Path(os.path.abspath(candidate))
@@ -226,6 +243,7 @@ def source_seal_environment(
     *,
     cargo: AuthenticatedTool,
     rustc: AuthenticatedTool,
+    rustdoc: AuthenticatedTool,
     git: pathlib.Path,
 ) -> dict[str, str]:
     home = source_seal_home()
@@ -250,14 +268,16 @@ def source_seal_environment(
             (
                 str(cargo.invocation.parent),
                 str(rustc.invocation.parent),
+                str(rustdoc.invocation.parent),
                 str(git.parent),
                 "/usr/bin",
                 "/bin",
             )
         )
     )
-    return {
+    environment = {
         "CARGO": str(cargo.invocation),
+        "CARGO_BUILD_JOBS": "1",
         "CARGO_HOME": str(cargo_home),
         "CARGO_INCREMENTAL": "0",
         "CARGO_NET_OFFLINE": "true",
@@ -270,18 +290,48 @@ def source_seal_environment(
         "PATH": os.pathsep.join(path_entries),
         "RUSTC": str(rustc.invocation),
         "RUSTC_BOOTSTRAP": "1",
+        "RUSTDOC": str(rustdoc.invocation),
         "RUSTUP_HOME": str(rustup_home),
         "TMPDIR": str(temporary_directory),
     }
+    configured_target = os.environ.get("NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR")
+    if not configured_target:
+        raise RuntimeError("NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR is required")
+    target = pathlib.Path(configured_target)
+    if not target.is_absolute() or target != pathlib.Path(os.path.abspath(target)):
+        raise RuntimeError(
+            "NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR must be an absolute canonical directory"
+        )
+    try:
+        metadata = target.lstat()
+        resolved = target.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError(
+            "NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR is unavailable"
+        ) from error
+    if (
+        resolved != target
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+    ):
+        raise RuntimeError(
+            "NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR must be a non-symbolic "
+            "canonical directory"
+        )
+    environment["CARGO_TARGET_DIR"] = str(target)
+    return environment
 
 
-def source_seal_tools() -> tuple[AuthenticatedTool, AuthenticatedTool, pathlib.Path]:
+def source_seal_tools() -> tuple[
+    AuthenticatedTool, AuthenticatedTool, AuthenticatedTool, pathlib.Path
+]:
     git = pathlib.Path("/usr/bin/git").resolve(strict=True)
     if not git.is_file() or not os.access(git, os.X_OK):
         raise RuntimeError("pinned source-seal Git executable is unavailable")
     return (
         required_tool("NORITO_BRIDGE_SEAL_CARGO", "cargo"),
         required_tool("NORITO_BRIDGE_SEAL_RUSTC", "rustc"),
+        required_tool("NORITO_BRIDGE_SEAL_RUSTDOC", "rustdoc"),
         git,
     )
 
@@ -299,16 +349,18 @@ def run(
     else:
         invocation = executable
         canonical = executable
-    result = subprocess.run(
-        [str(invocation), *args],
-        executable=str(canonical),
-        cwd=root,
-        env=environment,
-        check=True,
-        stdout=subprocess.PIPE,
-    ).stdout
-    if isinstance(executable, AuthenticatedTool):
-        executable.authenticate()
+    try:
+        result = subprocess.run(
+            [str(invocation), *args],
+            executable=str(canonical),
+            cwd=root,
+            env=environment,
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+    finally:
+        if isinstance(executable, AuthenticatedTool):
+            executable.authenticate()
     return result
 
 
@@ -318,27 +370,38 @@ def metadata(
     lockfile_path: pathlib.Path | None = None,
 ) -> dict[str, object]:
     lockfile = selected_lockfile_path(root, lockfile_path)
-    cargo, rustc, git = source_seal_tools()
-    output = run(
-        root,
-        cargo,
-        [
-            "metadata",
-            "--locked",
-            "--offline",
-            "-Z",
-            "unstable-options",
-            "--lockfile-path",
-            str(lockfile),
-            "--format-version",
-            "1",
-            "--features",
-            "connect_norito_bridge/privacy-production-enabled",
-            "--filter-platform",
-            target,
-        ],
-        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
-    )
+    cargo, rustc, rustdoc, git = source_seal_tools()
+    rustc.authenticate()
+    rustdoc.authenticate()
+    try:
+        output = run(
+            root,
+            cargo,
+            [
+                "metadata",
+                "--locked",
+                "--offline",
+                "-Z",
+                "unstable-options",
+                "--lockfile-path",
+                str(lockfile),
+                "--format-version",
+                "1",
+                "--features",
+                "connect_norito_bridge/privacy-production-enabled",
+                "--filter-platform",
+                target,
+            ],
+            source_seal_environment(
+                cargo=cargo,
+                rustc=rustc,
+                rustdoc=rustdoc,
+                git=git,
+            ),
+        )
+    finally:
+        rustc.authenticate()
+        rustdoc.authenticate()
     return json.loads(output)
 
 
@@ -414,6 +477,17 @@ def seal_inputs(
         platform_inputs = PLATFORM_ROOT_INPUTS[platform]
     except KeyError as error:
         raise RuntimeError(f"unsupported source-seal platform: {platform}") from error
+    if platform == "apple":
+        for value in APPLE_REQUIRED_ROOT_INPUTS:
+            required = root / value
+            try:
+                metadata = required.lstat()
+            except OSError as error:
+                raise RuntimeError(f"required Apple source-seal input is missing: {value}") from error
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise RuntimeError(
+                    f"required Apple source-seal input is not a regular file: {value}"
+                )
     candidates = set(COMMON_ROOT_INPUTS)
     candidates.update(platform_inputs)
     candidates.update(local_dependency_roots(root, targets, lockfile))
@@ -432,7 +506,7 @@ def listed_files(
 ) -> list[str]:
     lockfile = selected_lockfile_path(root, lockfile_path)
     input_set = set(inputs)
-    cargo, rustc, git = source_seal_tools()
+    cargo, rustc, rustdoc, git = source_seal_tools()
     output = run(
         root,
         git,
@@ -444,7 +518,7 @@ def listed_files(
             "--",
             *inputs,
         ],
-        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
+        source_seal_environment(cargo=cargo, rustc=rustc, rustdoc=rustdoc, git=git),
     )
     listed = {
         value.decode("utf-8")
@@ -470,6 +544,71 @@ def listed_files(
     return sorted(listed)
 
 
+def _swift_native_bridge_hash_block(
+    contents: bytes,
+) -> tuple[re.Match[bytes], list[re.Match[bytes]]]:
+    blocks = list(SWIFT_NATIVE_BRIDGE_HASH_BLOCK.finditer(contents))
+    if len(blocks) != 1:
+        raise RuntimeError(
+            "NativeBridge.swift must contain exactly one canonical expectedHashes block"
+        )
+    block = blocks[0]
+    matches = list(SWIFT_NATIVE_BRIDGE_HASH_PIN.finditer(block.group("body")))
+    keys = [match.group("key").decode("ascii") for match in matches]
+    suffixes = [match.group("suffix") for match in matches]
+    if (
+        len(matches) != len(SWIFT_NATIVE_BRIDGE_HASH_KEYS)
+        or set(keys) != set(SWIFT_NATIVE_BRIDGE_HASH_KEYS)
+        or suffixes != [b",", b",", b""]
+    ):
+        raise RuntimeError(
+            "NativeBridge.swift must contain exactly one canonical fallback hash "
+            "for every Apple artifact slice"
+        )
+    return block, matches
+
+
+def swift_native_bridge_hash_pins(contents: bytes) -> dict[str, str]:
+    """Return pins from the sole executable ``expectedHashes`` declaration."""
+
+    _block, matches = _swift_native_bridge_hash_block(contents)
+    return {
+        match.group("key").decode("ascii"): match.group("digest").decode("ascii")
+        for match in matches
+    }
+
+
+def rewrite_swift_native_bridge_hash_pins(
+    contents: bytes,
+    hashes: dict[str, str],
+) -> bytes:
+    """Rewrite only the canonical ``expectedHashes`` declaration."""
+
+    if set(hashes) != set(SWIFT_NATIVE_BRIDGE_HASH_KEYS) or any(
+        not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+        for value in hashes.values()
+    ):
+        raise RuntimeError("Swift native bridge replacement hashes are not canonical")
+    block, _matches = _swift_native_bridge_hash_block(contents)
+    body = block.group("body")
+
+    def replace(match: re.Match[bytes]) -> bytes:
+        key = match.group("key").decode("ascii")
+        return (
+            match.group("prefix")
+            + b'"'
+            + match.group("key")
+            + b'": "'
+            + hashes[key].encode("ascii")
+            + b'"'
+            + match.group("suffix")
+        )
+
+    rewritten = SWIFT_NATIVE_BRIDGE_HASH_PIN.sub(replace, body)
+    body_start, body_end = block.span("body")
+    return contents[:body_start] + rewritten + contents[body_end:]
+
+
 def normalize_swift_native_bridge_hash_pins(contents: bytes) -> bytes:
     """Normalize the three manifestless fallback digests for source sealing.
 
@@ -479,27 +618,9 @@ def normalize_swift_native_bridge_hash_pins(contents: bytes) -> bytes:
     artifact-producing parent without excluding any executable loader logic.
     """
 
-    matches = list(SWIFT_NATIVE_BRIDGE_HASH_PIN.finditer(contents))
-    keys = [match.group("key").decode("ascii") for match in matches]
-    if len(matches) != len(SWIFT_NATIVE_BRIDGE_HASH_KEYS) or set(keys) != set(
-        SWIFT_NATIVE_BRIDGE_HASH_KEYS
-    ):
-        raise RuntimeError(
-            "NativeBridge.swift must contain exactly one canonical fallback hash "
-            "for every Apple artifact slice"
-        )
-
-    return SWIFT_NATIVE_BRIDGE_HASH_PIN.sub(
-        lambda match: (
-            match.group("prefix")
-            + b'"'
-            + match.group("key")
-            + b'": "'
-            + (b"0" * 64)
-            + b'"'
-            + match.group("suffix")
-        ),
+    return rewrite_swift_native_bridge_hash_pins(
         contents,
+        {key: "0" * 64 for key in SWIFT_NATIVE_BRIDGE_HASH_KEYS},
     )
 
 
@@ -537,7 +658,7 @@ def status(
         for relative in inputs
         if relative != "Cargo.lock" or lockfile == root / "Cargo.lock"
     ]
-    cargo, rustc, git = source_seal_tools()
+    cargo, rustc, rustdoc, git = source_seal_tools()
     output = run(
         root,
         git,
@@ -548,18 +669,18 @@ def status(
             "--",
             *status_inputs,
         ],
-        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
+        source_seal_environment(cargo=cargo, rustc=rustc, rustdoc=rustdoc, git=git),
     )
     return output.decode("utf-8").rstrip("\n")
 
 
 def source_commit(root: pathlib.Path) -> str:
-    cargo, rustc, git = source_seal_tools()
+    cargo, rustc, rustdoc, git = source_seal_tools()
     value = run(
         root,
         git,
         ["rev-parse", "--verify", "HEAD"],
-        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
+        source_seal_environment(cargo=cargo, rustc=rustc, rustdoc=rustdoc, git=git),
     ).decode("ascii").strip()
     if len(value) != 40 or any(character not in "0123456789abcdef" for character in value):
         raise RuntimeError("source commit is not a canonical lowercase Git SHA-1")

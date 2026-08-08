@@ -15,6 +15,7 @@ export const MUSUBI_V1_MODELS = Object.freeze({
   '/v1/musubi/instructions/package-member-set-role': ['SetMusubiPackageMaintainerRoleV1', 'MusubiInstructionEnvelopeV1'],
   '/v1/musubi/instructions/package-metadata-set': ['SetMusubiPackageMetadataV1', 'MusubiInstructionEnvelopeV1'],
   '/v1/musubi/instructions/package-recover': ['RecoverMusubiPackageV1', 'MusubiInstructionEnvelopeV1'],
+  '/v1/musubi/instructions/provider-bundle-attestation-register': ['RegisterMusubiProviderBundleAttestationV1', 'MusubiInstructionEnvelopeV1'],
   '/v1/musubi/instructions/registry-policy-set': ['SetMusubiRegistryPolicyV1', 'MusubiInstructionEnvelopeV1'],
   '/v1/musubi/instructions/release-digest-assert': ['AssertMusubiReleaseDigestV1', 'MusubiInstructionEnvelopeV1'],
   '/v1/musubi/instructions/release-publish': ['PublishMusubiReleaseV1', 'MusubiInstructionEnvelopeV1'],
@@ -24,9 +25,10 @@ export const MUSUBI_V1_MODELS = Object.freeze({
   '/v1/musubi/queries/archive-locations': ['MusubiArchiveLocationQueryV1', 'MusubiArchiveLocationPageV1'],
   '/v1/musubi/queries/archive-retention': ['MusubiArchiveRetentionQueryV1', 'MusubiArchiveRetentionPageV1'],
   '/v1/musubi/queries/exact-package': ['MusubiExactPackageQueryV1', 'MusubiPackageRecordV1'],
-  '/v1/musubi/queries/exact-release': ['MusubiExactReleaseQueryV1', 'MusubiReleaseRecordV1'],
+  '/v1/musubi/queries/exact-release': ['MusubiExactReleaseQueryV1', 'MusubiExactReleaseSnapshotV1'],
   '/v1/musubi/queries/maintainers': ['MusubiPackagePageQueryV1', 'MusubiMaintainerPageV1'],
   '/v1/musubi/queries/ordered-prefix': ['MusubiOrderedPrefixQueryV1', 'MusubiOrderedPackagePageV1'],
+  '/v1/musubi/queries/provider-bundle-attestation': ['MusubiProviderBundleAttestationKeyV1', 'MusubiProviderBundleAttestationRecordV1'],
   '/v1/musubi/queries/resolver-index': ['MusubiResolverIndexQueryV1', 'MusubiResolverIndexPageV1'],
   '/v1/musubi/queries/search': ['MusubiSearchQueryV1', 'MusubiSearchPageV1'],
   '/v1/musubi/queries/versions': ['MusubiPackagePageQueryV1', 'MusubiVersionPageV1'],
@@ -60,10 +62,10 @@ function equalArrays(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-/** Validate one generated document against the exact 29-route Musubi V1 contract. */
+/** Validate one generated document against the exact 31-route Musubi V1 contract. */
 export function verifyMusubiV1OpenApiContract(document, label = 'OpenAPI document') {
-  if (MUSUBI_V1_PATHS.length !== 29) {
-    throw new Error('internal Musubi V1 OpenAPI contract must contain exactly 29 routes');
+  if (MUSUBI_V1_PATHS.length !== 31) {
+    throw new Error('internal Musubi V1 OpenAPI contract must contain exactly 31 routes');
   }
   const paths = requireObject(requireObject(document, label).paths, `${label}.paths`);
   const actualPaths = Object.keys(paths).filter((path) => path.startsWith('/v1/musubi/')).sort();

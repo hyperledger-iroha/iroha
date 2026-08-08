@@ -10,16 +10,8 @@ use std::sync::Arc;
 
 use axum::http::{Request, StatusCode, Uri};
 use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    prelude::World,
-    query::store::LiveQueryStore,
-    state::State,
-    sumeragi::consensus::{
-        Evidence, EvidenceKind, EvidencePayload, Phase, Vote, default_chain_order_hash,
-    },
+    kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
-use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{ChainId, peer::PeerId};
 use norito::json;
 use tower::ServiceExt as _; // for Router::oneshot
@@ -125,33 +117,6 @@ async fn diff_openapi_if_available(app: &axum::Router) {
             "generated OpenAPI document mismatched expected snapshot ({expected_path}):\n{preview}"
         );
     }
-}
-
-fn sample_evidence_hex() -> String {
-    fn vote_with_seed(seed: u8) -> Vote {
-        let hash = Hash::prehashed([seed; 32]);
-        Vote {
-            phase: Phase::Prepare,
-            block_hash: HashOf::from_untyped_unchecked(hash),
-            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            height: 1,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-        }
-    }
-    let v1 = vote_with_seed(0x11);
-    let v2 = vote_with_seed(0x22);
-    let evidence = Evidence {
-        kind: EvidenceKind::DoublePrepare,
-        payload: EvidencePayload::DoubleVote { v1, v2 },
-    };
-    hex::encode(norito::to_bytes(&evidence).expect("encode evidence"))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -260,33 +225,30 @@ async fn router_builds_under_current_features() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    let post_body = format!("{{\"evidence_hex\":\"{}\"}}", sample_evidence_hex());
-    let post_body_bytes = post_body.as_bytes().to_vec();
-    let resp_post = app
-        .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .method("POST")
-                .uri(Uri::from_static("/v1/sumeragi/evidence"))
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(post_body))
-                .unwrap(),
-            &post_body_bytes,
-        ))
-        .await
-        .unwrap();
-    assert!(
-        matches!(
-            resp_post.status(),
-            StatusCode::ACCEPTED
-                | StatusCode::SERVICE_UNAVAILABLE
-                | StatusCode::FORBIDDEN
-                | StatusCode::TOO_MANY_REQUESTS
-        ),
-        "unexpected status from evidence POST: {}",
-        resp_post.status()
-    );
+    for (path, expected_status) in [
+        ("/v1/sumeragi/evidence", StatusCode::METHOD_NOT_ALLOWED),
+        ("/v1/sumeragi/vrf/commit", StatusCode::NOT_FOUND),
+        ("/v1/sumeragi/vrf/reveal", StatusCode::NOT_FOUND),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(fixtures::operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .method("POST")
+                    .uri(Uri::from_static(path))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            expected_status,
+            "retired Sumeragi mutation route {path} must remain absent"
+        );
+    }
 
     let resp2 = app
         .clone()

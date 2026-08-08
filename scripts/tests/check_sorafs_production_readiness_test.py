@@ -29,6 +29,10 @@ from sorafs_resilience_test_support import (  # noqa: E402
     resilience_summary as build_resilience_summary,
 )
 from sorafs_rollout_runner_test_support import TopologyBoundChecker  # noqa: E402
+from sorafs_production_readiness_duplicate_test_support import (  # noqa: E402
+    assert_duplicate_and_unrequired_summaries_fail_closed,
+    assert_duplicate_gate_summary_fails,
+)
 
 NOW_UNIX = 1_800_800_000
 GENERATED_AT = NOW_UNIX - 120
@@ -675,6 +679,21 @@ def default_gate_metadata(
         add_hex_list("valid_checkpoint_digests", "checkpoint_digest_hex")
         add_policy()
         add_hex_list("valid_public_head_cids", "public_head_cid_hex")
+        add_hex_list(
+            "valid_receiver_policy_digests", "receiver_policy_digest_hex"
+        )
+        add_hex_list(
+            "valid_replay_namespace_digests", "replay_namespace_digest_hex"
+        )
+        add_hex_list("valid_replica_set_digests", "replica_set_digest_hex")
+        add_hex_list(
+            "valid_kubo_ingress_binding_digests",
+            "kubo_ingress_binding_digest_hex",
+        )
+        add_hex_list(
+            "valid_signed_head_ingress_binding_digests",
+            "signed_head_ingress_binding_digest_hex",
+        )
     elif gate_name == "hedging_billing":
         metadata["metric_count_values"] = [len(MODULE.HEDGING_BILLING_REQUIRED_METRICS)]
         metadata["metrics"] = sorted(MODULE.HEDGING_BILLING_REQUIRED_METRICS)
@@ -6251,6 +6270,21 @@ def test_hex_list_metadata_without_owner_kind_tether_fails_closed(
 def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
+    governance_dag_publisher_cases = [
+        ("governance_dag", field, ("publisher_service",), binding)
+        for field, binding in (
+            ("valid_kubo_ingress_binding_digests", "kubo_ingress_binding_digest_hex"),
+            ("valid_policy_digests", "policy_digest_hex"),
+            ("valid_public_head_cids", "public_head_cid_hex"),
+            ("valid_receiver_policy_digests", "receiver_policy_digest_hex"),
+            ("valid_replay_namespace_digests", "replay_namespace_digest_hex"),
+            ("valid_replica_set_digests", "replica_set_digest_hex"),
+            (
+                "valid_signed_head_ingress_binding_digests",
+                "signed_head_ingress_binding_digest_hex",
+            ),
+        )
+    ]
     manual_cases = [
         (
             "ai_prescreen",
@@ -6314,23 +6348,10 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "suite_report_digest_hex",
         ),
         (
-            "governance_dag",
-            "valid_checkpoint_digests",
-            ("operator_recovery",),
-            "checkpoint_digest_hex",
+            "governance_dag", "valid_checkpoint_digests",
+            ("operator_recovery",), "checkpoint_digest_hex",
         ),
-        (
-            "governance_dag",
-            "valid_policy_digests",
-            ("publisher_service",),
-            "policy_digest_hex",
-        ),
-        (
-            "governance_dag",
-            "valid_public_head_cids",
-            ("publisher_service",),
-            "public_head_cid_hex",
-        ),
+        *governance_dag_publisher_cases,
         (
             "hedging_billing",
             "valid_policy_digests",
@@ -10005,6 +10026,54 @@ def test_governance_dag_policy_bound_artifacts_must_match_policy_digest(
     assert (
         "governance_dag policy-bound artifact fingerprints must match "
         "valid_policy_digests"
+    ) in errors
+
+
+@pytest.mark.parametrize(
+    ("metadata_field", "fingerprint_field"),
+    (
+        ("valid_receiver_policy_digests", "receiver_policy_digest_hex"),
+        ("valid_replay_namespace_digests", "replay_namespace_digest_hex"),
+        ("valid_replica_set_digests", "replica_set_digest_hex"),
+        (
+            "valid_kubo_ingress_binding_digests",
+            "kubo_ingress_binding_digest_hex",
+        ),
+        (
+            "valid_signed_head_ingress_binding_digests",
+            "signed_head_ingress_binding_digest_hex",
+        ),
+    ),
+)
+def test_governance_dag_ingress_bound_artifacts_match_publisher_anchors(
+    metadata_field: str,
+    fingerprint_field: str,
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("governance_dag")
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        **{fingerprint_field: "cd" * 32},
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "governance_dag.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "governance_dag",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "governance_dag ingress-bound artifact fingerprints must match "
+        f"{metadata_field}"
     ) in errors
 
 
@@ -17626,134 +17695,24 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
 
 
 def test_duplicate_gate_summary_fails(tmp_path: Path) -> None:
-    first = write_gate(tmp_path, "gateway_load")
-    second = tmp_path / "gateway_load_duplicate.json"
-    second.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
-    third = tmp_path / "gateway_load_duplicate_2.json"
-    third.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
-    summary = tmp_path / "summary.json"
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "gateway_load",
-            "--summary-out",
-            str(summary),
-        )
-        == 1
-    )
-
-    result = json.loads(summary.read_text(encoding="utf-8"))
-    row_errors = result["required"]["gateway_load"]["errors"]
-    assert row_errors.count("duplicate gateway_load production readiness summary") == 1
-    assert (
-        result["errors"].count("duplicate gateway_load production readiness summary")
-        == 2
-    )
-
-    errors: list[str] = []
-    result["required"]["gateway_load"]["errors"] = [
-        "duplicate gateway_load production readiness summary",
-        "duplicate gateway_load production readiness summary",
-    ]
-    MODULE.validate_duplicate_summary_diagnostics(
-        result["required"],
-        {"gateway_load"},
-        2,
-        errors,
-    )
-    assert (
-        "gateway_load duplicate summary row errors must contain the deterministic duplicate summary diagnostic exactly once"
-        in "\n".join(errors)
-    )
-    errors = []
-    result["required"]["gateway_load"]["errors"] = [
-        "duplicate gateway_load production readiness summary"
-    ]
-    MODULE.validate_duplicate_summary_diagnostics(
-        result["required"],
-        {"gateway_load"},
-        3,
-        errors,
-    )
-    assert (
-        "aggregate summary duplicate-summary diagnostics must match duplicate summary inputs"
-        in "\n".join(errors)
+    assert_duplicate_gate_summary_fails(
+        tmp_path,
+        module=MODULE,
+        write_gate=write_gate,
+        run_gate=run_gate,
     )
 
 
 def test_duplicate_and_unrequired_summaries_fail_closed_from_config(
     tmp_path: Path,
 ) -> None:
-    gate_names = [gate.name for gate in MODULE.GATE_SUMMARY_KINDS]
-    assert len(gate_names) > 1
-
-    for index, gate_name in enumerate(gate_names):
-        root = tmp_path / f"{index}_{gate_name}_duplicate"
-        root.mkdir()
-        first = write_gate(root, gate_name)
-        for duplicate_index in (1, 2):
-            duplicate = root / f"{gate_name}_duplicate_{duplicate_index}.json"
-            duplicate.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
-        summary = root / "summary.json"
-
-        assert (
-            run_gate(
-                root,
-                "--require-gate",
-                gate_name,
-                "--summary-out",
-                str(summary),
-            )
-            == 1
-        )
-
-        result = json.loads(summary.read_text(encoding="utf-8"))
-        duplicate_error = f"duplicate {gate_name} production readiness summary"
-        row_errors = result["required"][gate_name]["errors"]
-        assert row_errors.count(duplicate_error) == 1
-        assert result["errors"].count(duplicate_error) == 2
-        assert f"{gate_name}_duplicate_" not in "\n".join(result["errors"])
-
-    for index, gate_name in enumerate(gate_names):
-        unrequired_gate = gate_names[(index + 1) % len(gate_names)]
-        root = tmp_path / f"{index}_{gate_name}_unrequired"
-        root.mkdir()
-        required_summary = write_gate(root, gate_name)
-        unrequired_summary = write_gate(root, unrequired_gate)
-        summary = root / "summary.json"
-
-        assert (
-            MODULE.main(
-                [
-                    "--evidence",
-                    str(required_summary),
-                    "--evidence",
-                    str(unrequired_summary),
-                    "--require-gate",
-                    gate_name,
-                    "--now-unix",
-                    str(NOW_UNIX),
-                    "--deployment-id",
-                    DEPLOYMENT_ID,
-                    "--environment",
-                    ENVIRONMENT,
-                    *topology_cli_args(tmp_path),
-                    "--summary-out",
-                    str(summary),
-                ]
-            )
-            == 1
-        )
-
-        result = json.loads(summary.read_text(encoding="utf-8"))
-        errors = "\n".join(result["errors"])
-        assert (
-            result["errors"].count(
-                "explicit production readiness summary belongs to unrequired gate"
-            )
-            == 1
-        )
-        assert MODULE.GATE_BY_NAME[unrequired_gate].schema not in errors
-        assert f"{unrequired_gate}` gate" not in errors
+    assert_duplicate_and_unrequired_summaries_fail_closed(
+        tmp_path,
+        module=MODULE,
+        write_gate=write_gate,
+        run_gate=run_gate,
+        now_unix=NOW_UNIX,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+        topology_cli_args=topology_cli_args,
+    )

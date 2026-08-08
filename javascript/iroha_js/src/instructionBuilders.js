@@ -24,6 +24,8 @@ import {
 } from "./validationError.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+import { parseCanonicalContractAddress } from "./contractAddress.js";
+import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
   isCanonicalKotodamaDynamicAccessBaseKey,
@@ -49,18 +51,45 @@ import {
   proofBoxMaxProofBytes,
 } from "./proofAttachment.js";
 import {
+  assertAllowedFields,
   assertExactNonBlankString,
+  assertExactFields,
   assertNonBlankString,
   assertString,
   assertWellFormedUtf16,
   canonicalHashLiteral,
+  normalizeGovernanceSelectorV1,
   parseHashLiteral,
   parseHashLiteralToBuffer,
+  requireExactLowerHex32String,
 } from "./instructionBuilderPrimitives.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const UINT64_MAX_BIGINT = 0xffff_ffff_ffff_ffffn;
 const UINT32_MAX = 0xffff_ffff;
+const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
+  "private_key",
+  "privateKey",
+  "private_key_hex",
+  "privateKeyHex",
+  "private_key_bytes",
+  "privateKeyBytes",
+  "private_key_seed",
+  "privateKeySeed",
+  "private_key_multihash",
+  "privateKeyMultihash",
+  "private_key_algorithm",
+  "privateKeyAlgorithm",
+]);
+const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
+  "root_hint",
+  "owner",
+  "amount",
+  "duration_blocks",
+  "direction",
+  "nullifier",
+]);
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
 export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
@@ -87,6 +116,15 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
       );
     }
   }
+}
+
+function normalizeFinalizeProposalId(value, name) {
+  if (typeof value === "string") {
+    return Array.from(
+      Buffer.from(requireExactLowerHex32String(value, name), "hex").values(),
+    );
+  }
+  return normalizeFixedBytes(value, name);
 }
 
 function readSingleAlias(source, aliases, name, description) {
@@ -253,41 +291,42 @@ function assertPlainObject(value, name) {
   return value;
 }
 
-function assertAllowedFields(source, allowed, name) {
-  for (const field of Reflect.ownKeys(source)) {
-    const label = typeof field === "symbol" ? field.toString() : field;
-    const descriptor = Object.getOwnPropertyDescriptor(source, field);
-    if (typeof field !== "string" || !allowed.has(field)) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${name}.${label} is not supported`,
-        `${name}.${label}`,
-      );
+function rejectGovernancePrivateKeyFieldsDeep(value, context) {
+  const pending = [{ value, path: context }];
+  const visited = new WeakSet();
+  while (pending.length > 0) {
+    const { value: candidate, path } = pending.pop();
+    if (candidate === null || typeof candidate !== "object") {
+      continue;
     }
+    if (visited.has(candidate)) {
+      continue;
+    }
+    visited.add(candidate);
+    const prototype = Object.getPrototypeOf(candidate);
     if (
-      !descriptor ||
-      !descriptor.enumerable ||
-      !Object.prototype.hasOwnProperty.call(descriptor, "value")
+      !Array.isArray(candidate) &&
+      prototype !== Object.prototype &&
+      prototype !== null
     ) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${name}.${label} must be an enumerable data field`,
-        `${name}.${label}`,
-      );
+      continue;
     }
-  }
-}
-
-function assertExactFields(source, fields, name) {
-  const allowed = new Set(fields);
-  assertAllowedFields(source, allowed, name);
-  for (const field of fields) {
-    if (!Object.prototype.hasOwnProperty.call(source, field)) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${name}.${field} is required`,
-        `${name}.${field}`,
-      );
+    for (const key of Reflect.ownKeys(candidate)) {
+      if (key === "length") {
+        continue;
+      }
+      const field = typeof key === "string" ? key : key.toString();
+      if (typeof key === "string" && GOVERNANCE_PRIVATE_KEY_FIELDS.has(key)) {
+        fail(
+          ValidationErrorCode.INVALID_OBJECT,
+          `${path} does not accept private-key field ${key}; sign the transaction locally`,
+          `${path}.${key}`,
+        );
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      if (descriptor && Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+        pending.push({ value: descriptor.value, path: `${path}.${field}` });
+      }
     }
   }
 }
@@ -976,6 +1015,76 @@ function normalizeHexHashString(value, name) {
   return Buffer.from(buffer).toString("hex");
 }
 
+function normalizeGovernanceHex32(value, name) {
+  if (typeof value !== "string") {
+    return normalizeHexHashString(value, name);
+  }
+  const literal = assertString(value, name);
+  let body = literal;
+  const separator = literal.indexOf(":");
+  if (separator !== -1) {
+    const scheme = literal.slice(0, separator);
+    if (scheme.length === 0 || scheme.toLowerCase() !== "blake2b32") {
+      fail(
+        ValidationErrorCode.INVALID_HEX,
+        `${name} must use the optional blake2b32: scheme`,
+        name,
+      );
+    }
+    body = literal.slice(separator + 1);
+  }
+  if (body.startsWith("0x") || body.startsWith("0X")) {
+    body = body.slice(2);
+  }
+  if (body.length !== 64 || !/^[0-9A-Fa-f]{64}$/u.test(body)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be exactly 32-byte hexadecimal with no whitespace`,
+      name,
+    );
+  }
+  return body.toLowerCase();
+}
+
+function normalizeGovernanceU64(value, name) {
+  let integer;
+  if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a lossless unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "string") {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a canonical unsigned 64-bit integer`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a lossless unsigned 64-bit integer`,
+      name,
+    );
+  }
+  if (integer < 0n || integer > UINT64_MAX_BIGINT) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${UINT64_MAX_BIGINT.toString(10)}`,
+      name,
+    );
+  }
+  return integer;
+}
+
 function normalizeVerifyingKeyId(value, name) {
   if (value === undefined || value === null) {
     return null;
@@ -1043,15 +1152,12 @@ function normalizeVerifyingKeyId(value, name) {
 function normalizeZkAssetMode(value, name) {
   const raw = value ?? "Hybrid";
   const normalized = String(raw).trim().toLowerCase();
-  if (normalized === "zknative" || normalized === "zk-native" || normalized === "zk_native") {
-    return "ZkNative";
-  }
   if (normalized === "hybrid") {
     return "Hybrid";
   }
   fail(
     ValidationErrorCode.INVALID_STRING,
-    `${name} must be 'ZkNative' or 'Hybrid'`,
+    `${name} must be 'Hybrid'`,
     name,
   );
 }
@@ -1076,25 +1182,6 @@ function normalizeConfidentialPolicyMode(value, name) {
         name,
       );
   }
-}
-
-function normalizeConfidentialEncryptedPayload(value, name) {
-  const source = assertPlainObject(value, name);
-  const version = asByte(source.version ?? source.payloadVersion ?? 1, `${name}.version`);
-  const ephemeral = normalizeFixedBytes(
-    source.ephemeralPublicKey ?? source.ephemeral_pubkey ?? source.ephemeralKey,
-    `${name}.ephemeralPublicKey`,
-    32,
-  );
-  const nonce = normalizeFixedBytes(source.nonce, `${name}.nonce`, 24);
-  const ciphertextValue = source.ciphertext ?? source.ciphertextB64 ?? source.ciphertext_base64;
-  const ciphertext = normalizeBase64(ciphertextValue, `${name}.ciphertext`);
-  return {
-    version,
-    ephemeral_pubkey: ephemeral,
-    nonce,
-    ciphertext,
-  };
 }
 
 function normalizeProofAttachment(value, name) {
@@ -2876,14 +2963,9 @@ function normalizeAtWindow(value, name) {
     return null;
   }
   const source = assertPlainObject(value, name);
-  const lower = asNonNegativeInteger(
-    source.lower ?? source.start ?? source.from,
-    `${name}.lower`,
-  );
-  const upper = asNonNegativeInteger(
-    source.upper ?? source.end ?? source.to,
-    `${name}.upper`,
-  );
+  assertExactFields(source, ["lower", "upper"], name);
+  const lower = normalizeGovernanceU64(source.lower, `${name}.lower`);
+  const upper = normalizeGovernanceU64(source.upper, `${name}.upper`);
   if (upper < lower) {
     fail(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -2891,7 +2973,7 @@ function normalizeAtWindow(value, name) {
       `${name}.upper`,
     );
   }
-  return { lower: String(lower), upper: String(upper) };
+  return { lower: lower.toString(10), upper: upper.toString(10) };
 }
 
 function normalizeVotingMode(value, name) {
@@ -2908,87 +2990,52 @@ function normalizeJsonPayload(value, name) {
   if (value === null || value === undefined) {
     return "{}";
   }
-  let payload = value;
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
-    }
-    try {
-      payload = JSON.parse(trimmed);
-    } catch (error) {
-      fail(
-        ValidationErrorCode.INVALID_JSON_VALUE,
-        `${name} must be valid JSON`,
-        name,
-        error,
-      );
-    }
-  }
-  const normalized = normalizeZkBallotPublicInputs(payload, name);
-  return canonicalJsonStringify(normalized, name);
-}
-
-function canonicalJsonStringify(value, name) {
-  return JSON.stringify(canonicalizeJsonValue(value, name, new Set()));
-}
-
-function canonicalizeJsonValue(value, name, stack) {
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain non-finite numbers`, name);
-    }
-    return value;
-  }
-  if (typeof value === "bigint") {
-    fail(ValidationErrorCode.INVALID_JSON_VALUE, `${name} must not contain BigInt values`, name);
-  }
-  if (typeof value === "function" || typeof value === "symbol") {
-    return undefined;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => canonicalizeJsonValue(entry, name, stack));
-  }
-  if (value && typeof value === "object") {
-    if (typeof value.toJSON === "function") {
-      return canonicalizeJsonValue(value.toJSON(), name, stack);
-    }
-    if (stack.has(value)) {
-      fail(
-        ValidationErrorCode.INVALID_JSON_VALUE,
-        `${name} must not contain circular references`,
-        name,
-      );
-    }
-    stack.add(value);
-    const result = {};
-    const keys = Object.keys(value).sort();
-    for (const key of keys) {
-      const entry = value[key];
-      if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
-        continue;
-      }
-      result[key] = canonicalizeJsonValue(entry, name, stack);
-    }
-    stack.delete(value);
-    return result;
-  }
-  return value;
+  const normalized = normalizeZkBallotPublicInputs(value, name);
+  return stringifyStrictLosslessIntegerJson(normalized, name);
 }
 
 function normalizeZkBallotPublicInputs(value, name) {
-  const normalized = { ...assertPlainObject(value, name) };
-  rejectPublicInputKey(normalized, "durationBlocks", "duration_blocks", name);
-  rejectPublicInputKey(normalized, "root_hint_hex", "root_hint", name);
-  rejectPublicInputKey(normalized, "rootHintHex", "root_hint", name);
-  rejectPublicInputKey(normalized, "rootHint", "root_hint", name);
-  rejectPublicInputKey(normalized, "nullifier_hex", "nullifier", name);
-  rejectPublicInputKey(normalized, "nullifierHex", "nullifier", name);
-  normalizeZkBallotPublicInputHex(normalized, "root_hint", name);
-  normalizeZkBallotPublicInputHex(normalized, "nullifier", name);
+  const source = assertPlainObject(value, name);
+  rejectGovernancePrivateKeyFieldsDeep(source, name);
+  assertAllowedFields(source, new Set(GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS), name);
+
+  const normalized = {};
+  for (const field of GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      continue;
+    }
+    const entry = source[field];
+    if (entry === null) {
+      normalized[field] = null;
+      continue;
+    }
+    switch (field) {
+      case "root_hint":
+      case "nullifier":
+        normalized[field] = normalizeGovernanceHex32(entry, `${name}.${field}`);
+        break;
+      case "owner":
+        normalized.owner = ensureCanonicalAccountId(entry, `${name}.owner`);
+        break;
+      case "amount":
+        normalized.amount = asQuantity(entry, `${name}.amount`);
+        break;
+      case "duration_blocks":
+        normalized.duration_blocks = normalizeGovernanceU64(
+          entry,
+          `${name}.duration_blocks`,
+        );
+        break;
+      case "direction":
+        normalized.direction = normalizeGovernanceBallotDirection(
+          entry,
+          `${name}.direction`,
+        );
+        break;
+      default:
+        throw new Error(`unhandled governance public input ${field}`);
+    }
+  }
 
   const hasOwner = normalized.owner !== undefined && normalized.owner !== null;
   const hasAmount = normalized.amount !== undefined && normalized.amount !== null;
@@ -3002,60 +3049,16 @@ function normalizeZkBallotPublicInputs(value, name) {
       name,
     );
   }
-  if (hasOwner) {
-    normalized.owner = ensureCanonicalAccountId(normalized.owner, `${name}.owner`);
-  }
   return normalized;
 }
 
-function normalizeZkBallotPublicInputHex(target, key, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
-  }
-  const value = target[key];
-  if (value === null) {
-    return;
-  }
-  if (typeof value !== "string") {
-    fail(
-      ValidationErrorCode.INVALID_HEX,
-      `${name}.${key} must be a 32-byte hex string`,
-      name,
-    );
-  }
-  const trimmed = value.trim();
-  let body = trimmed;
-  if (trimmed.includes(":")) {
-    const [scheme, rest] = trimmed.split(":", 2);
-    if (scheme && scheme.toLowerCase() !== "blake2b32") {
-      fail(
-        ValidationErrorCode.INVALID_HEX,
-        `${name}.${key} must be a 32-byte hex string`,
-        name,
-      );
-    }
-    body = rest.trim();
-  }
-  if (body.startsWith("0x") || body.startsWith("0X")) {
-    body = body.slice(2);
-  }
-  if (!/^[0-9a-fA-F]{64}$/.test(body)) {
-    fail(
-      ValidationErrorCode.INVALID_HEX,
-      `${name}.${key} must be a 32-byte hex string`,
-      name,
-    );
-  }
-  target[key] = body.toLowerCase();
-}
-
-function rejectPublicInputKey(target, key, canonicalKey, name) {
-  if (!Object.prototype.hasOwnProperty.call(target, key)) {
-    return;
+function normalizeGovernanceBallotDirection(value, name) {
+  if (value === "Aye" || value === "Nay" || value === "Abstain") {
+    return value;
   }
   fail(
-    ValidationErrorCode.INVALID_OBJECT,
-    `${name} must use ${canonicalKey} (unsupported key ${key})`,
+    ValidationErrorCode.INVALID_STRING,
+    `${name} must be exactly Aye, Nay, or Abstain`,
     name,
   );
 }
@@ -4769,6 +4772,25 @@ function normalizeContractTargetSelectorInput(source, context) {
   };
 }
 
+function normalizeGovernanceContractAddress(value, name) {
+  const literal = assertExactNonBlankString(value, name);
+  parseCanonicalContractAddress(literal, name);
+  return literal;
+}
+
+function normalizeGovernanceManifestProvenance(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(source, ["signer", "signature"], name);
+  return normalizeManifestProvenance(source, name);
+}
+
+function normalizeGovernanceProof(value, name) {
+  if (typeof value === "string") {
+    return decodeBase64Strict(value, name).toString("base64");
+  }
+  return normalizeBase64(value, name);
+}
+
 /**
  * Build a normalized payload for `ToriiClient.approveMultisigContractCall(...)`.
  * @param {object} options
@@ -4943,23 +4965,70 @@ export function buildRegisterKaigiRelayInstruction(options) {
  */
 export function buildProposeDeployContractInstruction(options) {
   const source = assertPlainObject(options, "proposeDeployContract");
-  const payload = {
-    ...normalizeContractTargetSelectorInput(source, "proposeDeployContract"),
-    code_hash_hex: normalizeHexHashString(
-      source.codeHash ?? source.code_hash ?? source.codeHashHex,
+  rejectGovernancePrivateKeyFieldsDeep(source, "proposeDeployContract");
+  assertAllowedFields(
+    source,
+    new Set([
+      "contractAddress",
       "codeHash",
-    ),
-    abi_hash_hex: normalizeHexHashString(
-      source.abiHash ?? source.abi_hash ?? source.abiHashHex,
       "abiHash",
-    ),
-    abi_version: assertString(
-      source.abiVersion ?? source.abi_version ?? "1",
       "abiVersion",
+      "window",
+      "votingMode",
+      "manifestProvenance",
+    ]),
+    "proposeDeployContract",
+  );
+  for (const field of ["contractAddress", "codeHash", "abiHash"]) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `proposeDeployContract.${field} is required`,
+        `proposeDeployContract.${field}`,
+      );
+    }
+  }
+  const abiVersion = Object.prototype.hasOwnProperty.call(source, "abiVersion")
+    ? source.abiVersion
+    : "1";
+  if (abiVersion !== "1") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "abiVersion must be exactly '1'",
+      "abiVersion",
+    );
+  }
+  const payload = {
+    contract_address: normalizeGovernanceContractAddress(
+      source.contractAddress,
+      "proposeDeployContract.contractAddress",
     ),
-    window: normalizeAtWindow(source.window, "window"),
-    mode: normalizeVotingMode(source.votingMode ?? source.mode, "votingMode"),
+    code_hash_hex: normalizeGovernanceHex32(source.codeHash, "codeHash"),
+    abi_hash_hex: normalizeGovernanceHex32(source.abiHash, "abiHash"),
+    abi_version: abiVersion,
+    window: normalizeAtWindow(
+      Object.prototype.hasOwnProperty.call(source, "window")
+        ? source.window
+        : undefined,
+      "window",
+    ),
+    mode: normalizeVotingMode(
+      Object.prototype.hasOwnProperty.call(source, "votingMode")
+        ? source.votingMode
+        : undefined,
+      "votingMode",
+    ),
   };
+  if (
+    Object.prototype.hasOwnProperty.call(source, "manifestProvenance") &&
+    source.manifestProvenance !== undefined &&
+    source.manifestProvenance !== null
+  ) {
+    payload.manifest_provenance = normalizeGovernanceManifestProvenance(
+      source.manifestProvenance,
+      "manifestProvenance",
+    );
+  }
   return { ProposeDeployContract: payload };
 }
 
@@ -4993,17 +5062,31 @@ export function buildProposeSccpRouteGovernanceInstruction(options) {
  */
 export function buildCastZkBallotInstruction(options) {
   const source = assertPlainObject(options, "castZkBallot");
-  const proofValue = source.proof ?? source.proofB64 ?? source.proof_b64;
-  const publicInputs =
-    source.publicInputs ?? source.publicInputsJson ?? source.public_inputs_json;
+  rejectGovernancePrivateKeyFieldsDeep(source, "castZkBallot");
+  assertAllowedFields(
+    source,
+    new Set(["electionId", "proof", "publicInputs"]),
+    "castZkBallot",
+  );
+  for (const field of ["electionId", "proof"]) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `castZkBallot.${field} is required`,
+        `castZkBallot.${field}`,
+      );
+    }
+  }
   return {
     CastZkBallot: {
-      election_id: assertString(
-        source.electionId ?? source.election_id,
-        "electionId",
+      election_id: normalizeGovernanceSelectorV1(source.electionId, "electionId"),
+      proof_b64: normalizeGovernanceProof(source.proof, "proof"),
+      public_inputs_json: normalizeJsonPayload(
+        Object.prototype.hasOwnProperty.call(source, "publicInputs")
+          ? source.publicInputs
+          : undefined,
+        "publicInputs",
       ),
-      proof_b64: normalizeBase64(proofValue, "proof"),
-      public_inputs_json: normalizeJsonPayload(publicInputs, "publicInputs"),
     },
   };
 }
@@ -5017,7 +5100,7 @@ export function buildCastPlainBallotInstruction(options) {
   const source = assertPlainObject(options, "castPlainBallot");
   return {
     CastPlainBallot: {
-      referendum_id: assertString(
+      referendum_id: normalizeGovernanceSelectorV1(
         source.referendumId ?? source.referendum_id,
         "referendumId",
       ),
@@ -5068,16 +5151,25 @@ export function buildEnactReferendumInstruction(options) {
  */
 export function buildFinalizeReferendumInstruction(options) {
   const source = assertPlainObject(options, "finalizeReferendum");
+  const referendumId = requireExactLowerHex32String(
+    source.referendumId ?? source.referendum_id,
+    "finalizeReferendum.referendumId",
+  );
+  const proposalId = normalizeFinalizeProposalId(
+    source.proposalId ?? source.proposal_id,
+    "finalizeReferendum.proposalId",
+  );
+  if (Buffer.from(proposalId).toString("hex") !== referendumId) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      "finalizeReferendum.referendumId must equal proposalId",
+      "finalizeReferendum.referendumId",
+    );
+  }
   return {
     FinalizeReferendum: {
-      referendum_id: assertString(
-        source.referendumId ?? source.referendum_id,
-        "referendumId",
-      ),
-      proposal_id: normalizeFixedBytes(
-        source.proposalId ?? source.proposal_id,
-        "finalizeReferendum.proposalId",
-      ),
+      referendum_id: referendumId,
+      proposal_id: proposalId,
     },
   };
 }
@@ -5498,6 +5590,15 @@ export function buildRemoveSmartContractBytesInstruction(options) {
  */
 export function buildRegisterZkAssetInstruction(options) {
   const source = assertPlainObject(options, "registerZkAsset");
+  for (const retiredField of ["transferVerifyingKey", "vkTransfer", "vk_transfer"]) {
+    if (Object.prototype.hasOwnProperty.call(source, retiredField)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `registerZkAsset.${retiredField} is no longer supported`,
+        `registerZkAsset.${retiredField}`,
+      );
+    }
+  }
   const asset =
     source.assetDefinitionId ??
     source.asset_definition_id ??
@@ -5508,10 +5609,6 @@ export function buildRegisterZkAssetInstruction(options) {
     mode: normalizeZkAssetMode(source.mode ?? source.assetMode, "registerZkAsset.mode"),
     allow_shield: Boolean(source.allowShield ?? source.allow_shield ?? true),
     allow_unshield: Boolean(source.allowUnshield ?? source.allow_unshield ?? true),
-    vk_transfer: normalizeVerifyingKeyId(
-      source.transferVerifyingKey ?? source.vkTransfer ?? source.vk_transfer,
-      "registerZkAsset.vkTransfer",
-    ),
     vk_unshield: normalizeVerifyingKeyId(
       source.unshieldVerifyingKey ?? source.vkUnshield ?? source.vk_unshield,
       "registerZkAsset.vkUnshield",
@@ -5597,132 +5694,6 @@ export function buildCancelConfidentialPolicyTransitionInstruction(options) {
 }
 
 /**
- * Build a `zk::Shield` instruction payload.
- * @param {object} options
- * @returns {{zk: {Shield: object}}}
- */
-export function buildShieldInstruction(options) {
-  const source = assertPlainObject(options, "shield");
-  const payload = {
-    asset: assertString(
-      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-      "shield.asset",
-    ),
-    from: normalizeAccountId(source.fromAccountId ?? source.from, "shield.from"),
-    amount: asQuantity(source.amount, "shield.amount"),
-    note_commitment: normalizeFixedBytes(source.noteCommitment ?? source.note_commitment, "shield.noteCommitment", 32),
-    enc_payload: normalizeConfidentialEncryptedPayload(
-      source.encPayload ?? source.enc_payload ?? source.encryptedPayload,
-      "shield.encPayload",
-    ),
-  };
-  return {
-    zk: {
-      Shield: payload,
-    },
-  };
-}
-
-/**
- * Build a `zk::ZkTransfer` instruction payload.
- * @param {object} options
- * @returns {{zk: {ZkTransfer: object}}}
- */
-export function buildZkTransferInstruction(options) {
-  const source = assertPlainObject(options, "zkTransfer");
-  const inputs = Array.isArray(source.inputs)
-    ? source.inputs.map((entry, index) => normalizeFixedBytes(entry, `zkTransfer.inputs[${index}]`, 32))
-    : [];
-  const outputs = Array.isArray(source.outputs)
-    ? source.outputs.map((entry, index) => normalizeFixedBytes(entry, `zkTransfer.outputs[${index}]`, 32))
-    : [];
-  if (inputs.length === 0) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "zkTransfer.inputs must contain at least one nullifier",
-    );
-  }
-  if (outputs.length === 0) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "zkTransfer.outputs must contain at least one commitment",
-    );
-  }
-  const payload = {
-    asset: assertString(
-      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-      "zkTransfer.asset",
-    ),
-    inputs,
-    outputs,
-    proof: normalizeProofAttachment(source.proof, "zkTransfer.proof"),
-    root_hint: normalizeOptionalFixedBytes(source.rootHint ?? source.root_hint, "zkTransfer.rootHint"),
-  };
-  return {
-    zk: {
-      ZkTransfer: payload,
-    },
-  };
-}
-
-/**
- * Build a `zk::Unshield` instruction payload.
- * Private outputs come from the verified statement; caller-supplied output
- * commitments are not part of the first-release instruction.
- * @param {object} options
- * @returns {{zk: {Unshield: object}}}
- */
-export function buildUnshieldInstruction(options) {
-  const source = assertPlainObject(options, "unshield");
-  assertAllowedFields(
-    source,
-    new Set([
-      "assetDefinitionId",
-      "asset_definition_id",
-      "asset",
-      "toAccountId",
-      "to",
-      "destinationAccountId",
-      "publicAmount",
-      "public_amount",
-      "inputs",
-      "proof",
-      "rootHint",
-      "root_hint",
-    ]),
-    "unshield",
-  );
-  const inputs = Array.isArray(source.inputs)
-    ? source.inputs.map((entry, index) => normalizeFixedBytes(entry, `unshield.inputs[${index}]`, 32))
-    : [];
-  if (inputs.length === 0) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "unshield.inputs must contain at least one nullifier",
-    );
-  }
-  const payload = {
-    asset: assertString(
-      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-      "unshield.asset",
-    ),
-    to: normalizeAccountId(source.toAccountId ?? source.to ?? source.destinationAccountId, "unshield.to"),
-    public_amount: asQuantity(
-      source.publicAmount ?? source.public_amount,
-      "unshield.publicAmount",
-    ),
-    inputs,
-    proof: normalizeProofAttachment(source.proof, "unshield.proof"),
-    root_hint: normalizeOptionalFixedBytes(source.rootHint ?? source.root_hint, "unshield.rootHint"),
-  };
-  return {
-    zk: {
-      Unshield: payload,
-    },
-  };
-}
-
-/**
  * Build a `zk::CreateElection` instruction payload.
  * @param {object} options
  * @returns {{zk: {CreateElection: object}}}
@@ -5730,7 +5701,10 @@ export function buildUnshieldInstruction(options) {
 export function buildCreateElectionInstruction(options) {
   const source = assertPlainObject(options, "createElection");
   const payload = {
-    election_id: assertString(source.electionId ?? source.election_id, "createElection.electionId"),
+    election_id: normalizeGovernanceSelectorV1(
+      source.electionId ?? source.election_id,
+      "createElection.electionId",
+    ),
     options: asPositiveInteger(source.options, "createElection.options"),
     eligible_root: normalizeFixedBytes(source.eligibleRoot ?? source.eligible_root, "createElection.eligibleRoot", 32),
     start_ts: asNonNegativeInteger(source.startTs ?? source.start_ts ?? source.startTimestampMs, "createElection.startTs"),
@@ -5754,7 +5728,10 @@ export function buildCreateElectionInstruction(options) {
 export function buildSubmitBallotInstruction(options) {
   const source = assertPlainObject(options, "submitBallot");
   const payload = {
-    election_id: assertString(source.electionId ?? source.election_id, "submitBallot.electionId"),
+    election_id: normalizeGovernanceSelectorV1(
+      source.electionId ?? source.election_id,
+      "submitBallot.electionId",
+    ),
     ciphertext: normalizeByteArray(
       source.ciphertext ?? source.ciphertextBytes ?? source.ciphertext_b64 ?? source.ciphertextB64,
       "submitBallot.ciphertext",
@@ -5787,7 +5764,10 @@ export function buildFinalizeElectionInstruction(options) {
     );
   }
   const payload = {
-    election_id: assertString(source.electionId ?? source.election_id, "finalizeElection.electionId"),
+    election_id: normalizeGovernanceSelectorV1(
+      source.electionId ?? source.election_id,
+      "finalizeElection.electionId",
+    ),
     tally: tallyInput.map((entry, index) =>
       asNonNegativeInteger(entry, `finalizeElection.tally[${index}]`),
     ),

@@ -3,14 +3,17 @@
 # Render a per-validator config first, then start with:
 # `irohad --sora --config <rendered-validator-config.toml>`
 # This is the checked-in peer-1 template. Runtime-only validator private keys,
-# onboarding/faucet authorities, and streaming identity keys must come from a
-# user-local `validator_secrets.local.toml` rendered through
+# SoraNet transport identities, onboarding/faucet authorities, and streaming
+# identity keys must come from a user-local `validator_secrets.local.toml`
+# rendered through:
 # `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
 
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain_discriminant = 369
 public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
 private_key = "REPLACE_WITH_VALIDATOR_PRIVATE_KEY"
+soranet_transport_public_key = "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY"
+soranet_transport_private_key = "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY"
 
 trusted_peers = [
   "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
@@ -486,27 +489,6 @@ dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
 description = "Route contract deployments to the external `is` dataspace routing container for PoC proof tracking"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "shield"
-description = "Route shield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "zk::zk_transfer"
-description = "Route private ZK transfers to the external `is` dataspace routing container for dataspace-scoped balances"
-
-[[nexus.routing_policy.rules]]
-lane = 3
-dataspace = "is"
-[nexus.routing_policy.rules.matcher]
-instruction = "unshield"
-description = "Route unshield instructions to the external `is` dataspace routing container for dataspace-scoped balances"
 
 [nexus.fusion]
 floor_teu = 2500

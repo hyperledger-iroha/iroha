@@ -1519,11 +1519,6 @@ fn validate_fill_custody(
             .asset_escrows
             .get(&child_id)
             .is_some()
-            || state_transaction
-                .world
-                .anonymous_asset_escrows
-                .get(&child_id)
-                .is_some()
         {
             return Err(corrupt_state(
                 "derived orderbook settlement channel custody already exists",

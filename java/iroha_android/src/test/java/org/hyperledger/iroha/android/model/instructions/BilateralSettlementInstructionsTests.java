@@ -143,13 +143,10 @@ public final class BilateralSettlementInstructionsTests {
   }
 
   private static Properties fixtures() throws Exception {
-    final Path[] candidates = {
-      Paths.get("../../../fixtures/norito_rpc/bilateral_settlement_sdk_wire.properties"),
-      Paths.get("../../fixtures/norito_rpc/bilateral_settlement_sdk_wire.properties"),
-      Paths.get("../fixtures/norito_rpc/bilateral_settlement_sdk_wire.properties"),
-      Paths.get("fixtures/norito_rpc/bilateral_settlement_sdk_wire.properties")
-    };
-    for (final Path candidate : candidates) {
+    Path cursor = Paths.get("").toAbsolutePath();
+    while (cursor != null) {
+      final Path candidate =
+          cursor.resolve("fixtures/norito_rpc/bilateral_settlement_sdk_wire.properties");
       if (Files.isRegularFile(candidate)) {
         final Properties properties = new Properties();
         try (InputStream input = Files.newInputStream(candidate)) {
@@ -157,6 +154,7 @@ public final class BilateralSettlementInstructionsTests {
         }
         return properties;
       }
+      cursor = cursor.getParent();
     }
     throw new IllegalStateException("missing shared bilateral settlement wire fixture");
   }

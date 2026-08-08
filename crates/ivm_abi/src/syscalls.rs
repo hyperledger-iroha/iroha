@@ -222,27 +222,6 @@ pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
 /// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId
 /// Ret:  r10 = host-owned &Json
 pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
-/// Direct JSON object getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_JSON_DIRECT: u32 = 0x85;
-/// Direct JSON name getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_NAME_DIRECT: u32 = 0x86;
-/// Direct JSON account-id getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT: u32 = 0x87;
-/// Direct JSON NFT-id getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_NFT_ID_DIRECT: u32 = 0x88;
-/// Direct JSON blob getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_BLOB_HEX_DIRECT: u32 = 0x89;
-/// Direct JSON asset-definition getter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT: u32 = 0x8B;
-/// Direct JSON integer setter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_SET_I64_DIRECT: u32 = 0x8C;
-/// Direct JSON account-id setter that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT: u32 = 0x8D;
-/// Direct path-key helper returning `NoritoBytes(StatePath)` and accepting
-/// validated inputs from any allowed pointer region.
-pub const SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT: u32 = 0x8E;
-/// Direct schema-info helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_SCHEMA_INFO_DIRECT: u32 = 0x8F;
 
 /// Permanently retired pre-release decimal-i64 path helper number.
 ///
@@ -275,10 +254,6 @@ pub const SYSCALL_SCHEMA_ENCODE: u32 = 0x59;
 pub const SYSCALL_SCHEMA_DECODE: u32 = 0x5A;
 /// Schema info: r10 = &Name schema -> r10 = &Json {"id":"<hex>", "version":N}
 pub const SYSCALL_SCHEMA_INFO: u32 = 0x5B;
-/// Direct schema encode helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_SCHEMA_ENCODE_DIRECT: u32 = 0xD0;
-/// Direct schema decode helper that accepts validated TLVs from any allowed pointer region.
-pub const SYSCALL_SCHEMA_DECODE_DIRECT: u32 = 0xD1;
 /// Decode a canonical Norito-framed `Name` from `NoritoBytes` and return a host-owned `&Name` TLV.
 ///
 /// Args: r10 = &NoritoBytes (canonical Norito `Name` frame)
@@ -357,20 +332,16 @@ pub const SYSCALL_GET_PRIVATE_INPUT: u32 = 0xFD;
 pub const SYSCALL_COMMIT_OUTPUT: u32 = 0xFE;
 
 // ZK verification and state-read syscalls (pointer-ABI NoritoBytes payloads)
-/// Verify a shielded transfer proof (no state mutation).
-pub const SYSCALL_ZK_VERIFY_TRANSFER: u32 = 0x60;
-/// Verify an unshield proof (no state mutation).
-pub const SYSCALL_ZK_VERIFY_UNSHIELD: u32 = 0x61;
 /// Verify a ballot proof for an election (no state mutation).
-pub const SYSCALL_ZK_VOTE_VERIFY_BALLOT: u32 = 0x62;
+pub const SYSCALL_ZK_VOTE_VERIFY_BALLOT: u32 = 0x60;
 /// Verify a tally proof for an election (no state mutation).
-pub const SYSCALL_ZK_VOTE_VERIFY_TALLY: u32 = 0x63;
+pub const SYSCALL_ZK_VOTE_VERIFY_TALLY: u32 = 0x61;
 /// Read recent Merkle roots for an asset's shielded ledger.
-pub const SYSCALL_ZK_ROOTS_GET: u32 = 0x64;
+pub const SYSCALL_ZK_ROOTS_GET: u32 = 0x62;
 /// Read finalized tally for an election, if present.
-pub const SYSCALL_ZK_VOTE_GET_TALLY: u32 = 0x65;
+pub const SYSCALL_ZK_VOTE_GET_TALLY: u32 = 0x63;
 /// Batch verification of Halo2 OpenVerify envelopes.
-pub const SYSCALL_ZK_VERIFY_BATCH: u32 = 0x68;
+pub const SYSCALL_ZK_VERIFY_BATCH: u32 = 0x64;
 
 /// Verify a BLS-based VRF proof and return the 32-byte output in a Blob TLV.
 ///
@@ -449,10 +420,8 @@ pub const SYSCALL_INPUT_PUBLISH_TLV: u32 = 0xE0;
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION: u32 = 0xA0;
 /// `r11` operation tag authorizing a decoded `SubmitBallot` instruction for syscall `0xA0`.
 pub const SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT: u64 = 1;
-/// `r11` operation tag authorizing a decoded `Unshield` instruction for syscall `0xA0`.
-pub const SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD: u64 = 2;
 /// `r11` operation tag authorizing a decoded `RecordSccpMessage` instruction for syscall `0xA0`.
-pub const SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE: u64 = 3;
+pub const SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE: u64 = 2;
 /// Execute a query from canonical `&NoritoBytes(QueryRequest)`.
 pub const SYSCALL_SMARTCONTRACT_EXECUTE_QUERY: u32 = 0xA1;
 /// Convenience syscall used by samples: create one NFT per known account.
@@ -475,18 +444,7 @@ pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
 pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
 /// Call a deployed ABI v1 contract synchronously by contract-address literal.
 pub const SYSCALL_CALL_CONTRACT: u32 = 0xA9;
-/// Open and fund a native anonymous asset escrow with shielded proof material.
-pub const SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER: u32 = 0xAA;
-/// Accept an open native anonymous asset escrow.
-pub const SYSCALL_ANONYMOUS_ESCROW_ACCEPT: u32 = 0xAB;
-/// Mark accepted native anonymous escrow off-chain payment as sent.
-pub const SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT: u32 = 0xAC;
-/// Release a paid native anonymous escrow to the buyer with shielded outputs.
-pub const SYSCALL_ANONYMOUS_ESCROW_RELEASE: u32 = 0xAD;
-/// Cancel and refund a native anonymous escrow with shielded outputs.
-pub const SYSCALL_ANONYMOUS_ESCROW_CANCEL: u32 = 0xAE;
-/// Open a dispute for native anonymous escrow court moderation.
-pub const SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE: u32 = 0xAF;
+// IDs 0xAA through 0xAF are intentionally unassigned.
 /// Begin an atomic cross-transaction (AXT) envelope.
 pub const SYSCALL_AXT_BEGIN: u32 = 0xB0;
 /// Declare a DS touch within an active AXT.
@@ -530,8 +488,7 @@ pub const SYSCALL_ESCROW_CANCEL: u32 = 0xBC;
 pub const SYSCALL_ESCROW_OPEN_DISPUTE: u32 = 0xBD;
 /// Resolve a disputed escrow with a buyer/seller split.
 pub const SYSCALL_ESCROW_RESOLVE_DISPUTE: u32 = 0xBE;
-/// Resolve a disputed native anonymous escrow with shielded buyer/seller outputs.
-pub const SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE: u32 = 0xBF;
+// ID 0xBF is intentionally unassigned.
 
 /// Soracloud runtime host surface.
 /// Read committed service-state metadata for handler-local execution.
@@ -768,12 +725,6 @@ pub const SYSCALL_JSON_GET_INT: u32 = 0x01_0160;
 pub const SYSCALL_JSON_GET_DECIMAL: u32 = 0x01_0161;
 /// Parse a canonical non-negative base-10 JSON string into a `quantity` pointer.
 pub const SYSCALL_JSON_GET_QUANTITY: u32 = 0x01_0162;
-/// Direct form of [`SYSCALL_JSON_GET_INT`].
-pub const SYSCALL_JSON_GET_INT_DIRECT: u32 = 0x01_0163;
-/// Direct form of [`SYSCALL_JSON_GET_DECIMAL`].
-pub const SYSCALL_JSON_GET_DECIMAL_DIRECT: u32 = 0x01_0164;
-/// Direct form of [`SYSCALL_JSON_GET_QUANTITY`].
-pub const SYSCALL_JSON_GET_QUANTITY_DIRECT: u32 = 0x01_0165;
 
 /// Return whether `number` belongs to the exact Kotodama V1 numeric surface.
 #[must_use]
@@ -830,33 +781,6 @@ pub const fn is_koto_test_syscall(number: u32) -> bool {
             | SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
             | SYSCALL_KOTO_TEST_EXPECT_REJECT_AS
     )
-}
-
-/// Map direct helper syscall aliases onto their canonical helper numbers.
-///
-/// The first-release ABI exposes both canonical helper syscalls and direct
-/// aliases that relax pointer-region placement once the TLV has already been
-/// validated. Hosts execute the canonical implementation for both forms to
-/// keep behavior identical across runtimes.
-pub const fn canonical_helper_syscall(number: u32) -> u32 {
-    match number {
-        SYSCALL_JSON_GET_JSON_DIRECT => SYSCALL_JSON_GET_JSON,
-        SYSCALL_JSON_GET_NAME_DIRECT => SYSCALL_JSON_GET_NAME,
-        SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_GET_ACCOUNT_ID,
-        SYSCALL_JSON_GET_NFT_ID_DIRECT => SYSCALL_JSON_GET_NFT_ID,
-        SYSCALL_JSON_GET_BLOB_HEX_DIRECT => SYSCALL_JSON_GET_BLOB_HEX,
-        SYSCALL_JSON_GET_INT_DIRECT => SYSCALL_JSON_GET_INT,
-        SYSCALL_JSON_GET_DECIMAL_DIRECT => SYSCALL_JSON_GET_DECIMAL,
-        SYSCALL_JSON_GET_QUANTITY_DIRECT => SYSCALL_JSON_GET_QUANTITY,
-        SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
-        SYSCALL_JSON_SET_I64_DIRECT => SYSCALL_JSON_SET_I64,
-        SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => SYSCALL_JSON_SET_ACCOUNT_ID,
-        SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => SYSCALL_BUILD_PATH_KEY_NORITO,
-        SYSCALL_SCHEMA_INFO_DIRECT => SYSCALL_SCHEMA_INFO,
-        SYSCALL_SCHEMA_ENCODE_DIRECT => SYSCALL_SCHEMA_ENCODE,
-        SYSCALL_SCHEMA_DECODE_DIRECT => SYSCALL_SCHEMA_DECODE,
-        _ => number,
-    }
 }
 
 /// Returns whether a syscall number is allowed for the given ABI policy.
@@ -1033,8 +957,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_ACTIVATE_CONTRACT_INSTANCE
             | SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
             | SYSCALL_REMOVE_SMART_CONTRACT_BYTES
-            | SYSCALL_ZK_VERIFY_TRANSFER
-            | SYSCALL_ZK_VERIFY_UNSHIELD
             | SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | SYSCALL_ZK_VOTE_VERIFY_TALLY
             | SYSCALL_ZK_VERIFY_BATCH
@@ -1043,13 +965,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_AXT_COMMIT
             | SYSCALL_VERIFY_DS_PROOF
             | SYSCALL_USE_ASSET_HANDLE
-            | SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER
-            | SYSCALL_ANONYMOUS_ESCROW_ACCEPT
-            | SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT
-            | SYSCALL_ANONYMOUS_ESCROW_RELEASE
-            | SYSCALL_ANONYMOUS_ESCROW_CANCEL
-            | SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE
-            | SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE
             | SYSCALL_ESCROW_OPEN_OFFER
             | SYSCALL_ESCROW_ACCEPT
             | SYSCALL_ESCROW_MARK_PAYMENT_SENT
@@ -1129,24 +1044,9 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_JSON_OBJECT
             | SYSCALL_JSON_SET_I64
             | SYSCALL_JSON_SET_ACCOUNT_ID
-            | SYSCALL_JSON_GET_JSON_DIRECT
-            | SYSCALL_JSON_GET_NAME_DIRECT
-            | SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
-            | SYSCALL_JSON_GET_NFT_ID_DIRECT
-            | SYSCALL_JSON_GET_BLOB_HEX_DIRECT
-            | SYSCALL_JSON_GET_INT_DIRECT
-            | SYSCALL_JSON_GET_DECIMAL_DIRECT
-            | SYSCALL_JSON_GET_QUANTITY_DIRECT
-            | SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
-            | SYSCALL_JSON_SET_I64_DIRECT
-            | SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
-            | SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
-            | SYSCALL_SCHEMA_INFO_DIRECT
             | SYSCALL_SCHEMA_ENCODE
             | SYSCALL_SCHEMA_DECODE
             | SYSCALL_SCHEMA_INFO
-            | SYSCALL_SCHEMA_ENCODE_DIRECT
-            | SYSCALL_SCHEMA_DECODE_DIRECT
             | SYSCALL_NAME_DECODE
             | SYSCALL_BUILD_PATH_KEY_NORITO
             | SYSCALL_ENCODE_INT
@@ -1253,26 +1153,10 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_JSON_OBJECT,
             SYSCALL_JSON_SET_I64,
             SYSCALL_JSON_SET_ACCOUNT_ID,
-            SYSCALL_JSON_GET_JSON_DIRECT,
-            SYSCALL_JSON_GET_NAME_DIRECT,
-            SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
-            SYSCALL_JSON_GET_NFT_ID_DIRECT,
-            SYSCALL_JSON_GET_BLOB_HEX_DIRECT,
-            SYSCALL_JSON_GET_INT_DIRECT,
-            SYSCALL_JSON_GET_DECIMAL_DIRECT,
-            SYSCALL_JSON_GET_QUANTITY_DIRECT,
-            SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
-            SYSCALL_JSON_SET_I64_DIRECT,
-            SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
-            SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
-            SYSCALL_SCHEMA_INFO_DIRECT,
         ]);
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
         v.push(SYSCALL_SCHEMA_INFO);
-        // Legacy numeric aliases are intentionally absent. The first-release
-        // surface exposes only the schema-bound exact numeric families below.
-        v.extend_from_slice(&[SYSCALL_SCHEMA_ENCODE_DIRECT, SYSCALL_SCHEMA_DECODE_DIRECT]);
         // Name decode is part of base ABI in V1
         v.push(SYSCALL_NAME_DECODE);
         // Account and asset ops (bridged by hosts)
@@ -1400,8 +1284,6 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         ]);
         // ZK verification/state-read
         v.extend_from_slice(&[
-            SYSCALL_ZK_VERIFY_TRANSFER,
-            SYSCALL_ZK_VERIFY_UNSHIELD,
             SYSCALL_ZK_VOTE_VERIFY_BALLOT,
             SYSCALL_ZK_VOTE_VERIFY_TALLY,
             SYSCALL_ZK_ROOTS_GET,
@@ -1456,14 +1338,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_VERIFY_DS_PROOF,
             SYSCALL_USE_ASSET_HANDLE,
         ]);
-        // Native asset escrow
+        // Native asset escrow. IDs 0xAA..=0xAF and 0xBF remain holes.
         v.extend_from_slice(&[
-            SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER,
-            SYSCALL_ANONYMOUS_ESCROW_ACCEPT,
-            SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT,
-            SYSCALL_ANONYMOUS_ESCROW_RELEASE,
-            SYSCALL_ANONYMOUS_ESCROW_CANCEL,
-            SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
             SYSCALL_ESCROW_OPEN_OFFER,
             SYSCALL_ESCROW_ACCEPT,
             SYSCALL_ESCROW_MARK_PAYMENT_SENT,
@@ -1471,7 +1347,6 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_ESCROW_CANCEL,
             SYSCALL_ESCROW_OPEN_DISPUTE,
             SYSCALL_ESCROW_RESOLVE_DISPUTE,
-            SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE,
         ]);
         // Soracloud runtime host surface
         v.extend_from_slice(&[
@@ -1599,8 +1474,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => "DEACTIVATE_CONTRACT_INSTANCE",
         SYSCALL_REMOVE_SMART_CONTRACT_BYTES => "REMOVE_SMART_CONTRACT_BYTES",
         // ZK verification/state-read
-        SYSCALL_ZK_VERIFY_TRANSFER => "ZK_VERIFY_TRANSFER",
-        SYSCALL_ZK_VERIFY_UNSHIELD => "ZK_VERIFY_UNSHIELD",
         SYSCALL_ZK_VOTE_VERIFY_BALLOT => "ZK_VOTE_VERIFY_BALLOT",
         SYSCALL_ZK_VOTE_VERIFY_TALLY => "ZK_VOTE_VERIFY_TALLY",
         SYSCALL_ZK_ROOTS_GET => "ZK_ROOTS_GET",
@@ -1623,24 +1496,9 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_OBJECT => "JSON_OBJECT",
         SYSCALL_JSON_SET_I64 => "JSON_SET_I64",
         SYSCALL_JSON_SET_ACCOUNT_ID => "JSON_SET_ACCOUNT_ID",
-        SYSCALL_JSON_GET_JSON_DIRECT => "JSON_GET_JSON_DIRECT",
-        SYSCALL_JSON_GET_NAME_DIRECT => "JSON_GET_NAME_DIRECT",
-        SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT => "JSON_GET_ACCOUNT_ID_DIRECT",
-        SYSCALL_JSON_GET_NFT_ID_DIRECT => "JSON_GET_NFT_ID_DIRECT",
-        SYSCALL_JSON_GET_BLOB_HEX_DIRECT => "JSON_GET_BLOB_HEX_DIRECT",
-        SYSCALL_JSON_GET_INT_DIRECT => "JSON_GET_INT_DIRECT",
-        SYSCALL_JSON_GET_DECIMAL_DIRECT => "JSON_GET_DECIMAL_DIRECT",
-        SYSCALL_JSON_GET_QUANTITY_DIRECT => "JSON_GET_QUANTITY_DIRECT",
-        SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT => "JSON_GET_ASSET_DEFINITION_ID_DIRECT",
-        SYSCALL_JSON_SET_I64_DIRECT => "JSON_SET_I64_DIRECT",
-        SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => "JSON_SET_ACCOUNT_ID_DIRECT",
-        SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => "BUILD_PATH_KEY_NORITO_DIRECT",
-        SYSCALL_SCHEMA_INFO_DIRECT => "SCHEMA_INFO_DIRECT",
         SYSCALL_SCHEMA_ENCODE => "SCHEMA_ENCODE",
         SYSCALL_SCHEMA_DECODE => "SCHEMA_DECODE",
         SYSCALL_SCHEMA_INFO => "SCHEMA_INFO",
-        SYSCALL_SCHEMA_ENCODE_DIRECT => "SCHEMA_ENCODE_DIRECT",
-        SYSCALL_SCHEMA_DECODE_DIRECT => "SCHEMA_DECODE_DIRECT",
         SYSCALL_NAME_DECODE => "NAME_DECODE",
         SYSCALL_POINTER_TO_NORITO => "POINTER_TO_NORITO",
         SYSCALL_POINTER_FROM_NORITO => "POINTER_FROM_NORITO",
@@ -1736,12 +1594,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_ACCOUNT_RECOVERY_APPROVE => "ACCOUNT_RECOVERY_APPROVE",
         SYSCALL_ACCOUNT_RECOVERY_CANCEL => "ACCOUNT_RECOVERY_CANCEL",
         SYSCALL_ACCOUNT_RECOVERY_FINALIZE => "ACCOUNT_RECOVERY_FINALIZE",
-        SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => "ANONYMOUS_ESCROW_OPEN_OFFER",
-        SYSCALL_ANONYMOUS_ESCROW_ACCEPT => "ANONYMOUS_ESCROW_ACCEPT",
-        SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => "ANONYMOUS_ESCROW_MARK_PAYMENT_SENT",
-        SYSCALL_ANONYMOUS_ESCROW_RELEASE => "ANONYMOUS_ESCROW_RELEASE",
-        SYSCALL_ANONYMOUS_ESCROW_CANCEL => "ANONYMOUS_ESCROW_CANCEL",
-        SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => "ANONYMOUS_ESCROW_OPEN_DISPUTE",
         SYSCALL_AXT_BEGIN => "AXT_BEGIN",
         SYSCALL_AXT_TOUCH => "AXT_TOUCH",
         SYSCALL_AXT_COMMIT => "AXT_COMMIT",
@@ -1754,7 +1606,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_ESCROW_CANCEL => "ESCROW_CANCEL",
         SYSCALL_ESCROW_OPEN_DISPUTE => "ESCROW_OPEN_DISPUTE",
         SYSCALL_ESCROW_RESOLVE_DISPUTE => "ESCROW_RESOLVE_DISPUTE",
-        SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => "ANONYMOUS_ESCROW_RESOLVE_DISPUTE",
         SYSCALL_SORACLOUD_READ_COMMITTED_STATE => "SORACLOUD_READ_COMMITTED_STATE",
         SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => "SORACLOUD_EMIT_STATE_MUTATION",
         SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => "SORACLOUD_EMIT_MAILBOX_MESSAGE",
@@ -4027,6 +3878,7 @@ mod tests {
         }
 
         for retired in core::iter::once(RETIRED_SYSCALL_BUILD_PATH_MAP_KEY)
+            .chain([0x65, 0x68])
             .chain(0x69..=0x76)
             .chain(0xD2..=0xDE)
             .chain(0x01_0040..=0x01_004D)
@@ -4048,6 +3900,166 @@ mod tests {
         let mut changed = canonical_surface;
         mutator(&mut changed);
         assert_ne!(descriptor_hash(&changed), canonical_hash);
+    }
+
+    #[test]
+    fn removed_syscall_numbers_are_unknown() {
+        let removed = [
+            0x85, 0x86, 0x87, 0x88, 0x89, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0xAA, 0xAB, 0xAC, 0xAD,
+            0xAE, 0xAF, 0xBF, 0xD0, 0xD1, 0x01_0163, 0x01_0164, 0x01_0165,
+        ];
+
+        for number in removed {
+            assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, number));
+            assert_eq!(registered_syscall_access(number), None);
+            assert_eq!(syscall_name(number), None);
+        }
+    }
+
+    #[test]
+    fn koto_test_syscalls_are_host_private() {
+        let private = [
+            SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+            SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY,
+            SYSCALL_KOTO_TEST_ACTOR_SIGN,
+            SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
+            SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
+        ];
+
+        for syscall in private {
+            assert!(is_koto_test_syscall(syscall));
+            assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
+            assert!(syscall > u8::MAX as u32);
+        }
+    }
+
+    #[test]
+    fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
+        assert!(
+            GENERIC_PROGRAM_DENIED_SYSCALLS_V1
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]),
+            "ABI-bound denylist must remain strictly sorted"
+        );
+        assert_eq!(
+            GENERIC_PROGRAM_DENIED_SYSCALLS_V1,
+            &[
+                SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+                SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+                SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
+                SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+                SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+                SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+                SYSCALL_STATE_GET,
+                SYSCALL_STATE_SET,
+                SYSCALL_STATE_DEL,
+                SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                SYSCALL_CALL_CONTRACT,
+                SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+                SYSCALL_SYSVAR_ENTRYPOINT,
+                SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+                SYSCALL_CALL_CONTRACT_QUANTITY2,
+                SYSCALL_STATE_KEYS,
+                SYSCALL_STATE_HAS,
+                SYSCALL_STATE_LEN,
+                SYSCALL_STATE_COUNT,
+            ]
+        );
+        for &syscall in GENERIC_PROGRAM_DENIED_SYSCALLS_V1 {
+            assert!(is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
+            assert!(!is_generic_program_syscall_allowed(
+                crate::SyscallPolicy::AbiV1,
+                syscall
+            ));
+        }
+        for syscall in [
+            SYSCALL_REGISTER_DOMAIN,
+            SYSCALL_INT_ADD,
+            SYSCALL_SUBSCRIPTION_BILL,
+            SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            SYSCALL_AXT_BEGIN,
+            SYSCALL_AXT_TOUCH,
+            SYSCALL_AXT_COMMIT,
+            SYSCALL_VERIFY_DS_PROOF,
+            SYSCALL_USE_ASSET_HANDLE,
+        ] {
+            assert!(is_generic_program_syscall_allowed(
+                crate::SyscallPolicy::AbiV1,
+                syscall
+            ));
+        }
+        assert!(!is_generic_program_syscall_allowed(
+            crate::SyscallPolicy::AbiV1,
+            u32::MAX
+        ));
+    }
+
+    #[test]
+    fn axt_syscall_classifier_is_exact() {
+        for syscall in [
+            SYSCALL_AXT_BEGIN,
+            SYSCALL_AXT_TOUCH,
+            SYSCALL_AXT_COMMIT,
+            SYSCALL_VERIFY_DS_PROOF,
+            SYSCALL_USE_ASSET_HANDLE,
+        ] {
+            assert!(is_axt_syscall(syscall));
+        }
+        for syscall in [SYSCALL_ESCROW_OPEN_OFFER, SYSCALL_STATE_GET, u32::MAX] {
+            assert!(!is_axt_syscall(syscall));
+        }
+    }
+
+    #[test]
+    fn syscall_access_classification_is_conservative() {
+        assert_eq!(syscall_access(SYSCALL_STATE_GET), SyscallAccess::StateRead);
+        assert_eq!(syscall_access(SYSCALL_STATE_SET), SyscallAccess::StateWrite);
+        assert_eq!(
+            syscall_access(SYSCALL_STATE_MAP_KEY_AT),
+            SyscallAccess::None
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_STATE_VALUE_ENCODE),
+            SyscallAccess::None
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_STATE_VALUE_DECODE),
+            SyscallAccess::None
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CORE_QUERY_GET),
+            SyscallAccess::LedgerRead
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CORE_QUERY_PAGE),
+            SyscallAccess::LedgerRead
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_VRF_EPOCH_SEED),
+            SyscallAccess::LedgerRead
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_TRANSFER_ASSET_SCOPED),
+            SyscallAccess::LedgerWrite
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CALL_CONTRACT),
+            SyscallAccess::Dynamic
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CALL_CONTRACT_QUANTITY2),
+            SyscallAccess::Dynamic
+        );
+        assert_eq!(syscall_access(SYSCALL_SHA256_HASH), SyscallAccess::None);
+        assert_eq!(syscall_access(0x00ff_fffe), SyscallAccess::Dynamic);
+
+        for number in abi_syscall_list() {
+            assert!(
+                syscall_name(*number).is_some(),
+                "ABI syscall 0x{number:06x} lacks a registry name"
+            );
+        }
     }
 
     #[test]
@@ -5473,23 +5485,6 @@ mod tests {
         assert!(sentinels.iter().all(|sentinel| sentinel[31] & 1 == 0));
         sentinels.sort_unstable();
         assert!(sentinels.windows(2).all(|pair| pair[0] != pair[1]));
-    }
-
-    #[test]
-    fn gas_text_is_not_part_of_the_abi_surface_hash() {
-        let canonical = &syscalls_doc_gen::DOCS[0];
-        let changed_gas = SyscallDoc {
-            number: canonical.number,
-            args: canonical.args,
-            ret: canonical.ret,
-            gas: "a deliberately different gas schedule",
-        };
-        let canonical_surface =
-            collect_abi_syscall_surface(&[canonical.number], std::slice::from_ref(canonical))
-                .expect("single canonical row");
-        let changed_surface = collect_abi_syscall_surface(&[canonical.number], &[changed_gas])
-            .expect("single altered-gas row");
-        assert_eq!(canonical_surface, changed_surface);
     }
 
     #[test]

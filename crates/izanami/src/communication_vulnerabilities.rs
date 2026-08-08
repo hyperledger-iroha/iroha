@@ -22,6 +22,10 @@ pub const PAPER_ATTACK_START_SECS: u16 = 133;
 pub const PAPER_ATTACK_END_SECS: u16 = 266;
 /// Validator/node count used by the paper's comparison experiments.
 pub const PAPER_NODE_COUNT: u8 = 20;
+/// Largest nearby revision-4 `3f + 1` committee used for Iroha comparison runs.
+pub const IZANAMI_REVISION4_NODE_COUNT: u8 = 19;
+/// Byzantine fault budget for [`IZANAMI_REVISION4_NODE_COUNT`].
+pub const IZANAMI_REVISION4_FAULT_BUDGET: u8 = 6;
 
 /// Protocol-agnostic communication attacks evaluated by the paper.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -404,7 +408,7 @@ pub struct IzanamiScenarioProfile {
     pub attack: CommunicationAttack,
     /// How directly Izanami covers the paper primitive.
     pub coverage: IzanamiCoverage,
-    /// Default CLI arguments for a paper-like run.
+    /// Default CLI arguments for a protocol-admissible comparison run.
     pub paper_like_args: &'static [&'static str],
     /// Short note for operators.
     pub note: &'static str,
@@ -418,7 +422,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
         paper_like_args: &[
             "--allow-net",
             "--peers",
-            "20",
+            "19",
             "--faulty",
             "0",
             "--duration",
@@ -439,7 +443,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
         paper_like_args: &[
             "--allow-net",
             "--peers",
-            "20",
+            "19",
             "--faulty",
             "2",
             "--duration",
@@ -451,7 +455,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--tps",
             "200",
             "--submitters",
-            "20",
+            "19",
             "--max-inflight",
             "512",
             "--fault-enable-crash-restart=true",
@@ -471,7 +475,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
         paper_like_args: &[
             "--allow-net",
             "--peers",
-            "20",
+            "19",
             "--faulty",
             "5",
             "--duration",
@@ -483,7 +487,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--tps",
             "200",
             "--submitters",
-            "20",
+            "19",
             "--max-inflight",
             "512",
             "--fault-enable-crash-restart=false",
@@ -499,13 +503,13 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
     },
     IzanamiScenarioProfile {
         attack: CommunicationAttack::Stopping,
-        coverage: IzanamiCoverage::Native,
+        coverage: IzanamiCoverage::Approximation,
         paper_like_args: &[
             "--allow-net",
             "--peers",
-            "20",
+            "19",
             "--faulty",
-            "18",
+            "6",
             "--duration",
             "800s",
             "--fault-window-start",
@@ -515,7 +519,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--tps",
             "200",
             "--submitters",
-            "20",
+            "19",
             "--max-inflight",
             "512",
             "--fault-enable-crash-restart=true",
@@ -527,7 +531,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--fault-enable-cpu-stress=false",
             "--fault-enable-disk-saturation=false",
         ],
-        note: "large crash/restart population tests whether Iroha resumes progress after mass recovery",
+        note: "an f-sized crash/restart population tests recovery without exceeding revision-4 conditional-liveness assumptions",
     },
     IzanamiScenarioProfile {
         attack: CommunicationAttack::LeaderIsolation,
@@ -535,7 +539,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
         paper_like_args: &[
             "--allow-net",
             "--peers",
-            "20",
+            "19",
             "--faulty",
             "1",
             "--duration",
@@ -547,7 +551,7 @@ pub const IZANAMI_SCENARIO_PROFILES: &[IzanamiScenarioProfile] = &[
             "--tps",
             "200",
             "--submitters",
-            "20",
+            "19",
             "--max-inflight",
             "512",
             "--fault-enable-crash-restart=false",
@@ -596,7 +600,15 @@ pub fn izanami_profile_for(attack: CommunicationAttack) -> Option<&'static Izana
 mod tests {
     use std::collections::BTreeSet;
 
+    use iroha_data_model::block::consensus_v2::is_valid_committee_size;
+
     use super::*;
+
+    fn numeric_arg(args: &[&str], name: &str) -> usize {
+        args.windows(2)
+            .find_map(|pair| (pair[0] == name).then(|| pair[1].parse().expect("numeric CLI arg")))
+            .unwrap_or_else(|| panic!("missing {name} argument"))
+    }
 
     #[test]
     fn catalog_covers_the_five_paper_attacks_once() {
@@ -717,10 +729,20 @@ mod tests {
     }
 
     #[test]
-    fn paper_like_profiles_preserve_baseline_shape() {
+    fn comparison_profiles_preserve_paper_timing_with_revision4_geometry() {
+        assert_eq!(PAPER_NODE_COUNT, 20);
+        assert_eq!(IZANAMI_REVISION4_NODE_COUNT, 19);
+        assert_eq!(IZANAMI_REVISION4_FAULT_BUDGET, 6);
+
         for profile in IZANAMI_SCENARIO_PROFILES {
             let args = profile.paper_like_args;
-            assert!(args.windows(2).any(|pair| pair == ["--peers", "20"]));
+            let peers = numeric_arg(args, "--peers");
+            let faulty = numeric_arg(args, "--faulty");
+            let submitters = numeric_arg(args, "--submitters");
+            assert!(is_valid_committee_size(peers));
+            assert_eq!(peers, usize::from(IZANAMI_REVISION4_NODE_COUNT));
+            assert!(faulty <= (peers - 1) / 3);
+            assert!(submitters <= peers);
             assert!(args.windows(2).any(|pair| pair == ["--duration", "800s"]));
             assert!(args.windows(2).any(|pair| pair == ["--tps", "200"]));
             assert!(
@@ -743,5 +765,13 @@ mod tests {
                 );
             }
         }
+
+        let stopping = izanami_profile_for(CommunicationAttack::Stopping)
+            .expect("stopping comparison profile");
+        assert_eq!(stopping.coverage, IzanamiCoverage::Approximation);
+        assert_eq!(
+            numeric_arg(stopping.paper_like_args, "--faulty"),
+            usize::from(IZANAMI_REVISION4_FAULT_BUDGET)
+        );
     }
 }

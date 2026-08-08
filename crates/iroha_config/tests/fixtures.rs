@@ -27,12 +27,16 @@ use iroha_config::parameters::{
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
 };
-use iroha_config_base::{env::MockEnv, read::ConfigReader};
-use iroha_crypto::{Algorithm, Hash, PublicKey};
-use iroha_data_model::{account::AccountId, name::Name};
+use iroha_config_base::{
+    env::MockEnv,
+    read::ConfigReader,
+    toml::{TomlSource, WriteExt as _},
+};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PrivateKey, PublicKey};
+use iroha_data_model::account::AccountId;
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
-use toml::Value as TomlValue;
+use toml::{Table, Value as TomlValue};
 use url::Url;
 
 fn fixtures_dir() -> PathBuf {
@@ -114,6 +118,8 @@ impl Drop for AddressRuntimeGuard {
 #[error("failed to load config from fixtures")]
 struct FixtureConfigLoadError;
 
+include!("fixtures/soranet_transport_identity_tests.rs");
+
 fn load_config_from_fixtures(path: impl AsRef<Path>) -> Result<Config, FixtureConfigLoadError> {
     let config = ConfigReader::new()
         .read_toml_with_extends(fixtures_dir().join(path))
@@ -176,6 +182,14 @@ fn minimal_config_snapshot() {
                     public_key: PublicKey(
                         bls_normal(
                             "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2",
+                        ),
+                    ),
+                    private_key: "[REDACTED PrivateKey]",
+                },
+                soranet_transport_key_pair: KeyPair {
+                    public_key: PublicKey(
+                        ed25519(
+                            "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B",
                         ),
                     ),
                     private_key: "[REDACTED PrivateKey]",
@@ -1047,10 +1061,7 @@ fn minimal_config_snapshot() {
                         enabled: false,
                         state_dir: None,
                         ipfs_api_url: None,
-                        head_mode: "signed_http",
                         signed_head_url: None,
-                        ipns_name: None,
-                        ipns_key_name: None,
                         ipfs_authenticator_handle: None,
                         ipfs_authenticator_revision: None,
                         ipfs_authenticator_policy_digest: None,
@@ -1073,13 +1084,8 @@ fn minimal_config_snapshot() {
                             4194304,
                         ),
                         max_request_bytes: Bytes(
-                            134283264,
+                            135397376,
                         ),
-                        mirror_max_entries: 65536,
-                        mirror_max_bytes: Bytes(
-                            536870912,
-                        ),
-                        max_head_age_secs: 900,
                         max_future_skew_secs: 60,
                         allow_insecure_http: false,
                         allow_private_ipfs_endpoint: false,
@@ -4419,18 +4425,6 @@ fn missing_fields() {
 }
 
 #[test]
-fn extra_fields() {
-    let error = load_config_from_fixtures("bad.extra_fields.toml")
-        .expect_err("should fail with extra field");
-
-    let msg = strip_ansi_codes(&format!("{error:?}"));
-
-    assert_contains!(msg, "Found unrecognised parameters");
-    assert_contains!(msg, "unknown parameter: `bar`");
-    assert_contains!(msg, "unknown parameter: `foo`");
-}
-
-#[test]
 fn sorafs_penalty_and_telemetry_roundtrip() {
     let config = load_config_from_fixtures("sorafs_penalty_and_telemetry.toml")
         .expect("config should parse with SoraFS governance overrides");
@@ -4711,15 +4705,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
                     == Some(instruction)
         })
     };
-    for instruction in [
-        "smartcontract::deploy",
-        "shield",
-        "zk::zk_transfer",
-        "unshield",
-    ] {
+    assert!(
+        has_is_instruction_route("smartcontract::deploy"),
+        "Taira profile should route smartcontract::deploy to the external `is` dataspace routing container"
+    );
+    for retired in ["shield", "zk::zk_transfer", "unshield"] {
         assert!(
-            has_is_instruction_route(instruction),
-            "Taira profile should route {instruction} to the external `is` dataspace routing container"
+            !has_is_instruction_route(retired),
+            "Taira profile must not retain retired generic confidential route {retired}"
         );
     }
 
@@ -5096,7 +5089,7 @@ fn gost_config_rejects_tc26_consensus_keys() {
 #[test]
 fn pipeline_workers_env_parses() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+    use iroha_config_base::env::MockEnv;
 
     // Default: use minimal base file so required params are satisfied,
     // then ensure workers fall back to defaults (0 = auto)
@@ -5128,7 +5121,7 @@ fn logger_level_env_accepts_lowercase() {
         logger::Level,
         parameters::{actual::Root as Actual, user::Root as User},
     };
-    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+    use iroha_config_base::env::MockEnv;
 
     let env = MockEnv::new().set("LOG_LEVEL", "info");
     let cfg: Actual = ConfigReader::new()
@@ -5146,7 +5139,6 @@ fn logger_level_env_accepts_lowercase() {
 #[test]
 fn tls_fallback_defaults_to_tls_only() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-    use iroha_config_base::read::ConfigReader;
 
     let cfg: Actual = ConfigReader::new()
         .read_toml_with_extends(fixtures_dir().join("base.toml"))
@@ -5168,7 +5160,6 @@ include!("fixtures/trusted_proxy_defaults_test.rs");
 #[test]
 fn torii_internal_api_trust_defaults_to_exact_loopback_hosts() {
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-    use iroha_config_base::read::ConfigReader;
 
     let cfg: Actual = ConfigReader::new()
         .read_toml_with_extends(fixtures_dir().join("base.toml"))

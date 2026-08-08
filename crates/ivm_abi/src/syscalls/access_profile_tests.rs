@@ -195,3 +195,20 @@ fn syscall_access_classification_is_conservative() {
         );
     }
 }
+
+#[test]
+fn gas_text_is_not_part_of_the_abi_surface_hash() {
+    let canonical = &syscalls_doc_gen::DOCS[0];
+    let changed_gas = SyscallDoc {
+        number: canonical.number,
+        args: canonical.args,
+        ret: canonical.ret,
+        gas: "a deliberately different gas schedule",
+    };
+    let canonical_surface =
+        collect_abi_syscall_surface(&[canonical.number], std::slice::from_ref(canonical))
+            .expect("single canonical row");
+    let changed_surface = collect_abi_syscall_surface(&[canonical.number], &[changed_gas])
+        .expect("single altered-gas row");
+    assert_eq!(canonical_surface, changed_surface);
+}

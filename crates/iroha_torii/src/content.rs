@@ -6,7 +6,7 @@ use std::{
 use crate::{SharedAppState, app_auth::verify_canonical_request, limits};
 use axum::{
     extract::ConnectInfo,
-    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
@@ -36,6 +36,10 @@ pub enum ContentError {
 }
 
 const CONTENT_RECEIPT_HEADER: &str = "sora-content-receipt";
+const CONTENT_SECURITY_POLICY_HEADER: HeaderName =
+    HeaderName::from_static("content-security-policy");
+const CONTENT_SECURITY_POLICY_VALUE: HeaderValue =
+    HeaderValue::from_static("sandbox; default-src 'none'");
 /// Exact `Vary` value for content whose manifest requires canonical authentication.
 pub(crate) const CANONICAL_CONTENT_AUTH_VARY: &str =
     "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
@@ -104,7 +108,7 @@ pub async fn handle_get_content(
             let current_height = app.state.committed_height() as u64;
 
             let Some(bundle) =
-                mv::storage::StorageReadOnly::get(world.content_bundles(), &bundle_id).cloned()
+                mv::storage::StorageReadOnly::get(world.content_bundles(), &bundle_id)
             else {
                 outcome_hint = Some("not_found");
                 return Err(ContentError::NotFound);
@@ -147,7 +151,11 @@ pub async fn handle_get_content(
 
             let range_spec = apply_range(entry.length, headers.get(header::RANGE))?;
 
-            (bundle, entry, range_spec)
+            // Keep the potentially large file/chunk projection borrowed until
+            // authentication, authorization, PoW, and range validation have
+            // succeeded. Anonymous callers must not make Torii clone a
+            // protected bundle record before crossing its manifest boundary.
+            (bundle.clone(), entry, range_spec)
         };
         if !limits::allow_cost_conditionally(
             &app.content_egress_limiter,
@@ -187,6 +195,7 @@ pub async fn handle_get_content(
 
         bytes_served = content_length;
         let etag = entry.file_hash.encode_hex::<String>();
+        let representation = content_representation_headers(&bundle.manifest, &entry);
 
         let mut response = Response::builder()
             .status(status)
@@ -207,11 +216,7 @@ pub async fn handle_get_content(
         if let Some(vary) = content_auth_vary_header(&bundle.manifest) {
             headers_mut.insert(header::VARY, vary);
         }
-        headers_mut.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_str(&mime_for_path(&bundle.manifest, &entry))
-                .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-        );
+        install_content_representation_headers(headers_mut, representation);
         headers_mut.insert(
             header::CONTENT_LENGTH,
             HeaderValue::from_str(&content_length.to_string())
@@ -673,6 +678,72 @@ fn mime_for_path(
     }
 }
 
+#[derive(Debug, Clone)]
+struct ContentRepresentationHeaders {
+    content_type: HeaderValue,
+    force_attachment: bool,
+}
+
+fn content_representation_headers(
+    manifest: &ContentBundleManifest,
+    entry: &iroha_data_model::content::ContentFileEntry,
+) -> ContentRepresentationHeaders {
+    let requested = mime_for_path(manifest, entry);
+    if let Some(content_type) = canonical_inline_content_type(&requested) {
+        return ContentRepresentationHeaders {
+            content_type,
+            force_attachment: false,
+        };
+    }
+
+    ContentRepresentationHeaders {
+        content_type: HeaderValue::from_static("application/octet-stream"),
+        force_attachment: true,
+    }
+}
+
+fn canonical_inline_content_type(content_type: &str) -> Option<HeaderValue> {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    let canonical = match media_type.as_str() {
+        "application/json" => "application/json",
+        "image/avif" => "image/avif",
+        "image/gif" => "image/gif",
+        "image/jpeg" => "image/jpeg",
+        "image/png" => "image/png",
+        "image/webp" => "image/webp",
+        "image/x-icon" => "image/x-icon",
+        "text/plain" => "text/plain; charset=utf-8",
+        _ => return None,
+    };
+    Some(HeaderValue::from_static(canonical))
+}
+
+fn install_content_representation_headers(
+    headers: &mut HeaderMap,
+    representation: ContentRepresentationHeaders,
+) {
+    headers.insert(header::CONTENT_TYPE, representation.content_type);
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        CONTENT_SECURITY_POLICY_HEADER,
+        CONTENT_SECURITY_POLICY_VALUE,
+    );
+    if representation.force_attachment {
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment"),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -977,6 +1048,88 @@ mod tests {
         assert_eq!(
             mime_for_path(&manifest, &css_entry),
             "text/css; charset=utf-8"
+        );
+    }
+
+    #[test]
+    fn torii_origin_content_coerces_active_and_unknown_media_to_downloads() {
+        let mut manifest = sample_manifest();
+        let entry = ContentFileEntry {
+            path: "index.html".into(),
+            offset: 0,
+            length: 0,
+            file_hash: [0; 32],
+        };
+
+        for active_or_unknown in [
+            "text/html; charset=utf-8",
+            "application/javascript",
+            "image/svg+xml",
+            "application/atom+xml",
+            "application/pdf",
+            "application/wasm",
+            "application/octet-stream",
+            "application/x-custom-active",
+            "text/plain\r\nx-active: true",
+        ] {
+            manifest
+                .mime_overrides
+                .insert(entry.path.clone(), active_or_unknown.to_owned());
+            let representation = content_representation_headers(&manifest, &entry);
+            assert_eq!(
+                representation.content_type,
+                HeaderValue::from_static("application/octet-stream"),
+                "{active_or_unknown} must not remain executable on the Torii origin"
+            );
+            assert!(representation.force_attachment);
+
+            let mut headers = HeaderMap::new();
+            install_content_representation_headers(&mut headers, representation);
+            assert_eq!(
+                headers.get(header::CONTENT_DISPOSITION),
+                Some(&HeaderValue::from_static("attachment"))
+            );
+            assert_eq!(
+                headers.get(header::X_CONTENT_TYPE_OPTIONS),
+                Some(&HeaderValue::from_static("nosniff"))
+            );
+            assert_eq!(
+                headers.get(CONTENT_SECURITY_POLICY_HEADER),
+                Some(&CONTENT_SECURITY_POLICY_VALUE)
+            );
+        }
+    }
+
+    #[test]
+    fn torii_origin_content_preserves_inert_media_with_nosniff() {
+        let mut manifest = sample_manifest();
+        manifest
+            .mime_overrides
+            .insert("logo.png".to_owned(), "IMAGE/PNG; profile=srgb".to_owned());
+        let entry = ContentFileEntry {
+            path: "logo.png".into(),
+            offset: 0,
+            length: 0,
+            file_hash: [0; 32],
+        };
+
+        let representation = content_representation_headers(&manifest, &entry);
+        assert_eq!(
+            representation.content_type,
+            HeaderValue::from_static("image/png")
+        );
+        assert!(!representation.force_attachment);
+
+        let mut headers = HeaderMap::new();
+        install_content_representation_headers(&mut headers, representation);
+        assert!(!headers.contains_key(header::CONTENT_DISPOSITION));
+        assert_eq!(
+            headers.get(header::X_CONTENT_TYPE_OPTIONS),
+            Some(&HeaderValue::from_static("nosniff"))
+        );
+        assert_eq!(
+            headers.get(CONTENT_SECURITY_POLICY_HEADER),
+            Some(&CONTENT_SECURITY_POLICY_VALUE)
         );
     }
 

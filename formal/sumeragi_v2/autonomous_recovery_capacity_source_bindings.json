@@ -51,6 +51,16 @@
       "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
     },
     {
+      "mode": "PrunePeakDropsRosterGeneration",
+      "config": "multilane_autonomous_recovery_capacity_prune_peak_drops_roster_generation_bug.cfg",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
+    },
+    {
+      "mode": "PrunePeakDropsReservationEnvelope",
+      "config": "multilane_autonomous_recovery_capacity_prune_peak_drops_reservation_envelope_bug.cfg",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite"
+    },
+    {
       "mode": "DebugAppendBeforeCarrierReservation",
       "config": "multilane_autonomous_recovery_capacity_debug_append_before_carrier_reservation_bug.cfg",
       "invariant": "MLDebugAppendReservationAndRestartAccounting"
@@ -542,6 +552,164 @@
       ]
     },
     {
+      "id": "prune_roster_generation_peak_projection",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/commit_roster_journal.rs",
+      "kind": "method",
+      "symbol": "CommitRosterJournalPruneProjectionV2::allocation_peak_with_sidecar",
+      "required_tokens": [
+        "self.current_pointer_growth_bytes .checked_add(sidecar_peak_bytes)",
+        "self.pointer_temporary_bytes.max(post_pointer)",
+        "self.generation_allocation_bytes .checked_add(publication_peak)"
+      ],
+      "ordered_tokens": [
+        "self.current_pointer_growth_bytes .checked_add(sidecar_peak_bytes)",
+        "self.pointer_temporary_bytes.max(post_pointer)",
+        "self.generation_allocation_bytes .checked_add(publication_peak)"
+      ]
+    },
+    {
+      "id": "prune_transaction_peak_projection",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/prune_commit_merge_support.rs",
+      "kind": "method",
+      "symbol": "KuraPruneCapacityAdmissionV2::transaction_peak_bytes",
+      "required_tokens": [
+        "self.roster .allocation_peak_with_sidecar(sidecar.sequential_peak_bytes)",
+        "self.marker_stable_growth_bytes.checked_add(bytes)",
+        "self.marker_temporary_bytes.max(post_marker)"
+      ],
+      "ordered_tokens": [
+        "self.roster .allocation_peak_with_sidecar(sidecar.sequential_peak_bytes)",
+        "self.marker_stable_growth_bytes.checked_add(bytes)",
+        "self.marker_temporary_bytes.max(post_marker)"
+      ]
+    },
+    {
+      "id": "prune_absolute_peak_projection",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/prune_commit_merge_support.rs",
+      "kind": "method",
+      "symbol": "KuraPruneCapacityAdmissionV2::required_peak_bytes",
+      "required_tokens": [
+        "self.source_physical_bytes .checked_add(self.reserved_bytes()?)",
+        ".and_then(|bytes| bytes.checked_add(self.intent_bytes))",
+        ".and_then(|bytes| bytes.checked_add(self.transaction_peak_bytes(sidecar)?))"
+      ],
+      "ordered_tokens": [
+        "self.source_physical_bytes .checked_add(self.reserved_bytes()?)",
+        ".and_then(|bytes| bytes.checked_add(self.intent_bytes))",
+        ".and_then(|bytes| bytes.checked_add(self.transaction_peak_bytes(sidecar)?))"
+      ]
+    },
+    {
+      "id": "prune_live_capacity_before_intent",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::prune_to_height",
+      "required_tokens": [
+        "let roster_projection =",
+        ".project_truncate_to_height(height)",
+        "self.canonical_prune_commit_marker_projection(height)?",
+        "self.canonical_prune_capacity_admission_snapshot(",
+        "self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {",
+        "self.persist_prune_intent(&intent)?",
+        "store.prune_with_failpoint(height, fail_stage)"
+      ],
+      "ordered_tokens": [
+        "let roster_projection =",
+        ".project_truncate_to_height(height)",
+        "self.canonical_prune_commit_marker_projection(height)?",
+        "self.canonical_prune_capacity_admission_snapshot(",
+        "self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {",
+        "self.persist_prune_intent(&intent)?",
+        "store.prune_with_failpoint(height, fail_stage)"
+      ]
+    },
+    {
+      "id": "prune_startup_capacity_before_repair",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::new_inner",
+      "required_tokens": [
+        "if configured_limit > 0 && intent.capacity.admitted_peak_bytes > configured_limit",
+        "Self::apply_prune_intent_to_block_store(&mut block_store, intent)?",
+        "kura.preflight_recovered_prune_capacity_before_mutation(intent)?",
+        "kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?",
+        "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
+        "kura.complete_recovered_prune_intent(intent)?"
+      ],
+      "ordered_tokens": [
+        "if configured_limit > 0 && intent.capacity.admitted_peak_bytes > configured_limit",
+        "Self::apply_prune_intent_to_block_store(&mut block_store, intent)?",
+        "kura.preflight_recovered_prune_capacity_before_mutation(intent)?",
+        "kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?",
+        "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
+        "kura.complete_recovered_prune_intent(intent)?"
+      ]
+    },
+    {
+      "id": "prune_roster_authorized_mutation",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/prune_recovery_capacity.rs",
+      "kind": "method",
+      "symbol": "Kura::truncate_roster_for_prune",
+      "required_tokens": [
+        "let remaining_roster = roster_log",
+        "intent.capacity.roster.authorizes(remaining_roster)",
+        "self.validate_recovered_prune_capacity(intent, remaining_roster, remaining_sidecar)?",
+        "let mut candidate = roster_log.clone();",
+        ".truncate_to_height_with_projection(height, intent.capacity.roster)",
+        "*roster_log = candidate;"
+      ],
+      "ordered_tokens": [
+        "let remaining_roster = roster_log",
+        "intent.capacity.roster.authorizes(remaining_roster)",
+        "self.validate_recovered_prune_capacity(intent, remaining_roster, remaining_sidecar)?",
+        "let mut candidate = roster_log.clone();",
+        ".truncate_to_height_with_projection(height, intent.capacity.roster)",
+        "*roster_log = candidate;"
+      ]
+    },
+    {
+      "id": "prune_roster_deterministic_publication",
+      "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/commit_roster_journal.rs",
+      "kind": "method",
+      "symbol": "CommitRosterJournal::persist_durable",
+      "required_tokens": [
+        "Self::reconcile_publication_residues(&self.path)?;",
+        ".open(&generation_temp_path)",
+        ".write_all(&bytes)",
+        "fs::rename(&generation_temp_path, &generation_path)",
+        "sync_dir(&generations).map_err(|source| {",
+        ".open(&pointer_temp_path)",
+        ".write_all(pointer_bytes.as_bytes())",
+        "fs::rename(&pointer_temp_path, &current_path)",
+        "sync_dir(&self.path)"
+      ],
+      "ordered_tokens": [
+        "Self::reconcile_publication_residues(&self.path)?;",
+        ".open(&generation_temp_path)",
+        ".write_all(&bytes)",
+        "fs::rename(&generation_temp_path, &generation_path)",
+        "sync_dir(&generations).map_err(|source| {",
+        ".open(&pointer_temp_path)",
+        ".write_all(pointer_bytes.as_bytes())",
+        "fs::rename(&pointer_temp_path, &current_path)",
+        "sync_dir(&self.path)"
+      ]
+    },
+    {
       "id": "entrypoint_claim_preflight_order",
       "invariant": "MLMutationPeaksAdmittedBeforeFirstWrite",
       "coverage": "anchor_only",
@@ -645,7 +813,7 @@
       "symbol": "Kura::new_inner",
       "required_tokens": [
         "if !provisional_open",
-        "kura.reconcile_merge_carriers_from_durable_blocks()?",
+        "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
         "kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
         "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
         "kura.repair_lane_merge_application_frontiers_on_startup()?",
@@ -654,7 +822,7 @@
         "Ok((kura, BlockCount(block_count)))"
       ],
       "ordered_tokens": [
-        "kura.reconcile_merge_carriers_from_durable_blocks()?",
+        "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
         "kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
         "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
         "kura.repair_lane_merge_application_frontiers_on_startup()?",

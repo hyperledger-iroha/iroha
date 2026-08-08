@@ -550,7 +550,7 @@ pub use routing::{
     ContractCallDto, ContractCallResponseDto, ContractCallSimulateDto,
     ContractCallSimulateResponseDto, ContractDeploymentStateRequestDto,
     ContractDeploymentStateResponseDto, ContractViewDto, ContractViewResponseDto,
-    EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
+    EvidenceListQuery, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
     KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
     MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsQueryRequestDto,
     MultisigProposalsResolveRequestDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
@@ -562,10 +562,9 @@ pub use routing::{
     handle_post_contract_call_batch_prepare, handle_post_contract_call_simulate,
     handle_post_contract_view, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
-    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
-    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
-    handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
-    handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
+    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
+    handle_queries_with_opts, handle_v1_events_sse, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -5733,6 +5732,21 @@ fn has_percent_encoded_offline_operation_id(path: &str) -> bool {
         .is_some_and(|operation_id| !operation_id.contains('/') && operation_id.contains('%'))
 }
 
+fn has_percent_encoded_governance_selector(path: &str) -> bool {
+    const PREFIXES: [&str; 4] = [
+        "/v1/gov/proposals/",
+        "/v1/gov/locks/",
+        "/v1/gov/referenda/",
+        "/v1/gov/tally/",
+    ];
+
+    PREFIXES.iter().any(|prefix| {
+        path.strip_prefix(*prefix).is_some_and(|selector| {
+            !selector.is_empty() && !selector.contains('/') && selector.contains('%')
+        })
+    })
+}
+
 async fn enforce_strict_request_target(
     req: axum::http::Request<Body>,
     next: Next,
@@ -5743,6 +5757,7 @@ async fn enforce_strict_request_target(
         || has_percent_encoded_separator(path)
         || has_dot_segment(path)
         || has_percent_encoded_offline_operation_id(path)
+        || has_percent_encoded_governance_selector(path)
     {
         Some((
             StatusCode::BAD_REQUEST,
@@ -14485,40 +14500,6 @@ async fn handler_confidential_asset_transitions(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_confidential_notes(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<crate::routing::ConfidentialNotesQuery>,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        check_access(&app, &headers, Some(remote_ip), "v1/confidential/notes").await?;
-    }
-    routing::handle_v1_confidential_notes(app.state.clone(), AxQuery(query)).await
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_confidential_relay_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::ConfidentialRelaySubmitRequestDto>,
-) -> Result<impl IntoResponse, Error> {
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
-    let key = token_hdr
-        .map(str::to_owned)
-        .unwrap_or_else(|| remote.ip().to_string());
-    if !app.tx_rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let telemetry = app.telemetry.clone();
-    routing::handle_v1_confidential_relay_submit(app, NoritoJson(request), telemetry).await
-}
-
-#[cfg(feature = "app_api")]
 async fn handler_domains_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -15140,24 +15121,6 @@ async fn handler_webhooks_delete(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/webhooks", true).await?;
 
     Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_gov_ballot_zk(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::ZkBallotDto>,
-) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/ballots/zk", true).await?;
-    crate::gov::handle_gov_ballot_zk(
-        app.chain_id.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -16028,10 +15991,12 @@ async fn handler_zk_roots(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/roots", true).await?;
-    routing::handle_v1_zk_roots(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_zk_roots_admitted(
         app.state.clone(),
         accept.map(|value| value.0),
-        crate::utils::extractors::NoritoJson(req),
+        req,
+        admission,
     )
     .await
 }
@@ -16047,10 +16012,12 @@ async fn handler_zk_merkle_path(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/merkle-path", true).await?;
-    routing::handle_v1_zk_merkle_path(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_zk_merkle_path_admitted(
         app.state.clone(),
         accept.map(|value| value.0),
-        crate::utils::extractors::NoritoJson(req),
+        req,
+        admission,
     )
     .await
 }
@@ -16061,7 +16028,7 @@ async fn handler_zk_verify_batch(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     enforce_proof_body_limit(&app, body.len(), "v1/zk/verify-batch")?;
     check_proof_access(
@@ -16074,7 +16041,18 @@ async fn handler_zk_verify_batch(
     )
     .await?;
 
+    let format = match crate::utils::typed_request_content_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
     let halo2 = app.state.zk_snapshot().halo2;
+    if !halo2.enabled {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "halo2 verification is disabled in node configuration".to_owned(),
+            ),
+        ));
+    }
     let limits = routing::ZkVerifyBatchLimits {
         open: iroha_zkp_halo2::OpenVerifyLimits::new(halo2.max_k, halo2.max_transcript_label_len),
         max_body_bytes: usize::try_from(app.proof_limits.max_body_bytes).unwrap_or(usize::MAX),
@@ -16082,8 +16060,9 @@ async fn handler_zk_verify_batch(
         max_envelope_bytes: halo2.max_envelope_bytes,
         enforce_transcript_label_ascii: halo2.enforce_transcript_label_ascii,
     };
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
 
-    routing::handle_v1_zk_verify_batch_with_limits(headers, body, limits).await
+    routing::handle_v1_zk_verify_batch_admitted(format, body, limits, admission).await
 }
 
 #[derive(
@@ -16096,6 +16075,7 @@ async fn handler_zk_verify_batch(
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 /// Request body for `POST /v1/zk/ivm/derive`.
 pub struct ZkIvmDeriveRequestDto {
     /// Verifying key reference used to select circuit parameters (gas schedule id, version).
@@ -16139,6 +16119,7 @@ pub struct ZkIvmDeriveResponseDto {
     PartialEq,
     Eq,
 )]
+#[norito(deny_unknown_fields)]
 /// Request body for `POST /v1/zk/ivm/prove`.
 pub struct ZkIvmProveRequestDto {
     /// Verifying key reference to use when producing the proof attachment.
@@ -16159,6 +16140,26 @@ pub struct ZkIvmProveRequestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub proved: Option<iroha_data_model::transaction::IvmProved>,
+}
+
+#[cfg(test)]
+mod zk_ivm_request_dto_json_tests {
+    use super::*;
+
+    #[test]
+    fn closed_zk_ivm_requests_reject_unknown_json_fields() {
+        for error in [
+            norito::json::from_str::<ZkIvmDeriveRequestDto>(r#"{"unexpected":true}"#)
+                .expect_err("derive request must reject unknown fields"),
+            norito::json::from_str::<ZkIvmProveRequestDto>(r#"{"unexpected":true}"#)
+                .expect_err("prove request must reject unknown fields"),
+        ] {
+            match error {
+                norito::json::Error::UnknownField { field } => assert_eq!(field, "unexpected"),
+                other => panic!("expected unknown field error, got {other:?}"),
+            }
+        }
+    }
 }
 
 #[derive(
@@ -19385,9 +19386,7 @@ fn signed_transaction_hash_for_entrypoint(
     match entrypoint {
         TransactionEntrypoint::External(signed) => Some(signed.hash()),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-        TransactionEntrypoint::SealedCommitment(_)
-        | TransactionEntrypoint::PrivateKaigi(_)
-        | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
 
@@ -22948,10 +22947,6 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AssetEscrowRecord(right),
         ) => merge_variant!(left, right, AssetEscrowRecord),
         (
-            QueryOutputBatchBox::AnonymousAssetEscrowRecord(mut left),
-            QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
-        ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
-        (
             QueryOutputBatchBox::FeeSponsorProgram(mut left),
             QueryOutputBatchBox::FeeSponsorProgram(right),
         ) => merge_variant!(left, right, FeeSponsorProgram),
@@ -23077,9 +23072,6 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::AssetEscrowRecord(items) => {
             canonicalize_variant!(items, AssetEscrowRecord)
-        }
-        QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
-            canonicalize_variant!(items, AnonymousAssetEscrowRecord)
         }
         QueryOutputBatchBox::FeeSponsorProgram(items) => {
             canonicalize_variant!(items, FeeSponsorProgram)
@@ -34868,10 +34860,11 @@ async fn handler_sumeragi_evidence(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<utils::extractors::ExtractAccept>,
-    AxQuery(q): AxQuery<routing::EvidenceListQuery>,
+    crate::NoritoStringQuery(q): crate::NoritoStringQuery<routing::EvidenceListStringQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     validate_api_token(app.as_ref(), &headers)?;
+    let q = routing::EvidenceListQuery::try_from(q)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -34896,40 +34889,6 @@ async fn handler_sumeragi_evidence(
     )
     .await
     .map(axum::response::IntoResponse::into_response)
-}
-
-async fn handler_sumeragi_evidence_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<routing::EvidenceSubmitRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    use axum::response::IntoResponse;
-    validate_api_token(app.as_ref(), &headers)?;
-
-    let Some(handle) = app.sumeragi.clone() else {
-        return Ok(axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response());
-    };
-
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/evidence/submit",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-
-    routing::handle_post_sumeragi_evidence_submit(
-        handle,
-        request,
-        app.state.as_ref(),
-        app.chain_id.as_ref(),
-    )
 }
 
 async fn handler_sumeragi_evidence_count(
@@ -44283,64 +44242,6 @@ fn map_block_proof_error(error: BlockProofError) -> Error {
     }
 }
 
-async fn handler_sumeragi_vrf_commit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<routing::VrfCommitRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    use axum::response::IntoResponse;
-    validate_api_token(app.as_ref(), &headers)?;
-
-    let Some(handle) = app.sumeragi.clone() else {
-        return Ok(axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response());
-    };
-
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/vrf/commit",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-
-    routing::handle_post_sumeragi_vrf_commit(handle, request)
-}
-
-async fn handler_sumeragi_vrf_reveal(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<routing::VrfRevealRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    use axum::response::IntoResponse;
-    validate_api_token(app.as_ref(), &headers)?;
-
-    let Some(handle) = app.sumeragi.clone() else {
-        return Ok(axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response());
-    };
-
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/vrf/reveal",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-
-    routing::handle_post_sumeragi_vrf_reveal(handle, request)
-}
-
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
 // (re-exports consolidated above)
 mod da;
@@ -48729,21 +48630,6 @@ impl Torii {
             mount_get!(PARAMETERS, handler_sumeragi_params);
             mount_get!(COMMIT_QC, handler_commit_qc);
         }
-
-        let app_state = builder.state().clone();
-        builder.route(
-            &route_catalog::sumeragi::EVIDENCE_SUBMIT,
-            catalog_post(handler_sumeragi_evidence_submit)
-                .authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sumeragi::VRF_COMMIT,
-            catalog_post(handler_sumeragi_vrf_commit).authenticated_operator(app_state.clone()),
-        );
-        builder.route(
-            &route_catalog::sumeragi::VRF_REVEAL,
-            catalog_post(handler_sumeragi_vrf_reveal).authenticated_operator(app_state.clone()),
-        );
     }
 
     fn add_core_info_routes(&self, builder: &mut RouterBuilder) {
@@ -49196,6 +49082,10 @@ impl Torii {
             catalog_post(musubi::handler_find_exact_release),
         );
         builder.route(
+            &route_catalog::musubi::PROVIDER_BUNDLE_ATTESTATION,
+            catalog_post(musubi::handler_find_provider_bundle_attestation),
+        );
+        builder.route(
             &route_catalog::musubi::RESOLVER_INDEX,
             catalog_post(musubi::handler_find_resolver_index),
         );
@@ -49238,6 +49128,10 @@ impl Torii {
         builder.route(
             &route_catalog::musubi::ARCHIVE_REGISTER,
             catalog_post(musubi::handler_build_archive_register),
+        );
+        builder.route(
+            &route_catalog::musubi::PROVIDER_BUNDLE_ATTESTATION_REGISTER,
+            catalog_post(musubi::handler_build_provider_bundle_attestation_register),
         );
         builder.route(
             &route_catalog::musubi::ARCHIVE_LOCATION_ADD,
@@ -50782,14 +50676,6 @@ impl Torii {
             catalog_get(handler_confidential_asset_transitions),
         );
         builder.route(
-            &route_catalog::application_api::CONFIDENTIAL_NOTES_GET,
-            catalog_get(handler_confidential_notes),
-        );
-        builder.route(
-            &route_catalog::application_api::CONFIDENTIAL_RELAY_SUBMIT_POST,
-            catalog_post(handler_confidential_relay_submit),
-        );
-        builder.route(
             &route_catalog::application_api::NFTS_GET,
             catalog_get(handler_nfts_list),
         );
@@ -51713,7 +51599,6 @@ impl Torii {
             mount_get!(GOV_LOCKS_GET, handler_gov_locks_get);
             mount_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);
             mount_get!(GOV_TALLY_GET, handler_gov_tally_get);
-            mount_post!(GOV_BALLOT_ZK, handler_gov_ballot_zk);
             mount_post!(GOV_BALLOT_ZK_V1, handler_gov_ballot_zk_v1);
             mount_post!(
                 GOV_BALLOT_ZK_V1_PROOF,
@@ -54804,7 +54689,7 @@ fn build_sorafs_gateway_security(
     let policy_config = GatewayPolicyConfig {
         require_manifest_envelope: config.require_manifest_envelope,
         enforce_admission: config.enforce_admission,
-        rate_limit: rate_limit.clone(),
+        rate_limit,
     };
     let rate_limiter = GatewayRateLimiter::new(rate_limit);
     let policy = Arc::new(GatewayPolicy::new(policy_config, admission, rate_limiter));

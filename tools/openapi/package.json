@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "sync-openapi": "node scripts/sync-openapi.mjs --version=current --latest",
+    "sync-openapi": "node scripts/sync-openapi.mjs --version=current --latest --output-dir=../../artifacts/openapi",
     "check:openapi-signatures": "node scripts/check-openapi-signatures.mjs",
     "check:openapi-release-inputs": "node scripts/verify-openapi-release-inputs.mjs",
     "check:musubi-v1": "node scripts/verify-musubi-v1-contract.mjs",

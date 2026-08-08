@@ -349,8 +349,7 @@
           "path": "crates/iroha_core/src/state.rs",
           "required_tokens": [
             "pub fn native_amx_participant_applications_diagnostics(",
-            "No adapter/session",
-            "cache is consulted."
+            "No adapter/session cache is consulted."
           ]
         },
         {
@@ -1947,9 +1946,9 @@
         ]
       },
       {
-        "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
-        "kind": "method",
-        "symbol": "ProductionV2Services::current_lane_output_rollover_claim",
+        "path": "crates/iroha_core/src/sumeragi/v2_worker/current_lane_output_rollover_claim.rs",
+        "kind": "fn",
+        "symbol": "current_lane_output_rollover_claim",
         "required_tokens": [
           "BlockMessage::LaneExecutablePayload",
           "BlockMessage::LaneBlockNewViewVote",
@@ -4368,6 +4367,12 @@
         ]
       },
       {
+        "path": "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "required_tokens": [
+          "include!(\"v2_worker/current_lane_output_rollover_claim.rs\");"
+        ]
+      },
+      {
         "path": "crates/iroha_core/src/lane_consensus.rs",
         "required_tokens": [
           "pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;",
@@ -6736,7 +6741,166 @@
           "required_tokens": [
             "height_context",
             ".roster",
-            "commit_qc.signers.iter().any"
+            "commit_qc.signers.binary_search"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "pending_native_participant_recovery_markers",
+          "required_tokens": [
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
+            "session_capacity",
+            "NativeAmxParticipantRecoveryMarkerV1::from"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "retire_native_participant_recovery_request",
+          "required_tokens": [
+            "native_participant_recovery_requests.remove",
+            "native_participant_recovery_request_owners",
+            "self.effects.retain",
+            "LaneHistoricalRecoveryRequest",
+            "self.effect_keys = self.effects.iter"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "reconcile_native_participant_recovery_requests",
+          "required_tokens": [
+            "pending_native_participant_recovery_markers",
+            "filter(|marker| !pending.contains(marker))",
+            "retire_native_participant_recovery_request"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "service_next_native_participant_recovery_request",
+          "required_tokens": [
+            "output_guard.acquire",
+            "reconcile_native_participant_recovery_requests",
+            "native_participant_recovery_retry_cursor",
+            "schedule_native_participant_recovery_request"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "schedule_native_participant_recovery_request",
+          "required_tokens": [
+            "native_participant_recovery_marker_is_well_formed",
+            "committed_block_hash_at_height",
+            "v2_finality_artifact",
+            "finality.verify",
+            "finality.commit_qc",
+            ".signers",
+            "push_effect",
+            "native_participant_recovery_request_owners",
+            "native_participant_recovery_requests.insert"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "validate_native_participant_recovery_request",
+          "required_tokens": [
+            "LANE_HISTORICAL_RECOVERY_VERSION_V2",
+            "request.certificate.is_some",
+            "request.signer_pops.is_empty",
+            "historical_recovery_request_fits_frame",
+            "lane_route_active",
+            "committed_block_hash_at_height",
+            "v2_finality_artifact",
+            "finality.verify",
+            "requester_is_authorized",
+            "finality_artifact_hash",
+            "execution_commitment"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "serve_historical_recovery_request",
+          "required_tokens": [
+            "validate_native_participant_recovery_request",
+            "peer_is_global_finality_signer",
+            "kura.get_block",
+            "native_participant_recovery_block_matches_finality",
+            "historical_recovery_response_fits_frame",
+            "LaneHistoricalRecoveryResponse"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "accept_native_participant_recovery_response",
+          "required_tokens": [
+            "native_participant_recovery_requests",
+            "pending_native_participant_recovery_markers",
+            "peer_is_global_finality_signer",
+            "native_participant_recovery_block_matches_finality",
+            "cache_block_body",
+            "repair_native_amx_participant_application_evidence",
+            "reconcile_native_participant_recovery_requests",
+            "close_admission_for_restart"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
+          "required_tokens": [
+            "begin_fail_stop_operation",
+            "prune_finalized_pending_certified_merge_entries",
+            "repair_globally_applied_lane_receipts",
+            "hydrate_canonical_lane_artifacts",
+            "drive_lane_sessions",
+            "construction.complete"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::repair_globally_applied_lane_receipts",
+          "required_tokens": [
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
+            "pending_native.len() > self.limits.session_capacity.get()",
+            "kura.get_block",
+            "schedule_native_participant_recovery_request",
+            "repair_native_amx_participant_application_evidence",
+            "unresolved_native",
+            "remains without exact durable evidence after repair"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::has_pending_historical_recovery",
+          "required_tokens": [
+            "historical_recovery_sessions.is_empty",
+            "native_participant_recovery_requests.is_empty",
+            "pending_native_participant_recovery_markers",
+            "Err(_) => true"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "run_inner",
+          "required_tokens": [
+            "service_next_native_participant_recovery_request",
+            "next_lane_retransmit",
+            "retransmit_interval",
+            "schedule_autonomous_new_view_timeouts",
+            "schedule_retransmission",
+            "deadline_after(now, retransmit_interval)",
+            "block_sync_frame_byte_capacity",
+            "service_historical_recovery_tick",
+            "dispatch_lane_work_effects"
           ]
         },
         {
@@ -10488,8 +10652,7 @@
             "routing_plan.digest",
             "durable_plan_claims.remove",
             "remove_hashes_from_fifo_locked",
-            "remove_transaction_locked",
-            "remove_hashes_from_fifo_locked(&HashSet::from([hash]))"
+            "remove_transaction_locked"
           ]
         },
         {
@@ -10784,6 +10947,7 @@
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
+            "finalize_plan_journal_startup_recovery()",
             "IrohaNetwork::start_with_crypto_and_initial_trusted_sources("
           ]
         },

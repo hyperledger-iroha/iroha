@@ -7,7 +7,6 @@ use iroha_core::{
     query::{insert_proof_record_for_test, store::LiveQueryStore},
     smartcontracts::Execute,
     state::{State, WorldReadOnly},
-    telemetry::StateTelemetry,
 };
 use iroha_data_model::{
     bridge::BridgeProofRecord,
@@ -64,11 +63,10 @@ fn make_transparent_proof(range: (u64, u64)) -> BridgeProof {
 }
 
 fn state_for_test() -> State {
-    State::with_telemetry(
+    State::new_for_testing(
         iroha_core::state::World::new(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-        StateTelemetry::default(),
     )
 }
 

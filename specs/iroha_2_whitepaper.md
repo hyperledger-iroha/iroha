@@ -122,9 +122,11 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
   assets) so multi-step rollouts can be managed on-chain with governance approval.
 - **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
   round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
-- **Confidential registries and events** capture shielded asset descriptors, verifier keys, commitments,
-  nullifiers, and event payloads (`ConfidentialEvent::{Shielded,Transferred,Unshielded}`) so confidential flows
-  remain auditable without leaking plaintext data.
+- **Confidential registries and events** capture asset policies, verifier keys,
+  commitments, nullifiers, and authenticated transfer events. Public settlement
+  is recorded by the specialized Kagemusha top-up/redemption anchor, drawdown,
+  escrow, and receipt state; V1 exposes no generic shield/transfer/unshield
+  event family.
 
 ## 4. Transaction lifecycle
 

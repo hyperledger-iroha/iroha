@@ -7,7 +7,6 @@ error[E0277]: the trait bound `std::string::String: BuiltInInstruction` is not s
   |                        required by a bound introduced by this call
   |
   = help: the following other types implement trait `data_model::seal::Instruction`:
-            AcceptAnonymousAssetEscrow
             AcceptAssetEscrow
             AcceptSorafsModerationJurorAssignment
             AcknowledgeSoracloudAgentMessage

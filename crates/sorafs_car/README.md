@@ -33,6 +33,11 @@ Right now it exposes:
   `ingest_bytes`, plan-based ingestion, proof construction, and deterministic
   sampling all return structured errors; allocation, source-I/O, and digest
   failures are never represented as a successful empty result.
+- With the `manifest` feature, `musubi::MusubiBundleVerifierV1` revalidates a
+  bounded plan and exact canonical CAR against `MusubiArchiveCommitmentV1`,
+  parses the mandatory descriptor, semantic manifest, and verification lock,
+  and returns typed evidence only after every source and bundle transcript is
+  bound. Failures expose only a closed, payload-free integrity surface.
 
 ## First-release safety contract
 

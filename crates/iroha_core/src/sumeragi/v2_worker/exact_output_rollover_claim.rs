@@ -3,6 +3,13 @@ enum ExactOutputRolloverClaim {
     /// Manually assembled output has no semantic rollover authority.
     Exact,
     GlobalV2(ExactOutputCreationScope),
+    /// Canonical payload chunks emitted in a separate fanout from their
+    /// proposal. The exact manifest is retained so finality handoff can
+    /// revalidate every chunk and signature against the applied context.
+    PayloadChunks {
+        scope: ExactOutputCreationScope,
+        manifest: wire::PayloadManifest,
+    },
     Lane(ExactOutputCreationScope),
     /// Kura-backed autonomous payload or NewView output that the successor
     /// rehydrates and deterministically retransmits with the same local
@@ -139,6 +146,7 @@ impl ExactOutputRolloverClaim {
         match self {
             Self::Exact | Self::NonRetireableLaneTransport { .. } => None,
             Self::GlobalV2(scope) | Self::Lane(scope) => Some(*scope),
+            Self::PayloadChunks { scope, .. } => Some(*scope),
             Self::AutonomousLane { scope, .. } => Some(*scope),
             Self::DurableCommitCertificateResponse { scope, .. }
             | Self::DurableCertifiedBodyResponse { scope, .. }
@@ -197,6 +205,42 @@ impl ExactOutputRolloverClaim {
                 } else {
                     Err("global-v2 rollover claim covers a different output kind".to_owned())
                 }
+            }
+            Self::PayloadChunks { manifest, .. } => {
+                let manifest_hash = HashOf::new(manifest);
+                if messages.len() != manifest.chunk_hashes.len() {
+                    return Err(
+                        "payload-chunk rollover claim changed the exact chunk count".to_owned(),
+                    );
+                }
+                for (expected_index, message) in messages.iter().enumerate() {
+                    let NetworkMessage::SumeragiBlock(envelope) = message else {
+                        return Err(
+                            "payload-chunk rollover claim covers a non-Sumeragi message".to_owned(),
+                        );
+                    };
+                    let BlockMessage::V2(message) = envelope.as_message() else {
+                        return Err("payload-chunk rollover claim covers a lane message".to_owned());
+                    };
+                    message
+                        .validate_version()
+                        .map_err(|error| error.to_string())?;
+                    let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload
+                    else {
+                        return Err(
+                            "payload-chunk rollover claim covers another v2 payload".to_owned(),
+                        );
+                    };
+                    if chunk.manifest_hash != manifest_hash
+                        || usize::try_from(chunk.index).ok() != Some(expected_index)
+                    {
+                        return Err(
+                            "payload-chunk rollover claim changed exact manifest coordinates"
+                                .to_owned(),
+                        );
+                    }
+                }
+                Ok(())
             }
             Self::Lane(_) => {
                 if messages.iter().all(|message| {

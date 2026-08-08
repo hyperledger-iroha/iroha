@@ -49,6 +49,7 @@ pub const AGENDA_PROPOSAL_VERSION_V1: u16 = 1;
 /// Citizen agenda proposal submitted to the Ministry of Information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgendaProposalV1 {
     /// Schema version; must equal [`AGENDA_PROPOSAL_VERSION_V1`].
     pub version: u16,
@@ -97,7 +98,7 @@ impl AgendaProposalV1 {
         if self.proposal_id.trim().is_empty() {
             return Err(AgendaProposalValidationError::MissingProposalId);
         }
-        if !self.proposal_id.starts_with("AC-") {
+        if !is_valid_agenda_proposal_id(&self.proposal_id) {
             return Err(AgendaProposalValidationError::InvalidProposalIdFormat {
                 value: self.proposal_id.clone(),
             });
@@ -228,6 +229,7 @@ pub enum AgendaProposalAction {
 /// Human-readable summary metadata for the proposal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgendaProposalSummary {
     /// Short title for the proposal.
     pub title: String,
@@ -240,6 +242,7 @@ pub struct AgendaProposalSummary {
 /// Target entry referenced by the proposal (e.g., perceptual hash digest).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgendaProposalTarget {
     /// Display label describing the entry (e.g., file set).
     pub label: String,
@@ -265,6 +268,7 @@ impl AgendaProposalTarget {
 /// Evidence attachment supporting the proposal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgendaEvidenceAttachment {
     /// Evidence kind (URL, `SoraFS` CID, Torii case, etc.).
     #[cfg_attr(
@@ -309,6 +313,7 @@ pub enum AgendaEvidenceKind {
 /// Submitter metadata recorded with the proposal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgendaProposalSubmitter {
     /// Individual or organization name.
     pub name: String,
@@ -451,8 +456,7 @@ const ALLOWED_TAGS: &[&str] = &[
 ];
 
 fn is_allowed_tag(tag: &str) -> bool {
-    let normalized = tag.trim().to_lowercase();
-    !normalized.is_empty() && ALLOWED_TAGS.contains(&normalized.as_str())
+    ALLOWED_TAGS.contains(&tag)
 }
 
 fn is_hex(value: &str) -> bool {
@@ -461,7 +465,8 @@ fn is_hex(value: &str) -> bool {
 
 fn is_valid_hash_family(value: &str) -> bool {
     let trimmed = value.trim();
-    !trimmed.is_empty()
+    trimmed == value
+        && !trimmed.is_empty()
         && trimmed.len() <= 48
         && trimmed
             .chars()
@@ -470,12 +475,25 @@ fn is_valid_hash_family(value: &str) -> bool {
 
 fn is_valid_language_tag(value: &str) -> bool {
     let trimmed = value.trim();
-    if trimmed.len() < 2 || trimmed.len() > 32 {
+    if trimmed != value || trimmed.len() < 2 || trimmed.len() > 32 {
         return false;
     }
     trimmed
         .split('-')
         .all(|segment| segment.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// Return whether `value` is an exact first-release Ministry agenda proposal identifier.
+///
+/// The accepted grammar is `AC-YYYY-###`; case, whitespace, and width aliases are rejected.
+#[must_use]
+pub fn is_valid_agenda_proposal_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 11
+        && bytes.starts_with(b"AC-")
+        && bytes[3..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..11].iter().all(u8::is_ascii_digit)
 }
 
 fn is_valid_brief_id(value: &str) -> bool {
@@ -1482,6 +1500,33 @@ mod tests {
     }
 
     #[test]
+    fn agenda_proposal_requires_exact_id_and_canonical_labels() {
+        assert!(is_valid_agenda_proposal_id("AC-2026-001"));
+        for proposal_id in ["AC-2026-01", "AC-2026-0001", " AC-2026-001", "AC-202A-001"] {
+            assert!(!is_valid_agenda_proposal_id(proposal_id));
+            let mut proposal = sample_proposal();
+            proposal.proposal_id = proposal_id.to_owned();
+            assert!(matches!(
+                proposal.validate(),
+                Err(AgendaProposalValidationError::InvalidProposalIdFormat { .. })
+            ));
+        }
+
+        let mut proposal = sample_proposal();
+        proposal.tags = vec![" CSAM ".to_owned()];
+        assert!(matches!(
+            proposal.validate(),
+            Err(AgendaProposalValidationError::InvalidTag { .. })
+        ));
+        let mut proposal = sample_proposal();
+        proposal.language = " en ".to_owned();
+        assert!(matches!(
+            proposal.validate(),
+            Err(AgendaProposalValidationError::InvalidLanguageTag { .. })
+        ));
+    }
+
+    #[test]
     fn agenda_proposal_rejects_duplicate_targets() {
         let mut proposal = sample_proposal();
         proposal.targets.push(proposal.targets[0].clone());
@@ -1502,6 +1547,26 @@ mod tests {
         let decoded: AgendaProposalV1 =
             norito::json::from_str(&json).expect("deserialize agenda proposal JSON");
         assert_eq!(decoded, proposal);
+    }
+
+    #[test]
+    fn agenda_proposal_json_rejects_unknown_top_level_and_nested_fields() {
+        let proposal = sample_proposal();
+        let mut top_level = json::to_value(&proposal).expect("agenda proposal JSON value");
+        top_level
+            .as_object_mut()
+            .expect("agenda proposal object")
+            .insert("private_key".to_owned(), json::Value::from("secret"));
+        assert!(json::from_value::<AgendaProposalV1>(top_level).is_err());
+
+        let mut nested = json::to_value(&proposal).expect("agenda proposal JSON value");
+        nested
+            .as_object_mut()
+            .and_then(|proposal| proposal.get_mut("summary"))
+            .and_then(json::Value::as_object_mut)
+            .expect("agenda proposal summary")
+            .insert("privateKey".to_owned(), json::Value::from("secret"));
+        assert!(json::from_value::<AgendaProposalV1>(nested).is_err());
     }
 
     #[test]

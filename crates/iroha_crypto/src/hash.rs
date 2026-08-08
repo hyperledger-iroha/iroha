@@ -165,7 +165,7 @@ impl Hash {
 
         let mut writer = HashWriter::new();
         let mut total = 0_u64;
-        let mut buffer = vec![0_u8; BUFFER_BYTES].into_boxed_slice();
+        let mut buffer = vec![0_u8; BUFFER_BYTES];
         loop {
             let read = std::io::Read::read(&mut reader, &mut buffer)?;
             if read == 0 {

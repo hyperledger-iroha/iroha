@@ -364,6 +364,8 @@ network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 
 ## Kagemusha proof artifacts and device registration
 
+ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
+native signer method; confidential movement uses the typed Kagemusha lifecycle.
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
 requires native bridge ABI 21, streams the eight authenticated V4 proof artifacts into an atomic
 generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
@@ -1517,11 +1519,12 @@ or compatibility-only payload in the Java resource directory.
 
 `MusubiToriiClientV1` and `MusubiModelsV1` mirror the Kotlin-default first-release
 registry surface without reflection, Android framework dependencies, or legacy
-wire aliases. The signer-free client exposes all eleven typed
+wire aliases. The signer-free client exposes all twelve typed
 `/v1/musubi/queries/*` POST routes and strictly preserves structured package IDs,
 immutable namespace bindings, SemVer requirement ASTs, chain/genesis lock
 identity, finalized cursors, and authoritative archive commitments. Unknown
-fields and unsupported versions fail closed.
+fields, unsupported versions, and duplicate parent-local dependency aliases
+fail closed.
 
 Both Java and Kotlin validate the Rust-owned contract in
 [`fixtures/musubi/sdk_v1.json`](../../fixtures/musubi/sdk_v1.json). Credentials, if
@@ -1549,7 +1552,7 @@ reasons use the canonical non-empty
 `MusubiModelsV1.Reason` value bounded to 1,024 UTF-8 bytes. Each builder exposes
 `barePayload()`, `concreteFrame()`, and
 `toInstructionBox()` and is checked at all four framing layers against
-all eighteen cases in
+all nineteen cases in
 [`fixtures/musubi/instructions_v1.json`](../../fixtures/musubi/instructions_v1.json).
 
 ## License

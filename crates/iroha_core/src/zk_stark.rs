@@ -2290,6 +2290,7 @@ pub fn stark_air_public_digest_from_composition(
 /// composition evaluations are the result of their arithmetic constraint system. This helper commits
 /// those already-evaluated vectors and emits transcript-derived AIR openings bound to the same FRI
 /// query roots replayed by the verifier.
+#[cfg(test)]
 pub(crate) fn prove_stark_fri_air_envelope_from_rows_and_composition_values_bytes(
     params: StarkFriParamsV1,
     transcript_label: String,

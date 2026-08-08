@@ -8,10 +8,16 @@ struct MusubiPersistedState<'a> {
         &'a Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1>,
     releases: &'a Storage<MusubiReleaseIdV1, MusubiReleaseRecordV1>,
     archives: &'a Storage<ArchiveId, MusubiArchiveRecordV1>,
+    provider_bundle_attestations: &'a Storage<
+        MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1,
+    >,
     archive_locations: &'a Storage<MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
     archive_availability: &'a Storage<ArchiveId, MusubiArchiveAvailabilityV1>,
     archive_reverse_references: &'a Storage<ArchiveId, MusubiArchiveReverseReferencesV1>,
     resolver_index: &'a Storage<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+    resolver_index_checkpoints:
+        &'a Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     public_directory: &'a Storage<MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
     aliases: &'a Storage<MusubiAliasNameV1, MusubiAliasRecordV1>,
     alias_history: &'a Storage<MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
@@ -31,10 +37,15 @@ impl MusubiPersistedState<'_> {
         let maintainer_directory = self.maintainer_directory.view();
         let releases = self.releases.view();
         let archives = self.archives.view();
+        let provider_bundle_attestations = self.provider_bundle_attestations.view();
         let archive_locations = self.archive_locations.view();
         let archive_availability = self.archive_availability.view();
         let archive_reverse_references = self.archive_reverse_references.view();
         let resolver_index = self.resolver_index.view();
+        validate_musubi_resolver_checkpoint_structure(
+            self.resolver_index_checkpoints,
+            self.resolver_index_revision,
+        )?;
         let public_directory = self.public_directory.view();
         let aliases = self.aliases.view();
         let alias_history = self.alias_history.view();
@@ -262,6 +273,42 @@ impl MusubiPersistedState<'_> {
             BTreeMap::<ArchiveId, Vec<iroha_data_model::musubi::MusubiArchiveLocationIdV1>>::new();
         let mut location_providers =
             BTreeMap::<ArchiveId, BTreeSet<iroha_data_model::sorafs::capacity::ProviderId>>::new();
+
+        for (attestation_key, record) in provider_bundle_attestations.iter() {
+            record.validate().map_err(|error| {
+                invalid_musubi_state("musubi_provider_bundle_attestations", error.to_string())
+            })?;
+            if attestation_key != &record.key {
+                return Err(invalid_musubi_state(
+                    "musubi_provider_bundle_attestations",
+                    "provider-attestation key does not match the stored record",
+                ));
+            }
+            let archive = archives.get(&record.key.archive_id).ok_or_else(|| {
+                invalid_musubi_state(
+                    "musubi_provider_bundle_attestations",
+                    "provider attestation references a missing archive",
+                )
+            })?;
+            let receipt = &archive.staging_receipt.payload.binding;
+            let binding = &record.attestation.payload.binding;
+            if record.registered_at_height < archive.registered_at_height
+                || binding.chain_id != receipt.chain_id
+                || binding.genesis_block_hash != receipt.genesis_block_hash
+                || binding.archive_id != archive.archive_id
+                || binding.bundle_digest != archive.commitment.bundle_digest
+                || binding.descriptor_digest != archive.commitment.descriptor_digest
+                || binding.semantic_release_manifest_digest
+                    != receipt.semantic_release_manifest_digest
+                || binding.source_tree_digest != archive.commitment.source_tree_digest
+            {
+                return Err(invalid_musubi_state(
+                    "musubi_provider_bundle_attestations",
+                    "provider attestation does not match the archive and ingress receipt commitments",
+                ));
+            }
+        }
+
         for (location_key, location) in archive_locations.iter() {
             location.validate().map_err(|error| {
                 invalid_musubi_state("musubi_archive_locations", error.to_string())
@@ -272,21 +319,45 @@ impl MusubiPersistedState<'_> {
                     "archive location references a missing archive",
                 )
             })?;
-            let receipt = &archive.staging_receipt.payload.binding;
-            if location.provider_attestations.iter().any(|attestation| {
-                let binding = &attestation.payload.binding;
-                binding.chain_id != receipt.chain_id
-                    || binding.genesis_block_hash != receipt.genesis_block_hash
-                    || binding.archive_id != archive.archive_id
-                    || binding.bundle_digest != archive.commitment.bundle_digest
-                    || binding.descriptor_digest != archive.commitment.descriptor_digest
-                    || binding.semantic_release_manifest_digest
-                        != receipt.semantic_release_manifest_digest
-                    || binding.source_tree_digest != archive.commitment.source_tree_digest
-            }) {
+            let mut attestation_references = Vec::with_capacity(location.providers.len());
+            let mut verification_lock_digest = None;
+            for provider_id in &location.providers {
+                let key = MusubiProviderBundleAttestationKeyV1 {
+                    archive_id: location.archive_id,
+                    replication_order: location.replication_order,
+                    provider_id: *provider_id,
+                };
+                let record = provider_bundle_attestations.get(&key).ok_or_else(|| {
+                    invalid_musubi_state(
+                        "musubi_archive_locations",
+                        "archive location references a missing exact provider attestation",
+                    )
+                })?;
+                let digest = record.attestation.payload.binding.verification_lock_digest;
+                if verification_lock_digest.is_some_and(|expected| expected != digest) {
+                    return Err(invalid_musubi_state(
+                        "musubi_archive_locations",
+                        "archive-location provider attestations disagree on the verification lock",
+                    ));
+                }
+                verification_lock_digest = Some(digest);
+                attestation_references.push(MusubiProviderBundleAttestationRefV1 {
+                    provider_id: *provider_id,
+                    digest: record.attestation_digest,
+                });
+            }
+            let attestation_set_digest = musubi_provider_bundle_attestation_set_digest_v1(
+                location.archive_id,
+                location.replication_order,
+                &attestation_references,
+            )
+            .map_err(|error| {
+                invalid_musubi_state("musubi_archive_locations", error.to_string())
+            })?;
+            if attestation_set_digest != location.provider_attestation_set_digest {
                 return Err(invalid_musubi_state(
                     "musubi_archive_locations",
-                    "provider attestation does not match the archive and ingress receipt commitments",
+                    "archive-location provider-attestation set digest is not exact",
                 ));
             }
             if location_key != &location.key() || location.revision > archive.location_revision {
@@ -1264,6 +1335,8 @@ fn parse_world(value: json::Value, ivm_seed: &IvmSeed<'_, World>) -> Result<Worl
     let musubi_maintainer_directory = take_required(&mut map, "musubi_maintainer_directory")?;
     let musubi_releases = take_required(&mut map, "musubi_releases")?;
     let musubi_archives = take_required(&mut map, "musubi_archives")?;
+    let musubi_provider_bundle_attestations =
+        take_required(&mut map, "musubi_provider_bundle_attestations")?;
     let musubi_archive_locations = take_required(&mut map, "musubi_archive_locations")?;
     let musubi_locations_by_pin = take_required(&mut map, "musubi_locations_by_pin")?;
     let musubi_locations_by_replication_order =
@@ -1279,6 +1352,7 @@ fn parse_world(value: json::Value, ivm_seed: &IvmSeed<'_, World>) -> Result<Worl
     let musubi_archive_reverse_references =
         take_required(&mut map, "musubi_archive_reverse_references")?;
     let musubi_resolver_index = take_required(&mut map, "musubi_resolver_index")?;
+    let musubi_resolver_index_checkpoints = take_musubi_resolver_index_checkpoints(&mut map)?;
     let musubi_public_directory = take_required(&mut map, "musubi_public_directory")?;
     let musubi_aliases = take_required(&mut map, "musubi_aliases")?;
     let musubi_alias_history = take_required(&mut map, "musubi_alias_history")?;
@@ -1375,7 +1449,6 @@ fn parse_world(value: json::Value, ivm_seed: &IvmSeed<'_, World>) -> Result<Worl
     let content_bundles = take_optional_default(&mut map, "content_bundles")?;
     let content_chunks = take_optional_default(&mut map, "content_chunks")?;
     let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
-    let anonymous_asset_escrows = take_optional_default(&mut map, "anonymous_asset_escrows")?;
     let vpn_leases = take_optional_default(&mut map, "vpn_leases")?;
     let merge_hint_roots: Cell<Vec<Hash>> = take_optional_default(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
@@ -1449,10 +1522,6 @@ fn parse_world(value: json::Value, ivm_seed: &IvmSeed<'_, World>) -> Result<Worl
         asset_escrows_by_seller: Storage::default(),
         asset_escrows_by_buyer: Storage::default(),
         asset_escrows_by_status: Storage::default(),
-        anonymous_asset_escrows,
-        anonymous_asset_escrows_by_seller: Storage::default(),
-        anonymous_asset_escrows_by_buyer: Storage::default(),
-        anonymous_asset_escrows_by_status: Storage::default(),
         vpn_leases,
         vpn_active_lease_by_account: Storage::default(),
         vpn_active_lease_by_address_slot: Storage::default(),
@@ -1510,6 +1579,7 @@ fn parse_world(value: json::Value, ivm_seed: &IvmSeed<'_, World>) -> Result<Worl
         musubi_maintainer_directory,
         musubi_releases,
         musubi_archives,
+        musubi_provider_bundle_attestations,
         musubi_archive_locations,
         musubi_locations_by_pin,
         musubi_locations_by_replication_order,
@@ -1517,6 +1587,7 @@ fn parse_world(value: json::Value, ivm_seed: &IvmSeed<'_, World>) -> Result<Worl
         musubi_archive_availability,
         musubi_archive_reverse_references,
         musubi_resolver_index,
+        musubi_resolver_index_checkpoints,
         musubi_public_directory,
         musubi_aliases,
         musubi_alias_history,
@@ -1627,10 +1698,12 @@ fn parse_world(value: json::Value, ivm_seed: &IvmSeed<'_, World>) -> Result<Worl
         maintainer_directory: &world.musubi_maintainer_directory,
         releases: &world.musubi_releases,
         archives: &world.musubi_archives,
+        provider_bundle_attestations: &world.musubi_provider_bundle_attestations,
         archive_locations: &world.musubi_archive_locations,
         archive_availability: &world.musubi_archive_availability,
         archive_reverse_references: &world.musubi_archive_reverse_references,
         resolver_index: &world.musubi_resolver_index,
+        resolver_index_checkpoints: &world.musubi_resolver_index_checkpoints,
         public_directory: &world.musubi_public_directory,
         aliases: &world.musubi_aliases,
         alias_history: &world.musubi_alias_history,
@@ -2420,10 +2493,12 @@ mod decode_tests {
             maintainer_directory: &world.musubi_maintainer_directory,
             releases: &world.musubi_releases,
             archives: &world.musubi_archives,
+            provider_bundle_attestations: &world.musubi_provider_bundle_attestations,
             archive_locations: &world.musubi_archive_locations,
             archive_availability: &world.musubi_archive_availability,
             archive_reverse_references: &world.musubi_archive_reverse_references,
             resolver_index: &world.musubi_resolver_index,
+            resolver_index_checkpoints: &world.musubi_resolver_index_checkpoints,
             public_directory: &world.musubi_public_directory,
             aliases: &world.musubi_aliases,
             alias_history: &world.musubi_alias_history,

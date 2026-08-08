@@ -1415,7 +1415,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
   sumeragi::v2_effects::tests::retained_producer_suffix_allows_exact_certified_response_to_release_fetch_capacity
   sumeragi::v2_effects::tests::retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch
-  sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed
+  sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner
   sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work
   sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes
   sumeragi::v2_effects::tests::retained_effect_tail_is_fifo_and_refilters_after_durable_decision
@@ -1559,6 +1559,7 @@ required_production_liveness_tests=(
   sumeragi::v2_recovery::tests::finalized_tip_derives_one_idempotent_successor_context
   sumeragi::v2_recovery::tests::successor_rejects_foreign_same_height_predecessor_and_mismatched_receipt
   sumeragi::v2_lifecycle_recovery::tests::generation_takeover_runs_crash_recover_and_rehydrate_then_stutters
+  sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart
   sumeragi::v2_lifecycle_recovery::tests::prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side
   sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt
   sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner
@@ -1894,7 +1895,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=834
+readonly expected_production_liveness_test_count=835
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1993,7 +1994,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 834-test liveness inventory above. The later
+# not belong to the canonical 835-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2136,6 +2137,55 @@ required_multilane_core_focus_tests=(
   kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
   kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
   kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
+  kura::tests::canonical_prune_capacity_includes_large_commit_roster_generation
+  kura::tests::startup_prune_capacity_reuses_large_roster_admission_exactly
+  kura::tests::active_prune_recovery_never_allocates_missing_retained_merge_carrier
+  kura::tests::historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rejection
+  kura::tests::historical_recovery_partial_batch_restart_completes_remaining_records
+  kura::tests::historical_recovery_append_crash_is_repaired_only_by_startup_before_replay
+  kura::tests::historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed
+  kura::tests::historical_recovery_acquires_prune_before_historical_mutation_lock
+  kura::tests::certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry
+  kura::tests::certified_bundle_rejects_mismatched_authority_before_reserving_or_writing
+  kura::tests::certified_bundle_authorized_active_slot_reset_publishes_exact_bundle
+  kura::tests::certified_bundle_active_slot_reset_without_authority_is_read_only
+  kura::tests::certified_bundle_regressed_proposal_height_rejects_before_reserving
+  kura::tests::certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing
+  kura::tests::certified_bundle_frontier_crash_rebuilds_exact_remaining_obligation
+  kura::tests::certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obligation
+  kura::tests::certified_frontier_build_conflict_fails_before_rebuild_map_publication
+  kura::tests::certified_pair_crash_rebuilds_only_bundle_obligation
+  kura::tests::durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback
+  kura::tests::bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation
+  kura::tests::certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit
+  kura::tests::certified_and_bundle_authenticated_append_builds_restart_at_original_exact_limit
+  kura::tests::append_intent_and_build_restart_preflight_reject_one_under_without_mutation
+  kura::tests::lane_retirement_is_blocked_by_outstanding_certified_bundle_reservation
+  kura::tests::certified_bundle_preflight_rejects_lone_append_build_without_mutation
+  kura::tests::certified_bundle_preflight_rejects_authenticated_mismatched_append_build
+  kura::tests::certified_bundle_preflight_checks_bad_older_history_beneath_exact_append_intent
+  kura::tests::certified_bundle_stale_incarnation_reservation_blocks_aba_without_mutation
+  kura::tests::certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error
+  kura::tests::historical_atomic_temp_fault_and_legacy_residue_recover_before_startup_inventory
+  kura::tests::historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry
+  kura::tests::historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion
+  kura::tests::historical_atomic_temp_rejects_multiple_names_for_one_target_before_mutation
+  kura::tests::historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks
+  kura::tests::historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutation
+  kura::tests::shared_autonomous_mutation_gate_counts_pending_canonical_bytes_exactly
+  kura::tests::startup_capacity_counts_pending_before_geometry_and_rejects_without_mutation
+  kura::tests::lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal
+  kura::tests::lane_history_compaction_rejects_data_only_temp_before_capacity_refusal
+  kura::tests::lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal
+  kura::tests::deterministic_commit_marker_temp_recovers_or_rolls_back_exactly
+  kura::tests::commit_marker_rejects_oversized_deterministic_temp
+  kura::tests::commit_marker_rejects_symlinked_deterministic_temp
+  commit_roster_journal::tests::durable_pointer_temp_recovers_forward_after_restart
+  commit_roster_journal::tests::durable_generation_temp_without_pointer_rolls_back_after_restart
+  commit_roster_journal::tests::partial_deterministic_temps_roll_back_to_stable_pointer
+  commit_roster_journal::tests::load_rejects_oversized_and_unexpected_publication_artifacts
+  commit_roster_journal::tests::load_rejects_symlinked_deterministic_publication_temp
+  commit_roster_journal::tests::prune_projection_accounts_large_generation_and_pointer_peak_exactly
   kura::tests::kura_start_rejects_unbound_local_peer_identity
   kura::tests::eviction_requires_distinct_matching_replica_adverts
   kura::tests::deterministic_commit_qc_keepers_use_f_plus_one_and_pin_a_local_keeper
@@ -2264,6 +2314,7 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_plan_valid_participant_predecessor_drift
   sumeragi::v2_lane_work::tests::native_signing_boundary_rejects_plan_valid_stale_coordinator_incarnation
   sumeragi::v2_apply::tests::historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application
+  sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart
   sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
 )
@@ -2489,7 +2540,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=474
+readonly expected_multilane_focus_test_count=524
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2660,7 +2711,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 474-row TSV is
+  # unambiguous one-test Cargo transcript per entry. The canonical 524-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2768,8 +2819,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 475 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 474 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 525 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 524 focused tests" >&2
     exit 1
   fi
 fi
@@ -3787,9 +3838,11 @@ if [[ "$profile" == "--release" ]]; then
 fi
 
 # G-12P is a distinct real-network gate from the reducer seed matrix above.
-# Its launcher starts ten fresh 12-peer networks, uses one canonical seed per
-# process, forbids retries, and validates each Cargo transcript as exactly one
-# scheduled/passing test before publishing completion accounting.
+# The stable identifier counts twelve lane-validator assignments. Its launcher
+# starts ten fresh exact 13-peer global committees, keeps the final voter out of
+# every lane committee, uses one canonical seed per process, forbids retries,
+# and validates each Cargo transcript as exactly one scheduled/passing test
+# before publishing completion accounting.
 nexus_cross_completion_path_file="${IROHA_RELEASE_HOST_ROOT:-${repo_root}/target}/nexus-cross-dataspace-completion-path"
 rm -f -- "$nexus_cross_completion_path_file"
 nexus_cross_args=(
@@ -4008,4 +4061,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 474/474 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 524/524 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

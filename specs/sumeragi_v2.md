@@ -450,15 +450,26 @@ the full-body voting gate. Chunk signatures bind epoch, height, view, context, p
 payload root, encoding, chunk index, and total chunk count, preventing replay or mixed
 reconstruction.
 
+A checksummed validation-marker file is never restart authority by itself. Startup quarantines all
+recovered markers, reloads their exact signed bodies, and reproduces each execution commitment with
+the production deterministic validator before the serialized runtime can restore Prepare or Commit
+authority. Reproposal aliases of one exact body share one execution pass but retain independently
+checked round-local bindings. If Kura already crossed the commit boundary, its cryptographically
+verified finality artifact authenticates the exact subject and execution commitment instead of
+replaying the candidate against an advanced world state. A substituted marker, mismatched
+commitment, missing semantic dependency, or caller that skips this preflight fails closed before
+network ingress.
+
 The view projection partitions the bounded committee into Set A (`2f + 1`
 members, with the leader first and proxy tail last) and Set B (`f` members).
 Proposal control reaches the full committee, while the initial RS16 chunk
-fanout targets Set A. Prepare and Commit votes go to the proxy tail. If the
-fast path does not complete, retransmission expands chunks to Set B; any
-`2f + 1` equal votes form the QC. A faulty proxy tail is never replaced by a
-backup collector in the same view: committee-wide timeout votes form a TC and
-cyclically rotate all roles. Every voter must reconstruct, durably store, and
-deterministically validate the full exact body before Prepare.
+fanout targets Set A. Prepare and Commit votes reach the full committee, so any
+validator can aggregate and broadcast the QC without making one projected
+collector a liveness dependency. If the fast path does not complete,
+retransmission expands chunks to Set B; any `2f + 1` equal votes form the QC.
+Committee-wide timeout votes form a TC and cyclically rotate all roles. Every
+voter must reconstruct, durably store, and deterministically validate the full
+exact body before Prepare.
 
 The reducer may bind and durably reconstruct lane proposals after a PrepareQC
 locks one exact global body, but no current-height lane Prepare, Commit, QC, or
@@ -638,8 +649,9 @@ identity that conflicts with the canonical recovered proposal stops rollover bef
 successor reapplies its configured ordinary-session bound without evicting protected commit evidence.
 Ephemeral NewView votes and timeout markers do not cross that boundary; the successor fully
 revalidates the durable cursor chain and latest certificate from Kura. Historical shared-lane
-evidence is authenticated with the immutable V2 height-context roster and PoPs stored for its
-original proposal height, never the successor's mutable roster.
+evidence is authenticated with the cryptographically verified V2 finality artifact, roster, and
+PoPs for its original proposal height, never the structural context-recovery store or the
+successor's mutable roster.
 
 Startup enumerates validated autonomous artifacts before reconstructing missing payloads from
 committed global anchors. It filters finalized and inactive work before applying the global session
@@ -736,10 +748,17 @@ timestamp plus one millisecond. Zero, fractional-millisecond, or overflowing cad
 closed. This hash-only-parent profile is one-shot: after that block finalizes, every later context
 must carry the ordinary parent CommitQC and a snapshot anchor is rejected. A crash before the first
 finality sidecar can reopen only from the original anchor-height snapshot and the exact persisted
-context, safety-WAL decision, body receipt, and validation receipt; it never fetches, signs,
-broadcasts, changes view, or executes an inferred context during recovery. A later snapshot is
-written only after complete commit evidence exists and is not accepted as a recovery root for that
-pre-finality window.
+context, safety-WAL decision, body receipt, and semantically replayed validation
+receipt; it never fetches, signs, broadcasts, changes view, or executes an
+inferred context during recovery. A checksummed marker cannot select itself for
+semantic replay: the authenticated WAL frontier names only the durable
+lock/decision and the adapter's bounded first replay batch. Markers from older
+views retain no restart vote authority and cannot force unbounded synchronous
+execution. If one selected marker needs a certified merge sidecar, startup
+retires that marker authority while retaining the exact body; only later live
+reducer work may enter the existing bounded sidecar-fetch and validation retry
+path. A later snapshot is written only after complete commit evidence exists
+and is not accepted as a recovery root for that pre-finality window.
 
 Before replay mutates WSV, startup preflights the entire requested height range. Every executable
 height must have a locally retrievable canonical body; ordinary finalized body eviction remains
@@ -983,6 +1002,8 @@ paper argument assumes that, after GST:
   ticks coalesce and an untrusted normal-message flood cannot discard an already emitted timeout;
 - body transfer, reconstruction, validation, signing, certificate formation, application, and
   fsync terminate within the declared service bounds;
+- an honest leader can construct a deterministically valid non-empty proposal
+  from available user, internal, or recovery work;
 - correct nodes eventually recover with intact WAL state;
 - an honest leader recurs within one roster rotation;
 - honest Prepare signers continue serving their durable bodies; and
@@ -996,7 +1017,9 @@ reaches an honest leader, and a safe round forms PrepareQC and CommitQC. Every r
 node independently persists the exact decision, fetches and validates the certified body, applies
 it, and advances its local certified prefix; no global all-node application barrier is required.
 FLP is the reason these post-GST premises are explicit. This targets consensus-height progress,
-including a valid empty heartbeat, not transaction-inclusion fairness or censorship resistance.
+when a valid non-empty proposal or armed recovery-heartbeat carrier is
+available, not idle-height production, transaction-inclusion fairness, or
+censorship resistance.
 
 Ten arbitrary-context Core safety wrappers are TLAPS-proved. This includes historical TC-lock
 Commit authorization, the dependent direct-or-installed-authorization timeout wrapper, and the
@@ -1022,11 +1045,12 @@ The production paths described above are implemented behavior, not a release
 attestation. The multilane gates remain open until fresh artifacts pass for
 focused/adversarial unit coverage; source-bound TLC and Apalache positives plus
 every expected mutation; unskipped four-peer DA/RBC lifecycle suites; 10/10
-twelve-peer corridor seeds and the two-hour fault soak; cross-SDK parity;
+13-peer global corridor seeds (twelve lane validators) and the two-hour fault
+soak; cross-SDK parity;
 five paired pinned-hardware one-versus-four-lane scaling runs; and the
 prescribed locked/offline full-workspace build, test, strict Clippy,
 formatting, and legacy-codec checks. This document makes no claim that those
-four-peer, twelve-peer, soak, scaling, or full-workspace runs have passed.
+four-peer, 13-peer global, soak, scaling, or full-workspace runs have passed.
 
 ## Taira profile
 

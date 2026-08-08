@@ -1,51 +1,7 @@
 // Backpressure and exact-output scheduling worker regression tests.
 // Included lexically by v2_worker::tests to preserve canonical test names.
 
-#[test]
-fn closed_flush_racing_final_receiver_retirement_is_nonfatal() {
-    let (service, _) = fixture();
-    let peer = service.context.roster[1].validator.clone();
-    let message = merge_share_message(b"closed reply retirement race");
-    let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-    let route = routes.mint(peer.clone());
-    let mut pending =
-        PendingExactOutput::new(1, 1, 1, &[]).expect("one retirement-race reply attempt fits");
-    pending
-        .enqueue(
-            PendingExactFanout::new_with_routes(
-                vec![message],
-                vec![peer],
-                vec![ExactTargetRoute::Reply(route.clone())],
-            )
-            .expect("one retirement-race reply fanout"),
-        )
-        .expect("retain the retirement-race reply");
-
-    let mut control = None;
-    pending
-        .drive_with_budget_ack(usize::MAX, |post, _ticket, attempted, _timeout_attempt| {
-            let ExactTargetRoute::Reply(attempted) = attempted else {
-                panic!("retirement-race response changed route kind")
-            };
-            let (writer, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, attempted);
-            control = Some(writer);
-            Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
-        })
-        .expect("queue the retirement-race writer flush");
-    assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
-    assert!(control.as_mut().expect("writer controller").close());
-    assert!(routes.retire(&route));
-    pending
-        .poll_reply_flushes()
-        .expect("final receiver retirement after Closed must not fail stop output");
-
-    let target = &pending.fanouts[0].targets[0];
-    assert_eq!(target.message_index, 0);
-    assert!(target.current.is_none());
-    assert!(target.pending_flush.is_none());
-    assert!(target.parked);
-    assert!(!pending.source_fifo_owners.is_empty());
-}
+include!("v2_worker_backpressure_retirement_cases.rs");
 
 #[test]
 fn unavailable_admission_racing_retirement_is_nonfatal() {
@@ -2760,6 +2716,81 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
         admitted,
         vec![
             (same_fanout_responsive.clone(), oldest_first_digest),
+            (same_fanout_responsive.clone(), oldest_second_digest),
+            (later_fanout_responsive.clone(), responsive_digest),
+        ]
+    );
+    assert_eq!(pending.fanouts.len(), 2);
+    assert!(pending.fanouts[0].targets[0].current.is_some());
+    assert!(pending.fanouts[1].targets[0].current.is_some());
+    assert!(pending.fanouts[1].target_is_complete(1));
+
+    assert_eq!(
+        pending.drive_with(|post, ticket, _route| {
+            assert!(ticket.is_none());
+            if post.peer_id == blocked {
+                admitted.push((post.peer_id, merge_share_digest(&post.data)));
+            } else {
+                assert_eq!(post.peer_id, observer);
+            }
+            Ok(())
+        }),
+        Ok(None)
+    );
+    assert!(!pending.is_pending());
+
+    let responsive_fanout = PendingExactFanout::new(
+        vec![merge_share_message(b"later responsive fanout")],
+        vec![later_fanout_responsive.clone()],
+    )
+    .expect("later responsive fanout");
+    assert_eq!(
+        pending
+            .enqueue(responsive_fanout)
+            .expect("responsive fanout within bounds"),
+        ExactFanoutOwnership::Owned
+    );
+    let later_blocked_fanout = PendingExactFanout::new(
+        vec![merge_share_message(b"later blocked-peer fanout")],
+        vec![blocked.clone()],
+    )
+    .expect("later same-source fanout");
+    assert_eq!(
+        pending
+            .enqueue(later_blocked_fanout)
+            .expect("same-source fanout within protocol bounds"),
+        ExactFanoutOwnership::SourceRetained,
+        "a blocked source cannot consume the slot reserved for another source/class"
+    );
+
+    assert_eq!(
+        pending.drive_with(|post, ticket, _route| {
+            if post.peer_id == observer {
+                return Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 7,
+                });
+            }
+            if post.peer_id == blocked {
+                blocked_attempts = blocked_attempts.saturating_add(1);
+                return Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 7,
+                });
+            }
+            assert!(ticket.is_none());
+            admitted.push((post.peer_id, merge_share_digest(&post.data)));
+            Ok(())
+        }),
+        Ok(Some(7))
+    );
+    assert_eq!(blocked_attempts, 2);
+    assert_eq!(
+        admitted,
+        vec![
+            (same_fanout_responsive.clone(), oldest_first_digest),
             (same_fanout_responsive, oldest_second_digest),
             (later_fanout_responsive, responsive_digest),
         ]
@@ -2821,4 +2852,139 @@ fn backpressured_source_does_not_block_other_sources_or_consume_their_reserve() 
         ]
     );
     assert!(!pending.is_pending());
+}
+
+#[test]
+fn delayed_gst_proposal_fence_and_phase_vote_fanout_survive_corridor_pressure() {
+    let (mut pressured, keys) = fixture_with_block_payload();
+    pressured
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install a one-unit delayed-GST output corridor");
+    pressured.set_exact_output_admission_hook(|post, ticket| {
+        Err(NetworkActorAdmissionError::Backpressured {
+            message: post,
+            ticket,
+            rank: 41,
+        })
+    });
+
+    let corridor_owner = routing_vote(&pressured, 0, wire::GlobalPhase::Prepare);
+    assert_eq!(
+        pressured
+            .broadcast_consensus(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Vote(corridor_owner),
+            ))
+            .expect("the incumbent control transfers to the exact-output service"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    assert!(
+        pressured
+            .has_pending_exact_output()
+            .expect("inspect the actor-backpressured incumbent")
+    );
+
+    let (_, payload, proposal) = proposal_body_and_payload(&pressured.context, &keys);
+    set_local_validator(&mut pressured, &keys, proposal.proposer);
+    let manifest_hash = HashOf::new(payload.manifest());
+    pressured
+        .register_outbound_payload(pressured.active_tag, payload)
+        .expect("retain the leader's canonical proposal source");
+    let proposal_message =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal.clone()));
+    assert_eq!(
+        pressured
+            .broadcast_consensus(proposal_message.clone())
+            .expect("full corridor returns typed source ownership"),
+        ConsensusBroadcastDisposition::SourceRetained
+    );
+    let retained = pressured
+        .outbound_chunks
+        .get(&manifest_hash)
+        .expect("source-retained proposal keeps its exact canonical payload");
+    assert_eq!(retained.owner, pressured.active_tag);
+    assert_eq!(retained.round, proposal.round);
+    assert_eq!(retained.subject, proposal.subject);
+    assert!(!pressured.output_guard.restart_required());
+
+    let recovered_routes = install_consensus_route_observer(&mut pressured);
+    assert!(
+        !pressured
+            .retry_pending_exact_output()
+            .expect("post-GST actor acceptance drains the incumbent")
+    );
+    take_consensus_route_observations(&recovered_routes);
+    assert_eq!(
+        pressured
+            .broadcast_consensus(proposal_message)
+            .expect("the retained leader source transfers after GST"),
+        ConsensusBroadcastDisposition::ExactServiceAccepted
+    );
+    let proposal_routes = take_consensus_route_observations(&recovered_routes);
+    let expected_proposal_targets = pressured
+        .remote_voters()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        proposal_route_targets(&proposal_routes, proposal.round, &proposal.manifest),
+        expected_proposal_targets
+    );
+    assert_eq!(
+        proposal_routes
+            .iter()
+            .filter(|(_, message)| matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::Proposal(routed)
+                    if routed.round == proposal.round && routed.manifest == proposal.manifest
+            ))
+            .count(),
+        expected_proposal_targets.len(),
+        "a retained proposal retry transfers exactly once to each remote target"
+    );
+    assert!(
+        pressured.outbound_chunks.contains_key(&manifest_hash),
+        "service acceptance retains the canonical payload for bounded retransmission"
+    );
+    assert!(!pressured.output_guard.restart_required());
+
+    // Model staggered view availability without replacing the production
+    // routing path: one responsive validator is first observed at view 0,
+    // then all three responsive validators converge on view 1 while the
+    // fourth validator withholds its own votes. Every Prepare/Commit share
+    // must still target all three remote voters, including the stale
+    // member, so the responsive 3-of-4 subset can reconstruct both
+    // certificates after connectivity heals.
+    let (mut routing, routing_keys) = fixture();
+    let withheld = routing.context.roster[3].validator.clone();
+    let observations = install_consensus_route_observer(&mut routing);
+    for (signer, view) in [(0_u32, 0_u64), (0, 1), (1, 1), (2, 1)] {
+        set_local_validator(&mut routing, &routing_keys, signer);
+        assert_ne!(routing.local_peer, withheld);
+        let expected = routing.remote_voters().into_iter().collect::<BTreeSet<_>>();
+        assert_eq!(expected.len(), 3);
+        assert!(expected.contains(&withheld));
+        for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
+            let vote = routing_vote(&routing, view, phase);
+            routing
+                .broadcast_consensus(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(vote),
+                ))
+                .expect("responsive phase vote transfers to exact output");
+            let routed = take_consensus_route_observations(&observations);
+            let targets = routed
+                .iter()
+                .filter_map(|(peer, message)| match &message.payload {
+                    wire::ConsensusMessageV2Payload::Vote(vote)
+                        if vote.signer == signer
+                            && vote.round.view == view
+                            && vote.phase == phase =>
+                    {
+                        Some(peer.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(targets, expected);
+            assert_eq!(routed.len(), expected.len());
+        }
+    }
 }

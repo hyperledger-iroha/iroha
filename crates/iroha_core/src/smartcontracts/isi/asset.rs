@@ -43,6 +43,7 @@ pub mod isi {
             error::MintabilityError,
         },
         nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
+        privacy::PrivacyStatementDigestV1,
     };
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
@@ -1260,103 +1261,7 @@ pub mod isi {
         Ok(hint.or(route_dataspace))
     }
 
-    fn dataspace_id_for_alias_segment(
-        catalog: &DataSpaceCatalog,
-        dataspace_alias: &str,
-    ) -> Option<DataSpaceId> {
-        if dataspace_alias.eq_ignore_ascii_case("universal") {
-            return Some(DataSpaceId::UNIVERSAL);
-        }
-        catalog.by_alias(dataspace_alias).map(|entry| entry.id)
-    }
-
-    fn asset_definition_home_dataspace_id(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition: &AssetDefinition,
-    ) -> Option<DataSpaceId> {
-        let dataspace_alias = state_transaction
-            .world
-            .asset_definition_domains
-            .get(definition.id())
-            .map(|domain| domain.dataspace().as_ref().to_owned())
-            .or_else(|| {
-                definition
-                    .owning_domain()
-                    .as_ref()
-                    .map(|domain| domain.dataspace().as_ref().to_owned())
-            });
-
-        match dataspace_alias {
-            Some(alias) => {
-                dataspace_id_for_alias_segment(&state_transaction.nexus.dataspace_catalog, &alias)
-            }
-            None if definition.balance_scope_policy() == AssetBalancePolicy::Global => {
-                Some(DataSpaceId::UNIVERSAL)
-            }
-            None => None,
-        }
-    }
-
-    fn bare_restricted_asset_home_dataspace_hint(
-        state_transaction: &StateTransaction<'_, '_>,
-        asset_id: &AssetId,
-    ) -> Result<Option<DataSpaceId>, Error> {
-        if !matches!(
-            asset_id.scope(),
-            iroha_data_model::asset::AssetBalanceScope::Global
-        ) {
-            return Ok(None);
-        }
-
-        let definition = state_transaction
-            .world
-            .asset_definition(asset_id.definition())
-            .map_err(Error::from)?;
-        if definition.balance_scope_policy() != AssetBalancePolicy::DataspaceRestricted {
-            return Ok(None);
-        }
-
-        Ok(
-            asset_definition_home_dataspace_id(state_transaction, &definition)
-                .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL),
-        )
-    }
-
-    fn ensure_global_asset_write_on_authoritative_route(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition_id: &AssetDefinitionId,
-        operation: &str,
-    ) -> Result<(), Error> {
-        let definition = state_transaction
-            .world
-            .asset_definition(definition_id)
-            .map_err(Error::from)?;
-        if definition.balance_scope_policy() != AssetBalancePolicy::Global {
-            return Ok(());
-        }
-
-        let home_dataspace = asset_definition_home_dataspace_id(state_transaction, &definition)
-            .unwrap_or(DataSpaceId::UNIVERSAL);
-        let route_dataspace = state_transaction
-            .current_dataspace_id
-            .or(state_transaction.world.current_dataspace_id);
-
-        if let Some(route_dataspace) = route_dataspace
-            && route_dataspace != home_dataspace
-            && route_dataspace != DataSpaceId::UNIVERSAL
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "global asset {definition_id} {operation} must execute on authoritative dataspace {} or the universal AMX coordinator; current route is {}",
-                    home_dataspace.as_u64(),
-                    route_dataspace.as_u64()
-                )
-                .into(),
-            ));
-        }
-
-        Ok(())
-    }
+    include!("asset/public_balance_scope.rs");
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum NumericAssetTransferSourcePolicy {
@@ -1608,6 +1513,8 @@ pub mod isi {
         VpnLease(Vec<u8>),
         /// Move value from verified fee-sponsor custody.
         FeeSponsor(Vec<u8>),
+        /// Move one exact transparent balance effect authorized by a native privacy proof.
+        PrivacyPublicBridge(Vec<u8>),
     }
 
     /// One-shot authorization and deterministic execution context for a numeric movement.
@@ -1813,6 +1720,12 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::FeeSponsorCustody,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
+                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding) => (
+                    "privacy-public-bridge",
+                    binding,
+                    NumericAssetTransferSourcePolicy::User,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
             };
             Self {
                 debit: NumericMovementDebitAuthorization::Protocol,
@@ -1966,6 +1879,24 @@ pub mod isi {
             amount: Quantity,
             authorization: NumericAssetMovementAuthorization,
         ) -> Result<Self, Error> {
+            Self::prepare_with_scope(
+                state_transaction,
+                source_id,
+                destination_id,
+                amount,
+                authorization,
+                NumericAssetTransferScopePolicy::Ambient,
+            )
+        }
+
+        fn prepare_with_scope(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            source_id: AssetId,
+            destination_id: AssetId,
+            amount: Quantity,
+            authorization: NumericAssetMovementAuthorization,
+            scope_policy: NumericAssetTransferScopePolicy,
+        ) -> Result<Self, Error> {
             let resolved_source = state_transaction
                 .world
                 .resolve_asset_id_for_current_scope(&source_id)?;
@@ -1977,7 +1908,7 @@ pub mod isi {
                 source_id,
                 destination_id,
                 amount,
-                NumericAssetTransferScopePolicy::Ambient,
+                scope_policy,
                 authority_policy,
                 authorization.source_policy,
                 authorization.control_policy,
@@ -2034,6 +1965,61 @@ pub mod isi {
             destination_id,
             amount,
             authorization,
+        )?
+        .apply(state_transaction)
+    }
+
+    /// Apply one exact transparent balance mutation authorized by a verified
+    /// native privacy statement.
+    pub(crate) fn execute_verified_privacy_public_balance_transfer(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        statement_digest: PrivacyStatementDigestV1,
+        definition_id: &AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
+        source_account: &AccountId,
+        destination_account: &AccountId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        validate_committed_public_balance_scope(
+            state_transaction,
+            definition_id,
+            public_balance_scope,
+            "privacy bridge transfer",
+        )?;
+        if source_account == destination_account {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "privacy public bridge source and destination must differ".into(),
+            ));
+        }
+        let source_id = AssetId::with_scope(
+            definition_id.clone(),
+            source_account.clone(),
+            public_balance_scope,
+        );
+        let destination_id = AssetId::with_scope(
+            definition_id.clone(),
+            destination_account.clone(),
+            public_balance_scope,
+        );
+        let binding = canonical_numeric_movement_binding(&(
+            statement_digest,
+            definition_id.clone(),
+            public_balance_scope,
+            source_account.clone(),
+            destination_account.clone(),
+            amount.clone(),
+        ))?;
+        PreparedNumericAssetMovement::prepare_with_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                submitting_authority,
+                RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding),
+            ),
+            NumericAssetTransferScopePolicy::ExplicitBilateral,
         )?
         .apply(state_transaction)
     }
@@ -4434,6 +4420,17 @@ pub mod isi {
                 (source_id, destination_id)
             }
             NumericAssetTransferScopePolicy::ExplicitBilateral => {
+                if source_id.scope() != destination_id.scope() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "explicit bilateral transfer must preserve one exact balance scope".into(),
+                    ));
+                }
+                validate_committed_public_balance_scope(
+                    state_transaction,
+                    source_id.definition(),
+                    *source_id.scope(),
+                    "explicit bilateral transfer",
+                )?;
                 let definition = state_transaction
                     .world
                     .asset_definition(source_id.definition())

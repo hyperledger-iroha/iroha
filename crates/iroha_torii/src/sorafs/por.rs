@@ -3061,7 +3061,7 @@ mod tests {
             .expect("install empty authoritative projection");
         let projection_address = {
             let projection = coordinator.authoritative_projection.read();
-            std::ptr::from_ref(projection.as_ref().expect("installed projection")).addr()
+            std::ptr::from_ref(projection.as_ref().expect("installed projection"))
         };
 
         let challenge = sample_challenge(false);
@@ -3093,7 +3093,7 @@ mod tests {
             .expect("replace one status and its indexes in place");
         let projection = coordinator.authoritative_projection.read();
         assert_eq!(
-            std::ptr::from_ref(projection.as_ref().expect("projection remains installed")).addr(),
+            std::ptr::from_ref(projection.as_ref().expect("projection remains installed"),),
             projection_address,
             "incremental updates must mutate the installed projection rather than clone history"
         );

@@ -374,12 +374,12 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             nexus_amx_context_hash: Hash::new(b"state merge finality nexus context"),
             execution_policy_hash: Hash::new(b"state merge finality execution policy"),
             da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::Plain,
+                encoding: PayloadEncoding::ReedSolomon16,
                 chunk_size_bytes: 1_024,
-                data_shards: 0,
-                parity_shards: 0,
+                data_shards: 1,
+                parity_shards: 1,
                 max_payload_size_bytes: 4_096,
-                max_chunk_count: 4,
+                max_chunk_count: 8,
             },
             leader_seed: [0x42; 32],
         };

@@ -1185,14 +1185,14 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         subject,
         payload_size_bytes: 1,
         layout: wire::DataAvailabilityLayout {
-            encoding: wire::PayloadEncoding::Plain,
-            chunk_size_bytes: 1,
-            data_shards: 0,
-            parity_shards: 0,
+            encoding: wire::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 2,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 1,
-            max_chunk_count: 1,
+            max_chunk_count: 2,
         },
-        chunk_hashes: vec![Hash::new([0_u8])],
+        chunk_hashes: vec![Hash::new([0_u8]); 2],
         chunk_root: Hash::new(b"runtime transport root"),
     });
     assert!(runtime.can_admit_network_payload(&transport));

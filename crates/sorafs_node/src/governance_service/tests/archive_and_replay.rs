@@ -22,7 +22,6 @@ fn canonical_decode_rejects_trailing_and_compressed_bytes() {
     assert_ne!(compressed, canonical);
     assert!(decode_canonical::<CheckpointBodyV1>(&compressed, "checkpoint").is_err());
 }
-
 #[test]
 fn bounded_norito_decode_rejects_sequence_allocation_bomb() {
     let encoded = norito::to_bytes(&vec![7_u64; 64]).expect("encode bounded vector");
@@ -217,16 +216,22 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
         poll_interval: Duration::from_millis(10),
         max_response_bytes: 1024 * 1024,
         max_request_bytes: 1024 * 1024,
-        mirror_max_entries: 1024,
-        mirror_max_bytes: 1024 * 1024,
-        max_head_age_secs: 3600,
         max_future_skew_secs: 60,
         allow_head_bootstrap: true,
         expected_producer_signer_handle: producer_signer_handle.to_owned(),
         expected_producer_signer_qualification: TEST_PRODUCER_SIGNER_QUALIFICATION,
+        expected_checkpoint_store_handle: "kms:governance-dag:source-producer-checkpoint"
+            .to_owned(),
+        expected_checkpoint_store_qualification: TEST_STORE_QUALIFICATION,
         expected_publisher_peer_id: TEST_PRODUCER_PEER_ID.as_bytes().to_vec(),
         expected_public_key: signer.public_key,
     };
+
+    assert!(
+        !config.source_dir.join("runtime-dag-index.json").exists()
+            && !config.source_dir.join("runtime-dag/head.to").exists(),
+        "a fresh producer must expose mutable head/index state only through the typed store"
+    );
 
     let loaded = load_source_snapshot(&config)
         .expect("service loads and revalidates checkpointed full source history");
@@ -244,8 +249,86 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
         )
     );
 
-    let index_path = config.source_dir.join("runtime-dag-index.json");
-    let original_index_bytes = fs::read(&index_path).expect("read publisher runtime index");
+    let committed = load_runtime_dag_committed_snapshot_v1(&config.source_root_guard)
+        .expect("load publisher typed committed state")
+        .expect("publisher committed state exists");
+    let original_head_bytes = committed.head_bytes().to_vec();
+    let original_index_bytes = committed.index_bytes().to_vec();
+    let original_index: JsonValue = json::from_slice(&original_index_bytes)
+        .expect("decode publisher runtime index for strict binding tests");
+    let mut strict_drift_cases = Vec::new();
+    for (field, replacement) in [
+        ("source", JsonValue::from("substituted")),
+        ("root", JsonValue::from("runtime-dag")),
+        ("generated_at", JsonValue::from(timestamp.saturating_add(1))),
+        ("signer_handle", JsonValue::from("hsm:attacker")),
+        ("signer_revision", JsonValue::from(2_u64)),
+        (
+            "signer_policy_digest_hex",
+            JsonValue::from(hex::encode([0xA1; 32])),
+        ),
+        ("publisher_peer_id", JsonValue::from("attacker-peer")),
+        ("checkpoint_store_handle", JsonValue::from("kms:attacker")),
+        ("checkpoint_store_revision", JsonValue::from(2_u64)),
+        (
+            "checkpoint_store_policy_digest_hex",
+            JsonValue::from(hex::encode([0xA2; 32])),
+        ),
+    ] {
+        let mut drifted = original_index.clone();
+        drifted
+            .as_object_mut()
+            .expect("runtime index object")
+            .insert(field.to_owned(), replacement);
+        strict_drift_cases.push((field, json::to_json_pretty(&drifted).expect("encode drift")));
+    }
+    strict_drift_cases.push((
+        "noncanonical-json",
+        json::to_json(&original_index).expect("encode compact runtime index"),
+    ));
+    let mut unknown_top = original_index.clone();
+    unknown_top
+        .as_object_mut()
+        .expect("runtime index object")
+        .insert("unknown_top_level".into(), JsonValue::from(true));
+    strict_drift_cases.push((
+        "unknown-top-level",
+        json::to_json_pretty(&unknown_top).expect("encode unknown top-level field"),
+    ));
+    let mut unknown_block = original_index.clone();
+    unknown_block
+        .get_mut("blocks")
+        .and_then(JsonValue::as_array_mut)
+        .and_then(|blocks| blocks.first_mut())
+        .and_then(JsonValue::as_object_mut)
+        .expect("first runtime index block")
+        .insert("unknown_block_field".into(), JsonValue::from(true));
+    strict_drift_cases.push((
+        "unknown-block-field",
+        json::to_json_pretty(&unknown_block).expect("encode unknown block field"),
+    ));
+    for (field, drifted) in strict_drift_cases {
+        write_runtime_dag_committed_snapshot_fixture_v1(
+            &config.source_dir,
+            original_head_bytes.clone(),
+            drifted.into_bytes(),
+        )
+        .expect("commit strict-boundary drift");
+        let error = match load_source_snapshot(&config) {
+            Ok(_) => panic!("runtime index `{field}` drift must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, GovernanceDagServiceError::Source(_)),
+            "unexpected `{field}` drift error: {error}"
+        );
+        write_runtime_dag_committed_snapshot_fixture_v1(
+            &config.source_dir,
+            original_head_bytes.clone(),
+            original_index_bytes.clone(),
+        )
+        .expect("restore strict runtime index fixture");
+    }
     let mut provenance_tampered_index: JsonValue = json::from_slice(&original_index_bytes)
         .expect("decode publisher runtime index for provenance tamper");
     provenance_tampered_index
@@ -261,7 +344,12 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
     let provenance_tampered_bytes = json::to_json_pretty(&provenance_tampered_index)
         .expect("encode provenance-tampered runtime index")
         .into_bytes();
-    write_test_sidecar_file(&index_path, &provenance_tampered_bytes);
+    write_runtime_dag_committed_snapshot_fixture_v1(
+        &config.source_dir,
+        original_head_bytes.clone(),
+        provenance_tampered_bytes,
+    )
+    .expect("commit provenance-tampered typed runtime state");
     let provenance_error = load_source_snapshot(&config)
         .expect_err("unsigned runtime-index provenance must not override the signed node");
     assert!(
@@ -270,7 +358,50 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
             .contains("submission provenance does not match its signed governance node"),
         "unexpected provenance substitution error: {provenance_error}"
     );
-    write_test_sidecar_file(&index_path, &original_index_bytes);
+    write_runtime_dag_committed_snapshot_fixture_v1(
+        &config.source_dir,
+        original_head_bytes.clone(),
+        original_index_bytes.clone(),
+    )
+    .expect("restore typed runtime state");
+
+    let original_index_value: JsonValue = json::from_slice(&original_index_bytes)
+        .expect("decode runtime index for immutable-source tests");
+    let first_original_entry = original_index_value
+        .get("blocks")
+        .and_then(JsonValue::as_array)
+        .and_then(|blocks| blocks.first())
+        .and_then(JsonValue::as_object)
+        .expect("first immutable runtime entry");
+    let json_source_path = first_original_entry
+        .get("json_path")
+        .and_then(JsonValue::as_str)
+        .expect("JSON source path");
+    let json_source_path = config.source_dir.join(json_source_path);
+    let original_json_source = fs::read(&json_source_path).expect("read original JSON source");
+    write_test_sidecar_file(&json_source_path, br#"{"substituted":true}"#);
+    let error = load_source_snapshot(&config)
+        .expect_err("JSON source substitution must violate its content-addressed pair path");
+    assert!(
+        error.to_string().contains("source paths do not bind"),
+        "unexpected JSON source substitution error: {error}"
+    );
+    write_test_sidecar_file(&json_source_path, &original_json_source);
+
+    let orphan_path = config
+        .source_dir
+        .join(GOVERNANCE_RUNTIME_DAG_DIR)
+        .join(GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR)
+        .join("orphan.to");
+    write_test_sidecar_file(&orphan_path, b"unindexed-runtime-artifact");
+    let error = load_source_snapshot(&config)
+        .expect_err("an unindexed immutable runtime artifact must fail exact inventory");
+    assert!(
+        error.to_string().contains("unindexed or missing artifact"),
+        "unexpected runtime inventory error: {error}"
+    );
+    fs::remove_file(&orphan_path).expect("remove orphan test artifact");
+    fs::remove_file(digest_sidecar_path(&orphan_path)).expect("remove orphan test digest sidecar");
 
     let mut index: JsonValue = json::from_slice(&original_index_bytes)
         .expect("decode publisher runtime index for source substitution");
@@ -305,7 +436,12 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
     let tampered_index = json::to_json_pretty(&index)
         .expect("encode substituted runtime index")
         .into_bytes();
-    write_test_sidecar_file(&index_path, &tampered_index);
+    write_runtime_dag_committed_snapshot_fixture_v1(
+        &config.source_dir,
+        original_head_bytes,
+        tampered_index,
+    )
+    .expect("commit source-substituted typed runtime state");
     let error = load_source_snapshot(&config)
         .expect_err("source payload substitution must not escape the signed node binding");
     assert!(
@@ -314,6 +450,44 @@ fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
             .contains("source payload does not match its signed governance node"),
         "unexpected source substitution error: {error}"
     );
+}
+
+#[test]
+fn source_loader_rejects_legacy_loose_authorities_without_cleanup() {
+    for relative in [
+        "runtime-dag-index.json",
+        ".runtime-dag-index.json.tmp-42000-1",
+        "runtime-dag/head.to",
+        "runtime-dag/.head.to.retained-v1-0000",
+    ] {
+        let root = secure_temp_dir();
+        let source_dir = root.path().join("source");
+        let mut source = signed_source(1, 0x7a, current_unix_timestamp_seconds().saturating_sub(1));
+        materialize_source_snapshot(&source_dir, &mut source);
+        let legacy_path = source_dir.join(relative);
+        if let Some(parent) = legacy_path.parent() {
+            fs::create_dir_all(parent).expect("create legacy authority parent");
+        }
+        fs::write(&legacy_path, b"legacy-runtime-authority-must-remain")
+            .expect("seed legacy runtime authority");
+        let config = test_runtime_config(&source, root.path());
+
+        let error = load_source_snapshot(&config)
+            .expect_err("service must reject a competing legacy runtime authority");
+
+        assert!(
+            error.to_string().contains("legacy"),
+            "unexpected error for `{relative}`: {error}"
+        );
+        assert_eq!(
+            fs::read(&legacy_path).expect("read preserved legacy runtime authority"),
+            b"legacy-runtime-authority-must-remain"
+        );
+        assert!(
+            source_dir.join("governance-runtime-committed-v1").is_dir(),
+            "legacy rejection must not mutate the typed committed store"
+        );
+    }
 }
 
 #[test]
@@ -355,6 +529,34 @@ fn committed_source_loader_authenticates_distinct_signing_key_segments() {
         .publish_deal_settlement(&outgoing_settlement, &outgoing_encoded)
         .expect("publish outgoing authority block");
 
+    let state_dir = root.path().join("state");
+    fs::create_dir_all(&state_dir).expect("create segmented source-loader state root");
+    let outgoing_config = RuntimeConfig {
+        source_root_guard: GovernanceFilesystemRootGuard::capture_source(&source_dir)
+            .expect("fence outgoing segmented publisher source root"),
+        source_dir: source_dir.clone(),
+        state_root_guard: GovernanceFilesystemRootGuard::capture_writer(&state_dir)
+            .expect("fence outgoing segmented source-loader state root"),
+        listen_addr: "127.0.0.1:0".parse().expect("test address"),
+        poll_interval: Duration::from_millis(10),
+        max_response_bytes: 1024 * 1024,
+        max_request_bytes: 1024 * 1024,
+        max_future_skew_secs: 60,
+        allow_head_bootstrap: true,
+        expected_producer_signer_handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+        expected_producer_signer_qualification: TEST_PRODUCER_SIGNER_QUALIFICATION,
+        expected_checkpoint_store_handle: TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+        expected_checkpoint_store_qualification: TEST_STORE_QUALIFICATION,
+        expected_publisher_peer_id: publisher_peer_id.clone(),
+        expected_public_key: outgoing_public_key,
+    };
+    let service_store = test_checkpoint_store(Arc::clone(&checkpoint_provider));
+    let outgoing_source = load_committed_source_snapshot(&outgoing_config, &service_store)
+        .expect("service authenticates the outgoing source before rotation");
+    let outgoing_checkpoint = checkpoint_from_source(&outgoing_source);
+    let outgoing_intent = intent_from_source(&outgoing_source);
+    drop(outgoing_config);
+
     let incoming_provider = Arc::new(PublisherTestSigner {
         handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
         peer_id: publisher_peer_id.clone(),
@@ -380,8 +582,6 @@ fn committed_source_loader_authenticates_distinct_signing_key_segments() {
         .transition_qualified_runtime_dag_providers(incoming_signer, incoming_store)
         .expect("install dual-signed key transition");
 
-    let state_dir = root.path().join("state");
-    fs::create_dir_all(&state_dir).expect("create segmented source-loader state root");
     let config = RuntimeConfig {
         source_root_guard: GovernanceFilesystemRootGuard::capture_source(&source_dir)
             .expect("fence segmented publisher source root"),
@@ -392,24 +592,38 @@ fn committed_source_loader_authenticates_distinct_signing_key_segments() {
         poll_interval: Duration::from_millis(10),
         max_response_bytes: 1024 * 1024,
         max_request_bytes: 1024 * 1024,
-        mirror_max_entries: 1024,
-        mirror_max_bytes: 1024 * 1024,
-        max_head_age_secs: 3600,
         max_future_skew_secs: 60,
         allow_head_bootstrap: true,
         expected_producer_signer_handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
         expected_producer_signer_qualification: TEST_PRODUCER_SIGNER_QUALIFICATION,
+        expected_checkpoint_store_handle: TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+        expected_checkpoint_store_qualification: TEST_STORE_QUALIFICATION,
         expected_publisher_peer_id: publisher_peer_id,
         expected_public_key: incoming_public_key,
     };
-    let service_store = test_checkpoint_store(Arc::clone(&checkpoint_provider));
     let rotated_without_append = load_committed_source_snapshot(&config, &service_store)
         .expect("incoming binding authenticates the outgoing-signed retained tip");
     assert_eq!(rotated_without_append.blocks.len(), 1);
     assert_eq!(
+        rotated_without_append.head_bytes,
+        outgoing_source.head_bytes
+    );
+    assert_ne!(
+        rotated_without_append.index_blake3,
+        outgoing_source.index_blake3
+    );
+    assert_eq!(
+        rotated_without_append.chain_blake3,
+        outgoing_source.chain_blake3
+    );
+    assert_eq!(
         rotated_without_append.head.head_signature.public_key,
         outgoing_public_key.to_vec()
     );
+    validate_checkpoint_against_source(Some(&outgoing_checkpoint), &rotated_without_append)
+        .expect("service checkpoint continuity survives a provider-only rotation");
+    validate_intent_against_source(&outgoing_intent, None, None, &rotated_without_append)
+        .expect("active service intent continuity survives a provider-only rotation");
 
     let incoming_settlement = settlement(1, timestamp.saturating_add(1));
     let incoming_encoded =
@@ -432,6 +646,10 @@ fn committed_source_loader_authenticates_distinct_signing_key_segments() {
         segmented.head.head_signature.public_key,
         incoming_public_key.to_vec()
     );
+    validate_checkpoint_against_source(Some(&outgoing_checkpoint), &segmented)
+        .expect("an authenticated checkpoint at N remains valid after source advances to N+1");
+    validate_intent_against_source(&outgoing_intent, None, None, &segmented)
+        .expect("a sealed target at N remains recoverable after source advances to N+1");
 
     let mut sealed = checkpoint_provider
         .inner
@@ -476,7 +694,11 @@ fn checkpoint_rejects_rollback_and_fork() {
 fn producer_commit_guard_binds_the_exact_verified_source_index() {
     let root = secure_temp_dir();
     let source_dir = root.path().join("source");
-    let mut source = signed_source(2, 0x74, 1_800_000_000);
+    let mut source = signed_source(
+        2,
+        0x74,
+        current_unix_timestamp_seconds().saturating_sub(10),
+    );
     materialize_source_snapshot(&source_dir, &mut source);
     let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
     seed_producer_checkpoint(&provider, &source_dir, &source);
@@ -504,27 +726,66 @@ fn producer_commit_guard_binds_the_exact_verified_source_index() {
 }
 
 #[test]
-fn service_checkpoint_and_intent_bind_current_source_index_digest() {
-    let source = signed_source(2, 0x75, 1_800_000_000);
-    let mut checkpoint = checkpoint_from_source(&source);
-    checkpoint.source_index_blake3[0] ^= 0x80;
+fn service_checkpoint_and_intent_bind_rotation_stable_signed_head() {
+    let source = signed_source(2, 0x75, current_unix_timestamp_seconds().saturating_sub(10));
+    let checkpoint = checkpoint_from_source(&source);
+    let intent = intent_from_source(&source);
+    let mut provider_rotated = source.clone();
+    provider_rotated.index_blake3[0] ^= 0x80;
+    validate_checkpoint_against_source(Some(&checkpoint), &provider_rotated)
+        .expect("provider-only index drift preserves checkpoint chain continuity");
+    validate_intent_against_source(&intent, None, None, &provider_rotated)
+        .expect("provider-only index drift preserves intent chain continuity");
+
+    let mut substituted_head = source.clone();
+    substituted_head.blocks[0].bytes[0] ^= 0x80;
     assert!(
-        validate_checkpoint_against_source(Some(&checkpoint), &source)
-            .expect_err("current checkpoint must bind the exact source index")
+        validate_checkpoint_against_source(Some(&checkpoint), &substituted_head)
+            .expect_err("checkpoint continuity must bind the exact signed source chain")
             .to_string()
-            .contains("source-index digest")
+            .contains("authenticated checkpoint")
+    );
+    assert!(
+        validate_intent_against_source(&intent, None, None, &substituted_head)
+            .expect_err("intent continuity must bind the exact signed source chain")
+            .to_string()
+            .contains("durable publish intent")
+    );
+}
+
+#[test]
+fn active_publish_intent_must_cover_the_exact_unpublished_suffix() {
+    let timestamp = current_unix_timestamp_seconds().saturating_sub(10);
+    let source = signed_source(3, 0x7b, timestamp);
+
+    let mut omitted_prefix = intent_from_source(&source);
+    omitted_prefix.blocks.remove(0);
+    let error = validate_intent_against_source(&omitted_prefix, None, None, &source)
+        .expect_err("an active intent cannot omit the first unpublished block");
+    assert!(
+        error
+            .to_string()
+            .contains("complete unpublished source suffix")
     );
 
-    let mut intent = intent_from_source(&source);
-    intent.target_source_index_blake3[0] ^= 0x80;
-    let root = secure_temp_dir();
-    let config = test_runtime_config(&source, root.path());
-    assert!(
-        validate_intent_against_source(&intent, None, None, &source, &config)
-            .expect_err("current publish intent must bind the exact source index")
-            .to_string()
-            .contains("source-index digest")
-    );
+    let predecessor_source = signed_source(1, 0x7b, timestamp);
+    let checkpoint = checkpoint_from_source(&predecessor_source);
+    let mut successor_intent = intent_from_source(&source);
+    successor_intent.generation = checkpoint.generation + 1;
+    successor_intent.blocks.remove(0);
+    successor_intent.previous_public_head_blake3 = Some(checkpoint.head_bytes_blake3);
+    validate_intent_against_source(&successor_intent, Some(&checkpoint), None, &source)
+        .expect("an active intent may contain exactly the suffix after its checkpoint");
+
+    let completed_checkpoint = checkpoint_from_source(&source);
+    let completed_intent = intent_from_source(&source);
+    validate_intent_against_source(
+        &completed_intent,
+        Some(&completed_checkpoint),
+        None,
+        &source,
+    )
+        .expect("completed same-generation recovery validates without replaying publication");
 }
 
 #[test]
@@ -617,40 +878,6 @@ fn rooted_source_read_rejects_descendant_symlink() {
         GovernanceFilesystemRootGuard::capture_source(dir.path()).expect("retain source root");
     read_rooted_file(&guard, Path::new("linked.to"), 32, false)
         .expect_err("rooted source read must reject symlink");
-}
-
-#[test]
-fn rooted_state_recovery_is_deterministic_after_restart() {
-    let dir = secure_temp_dir();
-    let guard =
-        GovernanceFilesystemRootGuard::capture_writer(dir.path()).expect("retain state root");
-    write_rooted_atomic_secret(&guard, Path::new(MIRROR_INDEX_FILE), b"first-generation")
-        .expect("write first state generation");
-    drop(guard);
-
-    let stale = dir.path().join(format!(".{MIRROR_INDEX_FILE}.tmp-42000-9"));
-    fs::write(&stale, b"crash-temporary").expect("seed restart temporary");
-    let restarted = GovernanceFilesystemRootGuard::capture_writer(dir.path())
-        .expect("retain restarted state root");
-    write_rooted_atomic_secret(
-        &restarted,
-        Path::new(MIRROR_INDEX_FILE),
-        b"second-generation",
-    )
-    .expect("recover and write second state generation");
-
-    assert!(!stale.exists());
-    assert_eq!(
-        read_rooted_file(
-            &restarted,
-            Path::new(MIRROR_INDEX_FILE),
-            MUTABLE_STATE_MAX_BYTES,
-            true,
-        )
-        .expect("read restarted state")
-        .bytes(),
-        b"second-generation"
-    );
 }
 
 #[cfg(unix)]
@@ -954,27 +1181,726 @@ fn producer_and_public_service_sealed_slots_coexist_without_cross_mutation() {
 }
 
 #[test]
-fn mirror_retention_honours_entry_and_byte_caps() {
+fn mirror_retention_uses_protocol_constants_and_honours_both_caps() {
     let source = signed_source(3, 0x38, 1_800_000_000);
     let intent = intent_from_source(&source);
     let latest = source.blocks[2].bytes.len() as u64;
     let previous = source.blocks[1].bytes.len() as u64;
     let exact_two = latest + previous;
-    let retained = merge_published_blocks(None, &intent, &source, 2, exact_two)
+    let retained = retained_source_suffix_with_limits(&source, 2, exact_two)
         .expect("retain exact two-block suffix");
     assert_eq!(retained.len(), 2);
-    assert_eq!(retained[0].sequence, 1);
-    assert_eq!(retained[1].sequence, 2);
+    assert_eq!(retained[0].block.sequence, 1);
+    assert_eq!(retained[1].block.sequence, 2);
 
-    let one = merge_published_blocks(None, &intent, &source, 1, exact_two)
+    let one = retained_source_suffix_with_limits(&source, 1, exact_two)
         .expect("entry cap retains one block");
     assert_eq!(one.len(), 1);
-    assert_eq!(one[0].sequence, 2);
+    assert_eq!(one[0].block.sequence, 2);
 
-    let byte_limited = merge_published_blocks(None, &intent, &source, 3, exact_two - 1)
+    let byte_limited = retained_source_suffix_with_limits(&source, 3, exact_two - 1)
         .expect("byte cap retains the newest fitting suffix");
     assert_eq!(byte_limited.len(), 1);
-    assert!(merge_published_blocks(None, &intent, &source, 3, latest - 1).is_err());
+    assert!(retained_source_suffix_with_limits(&source, 3, latest - 1).is_err());
+
+    let protocol_retained = merge_published_blocks(None, &intent, &[], &source)
+        .expect("protocol retention keeps this small complete source");
+    assert_eq!(protocol_retained.len(), source.blocks.len());
+
+    let prefix = signed_source(1, 0x38, 1_800_000_000);
+    assert_eq!(prefix.blocks[0].bytes, source.blocks[0].bytes);
+    let checkpoint = checkpoint_from_source(&prefix);
+    let mut append_intent = intent_from_source(&source);
+    append_intent.generation = checkpoint.generation + 1;
+    append_intent.previous_public_head_blake3 = Some(checkpoint.head_bytes_blake3);
+    append_intent.blocks.drain(..1);
+    let expanded = merge_published_blocks(Some(&checkpoint), &append_intent, &[], &source)
+        .expect("append from a one-block checkpoint backfills the complete retained suffix");
+    assert_eq!(
+        expanded
+            .iter()
+            .map(|block| block.sequence)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+}
+
+#[test]
+fn checkpoint_requires_the_exact_protocol_retained_suffix() {
+    let source = signed_source(3, 0x39, 1_800_000_000);
+    let checkpoint = checkpoint_from_source(&source);
+    validate_checkpoint_against_source(Some(&checkpoint), &source)
+        .expect("complete protocol-retained suffix validates");
+
+    let mut under_retained = checkpoint;
+    under_retained.mirror_blocks.remove(0);
+    let error = validate_checkpoint_body(&under_retained)
+        .expect_err("a checkpoint cannot leave a gap between its archive and retained mirror");
+    assert!(
+        error
+            .to_string()
+            .contains("one exact block prefix"),
+        "unexpected exact-retention error: {error}"
+    );
+}
+
+#[test]
+fn checkpoint_body_rejects_inventory_above_protocol_retention_cap() {
+    let source = signed_source(1, 0x3A, 1_800_000_000);
+    let mut checkpoint = checkpoint_from_source(&source);
+    let prototype = checkpoint.mirror_blocks[0].clone();
+    let last_sequence =
+        u64::try_from(GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1).expect("V1 entry cap fits u64");
+    checkpoint.mirror_blocks = (0..=last_sequence)
+        .map(|sequence| {
+            let mut published = prototype.clone();
+            published.sequence = sequence;
+            let mut block_cid = [0_u8; 32];
+            block_cid[..8].copy_from_slice(&sequence.to_le_bytes());
+            published.governance_block_cid = block_cid.to_vec();
+            published
+        })
+        .collect();
+    checkpoint.head_block_cid = checkpoint
+        .mirror_blocks
+        .last()
+        .expect("over-cap inventory is nonempty")
+        .governance_block_cid
+        .clone();
+
+    let error = validate_checkpoint_body(&checkpoint)
+        .expect_err("one entry above the protocol retention cap must fail closed");
+    assert!(
+        error.to_string().contains("first-release bounds"),
+        "unexpected over-cap checkpoint error: {error}"
+    );
+}
+
+#[test]
+fn v1_max_retention_encoding_budget_fits_durable_stores() {
+    // Canonical pretty JSON uses six spaces for nested block fields, four
+    // for lookup rows, and six for payload-kind positions. This per-entry
+    // budget covers the eleven block fields, three 64-byte-key lookup rows,
+    // and one kind position at the widest V1 numeric/string widths. The
+    // fixed allowance covers root/head fields, map framing, and all kind keys.
+    const MAX_PAYLOAD_KIND_BYTES: usize = 48;
+    const MAX_SUBMISSION_ORIGIN_BYTES: usize = 32;
+    const MAX_MIRROR_FIXED_JSON_BYTES: usize = 1024 * 1024;
+    const MAX_MIRROR_STORE_WRAPPER_BYTES: usize = 4 * 1024;
+    const MAX_SEALED_FIXED_BYTES: usize = 1024 * 1024;
+
+    let quoted = |bytes: usize| bytes.saturating_add(2);
+    let block_fields = [
+        ("position", 5),
+        ("sequence", 20),
+        ("timestamp", 20),
+        ("payload_kind", quoted(MAX_PAYLOAD_KIND_BYTES)),
+        ("block_cid_hex", quoted(64)),
+        ("node_cid_hex", quoted(64)),
+        ("blake3", quoted(64)),
+        (
+            "encoded_len",
+            GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1
+                .to_string()
+                .len(),
+        ),
+        ("ipfs_cid", quoted(59)),
+        ("submission_publisher_account_digest_hex", quoted(64)),
+        ("submission_origin", quoted(MAX_SUBMISSION_ORIGIN_BYTES)),
+    ];
+    let block_object_bytes = block_fields
+        .iter()
+        .map(|(key, value_bytes)| 6 + quoted(key.len()) + 2 + *value_bytes + 2)
+        .sum::<usize>()
+        // Opening/closing lines, conservatively retaining a trailing comma.
+        .saturating_add(13);
+    let lookup_row_bytes = 4 + quoted(64) + 2 + 5 + 2;
+    let kind_position_bytes = 6 + 5 + 2;
+    let mirror_entry_bytes = block_object_bytes
+        .saturating_add(lookup_row_bytes.saturating_mul(3))
+        .saturating_add(kind_position_bytes);
+    let mirror_json_upper = mirror_entry_bytes
+        .checked_mul(GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1)
+        .and_then(|bytes| bytes.checked_add(MAX_MIRROR_FIXED_JSON_BYTES))
+        .expect("V1 mirror JSON budget arithmetic cannot overflow");
+    assert!(
+        mirror_json_upper <= GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1 as usize,
+        "V1 mirror JSON upper bound {mirror_json_upper} exceeds the durable byte ceiling"
+    );
+    assert!(
+        mirror_json_upper.saturating_add(MAX_MIRROR_STORE_WRAPPER_BYTES)
+            <= MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES,
+        "V1 mirror wrapper no longer fits its two-slot store"
+    );
+
+    // A standalone Norito frame includes at least as much framing as the
+    // same value nested in a vector, so multiplying a widest-string sample
+    // frame gives a conservative, allocation-free maximum inventory bound.
+    // Submission provenance is not stored in either sealed entry type; it
+    // is derived from authenticated source blocks only for the JSON bound above.
+    let source = signed_source(1, 0x3B, 1_800_000_000);
+    let checkpoint = checkpoint_from_source(&source);
+    let mut published_sample = checkpoint.mirror_blocks[0].clone();
+    published_sample.sequence = u64::MAX;
+    published_sample.timestamp = u64::MAX;
+    published_sample.encoded_len = u64::MAX;
+    published_sample.payload_kind = "x".repeat(MAX_PAYLOAD_KIND_BYTES);
+    let published_frame_bytes = norito::to_bytes(&published_sample)
+        .expect("encode maximum-width published-block sizing sample")
+        .len();
+    let checkpoint_upper = published_frame_bytes
+        .checked_mul(GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1)
+        .and_then(|bytes| bytes.checked_add(MAX_SEALED_FIXED_BYTES))
+        .expect("V1 checkpoint budget arithmetic cannot overflow");
+    assert!(
+        checkpoint_upper <= GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1 as usize,
+        "V1 checkpoint upper bound {checkpoint_upper} exceeds the sealed-state ceiling"
+    );
+
+    let intent = intent_from_source(&source);
+    let mut intent_sample = intent.blocks[0].clone();
+    intent_sample.sequence = u64::MAX;
+    intent_sample.timestamp = u64::MAX;
+    intent_sample.encoded_len = u64::MAX;
+    intent_sample.payload_kind = "x".repeat(MAX_PAYLOAD_KIND_BYTES);
+    let intent_frame_bytes = norito::to_bytes(&intent_sample)
+        .expect("encode maximum-width intent-block sizing sample")
+        .len();
+    let intent_upper = intent_frame_bytes
+        .checked_mul(SOURCE_ENTRY_HARD_CAP)
+        .and_then(|bytes| bytes.checked_add(MAX_SEALED_FIXED_BYTES))
+        .expect("V1 publish-intent budget arithmetic cannot overflow");
+    assert!(
+        intent_upper <= GOVERNANCE_DAG_SERVICE_MUTABLE_STATE_MAX_BYTES_V1 as usize,
+        "V1 publish-intent upper bound {intent_upper} exceeds the sealed-state ceiling"
+    );
+}
+
+#[test]
+fn canonical_lookup_ids_reject_uppercase_short_and_non_hex() {
+    assert!(is_canonical_digest_hex(&"ab".repeat(32)));
+    assert!(!is_canonical_digest_hex(&"AB".repeat(32)));
+    assert!(!is_canonical_digest_hex("ab"));
+    assert!(!is_canonical_digest_hex(&"gg".repeat(32)));
+}
+
+#[test]
+fn json_response_etag_supports_exact_not_modified() {
+    let value = JsonValue::from("stable");
+    let first = json_response(StatusCode::OK, value.clone(), &HeaderMap::new());
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get(header::ETAG)
+        .expect("response has ETag")
+        .clone();
+    let mut request_headers = HeaderMap::new();
+    request_headers.insert(header::IF_NONE_MATCH, etag.clone());
+    let second = json_response(StatusCode::OK, value, &request_headers);
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(second.headers().get(header::ETAG), Some(&etag));
+}
+
+#[test]
+fn signed_head_accepts_only_canonical_strong_entity_tags() {
+    for valid in ["\"\"", r#""v1""#, r#""!#$%&'()*+-.^_`|~""#] {
+        let value = HeaderValue::from_str(valid).expect("valid test header value");
+        assert_eq!(strong_http_entity_tag(&value).as_deref(), Some(valid));
+    }
+    for invalid in ["v1", r#"W/"v1""#, r#""a\"b""#, r#""a b""#] {
+        let value = HeaderValue::from_str(invalid).expect("representable invalid ETag");
+        assert!(
+            strong_http_entity_tag(&value).is_none(),
+            "accepted noncanonical ETag {invalid:?}"
+        );
+    }
+    let obs_text = HeaderValue::from_bytes(&[b'"', 0x80, b'"'])
+        .expect("HTTP header values can represent obsolete text");
+    assert!(strong_http_entity_tag(&obs_text).is_none());
+}
+
+#[tokio::test]
+async fn routes_reject_noncanonical_identifiers_before_lookup() {
+    let telemetry = ApiState(Arc::new(RwLock::new(ApiSnapshot {
+        live: true,
+        ready: true,
+        ..ApiSnapshot::default()
+    })));
+    let dir = secure_temp_dir();
+    let source = signed_source(1, 0x2b, 1_800_000_000);
+    let config = test_runtime_config(&source, dir.path());
+    let mirror_store = open_mirror_index_store(&config).expect("initialize typed mirror store");
+    drop(mirror_store);
+    let mirror_reader = GovernanceDagMirrorReadHandleV1::try_new(
+        &config,
+        test_checkpoint_store(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        true,
+    )
+    .expect("construct bootstrap mirror reader");
+    let app = service_router(ServiceApiState {
+        telemetry,
+        mirror_reader,
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sorafs/governance/dag/blocks/ABCD")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("route response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sorafs/governance/dag/digests/gggg")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("route response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn private_ipfs_permission_does_not_authorize_private_head_endpoint() {
+    let config = SorafsGovernanceDagService {
+        allow_insecure_http: true,
+        allow_private_ipfs_endpoint: true,
+        allow_private_head_endpoint: false,
+        ..SorafsGovernanceDagService::default()
+    };
+    let ipfs = build_pinned_endpoint(
+        "http://127.0.0.1:5001",
+        test_authenticator(
+            TEST_IPFS_AUTH_HANDLE,
+            GovernanceDagAuthenticationScope::Ipfs,
+        ),
+        GovernanceDagAuthenticationScope::Ipfs,
+        &config,
+        true,
+    )
+    .await;
+    assert!(ipfs.is_ok());
+    let head = build_pinned_endpoint(
+        "http://127.0.0.1:9099/head",
+        test_authenticator(
+            TEST_HEAD_AUTH_HANDLE,
+            GovernanceDagAuthenticationScope::SignedHead,
+        ),
+        GovernanceDagAuthenticationScope::SignedHead,
+        &config,
+        false,
+    )
+    .await;
+    assert!(head.is_err());
+}
+
+#[tokio::test]
+async fn dns_policy_rejects_mixed_mapped_overcap_and_timeout_answers() {
+    let public = "8.8.8.8:443".parse().expect("public address");
+    let private = "127.0.0.1:443".parse().expect("private address");
+    assert!(
+        resolve_endpoint_addresses(
+            std::future::ready(Ok(vec![public, private])),
+            Duration::from_secs(1),
+            false,
+        )
+        .await
+        .is_err()
+    );
+
+    let mapped = SocketAddr::new(
+        IpAddr::V6("::ffff:127.0.0.1".parse().expect("mapped IPv6")),
+        443,
+    );
+    assert!(
+        resolve_endpoint_addresses(
+            std::future::ready(Ok(vec![mapped])),
+            Duration::from_secs(1),
+            false,
+        )
+        .await
+        .is_err()
+    );
+
+    let over_cap = (1..=(MAX_DNS_ADDRESSES + 1))
+        .map(|last| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 4, last as u8)), 443))
+        .collect::<Vec<_>>();
+    assert!(
+        resolve_endpoint_addresses(
+            std::future::ready(Ok(over_cap)),
+            Duration::from_secs(1),
+            false,
+        )
+        .await
+        .is_err()
+    );
+
+    let delayed = async {
+        time::sleep(Duration::from_millis(50)).await;
+        Ok(vec![public])
+    };
+    assert!(
+        resolve_endpoint_addresses(delayed, Duration::from_millis(1), false)
+            .await
+            .is_err()
+    );
+
+    let calls = Arc::new(AtomicU64::new(0));
+    let calls_for_resolution = calls.clone();
+    let resolved = resolve_endpoint_addresses(
+        async move {
+            calls_for_resolution.fetch_add(1, AtomicOrdering::SeqCst);
+            Ok(vec![public, public])
+        },
+        Duration::from_secs(1),
+        false,
+    )
+    .await
+    .expect("one pinned public DNS snapshot");
+    assert_eq!(resolved, vec![public]);
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[test]
+fn ipfs_urls_cids_and_secret_debug_output_are_canonical() {
+    let provider = Arc::new(TestAuthenticator::new(
+        TEST_IPFS_AUTH_HANDLE,
+        "never-log-this-token",
+    ));
+    let authenticator = OpaqueAuthenticator::try_new(
+        TEST_IPFS_AUTH_HANDLE,
+        TEST_AUTH_QUALIFICATION,
+        provider.ingress_binding(),
+        provider,
+        GovernanceDagAuthenticationScope::Ipfs,
+        "IPFS authenticator",
+    )
+    .expect("bind test authenticator");
+    let endpoint = PinnedEndpoint {
+        url: Url::parse("http://127.0.0.1:5001/").expect("test URL"),
+        client: Client::builder().no_proxy().build().expect("test client"),
+        authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
+        authenticator: authenticator.clone(),
+        authenticated_wire_body_max_bytes: authenticated_ipfs_wire_body_max_bytes(
+            GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
+        )
+        .expect("derive test authenticated wire-body bound"),
+    };
+    let url = endpoint
+        .ipfs_url(
+            "api/v0/cat",
+            &[("arg", TEST_CID_PAYLOAD), ("progress", "false")],
+        )
+        .expect("canonical IPFS URL");
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    assert_eq!(pairs.len(), 2, "query fields must not be duplicated");
+    assert_eq!(pairs[0], ("arg".into(), TEST_CID_PAYLOAD.into()));
+    assert_eq!(pairs[1], ("progress".into(), "false".into()));
+
+    let add_url = endpoint
+        .ipfs_url("api/v0/add", IPFS_UNIXFS_V1_ADD_QUERY)
+        .expect("construct fixed-profile IPFS add URL");
+    let add_pairs = add_url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        add_pairs,
+        [
+            ("chunker", "size-1048576"),
+            ("cid-version", "1"),
+            ("hash", "sha2-256"),
+            ("max-file-links", "1024"),
+            ("pin", "false"),
+            ("quieter", "true"),
+            ("raw-leaves", "true"),
+            ("trickle", "false"),
+            ("wrap-with-directory", "false"),
+        ]
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+    );
+
+    for cid in [
+        TEST_CID_PAYLOAD,
+        TEST_CID_BLOCK,
+        TEST_CID_HEAD,
+        TEST_CID_OLD,
+        TEST_CID_NEW,
+        TEST_CID_ATTACKER,
+    ] {
+        assert!(is_canonical_cid_v1(cid), "valid CID rejected: {cid}");
+        assert_eq!(
+            validate_ipfs_cid(cid).expect("canonical CID must validate"),
+            cid
+        );
+    }
+    let uppercase = TEST_CID_PAYLOAD.to_ascii_uppercase();
+    let padded = format!("{TEST_CID_PAYLOAD}=");
+    let truncated = &TEST_CID_PAYLOAD[..TEST_CID_PAYLOAD.len() - 1];
+    for cid in [
+        "",
+        "QmYwAPJzv5CZsnAzt8auVZRnGi2j4XQJKiTyrZq4XgNLwN",
+        "bafytestcid",
+        uppercase.as_str(),
+        padded.as_str(),
+        truncated,
+    ] {
+        assert!(!is_canonical_cid_v1(cid), "invalid CID accepted: {cid}");
+        assert!(validate_ipfs_cid(cid).is_err());
+    }
+
+    let rendered = format!("{authenticator:?}");
+    assert!(rendered.contains("[REDACTED]"));
+    assert!(!rendered.contains("never-log-this-token"));
+    assert!(rendered.contains(TEST_IPFS_AUTH_HANDLE));
+}
+
+#[test]
+fn authenticator_rotates_per_request_and_redacts_provider_failures() {
+    let provider = Arc::new(TestAuthenticator::new(
+        TEST_IPFS_AUTH_HANDLE,
+        "first-secret-token",
+    ));
+    let authenticator = OpaqueAuthenticator::try_new(
+        TEST_IPFS_AUTH_HANDLE,
+        TEST_AUTH_QUALIFICATION,
+        provider.ingress_binding(),
+        provider.clone(),
+        GovernanceDagAuthenticationScope::Ipfs,
+        "IPFS authenticator",
+    )
+    .expect("bind runtime authenticator");
+    let client = Client::builder().no_proxy().build().expect("test client");
+    let url = Url::parse("https://example.invalid/").expect("test URL");
+    let request = client
+        .get(url)
+        .header(header::ACCEPT_ENCODING, "identity")
+        .build()
+        .expect("build test request");
+    let descriptor = canonical_outbound_request_descriptor(
+        &request,
+        GovernanceDagAuthenticationScope::Ipfs,
+        1024,
+    )
+    .expect("canonical test request");
+
+    let first = authenticator
+        .authenticate(&descriptor)
+        .expect("authenticate first request");
+    assert_eq!(first.request_digest(), descriptor.request_digest());
+    assert_eq!(first.public_key(), provider.ingress_binding().public_key());
+
+    provider.rotate("rotated-secret-token");
+    let rotated = authenticator
+        .authenticate(&descriptor)
+        .expect("authenticate rotated request");
+    assert_ne!(first.nonce(), rotated.nonce());
+
+    provider
+        .qualification_revision
+        .store(2, AtomicOrdering::SeqCst);
+    let error = authenticator
+        .authenticate(&descriptor)
+        .expect_err("authenticator policy drift must fail closed");
+    assert!(error.to_string().contains("ingress qualification changed"));
+    provider
+        .qualification_revision
+        .store(1, AtomicOrdering::SeqCst);
+
+    let drifting_provider = Arc::new(TestAuthenticator::new(
+        TEST_IPFS_AUTH_HANDLE,
+        "must-not-be-returned",
+    ));
+    let drifting_authenticator = OpaqueAuthenticator::try_new(
+        TEST_IPFS_AUTH_HANDLE,
+        TEST_AUTH_QUALIFICATION,
+        drifting_provider.ingress_binding(),
+        drifting_provider.clone(),
+        GovernanceDagAuthenticationScope::Ipfs,
+        "IPFS authenticator",
+    )
+    .expect("bind stable runtime authenticator");
+    drifting_provider
+        .drift_during_authentication
+        .store(true, AtomicOrdering::SeqCst);
+    let error = drifting_authenticator
+        .authenticate(&descriptor)
+        .expect_err("policy drift during authentication must discard the request");
+    assert!(error.to_string().contains("ingress qualification changed"));
+    assert!(!error.to_string().contains("must-not-be-returned"));
+
+    provider.refuse.store(true, AtomicOrdering::SeqCst);
+    let error = authenticator
+        .authenticate(&descriptor)
+        .expect_err("authenticator outage must fail closed");
+    assert!(error.to_string().contains("refused"));
+    assert!(!error.to_string().contains("rotated-secret-token"));
+
+    let mismatch = OpaqueAuthenticator::try_new(
+        "vault:governance/ipfs:other",
+        TEST_AUTH_QUALIFICATION,
+        provider.ingress_binding(),
+        provider,
+        GovernanceDagAuthenticationScope::Ipfs,
+        "IPFS authenticator",
+    )
+    .expect_err("mismatched authenticator handle must fail");
+    assert!(mismatch.to_string().contains("does not match"));
+}
+
+#[test]
+fn outbound_nonce_sanity_window_never_exhausts_fresh_request_throughput() {
+    let provider = Arc::new(TestAuthenticator::new(
+        TEST_IPFS_AUTH_HANDLE,
+        "bounded-sender-window",
+    ));
+    let authenticator = OpaqueAuthenticator::try_new(
+        TEST_IPFS_AUTH_HANDLE,
+        TEST_AUTH_QUALIFICATION,
+        provider.ingress_binding(),
+        provider,
+        GovernanceDagAuthenticationScope::Ipfs,
+        "IPFS authenticator",
+    )
+    .expect("bind request authenticator");
+    let request = canonical_test_request(
+        GovernanceDagAuthenticationScope::Ipfs,
+        "POST",
+        "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+        &[("accept-encoding", "identity")],
+        b"",
+    );
+
+    let oldest = authenticator
+        .authenticate(&request)
+        .expect("authenticate initial request");
+    for _ in 0..GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1 {
+        authenticator
+            .authenticate(&request)
+            .expect("fresh outbound nonces must evict rather than exhaust the sender window");
+    }
+    authenticator
+        .validate_envelope(&request, &oldest)
+        .expect("sender eviction is not receiver replay authority");
+
+    let now = current_unix_timestamp_seconds();
+    let mut window = OutboundRequestNonceWindowV1::new();
+    window
+        .observe([0xA1; 32], now, now.saturating_sub(1))
+        .expect("observe nonce before its expiry");
+    window
+        .observe([0xA1; 32], now.saturating_add(1), now)
+        .expect("an envelope expiring at now is no longer live");
+}
+
+#[test]
+fn request_auth_envelope_rejects_tamper_replay_key_and_time_failures() {
+    let provider = Arc::new(TestAuthenticator::new(
+        TEST_IPFS_AUTH_HANDLE,
+        "never-expose-hsm-diagnostic",
+    ));
+    let authenticator = OpaqueAuthenticator::try_new(
+        TEST_IPFS_AUTH_HANDLE,
+        TEST_AUTH_QUALIFICATION,
+        provider.ingress_binding(),
+        provider,
+        GovernanceDagAuthenticationScope::Ipfs,
+        "IPFS authenticator",
+    )
+    .expect("bind request-auth verifier");
+    let request = canonical_test_request(
+        GovernanceDagAuthenticationScope::Ipfs,
+        "POST",
+        "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+        &[("accept-encoding", "identity")],
+        b"",
+    );
+    let tampered = canonical_test_request(
+        GovernanceDagAuthenticationScope::Ipfs,
+        "POST",
+        "https://example.invalid/api/v0/pin/add?arg=other&recursive=true",
+        &[("accept-encoding", "identity")],
+        b"",
+    );
+    let now = current_unix_timestamp_seconds();
+    let envelope = signed_test_request_auth_envelope(
+        TEST_IPFS_AUTH_HANDLE,
+        &request,
+        now,
+        now + 15,
+        [0x11; 32],
+    );
+    authenticator
+        .validate_envelope(&request, &envelope)
+        .expect("accept first exact envelope");
+    let replay = authenticator
+        .validate_envelope(&request, &envelope)
+        .expect_err("reject exact nonce replay");
+    assert!(replay.to_string().contains("reused a live outbound nonce"));
+    let tamper = authenticator
+        .validate_envelope(&tampered, &envelope)
+        .expect_err("reject URL/request-digest tamper");
+    assert!(tamper.to_string().contains("does not match"));
+
+    let wrong_key = signed_test_request_auth_envelope(
+        TEST_HEAD_AUTH_HANDLE,
+        &request,
+        now,
+        now + 15,
+        [0x12; 32],
+    );
+    assert!(
+        authenticator
+            .validate_envelope(&request, &wrong_key)
+            .expect_err("reject wrong public key")
+            .to_string()
+            .contains("does not match")
+    );
+
+    let invalid_signature = GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
+        &request,
+        now,
+        now + 15,
+        [0x13; 32],
+        test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+        [0x55; 64],
+    )
+    .expect("structurally non-zero envelope");
+    assert!(
+        authenticator
+            .validate_envelope(&request, &invalid_signature)
+            .expect_err("reject invalid signature")
+            .to_string()
+            .contains("signature")
+    );
+
+    for (issued_at, expires_at, nonce, label) in [
+        (now - 20, now - 1, [0x21; 32], "stale"),
+        (now + 6, now + 16, [0x22; 32], "future"),
+        (now, now + 31, [0x23; 32], "overlong"),
+    ] {
+        let envelope = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            issued_at,
+            expires_at,
+            nonce,
+        );
+        let error = authenticator
+            .validate_envelope(&request, &envelope)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(label)
+                || error.to_string().contains("future")
+                || error.to_string().contains("overlong"),
+            "{label} envelope returned unexpected error: {error}"
+        );
+    }
 }
 
 #[test]
@@ -985,7 +1911,9 @@ fn signed_block_prefix_archive_structurally_covers_pruned_prefix() {
         .iter()
         .map(|block| u64::try_from(block.bytes.len()).expect("block length fits u64"))
         .sum();
-    let retained = merge_published_blocks(None, &intent, &source, 2, retained_bytes)
+    let by_sequence =
+        published_blocks_by_sequence(None, &intent).expect("index published blocks");
+    let retained = select_mirror_suffix(&by_sequence, &source, 2, retained_bytes)
         .expect("plan bounded mirror suffix");
     assert_eq!(
         retained
@@ -1202,7 +2130,9 @@ fn archive_readback_validation_precedes_checkpoint_construction() {
         .iter()
         .map(|block| u64::try_from(block.bytes.len()).expect("block length fits u64"))
         .sum();
-    let retained = merge_published_blocks(None, &intent, &source, 2, retained_bytes)
+    let by_sequence =
+        published_blocks_by_sequence(None, &intent).expect("index published blocks");
+    let retained = select_mirror_suffix(&by_sequence, &source, 2, retained_bytes)
         .expect("plan retained suffix");
     let endpoint = block_prefix_archive_test_endpoint();
     let (archive, archive_bytes, archive_head) = signed_block_prefix_archive_fixture(
@@ -1245,7 +2175,9 @@ fn signed_block_prefix_archive_checkpoint_cas_fences_replicas_and_replay() {
         .iter()
         .map(|block| u64::try_from(block.bytes.len()).expect("block length fits u64"))
         .sum();
-    let retained = merge_published_blocks(None, &intent, &source, 2, retained_bytes)
+    let by_sequence =
+        published_blocks_by_sequence(None, &intent).expect("index published blocks");
+    let retained = select_mirror_suffix(&by_sequence, &source, 2, retained_bytes)
         .expect("plan retained suffix");
     let endpoint = block_prefix_archive_test_endpoint();
     let (_archive, _bytes, archive_head) = signed_block_prefix_archive_fixture(
@@ -1277,480 +2209,24 @@ fn signed_block_prefix_archive_checkpoint_cas_fences_replicas_and_replay() {
 }
 
 #[test]
-fn canonical_lookup_ids_reject_uppercase_short_and_non_hex() {
-    assert!(is_canonical_digest_hex(&"ab".repeat(32)));
-    assert!(!is_canonical_digest_hex(&"AB".repeat(32)));
-    assert!(!is_canonical_digest_hex("ab"));
-    assert!(!is_canonical_digest_hex(&"gg".repeat(32)));
-}
-
-#[test]
-fn json_response_etag_supports_exact_not_modified() {
-    let value = JsonValue::from("stable");
-    let first = json_response(StatusCode::OK, value.clone(), &HeaderMap::new());
-    assert_eq!(first.status(), StatusCode::OK);
-    let etag = first
-        .headers()
-        .get(header::ETAG)
-        .expect("response has ETag")
-        .clone();
-    let mut request_headers = HeaderMap::new();
-    request_headers.insert(header::IF_NONE_MATCH, etag.clone());
-    let second = json_response(StatusCode::OK, value, &request_headers);
-    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
-    assert_eq!(second.headers().get(header::ETAG), Some(&etag));
-}
-
-#[tokio::test]
-async fn routes_reject_noncanonical_identifiers_before_lookup() {
-    let state = ApiState(Arc::new(RwLock::new(ApiSnapshot {
-        live: true,
-        ready: true,
-        ..ApiSnapshot::default()
-    })));
-    let app = service_router(state);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sorafs/governance/dag/blocks/ABCD")
-                .body(Body::empty())
-                .expect("build request"),
-        )
-        .await
-        .expect("route response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/v1/sorafs/governance/dag/digests/gggg")
-                .body(Body::empty())
-                .expect("build request"),
-        )
-        .await
-        .expect("route response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn private_ipfs_permission_does_not_authorize_private_head_endpoint() {
-    let config = SorafsGovernanceDagService {
-        allow_insecure_http: true,
-        allow_private_ipfs_endpoint: true,
-        allow_private_head_endpoint: false,
-        ..SorafsGovernanceDagService::default()
-    };
-    let ipfs = build_pinned_endpoint(
-        "http://127.0.0.1:5001",
-        test_authenticator(
-            TEST_IPFS_AUTH_HANDLE,
-            GovernanceDagAuthenticationScope::Ipfs,
-        ),
-        GovernanceDagAuthenticationScope::Ipfs,
-        &config,
-        true,
-    )
-    .await;
-    assert!(ipfs.is_ok());
-    let head = build_pinned_endpoint(
-        "http://127.0.0.1:9099/head",
-        test_authenticator(
-            TEST_HEAD_AUTH_HANDLE,
-            GovernanceDagAuthenticationScope::SignedHead,
-        ),
-        GovernanceDagAuthenticationScope::SignedHead,
-        &config,
-        false,
-    )
-    .await;
-    assert!(head.is_err());
-}
-
-#[tokio::test]
-async fn dns_policy_rejects_mixed_mapped_overcap_and_timeout_answers() {
-    let public = "8.8.8.8:443".parse().expect("public address");
-    let private = "127.0.0.1:443".parse().expect("private address");
-    assert!(
-        resolve_endpoint_addresses(
-            std::future::ready(Ok(vec![public, private])),
-            Duration::from_secs(1),
-            false,
-        )
-        .await
-        .is_err()
-    );
-
-    let mapped = SocketAddr::new(
-        IpAddr::V6("::ffff:127.0.0.1".parse().expect("mapped IPv6")),
-        443,
-    );
-    assert!(
-        resolve_endpoint_addresses(
-            std::future::ready(Ok(vec![mapped])),
-            Duration::from_secs(1),
-            false,
-        )
-        .await
-        .is_err()
-    );
-
-    let over_cap = (1..=(MAX_DNS_ADDRESSES + 1))
-        .map(|last| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 4, last as u8)), 443))
-        .collect::<Vec<_>>();
-    assert!(
-        resolve_endpoint_addresses(
-            std::future::ready(Ok(over_cap)),
-            Duration::from_secs(1),
-            false,
-        )
-        .await
-        .is_err()
-    );
-
-    let delayed = async {
-        time::sleep(Duration::from_millis(50)).await;
-        Ok(vec![public])
-    };
-    assert!(
-        resolve_endpoint_addresses(delayed, Duration::from_millis(1), false)
-            .await
-            .is_err()
-    );
-
-    let calls = Arc::new(AtomicU64::new(0));
-    let calls_for_resolution = calls.clone();
-    let resolved = resolve_endpoint_addresses(
-        async move {
-            calls_for_resolution.fetch_add(1, Ordering::SeqCst);
-            Ok(vec![public, public])
-        },
-        Duration::from_secs(1),
-        false,
-    )
-    .await
-    .expect("one pinned public DNS snapshot");
-    assert_eq!(resolved, vec![public]);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn ipfs_urls_cids_and_secret_debug_output_are_canonical() {
-    let provider = Arc::new(TestAuthenticator::new(
-        TEST_IPFS_AUTH_HANDLE,
-        "never-log-this-token",
-    ));
-    let authenticator = OpaqueAuthenticator::try_new(
-        TEST_IPFS_AUTH_HANDLE,
-        TEST_AUTH_QUALIFICATION,
-        test_request_auth_policy(provider.public_key()),
-        provider,
-        GovernanceDagAuthenticationScope::Ipfs,
-        test_replay_store(),
-        "IPFS authenticator",
-    )
-    .expect("bind test authenticator");
-    let endpoint = PinnedEndpoint {
-        url: Url::parse("http://127.0.0.1:5001/").expect("test URL"),
-        client: Client::builder().no_proxy().build().expect("test client"),
-        authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
-        authenticator: authenticator.clone(),
-        max_request_bytes: GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
-    };
-    let url = endpoint
-        .ipfs_url(
-            "api/v0/cat",
-            &[("arg", TEST_CID_PAYLOAD), ("progress", "false")],
-        )
-        .expect("canonical IPFS URL");
-    let pairs = url.query_pairs().collect::<Vec<_>>();
-    assert_eq!(pairs.len(), 2, "query fields must not be duplicated");
-    assert_eq!(pairs[0], ("arg".into(), TEST_CID_PAYLOAD.into()));
-    assert_eq!(pairs[1], ("progress".into(), "false".into()));
-
-    for cid in [
-        TEST_CID_PAYLOAD,
-        TEST_CID_BLOCK,
-        TEST_CID_HEAD,
-        TEST_CID_OLD,
-        TEST_CID_NEW,
-        TEST_CID_ATTACKER,
-    ] {
-        assert!(is_canonical_cid_v1(cid), "valid CID rejected: {cid}");
-        assert_eq!(
-            validate_ipfs_cid(cid).expect("canonical CID must validate"),
-            cid
-        );
-    }
-    let uppercase = TEST_CID_PAYLOAD.to_ascii_uppercase();
-    let padded = format!("{TEST_CID_PAYLOAD}=");
-    let truncated = &TEST_CID_PAYLOAD[..TEST_CID_PAYLOAD.len() - 1];
-    for cid in [
-        "",
-        "QmYwAPJzv5CZsnAzt8auVZRnGi2j4XQJKiTyrZq4XgNLwN",
-        "bafytestcid",
-        uppercase.as_str(),
-        padded.as_str(),
-        truncated,
-    ] {
-        assert!(!is_canonical_cid_v1(cid), "invalid CID accepted: {cid}");
-        assert!(validate_ipfs_cid(cid).is_err());
-    }
-
-    let rendered = format!("{authenticator:?}");
-    assert!(rendered.contains("[REDACTED]"));
-    assert!(!rendered.contains("never-log-this-token"));
-    assert!(rendered.contains(TEST_IPFS_AUTH_HANDLE));
-}
-
-#[test]
-fn authenticator_rotates_per_request_and_redacts_provider_failures() {
-    let provider = Arc::new(TestAuthenticator::new(
-        TEST_IPFS_AUTH_HANDLE,
-        "first-secret-token",
-    ));
-    let authenticator = OpaqueAuthenticator::try_new(
-        TEST_IPFS_AUTH_HANDLE,
-        TEST_AUTH_QUALIFICATION,
-        test_request_auth_policy(provider.public_key()),
-        provider.clone(),
-        GovernanceDagAuthenticationScope::Ipfs,
-        test_replay_store(),
-        "IPFS authenticator",
-    )
-    .expect("bind runtime authenticator");
-    let client = Client::builder().no_proxy().build().expect("test client");
-    let url = Url::parse("https://example.invalid/").expect("test URL");
-    let request = client
-        .get(url)
-        .header(header::ACCEPT_ENCODING, "identity")
-        .build()
-        .expect("build test request");
-    let descriptor = canonical_outbound_request_descriptor(
-        &request,
-        GovernanceDagAuthenticationScope::Ipfs,
-        1024,
-    )
-    .expect("canonical test request");
-
-    let first = authenticator
-        .authenticate(&descriptor)
-        .expect("authenticate first request");
-    assert_eq!(first.request_digest(), descriptor.request_digest());
-    assert_eq!(first.public_key(), provider.public_key());
-
-    provider.rotate("rotated-secret-token");
-    let rotated = authenticator
-        .authenticate(&descriptor)
-        .expect("authenticate rotated request");
-    assert_ne!(first.nonce(), rotated.nonce());
-
-    provider
-        .qualification_revision
-        .store(2, AtomicOrdering::SeqCst);
-    let error = authenticator
-        .authenticate(&descriptor)
-        .expect_err("authenticator policy drift must fail closed");
-    assert!(error.to_string().contains("policy changed"));
-    provider
-        .qualification_revision
-        .store(1, AtomicOrdering::SeqCst);
-
-    let drifting_provider = Arc::new(TestAuthenticator::new(
-        TEST_IPFS_AUTH_HANDLE,
-        "must-not-be-returned",
-    ));
-    let drifting_authenticator = OpaqueAuthenticator::try_new(
-        TEST_IPFS_AUTH_HANDLE,
-        TEST_AUTH_QUALIFICATION,
-        test_request_auth_policy(drifting_provider.public_key()),
-        drifting_provider.clone(),
-        GovernanceDagAuthenticationScope::Ipfs,
-        test_replay_store(),
-        "IPFS authenticator",
-    )
-    .expect("bind stable runtime authenticator");
-    drifting_provider
-        .drift_during_authentication
-        .store(true, AtomicOrdering::SeqCst);
-    let error = drifting_authenticator
-        .authenticate(&descriptor)
-        .expect_err("policy drift during authentication must discard the request");
-    assert!(error.to_string().contains("policy changed"));
-    assert!(!error.to_string().contains("must-not-be-returned"));
-
-    provider.refuse.store(true, AtomicOrdering::SeqCst);
-    let error = authenticator
-        .authenticate(&descriptor)
-        .expect_err("authenticator outage must fail closed");
-    assert!(error.to_string().contains("refused"));
-    assert!(!error.to_string().contains("rotated-secret-token"));
-
-    let mismatch = OpaqueAuthenticator::try_new(
-        "vault:governance/ipfs:other",
-        TEST_AUTH_QUALIFICATION,
-        test_request_auth_policy(provider.public_key()),
-        provider,
-        GovernanceDagAuthenticationScope::Ipfs,
-        test_replay_store(),
-        "IPFS authenticator",
-    )
-    .expect_err("mismatched authenticator handle must fail");
-    assert!(mismatch.to_string().contains("does not match"));
-}
-
-#[test]
-fn request_auth_envelope_rejects_tamper_replay_key_and_time_failures() {
-    let provider = Arc::new(TestAuthenticator::new(
-        TEST_IPFS_AUTH_HANDLE,
-        "never-expose-hsm-diagnostic",
-    ));
-    let authenticator = OpaqueAuthenticator::try_new(
-        TEST_IPFS_AUTH_HANDLE,
-        TEST_AUTH_QUALIFICATION,
-        test_request_auth_policy(provider.public_key()),
-        provider,
-        GovernanceDagAuthenticationScope::Ipfs,
-        test_replay_store(),
-        "IPFS authenticator",
-    )
-    .expect("bind request-auth verifier");
-    let request = canonical_test_request(
-        GovernanceDagAuthenticationScope::Ipfs,
-        "POST",
-        "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
-        &[("accept-encoding", "identity")],
-        b"",
-    );
-    let tampered = canonical_test_request(
-        GovernanceDagAuthenticationScope::Ipfs,
-        "POST",
-        "https://example.invalid/api/v0/pin/add?arg=other&recursive=true",
-        &[("accept-encoding", "identity")],
-        b"",
-    );
-    let now = current_unix_timestamp_seconds();
-    let envelope = signed_test_request_auth_envelope(
-        TEST_IPFS_AUTH_HANDLE,
-        &request,
-        now,
-        now + 15,
-        [0x11; 32],
-    );
-    authenticator
-        .validate_envelope(&request, &envelope)
-        .expect("accept first exact envelope");
-    let replay = authenticator
-        .validate_envelope(&request, &envelope)
-        .expect_err("reject exact nonce replay");
-    assert!(replay.to_string().contains("replay"));
-    let tamper = authenticator
-        .validate_envelope(&tampered, &envelope)
-        .expect_err("reject URL/request-digest tamper");
-    assert!(tamper.to_string().contains("does not match"));
-
-    let wrong_key = signed_test_request_auth_envelope(
-        TEST_HEAD_AUTH_HANDLE,
-        &request,
-        now,
-        now + 15,
-        [0x12; 32],
-    );
-    assert!(
-        authenticator
-            .validate_envelope(&request, &wrong_key)
-            .expect_err("reject wrong public key")
-            .to_string()
-            .contains("does not match")
-    );
-
-    let invalid_signature = GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
-        &request,
-        now,
-        now + 15,
-        [0x13; 32],
-        test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
-        [0x55; 64],
-    )
-    .expect("structurally non-zero envelope");
-    assert!(
-        authenticator
-            .validate_envelope(&request, &invalid_signature)
-            .expect_err("reject invalid signature")
-            .to_string()
-            .contains("signature")
-    );
-
-    for (issued_at, expires_at, nonce, label) in [
-        (now - 20, now - 1, [0x21; 32], "stale"),
-        (now + 6, now + 16, [0x22; 32], "future"),
-        (now, now + 31, [0x23; 32], "overlong"),
-    ] {
-        let envelope = signed_test_request_auth_envelope(
-            TEST_IPFS_AUTH_HANDLE,
-            &request,
-            issued_at,
-            expires_at,
-            nonce,
-        );
-        let error = authenticator
-            .validate_envelope(&request, &envelope)
-            .unwrap_err();
-        assert!(
-            error.to_string().contains(label)
-                || error.to_string().contains("future")
-                || error.to_string().contains("overlong"),
-            "{label} envelope returned unexpected error: {error}"
-        );
-    }
-}
-
-#[test]
 fn sealed_request_auth_replay_fences_two_replica_cas_race() {
     let barrier = Arc::new(Barrier::new(2));
     let shared_store = Arc::new(
         TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE).with_replay_load_barrier(barrier),
     );
-    let first = test_authenticator_with_store(
-        Arc::new(TestAuthenticator::new(
-            TEST_IPFS_AUTH_HANDLE,
-            "first-replica-hsm",
-        )),
-        GovernanceDagAuthenticationScope::Ipfs,
-        shared_store.clone(),
-    );
-    let second = test_authenticator_with_store(
-        Arc::new(TestAuthenticator::new(
-            TEST_IPFS_AUTH_HANDLE,
-            "second-replica-hsm",
-        )),
-        GovernanceDagAuthenticationScope::Ipfs,
-        shared_store,
-    );
+    let first = test_checkpoint_store(shared_store.clone());
+    let second = test_checkpoint_store(shared_store);
     let retry = second.clone();
-    let request = canonical_test_request(
-        GovernanceDagAuthenticationScope::Ipfs,
-        "POST",
-        "https://example.invalid/api/v0/pin/add?arg=shared",
-        &[("accept-encoding", "identity")],
-        b"",
-    );
     let now = current_unix_timestamp_seconds();
-    let envelope = signed_test_request_auth_envelope(
-        TEST_IPFS_AUTH_HANDLE,
-        &request,
-        now,
-        now + 15,
-        [0xA7; 32],
-    );
-    let first_request = request.clone();
-    let first_envelope = envelope.clone();
-    let first_result =
-        std::thread::spawn(move || first.validate_envelope(&first_request, &first_envelope));
-    let second_request = request.clone();
-    let second_envelope = envelope.clone();
-    let second_result =
-        std::thread::spawn(move || second.validate_envelope(&second_request, &second_envelope));
+    let expires_at = now + 15;
+    let nonce = [0xA7; 32];
+    let slot = request_auth_replay_slot(GovernanceDagAuthenticationScope::Ipfs);
+    let first_result = std::thread::spawn(move || {
+        consume_sealed_request_auth_nonce(&first, slot, nonce, expires_at, now)
+    });
+    let second_result = std::thread::spawn(move || {
+        consume_sealed_request_auth_nonce(&second, slot, nonce, expires_at, now)
+    });
     let results = [
         first_result.join().expect("join first replay consumer"),
         second_result.join().expect("join second replay consumer"),
@@ -1766,8 +2242,7 @@ fn sealed_request_auth_replay_fences_two_replica_cas_race() {
         .expect("one replica must lose the replay-state CAS");
     assert!(conflict.to_string().contains("compare-and-swap failed"));
 
-    let replay = retry
-        .validate_envelope(&request, &envelope)
+    let replay = consume_sealed_request_auth_nonce(&retry, slot, nonce, expires_at, now)
         .expect_err("a later replica must observe the committed duplicate nonce");
     assert!(replay.to_string().contains("replay was rejected"));
 }

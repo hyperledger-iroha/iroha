@@ -59,6 +59,52 @@ external = true
 provenance = "checked-in public API facade; legacy generator requires repair before regeneration"
 
 [[generated]]
+name = "openapi-cargo-lock-pin"
+kind = "file"
+outputs = ["release/openapi-cargo-lock-v1.txt"]
+generator = "node tools/openapi/scripts/provision-openapi-cargo-lock.mjs pin --source=\"$PWD/Cargo.lock\" --output=\"${IROHA_OPENAPI_CARGO_LOCK_PIN_STAGE:?set an absolute external staging path}\""
+generator_sources = [
+  "tools/openapi/scripts/lib/openapi-safe-file.mjs",
+  "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
+]
+# Cargo.lock is deliberately ignored; the tracked V1 inventory declares it as
+# the required runtime source while the command binds its explicit root path.
+inputs = ["release/openapi-generator-inputs-v1.txt"]
+check = "node tools/openapi/scripts/provision-openapi-cargo-lock.mjs pin --source=\"$PWD/Cargo.lock\" --check=\"$PWD/release/openapi-cargo-lock-v1.txt\""
+
+[[generated]]
+name = "torii-openapi-release-bundle"
+kind = "file"
+outputs = [
+  "artifacts/openapi/torii.json",
+  "artifacts/openapi/manifest.json",
+  "artifacts/openapi/versions/current/torii.json",
+  "artifacts/openapi/versions/current/manifest.json",
+  "artifacts/openapi/versions.json",
+]
+generator = "NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- openapi --output-root artifacts/openapi --unsigned-manifest && node tools/openapi/scripts/sync-openapi.mjs --version=current --latest --allow-unsigned --output-dir=artifacts/openapi"
+generator_sources = [
+  "crates/iroha_torii/src/openapi.rs",
+  "tools/openapi/scripts/check-openapi-signatures.mjs",
+  "tools/openapi/scripts/lib/openapi-manifest-v2.mjs",
+  "tools/openapi/scripts/lib/openapi-provenance.mjs",
+  "tools/openapi/scripts/lib/openapi-safe-file.mjs",
+  "tools/openapi/scripts/lib/openapi-signers.mjs",
+  "tools/openapi/scripts/lib/openapi-versions-index.mjs",
+  "tools/openapi/scripts/sync-openapi.mjs",
+  "tools/openapi/scripts/verify-openapi-versions.mjs",
+  "xtask/src/main.rs",
+]
+# The validated V1 inventory expands the complete Rust/SDK/tooling source
+# closure; the signer policy remains an input and is never generator-owned.
+inputs = [
+  "artifacts/openapi/allowed_signers.json",
+  "release/openapi-cargo-lock-v1.txt",
+  "release/openapi-generator-inputs-v1.txt",
+]
+check = "bash ci/check_openapi_spec.sh"
+
+[[generated]]
 name = "ivm-syscall-rust-assets"
 kind = "file"
 outputs = [
@@ -231,6 +277,34 @@ inputs = [
 check = "cargo run --locked -p ivm --features dev-tools --bin ivm_fixture_export -- --check"
 
 [[generated]]
+name = "javascript-current-rust-contract-artifact"
+kind = "file"
+outputs = [
+  "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json",
+]
+generator = "python3 scripts/regenerate_current_rust_contract_artifact.py --write --cache-root \"${IROHA_KOTODAMA_CACHE_ROOT:?set the absolute external task-cache root}\" --output \"${IROHA_JS_CURRENT_ARTIFACT_STAGE:?set the exact cache-root/current-rust-contract-artifact.<unique>/current_rust_contract_artifact.json staging path}\" --koto \"${CARGO_TARGET_DIR:-target}/debug/koto\" --git \"${IROHA_GIT:?set the exact non-symbolic Git executable}\""
+generator_sources = [
+  "scripts/regenerate_current_rust_contract_artifact.py",
+]
+inputs = [
+  ".cargo/config.toml",
+  "Cargo.toml",
+  "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.ko",
+  "javascript/iroha_js/src/blake2b.js",
+  "javascript/iroha_js/src/ivmArtifact.js",
+  "javascript/iroha_js/src/kotodamaCompiler/normalize.js",
+  "rust-toolchain.toml",
+  "crates/**",
+  "vendor/**",
+]
+# The generator resolves the exact transitive local-package closure from tracked
+# Cargo manifests and binds its path+byte digest into the platform-independent
+# fixture. Cargo.lock is intentionally absent because it is ignored; its digest,
+# the fresh koto executable, and exact Git are attested only in private cache.
+# Live-tree publication remains a separate guarded operation.
+check = "python3 scripts/regenerate_current_rust_contract_artifact.py --check --cache-root \"${IROHA_KOTODAMA_CACHE_ROOT:?set the absolute external task-cache root}\" --koto \"${CARGO_TARGET_DIR:-target}/debug/koto\" --git \"${IROHA_GIT:?set the exact non-symbolic Git executable}\""
+
+[[generated]]
 name = "ivm-public-syscall-table"
 kind = "file"
 outputs = [
@@ -374,6 +448,26 @@ inputs = [
 check = "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check"
 
 [[generated]]
+name = "swift-kagemusha-peer-payment-v4-fixture"
+kind = "file"
+outputs = [
+  "crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex",
+]
+generator = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p kotlin-fixture-gen --features dev-tools --bin swift_kagemusha_peer_payment_v4 -- --recipient-request-hex \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex\" --output \"${IROHA_KAGEMUSHA_PEER_PAYMENT_V4_STAGE:?set an absolute external staging file path}\""
+generator_sources = [
+  "tools/kotlin-fixture-gen/Cargo.toml",
+  "tools/kotlin-fixture-gen/src/bin/swift_kagemusha_peer_payment_v4.rs",
+]
+inputs = [
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+]
+check = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p kotlin-fixture-gen --features dev-tools --bin swift_kagemusha_peer_payment_v4 -- --recipient-request-hex \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex\" --check \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex\""
+
+[[generated]]
 name = "kotodama-v1-artifacts-and-manifests"
 kind = "file"
 outputs = [
@@ -418,7 +512,7 @@ outputs = [
   "crates/kotodama_lang/src/samples/subscription_usage_recorder.to",
   "crates/kotodama_lang/src/samples/threshold_escrow.to",
   "crates/kotodama_lang/src/samples/tuple_return_demo.to",
-  "crates/kotodama_lang/src/samples/zk_vote_and_unshield.to",
+  "crates/kotodama_lang/src/samples/zk_vote_ballot.to",
   "demo/authority_probe.to",
   "demo/irohaswap.to",
   "demo/ivm_smoke.to",
@@ -428,8 +522,6 @@ outputs = [
   "examples/map/map.to",
   "examples/nft/nft.to",
   "examples/transfer/transfer.to",
-  "fuzz/attachments/zk/kotodama/zk_shield_example.to",
-  "fuzz/attachments/zk/kotodama/zk_unshield_verify_example.to",
   "integration_tests/fixtures/ivm/create_nft_for_every_user_trigger.to",
   "integration_tests/fixtures/ivm/mint_rose_trigger.to",
   "integration_tests/fixtures/ivm/query_assets_and_save_cursor.to",

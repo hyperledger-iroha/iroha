@@ -326,6 +326,18 @@ fn public_release_proving_fixture() -> &'static PublicReleaseProvingFixture {
                 .collect::<Vec<_>>()
         });
         let (party_states, public_key_shares): (Vec<_>, Vec<_>) = generated.into_iter().unzip();
+        assert!(
+            party_states.len() == ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
+                && party_states.iter().all(|state| {
+                    state.persistent_secret_commitment_blindings().len()
+                        == ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1
+                        && state
+                            .persistent_secret_commitment_blindings()
+                            .iter()
+                            .all(|blinding| !blinding.is_zero())
+                }),
+            "the production constructor must retain eight nonzero persistent commitment blindings per party",
+        );
         let share_references: [&ZkAmsMkheCollectivePublicKeyShareV1;
             ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
             std::array::from_fn(|index| &public_key_shares[index]);

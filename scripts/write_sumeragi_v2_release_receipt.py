@@ -380,14 +380,14 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 834
-_G_UNIT_TEST_COUNT = 474
+_PRODUCTION_TEST_COUNT = 835
+_G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        268,
+        318,
         "lib",
     ),
     (
@@ -503,7 +503,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-lifecycle-recovery",
         "sumeragi::v2_lifecycle_recovery::tests",
-        4,
+        5,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 131),

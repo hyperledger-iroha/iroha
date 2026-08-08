@@ -73,6 +73,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// Complete immutable inventory of Musubi V1 error codes.
+    #[cfg(test)]
     pub const ALL: &'static [Self] = &[
         Self::Usage,
         Self::ManifestInvalid,
@@ -188,26 +189,16 @@ impl Diagnostic {
 
     /// Return the stable public code.
     #[must_use]
+    #[cfg(test)]
     pub const fn code(&self) -> ErrorCode {
         self.code
     }
 
-    /// Return the already redacted summary.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
     /// Return deterministic already redacted context.
     #[must_use]
+    #[cfg(test)]
     pub const fn context(&self) -> &BTreeMap<String, String> {
         &self.context
-    }
-
-    /// Return the optional already redacted remediation hint.
-    #[must_use]
-    pub fn help(&self) -> Option<&str> {
-        self.help.as_deref()
     }
 
     fn to_json_value(&self) -> Value {
@@ -265,7 +256,8 @@ impl CommandOutput {
     ///
     /// `message` is the complete human stdout body. `data` is placed in the
     /// JSON envelope after recursively redacting secret-named fields and
-    /// diagnostic-like string content.
+    /// diagnostic-like string content. Validated public identity fields retain
+    /// their exact canonical text even when that text resembles an assignment.
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
     pub fn success(command: impl Into<String>, message: impl Into<String>, data: Value) -> Self {
@@ -361,12 +353,14 @@ pub struct RenderedOutput {
 impl RenderedOutput {
     /// Return bytes routed to stdout.
     #[must_use]
+    #[cfg(test)]
     pub fn stdout(&self) -> &str {
         &self.stdout
     }
 
     /// Return bytes routed to stderr.
     #[must_use]
+    #[cfg(test)]
     pub fn stderr(&self) -> &str {
         &self.stderr
     }
@@ -428,6 +422,8 @@ fn redact_json_value(value: &Value) -> Value {
                     let key = sanitize_diagnostic_text(key);
                     let value = if is_secret_key(&key) {
                         Value::from(REDACTED)
+                    } else if is_exact_public_string(&key, value) {
+                        value.clone()
                     } else {
                         redact_json_value(value)
                     };
@@ -436,6 +432,16 @@ fn redact_json_value(value: &Value) -> Value {
                 .collect(),
         ),
     }
+}
+
+fn is_exact_public_string(key: &str, value: &Value) -> bool {
+    // `ChainId` is validated public ASCII identity. Its grammar permits `:`, so values such as
+    // `token:dev` can resemble a secret assignment even though altering them would corrupt the
+    // deployment identity carried by a machine-readable receipt.
+    key == "chain_id"
+        && value
+            .as_str()
+            .is_some_and(|value| value.parse::<iroha_data_model::ChainId>().is_ok())
 }
 
 fn is_secret_key(key: &str) -> bool {
@@ -744,6 +750,30 @@ mod tests {
         assert_eq!(
             diagnostic.context().get("private_key"),
             Some(&REDACTED.to_owned())
+        );
+    }
+
+    #[test]
+    fn json_data_preserves_exact_public_chain_identity_without_weakening_other_redaction() {
+        let output = CommandOutput::success(
+            "publish",
+            "published",
+            Value::Object(Map::from_iter([
+                ("chain_id".to_owned(), Value::from("token:dev")),
+                ("message".to_owned(), Value::from("token:must-not-leak")),
+            ])),
+        )
+        .render(OutputFormat::Json)
+        .expect("render JSON");
+        let document: Value = norito::json::from_str(output.stdout()).expect("parse output");
+
+        assert_eq!(
+            document.pointer("/data/chain_id").and_then(Value::as_str),
+            Some("token:dev")
+        );
+        assert_eq!(
+            document.pointer("/data/message").and_then(Value::as_str),
+            Some("token:[REDACTED]")
         );
     }
 

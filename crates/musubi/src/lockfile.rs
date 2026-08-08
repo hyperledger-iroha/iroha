@@ -74,7 +74,7 @@ const EDGE_KEYS: &[&str] = &[
 pub struct LockedRootV1 {
     /// Canonical namespaced local package selector.
     pub package: MusubiPackageSelectorV1,
-    /// Sorted normal and root-local development dependency edges.
+    /// Sorted normal and root-local development dependency edges with unique parent-local aliases.
     pub dependencies: Vec<MusubiExactDependencyEdgeV1>,
 }
 
@@ -441,9 +441,12 @@ fn validate_edges(
     allow_development: bool,
     context: &str,
 ) -> Result<(), LockfileError> {
-    if edges.len() > MUSUBI_MAX_DEPENDENCIES_V1 || edges.windows(2).any(|pair| pair[0] >= pair[1]) {
+    if edges.len() > MUSUBI_MAX_DEPENDENCIES_V1
+        || edges.windows(2).any(|pair| pair[0] >= pair[1])
+        || edges.windows(2).any(|pair| pair[0].alias >= pair[1].alias)
+    {
         return Err(LockfileError::invalid(format!(
-            "{context} dependency edges exceed the bound or are not uniquely sorted"
+            "{context} dependency edges exceed the bound, are not canonically sorted, or reuse an alias"
         )));
     }
     for edge in edges {
@@ -462,23 +465,6 @@ fn validate_graph(
     roots: &[LockedRootV1],
     nodes: &[MusubiVerificationNodeV1],
 ) -> Result<(), LockfileError> {
-    let by_release = nodes
-        .iter()
-        .map(|node| (&node.release, node))
-        .collect::<BTreeMap<_, _>>();
-    for edge in roots
-        .iter()
-        .flat_map(|root| root.dependencies.iter())
-        .chain(nodes.iter().flat_map(|node| node.dependencies.iter()))
-    {
-        if !by_release.contains_key(&edge.selected) {
-            return Err(LockfileError::invalid(format!(
-                "dependency edge references missing node `{}`",
-                edge.selected
-            )));
-        }
-    }
-
     fn visit<'a>(
         release: &'a MusubiReleaseIdV1,
         depth: u16,
@@ -514,6 +500,23 @@ fn validate_graph(
         visiting.remove(release);
         complete.insert(release);
         Ok(())
+    }
+
+    let by_release = nodes
+        .iter()
+        .map(|node| (&node.release, node))
+        .collect::<BTreeMap<_, _>>();
+    for edge in roots
+        .iter()
+        .flat_map(|root| root.dependencies.iter())
+        .chain(nodes.iter().flat_map(|node| node.dependencies.iter()))
+    {
+        if !by_release.contains_key(&edge.selected) {
+            return Err(LockfileError::invalid(format!(
+                "dependency edge references missing node `{}`",
+                edge.selected
+            )));
+        }
     }
 
     let mut visiting = BTreeSet::new();
@@ -803,12 +806,11 @@ fn parse_table_array<'a>(
     table: &'a toml::Table,
     key: &str,
 ) -> Result<&'a [toml::Value], LockfileError> {
-    match table.get(key) {
-        None => Ok(&[]),
-        Some(value) => value.as_array().map(Vec::as_slice).ok_or_else(|| {
+    table.get(key).map_or(Ok(&[]), |value| {
+        value.as_array().map(Vec::as_slice).ok_or_else(|| {
             LockfileError::invalid(format!("field `{key}` must be an array of tables"))
-        }),
-    }
+        })
+    })
 }
 
 fn parse_version(raw: &str) -> Result<MusubiVersionV1, LockfileError> {
@@ -1005,6 +1007,25 @@ mod tests {
         ));
         lock.nodes[0].dependencies.sort();
         assert!(matches!(lock.validate(), Err(LockfileError::Invalid(_))));
+    }
+
+    #[test]
+    fn consumer_roots_reject_duplicate_aliases_across_dependency_kinds() {
+        let mut locked = lock();
+        let root = locked.roots.first_mut().expect("fixture workspace root");
+        root.dependencies.push(edge(
+            "parent",
+            package(3, "parallel"),
+            "^1.0.0",
+            "1.1.0",
+            MusubiDependencyKindV1::Normal,
+        ));
+        root.dependencies.sort();
+
+        let error = root
+            .validate()
+            .expect_err("one parent-local alias cannot name normal and development edges");
+        assert!(error.to_string().contains("reuse an alias"));
     }
 
     #[test]

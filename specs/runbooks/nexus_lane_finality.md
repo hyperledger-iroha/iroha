@@ -5,7 +5,8 @@
 **Scope:** Covers the slot-duration, DA quorum, oracle, and settlement-buffer SLOs that gate the 1 s finality promise. Use this alongside `dashboards/grafana/nexus_lanes.json` and the telemetry helpers under `scripts/telemetry/`.
 
 > **Release evidence:** This is an operational SLO runbook. It does not by
-> itself close any production multilane gate. Fresh four-peer, twelve-peer,
+> itself close any production multilane gate. Fresh four-peer, 13-peer global
+> (twelve-lane-validator),
 > two-hour soak, pinned-hardware scaling, SDK/formal, and full-workspace release
 > artifacts remain open until their dedicated suites pass without skips.
 

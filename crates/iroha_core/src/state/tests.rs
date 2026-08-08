@@ -78,7 +78,7 @@ use iroha_data_model::{
     query::{
         dsl::CompoundPredicate,
         error::FindError,
-        escrow::prelude::{FindAnonymousAssetEscrowsByStatus, FindAssetEscrowsByStatus},
+        escrow::prelude::FindAssetEscrowsByStatus,
         proof::prelude::{FindProofRecords, FindProofRecordsByStatus},
     },
     sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
@@ -133,6 +133,123 @@ fn musubi_v1_world_defaults_and_domain_generation_are_deterministic() {
     );
     block.commit();
     assert_eq!(world.view().musubi_domain_ownership_generation(&domain), 2);
+}
+
+#[test]
+fn musubi_resolver_checkpoints_are_sparse_block_final_and_reorg_safe() {
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+
+    let genesis = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(1).expect("genesis height"));
+        header.creation_time_ms = 1;
+    });
+    {
+        let mut block = state.block(genesis.as_ref().header());
+        let _ = block.apply_without_execution(&genesis, Vec::new());
+        block.commit().expect("commit genesis checkpoint");
+    }
+    {
+        let world = state.world.view();
+        let checkpoints = world.musubi_resolver_index_checkpoints();
+        assert_eq!(checkpoints.iter().count(), 1);
+        let genesis_checkpoint = checkpoints
+            .get(&MusubiResolverIndexRevisionV1::new(1).expect("revision one"))
+            .expect("genesis checkpoint");
+        assert_eq!(genesis_checkpoint.finalized_height, 1);
+        assert_eq!(
+            genesis_checkpoint.finalized_block_hash,
+            *genesis.as_ref().hash().as_ref()
+        );
+    }
+
+    let unchanged = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(2).expect("second height"));
+        header.creation_time_ms = 2;
+    });
+    {
+        let mut block = state.block(unchanged.as_ref().header());
+        let _ = block.apply_without_execution(&unchanged, Vec::new());
+        block.commit().expect("commit unchanged resolver block");
+    }
+    assert_eq!(
+        state
+            .world
+            .view()
+            .musubi_resolver_index_checkpoints()
+            .iter()
+            .count(),
+        1,
+        "unchanged blocks must not duplicate resolver checkpoints"
+    );
+
+    let jumped = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(3).expect("third height"));
+        header.creation_time_ms = 3;
+    });
+    {
+        let mut block = state.block(jumped.as_ref().header());
+        let mut transaction = block.transaction();
+        *transaction.world.musubi_resolver_index_revision.get_mut() =
+            MusubiResolverIndexRevisionV1::new(3).expect("revision three");
+        transaction.apply();
+        let _ = block.apply_without_execution(&jumped, Vec::new());
+        block.commit().expect("commit final same-block revision");
+    }
+    {
+        let world = state.world.view();
+        let checkpoints = world.musubi_resolver_index_checkpoints();
+        assert_eq!(checkpoints.iter().count(), 2);
+        assert!(
+            checkpoints
+                .get(&MusubiResolverIndexRevisionV1::new(2).expect("revision two"))
+                .is_none(),
+            "an intra-block revision must not receive a checkpoint"
+        );
+        let final_checkpoint = checkpoints
+            .get(&MusubiResolverIndexRevisionV1::new(3).expect("revision three"))
+            .expect("block-final revision checkpoint");
+        assert_eq!(final_checkpoint.finalized_height, 3);
+        assert_eq!(
+            final_checkpoint.finalized_block_hash,
+            *jumped.as_ref().hash().as_ref()
+        );
+    }
+
+    let replacement = new_dummy_block_with_payload(|header| {
+        header.set_height(NonZeroU64::new(3).expect("replacement height"));
+        header.creation_time_ms = 30;
+    });
+    assert_ne!(jumped.as_ref().hash(), replacement.as_ref().hash());
+    {
+        let mut block = state.block_and_revert(replacement.as_ref().header());
+        let mut transaction = block.transaction();
+        *transaction.world.musubi_resolver_index_revision.get_mut() =
+            MusubiResolverIndexRevisionV1::new(2).expect("replacement revision");
+        transaction.apply();
+        let _ = block.apply_without_execution(&replacement, Vec::new());
+        block.commit().expect("commit replacement checkpoint");
+    }
+    let world = state.world.view();
+    let checkpoints = world.musubi_resolver_index_checkpoints();
+    assert_eq!(checkpoints.iter().count(), 2);
+    assert!(
+        checkpoints
+            .get(&MusubiResolverIndexRevisionV1::new(3).expect("revision three"))
+            .is_none(),
+        "reverting a block must remove its resolver checkpoint"
+    );
+    let replacement_checkpoint = checkpoints
+        .get(&MusubiResolverIndexRevisionV1::new(2).expect("replacement revision"))
+        .expect("replacement checkpoint");
+    assert_eq!(replacement_checkpoint.finalized_height, 3);
+    assert_eq!(
+        replacement_checkpoint.finalized_block_hash,
+        *replacement.as_ref().hash().as_ref()
+    );
 }
 
 #[test]
@@ -861,6 +978,68 @@ fn merge_write_set_encoder_mentions_every_persisted_world_block_field() {
 }
 
 #[test]
+fn world_and_world_block_keep_snapshot_skip_annotations_in_sync() {
+    fn snapshot_skip_annotations(struct_body: &str) -> BTreeMap<&str, bool> {
+        let mut annotations = BTreeMap::new();
+        let mut skip = false;
+
+        for line in struct_body.lines() {
+            let trimmed = line.trim();
+            if trimmed == "#[norito(skip)]" {
+                skip = true;
+                continue;
+            }
+
+            let declaration = line
+                .strip_prefix("    pub(crate) ")
+                .or_else(|| line.strip_prefix("    pub "))
+                .or_else(|| line.strip_prefix("    "));
+            let Some((field, _)) = declaration.and_then(|line| line.split_once(':')) else {
+                continue;
+            };
+            if field
+                .chars()
+                .all(|character| character == '_' || character.is_ascii_alphanumeric())
+            {
+                annotations.insert(field, skip);
+                skip = false;
+            }
+        }
+
+        annotations
+    }
+
+    let source = include_str!("../state.rs");
+    let world = source
+        .split_once("pub struct World {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\n/// Struct for block's aggregated changes"))
+        .map(|(body, _)| body)
+        .expect("World declaration must remain discoverable");
+    let world_block = source
+        .split_once("pub struct WorldBlock<'world> {")
+        .and_then(|(_, tail)| tail.split_once("\n}\n\nimpl<'world> WorldBlock"))
+        .map(|(body, _)| body)
+        .expect("WorldBlock declaration must remain discoverable");
+    let world_annotations = snapshot_skip_annotations(world);
+    let block_annotations = snapshot_skip_annotations(world_block);
+
+    for (field, world_skips) in &world_annotations {
+        if *field == "external_event_buf" {
+            // The staged canonical serializer deliberately substitutes the
+            // already-committed external event buffer for this block-local buffer.
+            continue;
+        }
+        let Some(block_skips) = block_annotations.get(field) else {
+            continue;
+        };
+        assert_eq!(
+            block_skips, world_skips,
+            "WorldBlock field `{field}` must match World's snapshot skip annotation"
+        );
+    }
+}
+
+#[test]
 fn explorer_count_indexes_keep_complete_world_plumbing() {
     let source = include_str!("../state.rs");
 
@@ -1355,727 +1534,7 @@ fn deserialize_rejects_invalid_ram_lfe_program_policy_storage() {
     );
 }
 
-fn asset_alias_test_world() -> (World, AssetDefinitionId) {
-    let authority = AccountId::new(crate::state::checked_keypair().public_key().clone());
-    let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain");
-    let definition_id = AssetDefinitionId::derive_from_components(
-        domain_id.clone(),
-        "usd".parse().expect("asset name"),
-    );
-    let definition = AssetDefinition::numeric(
-        definition_id.clone(),
-        "usd".to_owned(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        Some(domain_id.clone()),
-    )
-    .build(&authority);
-
-    let domain = Domain::new(domain_id.clone()).build(&authority);
-    let account = Account::new(authority.clone()).build(&authority);
-    (
-        World::with([domain], [account], [definition]),
-        definition_id,
-    )
-}
-
-fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
-    AccountAlias::new(
-        label,
-        Some(AccountAliasDomain::new(domain_id.name().clone())),
-        DataSpaceId::UNIVERSAL,
-    )
-}
-
-fn seed_active_account_alias_binding(world: &mut World, owner: &AccountId, alias: &AccountAlias) {
-    world.account_aliases.insert(alias.clone(), owner.clone());
-    let mut aliases = world
-        .account_aliases_by_account
-        .view()
-        .get(owner)
-        .cloned()
-        .unwrap_or_default();
-    aliases.insert(alias.clone());
-    world
-        .account_aliases_by_account
-        .insert(owner.clone(), aliases);
-    world.account_rekey_records.insert(
-        alias.clone(),
-        AccountRekeyRecord::new(alias.clone(), owner.clone()),
-    );
-
-    let selector = crate::sns::selector_for_account_alias(alias, &DataSpaceCatalog::default())
-        .expect("account alias selector");
-    let address =
-        iroha_data_model::account::AccountAddress::from_account_id(owner).expect("account address");
-    let record = iroha_data_model::sns::NameRecordV1::new(
-        selector.clone(),
-        owner.clone(),
-        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-        0,
-        0,
-        u64::MAX,
-        u64::MAX,
-        u64::MAX,
-        Metadata::default(),
-    );
-    world.smart_contract_state.insert(
-        crate::sns::record_storage_key(&selector),
-        norito::codec::Encode::encode(&record),
-    );
-    world
-        .rebuild_account_scope_directory()
-        .expect("active account alias must define a valid account scope");
-}
-
-fn seed_account_alias_lease(
-    tx: &mut StateTransaction<'_, '_>,
-    owner: &AccountId,
-    alias: &AccountAlias,
-) {
-    if let Some(domain_id) = alias
-        .domain_id(&tx.nexus.dataspace_catalog)
-        .expect("fixture alias domain")
-    {
-        let selector = crate::sns::selector_for_domain(&domain_id).expect("domain selector");
-        let storage_key = crate::sns::record_storage_key(&selector);
-        if tx.world.smart_contract_state.get(&storage_key).is_none() {
-            let domain_owner = tx
-                .world
-                .domains
-                .get(&domain_id)
-                .map(|domain| domain.owned_by().clone())
-                .unwrap_or_else(|| owner.clone());
-            let address = iroha_data_model::account::AccountAddress::from_account_id(&domain_owner)
-                .expect("domain owner address");
-            let record = iroha_data_model::sns::NameRecordV1::new(
-                selector,
-                domain_owner,
-                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-                0,
-                0,
-                u64::MAX,
-                u64::MAX,
-                u64::MAX,
-                iroha_data_model::metadata::Metadata::default(),
-            );
-            tx.world
-                .smart_contract_state
-                .insert(storage_key, norito::codec::Encode::encode(&record));
-        }
-    }
-    let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
-        .expect("account alias selector");
-    let address =
-        iroha_data_model::account::AccountAddress::from_account_id(owner).expect("account address");
-    let record = iroha_data_model::sns::NameRecordV1::new(
-        selector.clone(),
-        owner.clone(),
-        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-        0,
-        0,
-        u64::MAX,
-        u64::MAX,
-        u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
-    );
-    tx.world.smart_contract_state.insert(
-        crate::sns::record_storage_key(&selector),
-        norito::codec::Encode::encode(&record),
-    );
-}
-
-#[test]
-fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
-    let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-    let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
-    let state = State::new_for_testing(
-        World::with([genesis_domain], [genesis_account], []),
-        crate::kura::Kura::blank_kura_for_testing(),
-        crate::query::store::LiveQueryStore::start_test(),
-    );
-
-    let view = state.view();
-    assert_eq!(
-        crate::sns::active_dataspace_owner_by_alias(
-            view.world(),
-            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
-            0,
-        ),
-        Some(genesis_id)
-    );
-}
-
-#[test]
-fn reserved_universal_dataspace_seed_classifies_noop_then_permission_repair() {
-    let owner = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-    let domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&owner);
-    let account = Account::new(owner.clone()).build(&owner);
-    let mut world = World::with([domain], [account], []);
-    State::seed_reserved_universal_dataspace_name_record(&mut world);
-    let intent = iroha_data_model::alias_setup::AliasIntentV1::Dataspace(
-        iroha_data_model::alias_setup::AliasDataSpaceIntentV1 {
-            dataspace: iroha_data_model::alias_setup::ResolvedDataSpaceV1::new(
-                crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
-                    .parse()
-                    .expect("reserved dataspace alias"),
-                DataSpaceId::UNIVERSAL,
-            ),
-            owner: owner.clone(),
-        },
-    );
-    assert_eq!(
-        crate::alias_setup::classify_alias_intent(
-            &world.view(),
-            &iroha_data_model::nexus::DataSpaceCatalog::default(),
-            &intent,
-            0,
-        )
-        .expect("classify seeded universal dataspace"),
-        iroha_data_model::alias_setup::AliasPlanDispositionV1::NoOp
-    );
-
-    let removed = crate::alias_setup::exact_alias_permission_bundle(&intent)
-        .into_iter()
-        .next()
-        .expect("exact permission bundle");
-    let mut permissions = world
-        .account_permissions
-        .view()
-        .get(&owner)
-        .cloned()
-        .expect("seeded permissions");
-    assert!(permissions.remove(&removed));
-    world.account_permissions.insert(owner.clone(), permissions);
-    assert_eq!(
-        crate::alias_setup::classify_alias_intent(
-            &world.view(),
-            &iroha_data_model::nexus::DataSpaceCatalog::default(),
-            &intent,
-            0,
-        )
-        .expect("classify permission repair"),
-        iroha_data_model::alias_setup::AliasPlanDispositionV1::Repair
-    );
-}
-
-#[test]
-fn asset_definition_alias_binding_status_classifies_lifecycle() {
-    let leased_alias: AssetDefinitionAlias = "usd#lease".parse().expect("lease alias");
-    let binding = AssetDefinitionAliasBindingRecord {
-        alias: leased_alias,
-        lease_expiry_ms: Some(200),
-        grace_until_ms: Some(250),
-        bound_at_ms: 100,
-    };
-    assert_eq!(
-        binding.status_at(150),
-        AssetDefinitionAliasLeaseStatus::LeasedActive
-    );
-    assert_eq!(
-        binding.status_at(200),
-        AssetDefinitionAliasLeaseStatus::LeasedGrace
-    );
-    assert_eq!(
-        binding.status_at(250),
-        AssetDefinitionAliasLeaseStatus::LeasedGrace
-    );
-    assert_eq!(
-        binding.status_at(251),
-        AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
-    );
-
-    let permanent_binding = AssetDefinitionAliasBindingRecord {
-        alias: "usd#permanent".parse().expect("permanent alias"),
-        lease_expiry_ms: None,
-        grace_until_ms: None,
-        bound_at_ms: 100,
-    };
-    assert_eq!(
-        permanent_binding.status_at(10_000),
-        AssetDefinitionAliasLeaseStatus::Permanent
-    );
-    assert!(!permanent_binding.is_grace_expired_at(u64::MAX));
-
-    let no_grace_binding = AssetDefinitionAliasBindingRecord {
-        alias: "usd#no_grace".parse().expect("no-grace alias"),
-        lease_expiry_ms: Some(200),
-        grace_until_ms: None,
-        bound_at_ms: 100,
-    };
-    assert!(!no_grace_binding.is_grace_expired_at(199));
-    assert!(no_grace_binding.is_grace_expired_at(200));
-    assert_eq!(
-        no_grace_binding.status_at(200),
-        AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
-    );
-
-    let malformed_binding = AssetDefinitionAliasBindingRecord {
-        alias: "usd#malformed".parse().expect("malformed alias"),
-        lease_expiry_ms: None,
-        grace_until_ms: Some(250),
-        bound_at_ms: 100,
-    };
-    assert!(
-        malformed_binding.is_grace_expired_at(0),
-        "a grace-only record must never revive a permanent alias"
-    );
-}
-
-#[test]
-fn contract_alias_binding_without_grace_expires_at_lease_boundary() {
-    let binding = ContractAliasBindingRecord {
-        alias: "router::universal".parse().expect("contract alias"),
-        lease_expiry_ms: Some(200),
-        grace_until_ms: None,
-        bound_at_ms: 100,
-    };
-    assert!(!binding.is_grace_expired_at(199));
-    assert!(binding.is_grace_expired_at(200));
-    assert_eq!(
-        binding.status_at(200),
-        ContractAliasLeaseStatus::ExpiredPendingCleanup
-    );
-}
-
-#[test]
-fn alias_binding_rejects_incoherent_lease_windows() {
-    let error = validate_alias_lease_window(None, Some(300), 100)
-        .expect_err("grace without a lease must fail");
-    assert!(error.to_string().contains("requires lease_expiry_ms"));
-
-    let mut world = World::new();
-
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &ALICE_ID,
-        6,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("contract address");
-    let error = world
-        .bind_contract_alias(
-            &contract_address,
-            "router_invalid::universal".parse().expect("contract alias"),
-            Some(200),
-            Some(199),
-            100,
-        )
-        .expect_err("grace before expiry must fail");
-    assert!(error.to_string().contains("must not precede"));
-
-    let error = world
-        .bind_contract_alias(
-            &contract_address,
-            "router_expired::universal".parse().expect("contract alias"),
-            Some(100),
-            None,
-            100,
-        )
-        .expect_err("already-expired lease must fail");
-    assert!(error.to_string().contains("greater than bound_at_ms"));
-}
-
-#[test]
-fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
-    let (mut world, definition_id) = asset_alias_test_world();
-    world.asset_definition_alias_bindings = std::iter::once((
-        definition_id,
-        AssetDefinitionAliasBindingRecord {
-            alias: "usd#invalid_persisted".parse().expect("asset alias"),
-            lease_expiry_ms: None,
-            grace_until_ms: Some(300),
-            bound_at_ms: 100,
-        },
-    ))
-    .collect();
-    let error = world
-        .rebuild_asset_definition_alias_indexes()
-        .expect_err("asset alias rebuild must reject grace without a lease");
-    assert!(error.contains("requires lease_expiry_ms"));
-
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &ALICE_ID,
-        7,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("contract address");
-    world.contract_alias_bindings = std::iter::once((
-        contract_address,
-        ContractAliasBindingRecord {
-            alias: "router_invalid_persisted::universal"
-                .parse()
-                .expect("contract alias"),
-            lease_expiry_ms: Some(100),
-            grace_until_ms: None,
-            bound_at_ms: 100,
-        },
-    ))
-    .collect();
-    let error = world
-        .rebuild_contract_alias_indexes()
-        .expect_err("contract alias rebuild must reject a non-forward lease");
-    assert!(error.contains("greater than bound_at_ms"));
-}
-
-#[test]
-fn world_bind_contract_alias_keeps_indexes_consistent() {
-    let mut world = World::new();
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &ALICE_ID,
-        1,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("contract address");
-    let other_contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &ALICE_ID,
-        2,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("other contract address");
-    let first_alias: ContractAlias = "router::universal".parse().expect("first alias");
-    let second_alias: ContractAlias = "router_v2::universal".parse().expect("second alias");
-
-    world
-        .bind_contract_alias(
-            &contract_address,
-            first_alias.clone(),
-            Some(200),
-            Some(300),
-            100,
-        )
-        .expect("bind first alias");
-    assert_eq!(
-        world.contract_aliases.view().get(&first_alias),
-        Some(&contract_address)
-    );
-    assert_eq!(
-        world
-            .contract_alias_bindings
-            .view()
-            .get(&contract_address)
-            .expect("first binding")
-            .alias,
-        first_alias
-    );
-
-    world
-        .bind_contract_alias(&contract_address, second_alias.clone(), None, None, 400)
-        .expect("rebind alias");
-    assert!(world.contract_aliases.view().get(&first_alias).is_none());
-    assert_eq!(
-        world.contract_aliases.view().get(&second_alias),
-        Some(&contract_address)
-    );
-    assert_eq!(
-        world
-            .contract_alias_bindings
-            .view()
-            .get(&contract_address)
-            .expect("second binding")
-            .bound_at_ms,
-        400
-    );
-
-    let err = world
-        .bind_contract_alias(&other_contract_address, second_alias, None, None, 500)
-        .expect_err("alias reuse across contracts must fail");
-    assert!(
-        err.to_string().contains("already bound"),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn contract_alias_time_lookup_rejects_index_without_binding_record() {
-    let mut world = World::new();
-    let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        &ALICE_ID,
-        7,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("contract address");
-    let alias: ContractAlias = "index_only::universal".parse().expect("contract alias");
-    world
-        .contract_aliases
-        .insert(alias.clone(), contract_address.clone());
-
-    let view = world.view();
-    assert_eq!(
-        view.contract_address_by_alias(&alias),
-        Some(contract_address),
-        "the raw index remains inspectable for state repair"
-    );
-    assert_eq!(
-        view.contract_address_by_alias_at(&alias, 0),
-        None,
-        "an index-only entry must never become an effective first-release binding"
-    );
-}
-
-#[test]
-fn asset_alias_time_lookup_rejects_index_without_binding_record() {
-    let (mut world, definition_id) = asset_alias_test_world();
-    let alias: AssetDefinitionAlias = "usd#index_only".parse().expect("asset alias");
-    world
-        .asset_definition_aliases
-        .insert(alias.clone(), definition_id.clone());
-
-    let view = world.view();
-    assert_eq!(
-        view.asset_definition_id_by_alias(&alias),
-        Some(definition_id),
-        "the raw index remains inspectable for state repair"
-    );
-    assert_eq!(
-        view.asset_definition_id_by_alias_at(&alias, 0),
-        None,
-        "an index-only entry must never become an effective first-release binding"
-    );
-}
-
-#[test]
-fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
-    let (mut world, definition_id) = asset_alias_test_world();
-    let persisted_alias: AssetDefinitionAlias = "usd#canonical".parse().expect("alias");
-    let binding = AssetDefinitionAliasBindingRecord {
-        alias: persisted_alias.clone(),
-        lease_expiry_ms: Some(200),
-        grace_until_ms: Some(300),
-        bound_at_ms: 100,
-    };
-
-    world.asset_definition_aliases = Storage::default();
-    world.asset_definition_alias_bindings =
-        std::iter::once((definition_id.clone(), binding.clone())).collect();
-    world
-        .rebuild_asset_definition_alias_indexes()
-        .expect("rebuild should succeed");
-    let view = world.view();
-
-    assert_eq!(
-        view.asset_definition_aliases().get(&persisted_alias),
-        Some(&definition_id)
-    );
-    assert_eq!(
-        view.asset_definition_alias_bindings()
-            .get(&definition_id)
-            .expect("binding"),
-        &binding
-    );
-    assert_eq!(
-        view.asset_definition(&definition_id)
-            .expect("definition")
-            .alias()
-            .as_ref(),
-        Some(&persisted_alias)
-    );
-    assert!(
-        world
-            .asset_definitions
-            .view()
-            .get(&definition_id)
-            .expect("stored definition")
-            .alias()
-            .is_none(),
-        "stored asset definition alias must stay empty; bindings drive alias reads"
-    );
-}
-
-#[test]
-fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
-    let (mut world, existing_definition_id) = asset_alias_test_world();
-    let existing_definition = world
-        .asset_definitions
-        .view()
-        .get(&existing_definition_id)
-        .expect("fixture definition")
-        .clone();
-    let added_definition_id = AssetDefinitionId::derive_from_components(
-        existing_definition
-            .owning_domain()
-            .as_ref()
-            .expect("fixture definition is explicitly domain-owned")
-            .clone(),
-        "rollback".parse().expect("asset name"),
-    );
-    let added_definition = AssetDefinition::numeric(
-        added_definition_id.clone(),
-        "rollback".to_owned(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        existing_definition.owning_domain().clone(),
-    )
-    .build(existing_definition.owned_by());
-    let alias: AssetDefinitionAlias = "rollback#universal".parse().expect("asset alias");
-    let binding = AssetDefinitionAliasBindingRecord {
-        alias,
-        lease_expiry_ms: None,
-        grace_until_ms: None,
-        bound_at_ms: 100,
-    };
-
-    {
-        let mut definitions = world.asset_definitions.block();
-        assert!(
-            definitions
-                .insert(added_definition_id.clone(), added_definition)
-                .is_none()
-        );
-        definitions.commit();
-    }
-    {
-        let mut bindings = world.asset_definition_alias_bindings.block();
-        assert!(
-            bindings
-                .insert(added_definition_id.clone(), binding)
-                .is_none()
-        );
-        bindings.commit();
-    }
-
-    let definitions_before =
-        norito::json::to_json(&world.asset_definitions).expect("serialize definitions");
-    let bindings_before = norito::json::to_json(&world.asset_definition_alias_bindings)
-        .expect("serialize alias bindings");
-
-    world
-        .rebuild_asset_definition_alias_indexes()
-        .expect("rebuild should succeed");
-
-    assert_eq!(
-        norito::json::to_json(&world.asset_definitions).expect("serialize definitions"),
-        definitions_before,
-        "rebuilding a derived index must preserve the authoritative definition MV history"
-    );
-    assert_eq!(
-        norito::json::to_json(&world.asset_definition_alias_bindings)
-            .expect("serialize alias bindings"),
-        bindings_before,
-        "rebuilding a derived index must preserve the authoritative binding MV history"
-    );
-
-    let definitions = world.asset_definitions.block_and_revert();
-    assert!(
-        definitions.get(&added_definition_id).is_none(),
-        "the latest definition insertion must remain rollback-capable"
-    );
-    definitions.commit();
-    let bindings = world.asset_definition_alias_bindings.block_and_revert();
-    assert!(
-        bindings.get(&added_definition_id).is_none(),
-        "the latest alias binding insertion must remain rollback-capable"
-    );
-    bindings.commit();
-}
-
-#[test]
-fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding() {
-    let (mut world, definition_id) = asset_alias_test_world();
-    let legacy_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("legacy alias");
-    world.asset_definition_aliases = Storage::default();
-    world.asset_definition_alias_bindings = Storage::default();
-    let mut stored_definition = world
-        .asset_definitions
-        .view()
-        .get(&definition_id)
-        .expect("stored definition")
-        .clone();
-    stored_definition.alias = Some(legacy_alias.clone());
-    world
-        .asset_definitions
-        .insert(definition_id.clone(), stored_definition);
-
-    let err = world
-        .rebuild_asset_definition_alias_indexes()
-        .expect_err("rebuild must reject inline asset-definition aliases");
-    assert_eq!(
-        err,
-        format!(
-            "Asset definition {definition_id} stores inline alias `{legacy_alias}`; persist aliases only in asset_definition_alias_bindings"
-        )
-    );
-}
-
-#[test]
-fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding() {
-    let (mut world, definition_id) = asset_alias_test_world();
-    let inline_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("inline alias");
-    world.asset_definition_aliases = Storage::default();
-    world.asset_definition_alias_bindings = std::iter::once((
-        definition_id.clone(),
-        AssetDefinitionAliasBindingRecord {
-            alias: "usd#canonical".parse().expect("persisted alias"),
-            lease_expiry_ms: None,
-            grace_until_ms: None,
-            bound_at_ms: 100,
-        },
-    ))
-    .collect();
-    let mut stored_definition = world
-        .asset_definitions
-        .view()
-        .get(&definition_id)
-        .expect("stored definition")
-        .clone();
-    stored_definition.alias = Some(inline_alias.clone());
-    world
-        .asset_definitions
-        .insert(definition_id.clone(), stored_definition);
-
-    let err = world
-        .rebuild_asset_definition_alias_indexes()
-        .expect_err("rebuild must reject inline asset-definition aliases");
-    assert_eq!(
-        err,
-        format!(
-            "Asset definition {definition_id} stores inline alias `{inline_alias}`; persist aliases only in asset_definition_alias_bindings"
-        )
-    );
-}
-
-#[test]
-fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
-    let (mut world, definition_id) = asset_alias_test_world();
-    let alias: AssetDefinitionAlias = "usd#lease".parse().expect("alias");
-    world.asset_definition_aliases = Storage::default();
-    world.asset_definition_alias_bindings = std::iter::once((
-        definition_id.clone(),
-        AssetDefinitionAliasBindingRecord {
-            alias: alias.clone(),
-            lease_expiry_ms: Some(200),
-            grace_until_ms: Some(250),
-            bound_at_ms: 100,
-        },
-    ))
-    .collect();
-    world
-        .rebuild_asset_definition_alias_indexes()
-        .expect("rebuild should succeed");
-
-    let view = world.view();
-    assert_eq!(
-        view.asset_definition_id_by_alias_at(&alias, 249),
-        Some(definition_id.clone())
-    );
-    assert_eq!(view.asset_definition_id_by_alias_at(&alias, 251), None);
-    assert_eq!(
-        view.asset_definition_aliases().get(&alias),
-        Some(&definition_id),
-        "stale binding remains indexed until sweep"
-    );
-    assert_eq!(
-        view.asset_definition(&definition_id)
-            .expect("definition")
-            .alias()
-            .as_ref(),
-        Some(&alias),
-        "effective definition still exposes the persisted binding for inspection"
-    );
-}
+include!("alias_binding_tests.rs");
 
 fn state_with_snapshot_nexus_runtime() -> State {
     let mut state = State::new(
@@ -2152,6 +1611,18 @@ fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
 #[test]
 fn state_snapshot_rejects_serialized_asset_definition_domain_index() {
     let (state, _, _) = snapshot_state_with_numeric_asset();
+    let block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let block_snapshot =
+        norito::json::to_value(&block.world).expect("serialize staged world snapshot");
+    let norito::json::Value::Object(block_world_object) = block_snapshot else {
+        panic!("staged world snapshot must be an object");
+    };
+    assert!(
+        !block_world_object.contains_key("asset_definition_domains"),
+        "staged snapshots must omit the same derived ownership index as committed snapshots"
+    );
+    drop(block);
+
     let mut snapshot = norito::json::to_value(&state).expect("serialize state");
     let norito::json::Value::Object(state_object) = &mut snapshot else {
         panic!("state snapshot must be an object");
@@ -2589,6 +2060,7 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
         bootstrap_digest,
         asset_definition_id.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Global,
         reserve_account.clone(),
     )
     .expect("canonical Orchard pool state");
@@ -4199,7 +3671,7 @@ fn state_snapshot_rejects_malformed_contract_alias_lease_window() {
 }
 
 #[test]
-fn escrow_records_roundtrip_through_state_json() {
+fn asset_escrow_record_roundtrips_through_state_json() {
     let mut world = World::default();
     let seller = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let buyer = AccountId::new(crate::state::checked_keypair().public_key().clone());
@@ -4231,38 +3703,7 @@ fn escrow_records_roundtrip_through_state_json() {
         resolution: None,
     };
 
-    let anonymous_id = iroha_data_model::escrow::EscrowId::new(Hash::new("anonymous-escrow"));
-    let proof_record = iroha_data_model::escrow::AnonymousAssetEscrowProofRecord {
-        nullifiers: vec![[0x11; 32]],
-        output_commitments: vec![[0x22; 32]],
-        proof_hash: [0x33; 32],
-        envelope_hash: Some([0x44; 32]),
-        root_hint: Some([0x55; 32]),
-        recorded_at_ms: 4,
-    };
-    let anonymous_record = iroha_data_model::escrow::AnonymousAssetEscrowRecord {
-        id: anonymous_id,
-        seller: seller.clone(),
-        buyer: Some(buyer),
-        asset_definition,
-        escrow_commitment: [0x22; 32],
-        status: iroha_data_model::escrow::AssetEscrowStatus::Accepted,
-        evidence_hashes: vec![Hash::new("anonymous-evidence")],
-        opening: proof_record,
-        release: None,
-        cancellation: None,
-        created_at_ms: 4,
-        accepted_at_ms: Some(5),
-        payment_sent_at_ms: None,
-        disputed_at_ms: None,
-        closed_at_ms: None,
-        resolution: None,
-    };
-
     world.asset_escrows.insert(public_id, public_record.clone());
-    world
-        .anonymous_asset_escrows
-        .insert(anonymous_id, anonymous_record.clone());
 
     let state = State::new(
         world,
@@ -4285,13 +3726,6 @@ fn escrow_records_roundtrip_through_state_json() {
         view.asset_escrows().get(&public_id).expect("public escrow"),
         &public_record
     );
-    assert_eq!(
-        view.anonymous_asset_escrows()
-            .get(&anonymous_id)
-            .expect("anonymous escrow"),
-        &anonymous_record
-    );
-
     let state_view = restored.view();
     let restored_public_ids = FindAssetEscrowsByStatus {
         status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
@@ -4301,15 +3735,6 @@ fn escrow_records_roundtrip_through_state_json() {
     .map(|record| record.id)
     .collect::<Vec<_>>();
     assert_eq!(restored_public_ids, vec![public_id]);
-
-    let restored_anonymous_ids = FindAnonymousAssetEscrowsByStatus {
-        status: iroha_data_model::escrow::AssetEscrowStatus::Accepted,
-    }
-    .execute(CompoundPredicate::PASS, &state_view)
-    .expect("query restored anonymous escrow status index")
-    .map(|record| record.id)
-    .collect::<Vec<_>>();
-    assert_eq!(restored_anonymous_ids, vec![anonymous_id]);
 }
 
 #[test]
@@ -6712,6 +6137,53 @@ fn query_view_matches_basic_read_only_snapshot_fields() {
     assert_eq!(view.height(), 1);
     assert_eq!(view.latest_block_hash(), Some(block_hash));
     assert_eq!(view.world().domains().iter().count(), 0);
+}
+
+#[test]
+fn query_view_retries_world_and_block_hashes_as_one_generation() {
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+
+    let generation = state.begin_state_view_write();
+    let reader_state = Arc::clone(&state);
+    let reader = std::thread::spawn(move || {
+        let view = reader_state.query_view();
+        (
+            view.height(),
+            view.latest_block_hash(),
+            view.world().musubi_replication_shortfall_releases(),
+        )
+    });
+
+    let contention_deadline = Instant::now() + Duration::from_secs(5);
+    while state.view_lock_contention_log.lock().last_warn_at.is_none() {
+        assert!(
+            Instant::now() < contention_deadline,
+            "query view did not observe the active write generation"
+        );
+        std::thread::yield_now();
+    }
+
+    {
+        let mut shortfall = state.world.musubi_replication_shortfall_releases.block();
+        *shortfall.get_mut() = 7;
+        shortfall.commit();
+    }
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(block_hash);
+        block_hashes.commit_for_tests();
+    }
+    drop(generation);
+
+    let (height, latest_hash, shortfall) = reader.join().expect("query reader must not panic");
+    assert_eq!(height, 1);
+    assert_eq!(latest_hash, Some(block_hash));
+    assert_eq!(shortfall, 7);
 }
 
 #[test]
@@ -53632,6 +53104,145 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
     }
 }
 
+#[allow(clippy::too_many_lines)]
+fn indexed_settled_vpn_lease(
+    chain_id: &ChainId,
+    client: &AccountId,
+    account_tag: u8,
+    ordinal: u16,
+    operator_key: &KeyPair,
+) -> VpnLeaseRecordV1 {
+    use iroha_data_model::soranet::vpn::{
+        VpnExitClassV1, VpnQuoteBodyV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnSignedQuoteV1,
+        VpnTariffV1,
+    };
+
+    let mut quote_id = [0_u8; 32];
+    quote_id[0] = account_tag;
+    quote_id[1..3].copy_from_slice(&ordinal.to_be_bytes());
+    let address_slot = VpnAddressSlotV1::new(
+        u32::from(account_tag)
+            .checked_mul(1_000)
+            .and_then(|base| base.checked_add(u32::from(ordinal)))
+            .expect("fixture VPN address slot arithmetic"),
+    )
+    .expect("fixture VPN address slot");
+    let lease_id = derive_vpn_lease_id_v1(chain_id, quote_id, client);
+    let session_id = derive_vpn_session_id_v1(chain_id, quote_id, client, address_slot);
+    let operator_account_id = AccountId::new(operator_key.public_key().clone());
+    let asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::parse_fully_qualified("universal.universal").expect("XOR domain"),
+        "xor".parse().expect("XOR asset name"),
+    );
+    let custody_account_id = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
+        chain_id,
+        &lease_id,
+        &asset_definition,
+    )
+    .expect("fixture VPN custody account");
+    let tariff = VpnTariffV1 {
+        lease_fee: Quantity::from(10_u32),
+        active_fee_per_minute: Quantity::from(1_u32),
+        ingress_fee_per_mib: Quantity::from(1_u32),
+        egress_fee_per_mib: Quantity::from(1_u32),
+    };
+    let policy = VpnQuotePolicyV1 {
+        exit_class: VpnExitClassV1::Standard,
+        relay_endpoint: "/dns/restart.test/udp/9443/quic".to_owned(),
+        relay_id: [account_tag.wrapping_add(0x20); 32],
+        descriptor_commit: [account_tag.wrapping_add(0x30); 32],
+        tls_server_name: "restart.test".to_owned(),
+        relay_tls_spki_sha256: [account_tag.wrapping_add(0x40); 32],
+        relay_certificate_sha256: [account_tag.wrapping_add(0x50); 32],
+        directory_snapshot_digest: [account_tag.wrapping_add(0x60); 32],
+        relay_trust_valid_until_ms: 1_002_000,
+        lease_secs: 1_000,
+        meter_family: "soranet.vpn.restart".to_owned(),
+        fee_asset_id: asset_definition.to_string(),
+        escrow_account_id: custody_account_id.clone(),
+        route_pushes: vec!["0.0.0.0/0".to_owned()],
+        excluded_routes: Vec::new(),
+        dns_servers: vec!["1.1.1.1".to_owned()],
+        tunnel_addresses: derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses,
+        mtu_bytes: 1_280,
+        flow_label_bits: 24,
+        padding_budget_ms: 15,
+    };
+    let signed_quote = VpnSignedQuoteV1::try_sign(
+        VpnQuoteBodyV1 {
+            chain_id: chain_id.clone(),
+            quote_id,
+            lease_id,
+            session_id,
+            address_slot,
+            client_account_id: client.clone(),
+            operator_account_id: operator_account_id.clone(),
+            metering_public_key: operator_key.public_key().clone(),
+            asset_definition: asset_definition.clone(),
+            tariff: tariff.clone(),
+            policy: policy.clone(),
+            valid_after_ms: 1_000,
+            expires_at_ms: 1_001_000,
+            settlement_grace_ms: 60_000,
+        },
+        operator_key.private_key(),
+    )
+    .expect("sign fixture VPN quote");
+    let settled_at_ms = 10_000_u64
+        .checked_add(u64::from(account_tag) * 1_000)
+        .and_then(|base| base.checked_add(u64::from(ordinal)))
+        .expect("fixture VPN settlement timestamp");
+    let open_tx_hash = quote_id;
+    let receipt = VpnSessionReceiptV1 {
+        session_id,
+        quote_id,
+        payment_tx_hash: open_tx_hash,
+        account_hash: *blake3::hash(client.to_string().as_bytes()).as_bytes(),
+        relay_id: policy.relay_id,
+        ingress_bytes: u64::from(ordinal),
+        egress_bytes: u64::from(ordinal),
+        cover_bytes: 0,
+        uptime_secs: 1,
+        started_at_ms: 2_000,
+        ended_at_ms: settled_at_ms,
+        exit_class: policy.exit_class,
+        meter_hash: [account_tag.wrapping_add(0x70); 32],
+        earned_fee: Quantity::from(1_u32),
+        highest_voucher_sequence: u64::from(ordinal) + 1,
+        client_voucher_hash: quote_id,
+    };
+    let relay_receipt_hash = receipt.hash();
+    VpnLeaseRecordV1 {
+        lease_id,
+        session_id,
+        quote_id,
+        client_account_id: client.clone(),
+        operator_account_id,
+        metering_public_key: operator_key.public_key().clone(),
+        asset_definition,
+        lease_fee: tariff.lease_fee.clone(),
+        custody_account_id,
+        relay_id: policy.relay_id,
+        tariff,
+        quote_policy: policy,
+        address_slot,
+        signed_quote,
+        open_tx_hash,
+        status: VpnLeaseStatusV1::Settled,
+        opened_at_ms: 2_000,
+        expires_at_ms: 1_001_000,
+        settlement_grace_ms: 60_000,
+        settled_at_ms: Some(settled_at_ms),
+        refunded_at_ms: None,
+        highest_voucher_sequence: receipt.highest_voucher_sequence,
+        client_voucher_hash: Some(receipt.client_voucher_hash),
+        relay_receipt_hash: Some(relay_receipt_hash),
+        settled_relay_receipt: Some(receipt),
+        earned_fee: Quantity::from(1_u32),
+        refunded_fee: Quantity::from(9_u32),
+    }
+}
+
 #[test]
 fn governance_lock_test_mutator_replaces_removes_and_rolls_back_expiry_index() {
     let world = World::default();
@@ -53795,6 +53406,196 @@ fn governance_unlock_stats_snapshot_obeys_transaction_and_block_visibility() {
 
     block.commit();
     assert_eq!(*world.view().governance_unlock_stats(), snapshot);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
+    let chain_id = ChainId::from("derived-index-restart");
+    let operator_key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+        .expect("deterministic VPN operator key");
+    let alice_id = (*ALICE_ID).clone();
+    let bob_id = (*BOB_ID).clone();
+    let alice_lease_count = VPN_SETTLED_RECEIPT_HISTORY_LIMIT + 7;
+    let bob_lease_count = VPN_SETTLED_RECEIPT_HISTORY_LIMIT + 3;
+    let mut leases = Vec::with_capacity(alice_lease_count + bob_lease_count);
+    let mut expected_alice = BTreeSet::new();
+    let mut expected_bob = BTreeSet::new();
+
+    for (client, account_tag, lease_count, expected) in [
+        (&alice_id, 1_u8, alice_lease_count, &mut expected_alice),
+        (&bob_id, 2_u8, bob_lease_count, &mut expected_bob),
+    ] {
+        for ordinal in 0..lease_count {
+            let record = indexed_settled_vpn_lease(
+                &chain_id,
+                client,
+                account_tag,
+                u16::try_from(ordinal).expect("fixture VPN ordinal"),
+                &operator_key,
+            );
+            expected.insert((
+                record.settled_at_ms.expect("settled fixture timestamp"),
+                record.lease_id,
+            ));
+            while expected.len() > VPN_SETTLED_RECEIPT_HISTORY_LIMIT {
+                let oldest = expected
+                    .first()
+                    .copied()
+                    .expect("over-limit expected VPN projection");
+                expected.remove(&oldest);
+            }
+            leases.push(record);
+        }
+    }
+
+    let xor_domain = DomainId::parse_fully_qualified("universal.universal").expect("XOR domain");
+    let xor_definition_id = AssetDefinitionId::derive_from_components(
+        xor_domain.clone(),
+        "xor".parse().expect("XOR asset name"),
+    );
+    let mut accounts = vec![
+        Account::new(alice_id.clone()).build(&alice_id),
+        Account::new(bob_id.clone()).build(&alice_id),
+        Account::new(AccountId::new(operator_key.public_key().clone())).build(&alice_id),
+    ];
+    accounts.extend(
+        leases
+            .iter()
+            .map(|record| Account::new(record.custody_account_id.clone()).build(&alice_id)),
+    );
+    let mut world = World::with(
+        [Domain::new(xor_domain.clone()).build(&alice_id)],
+        accounts,
+        [AssetDefinition::numeric(
+            xor_definition_id,
+            "XOR",
+            AssetBalancePolicy::Global,
+            Some(xor_domain),
+        )
+        .build(&alice_id)],
+    );
+
+    let referendum_a = "restart-lock-a".to_owned();
+    let referendum_b = "restart-lock-b".to_owned();
+    world.governance_locks.insert(
+        referendum_a.clone(),
+        GovernanceLocksForReferendum {
+            locks: BTreeMap::from([
+                (
+                    alice_id.clone(),
+                    indexed_governance_lock(alice_id.clone(), 80),
+                ),
+                (bob_id.clone(), indexed_governance_lock(bob_id.clone(), 120)),
+            ]),
+        },
+    );
+    world.governance_locks.insert(
+        referendum_b.clone(),
+        GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(
+                alice_id.clone(),
+                indexed_governance_lock(alice_id.clone(), 80),
+            )]),
+        },
+    );
+    let first_proposal_id = [0x11; 32];
+    let second_proposal_id = [0x22; 32];
+    world
+        .governance_proposals
+        .insert(first_proposal_id, indexed_validation_fee_proposal(31));
+    world
+        .governance_proposals
+        .insert(second_proposal_id, indexed_validation_fee_proposal(12));
+    let unlock_snapshot = GovernanceUnlockStatsSnapshot {
+        evaluated_height: 144,
+        expired_locks_now: 3,
+        referenda_with_expired: 2,
+    };
+    world.governance_unlock_stats = Cell::new(unlock_snapshot);
+    for record in leases {
+        assert!(world.vpn_leases.insert(record.lease_id, record).is_none());
+    }
+
+    let state = State::new_with_chain(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        chain_id,
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize indexed state snapshot");
+    let snapshot_world = snapshot
+        .as_object()
+        .and_then(|state| state.get("world"))
+        .and_then(norito::json::Value::as_object)
+        .expect("state snapshot world object");
+    for derived_field in [
+        "governance_lock_expiry_index",
+        "validation_fee_proposal_index",
+        "vpn_settled_leases_by_account",
+    ] {
+        assert!(
+            !snapshot_world.contains_key(derived_field),
+            "derived index `{derived_field}` must not be persisted or trusted on restart"
+        );
+    }
+    assert!(
+        snapshot_world.contains_key("governance_unlock_stats"),
+        "authoritative O(1) unlock snapshot must be persisted"
+    );
+
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore indexed state");
+    let restored_world = restored.world_view();
+    assert_eq!(
+        restored_world
+            .governance_lock_expiry_index()
+            .iter()
+            .map(|(height, bucket)| (*height, bucket.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                80,
+                BTreeSet::from([
+                    (referendum_a.clone(), alice_id.clone()),
+                    (referendum_b, alice_id.clone()),
+                ]),
+            ),
+            (120, BTreeSet::from([(referendum_a, bob_id.clone())])),
+        ],
+        "restart must exactly rebuild governance lock expiry buckets"
+    );
+    assert_eq!(
+        restored_world
+            .validation_fee_proposal_index()
+            .iter()
+            .map(|(key, ())| *key)
+            .collect::<Vec<_>>(),
+        vec![(12, second_proposal_id), (31, first_proposal_id)],
+        "restart must exactly rebuild the typed validation-fee ordering index"
+    );
+    assert_eq!(
+        *restored_world.governance_unlock_stats(),
+        unlock_snapshot,
+        "restart must retain the authoritative constant-time unlock projection"
+    );
+    assert_eq!(
+        restored_world.vpn_leases().len(),
+        alice_lease_count + bob_lease_count,
+        "authoritative settled lease history must remain complete"
+    );
+    assert_eq!(restored_world.vpn_settled_leases_by_account().len(), 2);
+    assert_eq!(
+        restored_world
+            .vpn_settled_leases_by_account()
+            .get(&alice_id),
+        Some(&expected_alice),
+        "Alice must receive only her exact newest 24 settled leases"
+    );
+    assert_eq!(
+        restored_world.vpn_settled_leases_by_account().get(&bob_id),
+        Some(&expected_bob),
+        "Bob must receive only his exact newest 24 settled leases"
+    );
 }
 
 #[test]
@@ -56779,12 +56580,12 @@ fn merge_carrier_finality_artifact(
         nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"),
         execution_policy_hash: Hash::new(b"state merge finality execution policy"),
         da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
+            encoding: PayloadEncoding::ReedSolomon16,
             chunk_size_bytes: 1024,
-            data_shards: 0,
-            parity_shards: 0,
+            data_shards: 1,
+            parity_shards: 1,
             max_payload_size_bytes: 4096,
-            max_chunk_count: 4,
+            max_chunk_count: 8,
         },
         leader_seed: [0xD3; 32],
     };

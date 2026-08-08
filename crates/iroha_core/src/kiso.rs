@@ -641,6 +641,14 @@ mod tests {
         KeyPair::try_random().expect("Kiso fixture key generation should succeed")
     }
 
+    fn checked_soranet_transport_keypair() -> KeyPair {
+        KeyPair::try_from_seed(
+            b"iroha:kiso:test:soranet-transport:v1".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("Kiso SoraNet transport fixture key generation should succeed")
+    }
+
     fn checked_public_key() -> iroha_crypto::PublicKey {
         checked_keypair().public_key().clone()
     }
@@ -743,11 +751,18 @@ mod tests {
         let key_pair = checked_keypair();
         let peer = Peer::new(socket_addr!(127.0.0.1:0), key_pair.public_key().clone());
         let streaming_identity = key_pair.clone();
+        let soranet_transport_key_pair = checked_soranet_transport_keypair();
+        assert_ne!(
+            soranet_transport_key_pair.public_key(),
+            key_pair.public_key(),
+            "SoraNet transport and node-signing identities must be independent"
+        );
 
         Root {
             common: Common {
                 chain: ChainId::from("test-chain"),
                 key_pair,
+                soranet_transport_key_pair,
                 peer: peer.clone(),
                 trusted_peers: WithOrigin::inline(TrustedPeers {
                     myself: peer,

@@ -70,7 +70,12 @@ Events (Data Events)
 Admission Rules
 - Contract Admission: Only `ProgramMetadata.abi_version = 1` is accepted in the first release; other values are rejected with `IvmAdmissionError::UnsupportedAbiVersion`.
   - For ABI v1 payloads, recompute `abi_hash(1)` and require equality with payload/manifest when provided; mismatches reject with `IvmAdmissionError::ManifestAbiHashMismatch`.
-- Transaction Admission: Instructions `ProposeRuntimeUpgrade`/`ActivateRuntimeUpgrade`/`CancelRuntimeUpgrade` require appropriate permissions (root/sudo); must satisfy window overlap constraints.
+- Transaction Admission: The governance wrapper
+  `ProposeRuntimeUpgradeProposal` requires the exact typed
+  `CanProposeRuntimeUpgrade { abi_version, abi_hash }` capability matching its
+  manifest. The low-level `ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, and
+  `CancelRuntimeUpgrade` instructions require `CanManageRuntimeUpgrades` and
+  must satisfy their window and overlap constraints.
 
 Provenance Enforcement
 - Runtime-upgrade manifests may carry SBOM digests (`sbom_digests`), SLSA attestation bytes (`slsa_attestation`), and signer metadata (`provenance` signatures). Signatures cover the canonical `RuntimeUpgradeManifestSignaturePayload` (all manifest fields except the `provenance` signatures list).

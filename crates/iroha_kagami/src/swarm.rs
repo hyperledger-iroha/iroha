@@ -662,6 +662,14 @@ fn validate_prepared_network_projection(
     config: &actual::Root,
     path: &Path,
 ) -> color_eyre::Result<()> {
+    let loopback_only = |cidrs: &[String]| {
+        cidrs
+            .iter()
+            .all(|cidr| matches!(cidr.as_str(), "127.0.0.0/8" | "127.0.0.1/32" | "::1/128"))
+    };
+    let trusted = config.common.trusted_peers.value();
+    let committee_size = trusted.others.len().saturating_add(1);
+    let required_peer_connections = committee_size.saturating_sub(1);
     ensure!(
         matches!(config.network.relay_mode, actual::RelayMode::Disabled)
             && config.network.relay_hub_addresses.is_empty(),
@@ -685,6 +693,84 @@ fn validate_prepared_network_projection(
     ensure!(
         config.network.p2p_proxy.is_none() && !config.network.p2p_proxy_required,
         "prepared validator config {} uses a P2P proxy that would bypass the exact Compose committee topology",
+        path.display()
+    );
+    ensure!(
+        config.network.debug_packet_loss_inbound_percent == 0
+            && config.network.debug_packet_loss_outbound_percent == 0,
+        "prepared validator config {} enables debug packet loss, which can deterministically prevent committee progress",
+        path.display()
+    );
+    ensure!(
+        config.network.allow_cidrs.is_empty() && config.network.deny_cidrs.is_empty(),
+        "prepared validator config {} uses P2P CIDR ACLs whose meaning changes on a Compose bridge",
+        path.display()
+    );
+    let committee_keys = std::iter::once(&trusted.myself)
+        .chain(trusted.others.iter())
+        .map(|peer| peer.id().public_key())
+        .collect::<BTreeSet<_>>();
+    if config.network.allowlist_only {
+        let allowed = config.network.allow_keys.iter().collect::<BTreeSet<_>>();
+        ensure!(
+            committee_keys.is_subset(&allowed),
+            "prepared validator config {} P2P allowlist excludes a signed-genesis committee member",
+            path.display()
+        );
+    }
+    let denied = config.network.deny_keys.iter().collect::<BTreeSet<_>>();
+    ensure!(
+        committee_keys.is_disjoint(&denied),
+        "prepared validator config {} P2P denylist contains a signed-genesis committee member",
+        path.display()
+    );
+    if let Some(max_incoming) = config.network.max_incoming {
+        ensure!(
+            max_incoming.get() >= required_peer_connections,
+            "prepared validator config {} max_incoming={} cannot admit the other {} committee members",
+            path.display(),
+            max_incoming,
+            required_peer_connections
+        );
+    }
+    if let Some(max_total) = config.network.max_total_connections {
+        ensure!(
+            max_total.get() >= required_peer_connections,
+            "prepared validator config {} max_total_connections={} cannot connect to the other {} committee members",
+            path.display(),
+            max_total,
+            required_peer_connections
+        );
+    }
+    ensure!(
+        !config.network.soranet_vpn.enabled,
+        "prepared validator config {} enables SoraVPN, but generated Compose services have no tunnel device or helper topology",
+        path.display()
+    );
+    ensure!(
+        loopback_only(&config.torii.api_rate_limit_bypass_cidrs)
+            && loopback_only(&config.torii.internal_api_trusted_cidrs)
+            && loopback_only(&config.torii.preauth_allow_cidrs)
+            && loopback_only(&config.torii.operator_auth.mtls_trusted_proxy_cidrs)
+            && loopback_only(&config.torii.soranet_privacy_ingest.allow_cidrs)
+            && loopback_only(&config.torii.transport.trusted_proxy_cidrs)
+            && loopback_only(&config.torii.transport.norito_rpc.mtls_trusted_proxy_cidrs),
+        "prepared validator config {} uses non-loopback source CIDRs or trusted-proxy CIDRs whose trust semantics change behind Compose NAT",
+        path.display()
+    );
+    ensure!(
+        !config.torii.push.enabled,
+        "prepared validator config {} enables push delivery whose private provider keys and egress are not projected",
+        path.display()
+    );
+    ensure!(
+        !config.torii.zk_prover_enabled,
+        "prepared validator config {} enables the background ZK prover without an immutable key-directory projection",
+        path.display()
+    );
+    ensure!(
+        !config.torii.sorafs_storage.governance_dag_service.enabled,
+        "prepared validator config {} enables the Governance DAG service without exposing its independent listener",
         path.display()
     );
     Ok(())
@@ -746,8 +832,10 @@ fn read_runtime_file_bounded(
     {
         use std::os::unix::fs::MetadataExt as _;
         ensure!(
-            before.uid() == rustix::process::geteuid().as_raw() && before.nlink() == 1,
-            "prepared {label} {} must be owner-held single-link regular data",
+            before.uid() == rustix::process::geteuid().as_raw()
+                && before.nlink() == 1
+                && before.mode() & 0o022 == 0,
+            "prepared {label} {} must be owner-held, single-link, and not group/world writable",
             path.display()
         );
     }
@@ -759,7 +847,7 @@ fn read_runtime_file_bounded(
         max_bytes
     );
     let mut raw = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(max_bytes.saturating_add(1))
         .read_to_end(&mut raw)
         .wrap_err_with(|| format!("read prepared {label} {}", path.display()))?;
@@ -805,6 +893,26 @@ fn collect_runtime_directory(
             "prepared {label} directory {} exceeds the maximum nesting depth {MAX_DEPTH}",
             directory.display()
         );
+        let before = fs::symlink_metadata(directory).wrap_err_with(|| {
+            format!(
+                "inspect prepared {label} directory {} before traversal",
+                directory.display()
+            )
+        })?;
+        ensure!(
+            before.is_dir() && !before.file_type().is_symlink(),
+            "prepared {label} directory {} is not a regular directory",
+            directory.display()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            ensure!(
+                before.uid() == rustix::process::geteuid().as_raw() && before.mode() & 0o022 == 0,
+                "prepared {label} directory {} must be owner-held and not group/world writable",
+                directory.display()
+            );
+        }
         let mut entries = fs::read_dir(directory)
             .wrap_err_with(|| format!("read prepared {label} directory {}", directory.display()))?
             .collect::<Result<Vec<_>, _>>()
@@ -815,6 +923,11 @@ fn collect_runtime_directory(
                 )
             })?;
         entries.sort_by_key(std::fs::DirEntry::file_name);
+        ensure!(
+            !entries.is_empty(),
+            "prepared {label} directory {} is empty; empty runtime trees cannot be represented byte-exactly",
+            directory.display()
+        );
         for entry in entries {
             *entries_seen = entries_seen
                 .checked_add(1)
@@ -889,9 +1002,31 @@ fn collect_runtime_directory(
             );
             captured.push((relative, content));
         }
+        let after = fs::symlink_metadata(directory).wrap_err_with(|| {
+            format!(
+                "reinspect prepared {label} directory {} after traversal",
+                directory.display()
+            )
+        })?;
+        ensure!(
+            same_file_snapshot(&before, &after),
+            "prepared {label} directory {} changed while being captured",
+            directory.display()
+        );
         Ok(())
     }
 
+    let lexical_source = fs::symlink_metadata(source).wrap_err_with(|| {
+        format!(
+            "inspect configured prepared {label} directory {}",
+            source.display()
+        )
+    })?;
+    ensure!(
+        lexical_source.is_dir() && !lexical_source.file_type().is_symlink(),
+        "configured prepared {label} directory {} must not be a symbolic link",
+        source.display()
+    );
     let source = fs::canonicalize(source).wrap_err_with(|| {
         format!(
             "canonicalize prepared {label} directory {}",
@@ -909,8 +1044,9 @@ fn collect_runtime_directory(
     {
         use std::os::unix::fs::MetadataExt as _;
         ensure!(
-            source_metadata.uid() == rustix::process::geteuid().as_raw(),
-            "prepared {label} directory {} must be owner-held",
+            source_metadata.uid() == rustix::process::geteuid().as_raw()
+                && source_metadata.mode() & 0o022 == 0,
+            "prepared {label} directory {} must be owner-held and not group/world writable",
             source.display()
         );
     }
@@ -946,6 +1082,21 @@ fn collect_runtime_directory(
         projection_root.join(format!("{namespace}-{}", digest.finalize().to_hex()));
     ensure_container_projection_directory(projection_root)?;
     ensure_container_projection_directory(&validation_dir)?;
+    let expected_files = captured
+        .iter()
+        .map(|(relative, _)| relative.clone())
+        .collect::<BTreeSet<_>>();
+    let mut expected_directories = BTreeSet::new();
+    for relative in &expected_files {
+        let mut parent = Path::new(relative).parent();
+        while let Some(path) = parent {
+            if path.as_os_str().is_empty() {
+                break;
+            }
+            expected_directories.insert(path.to_string_lossy().replace('\\', "/"));
+            parent = path.parent();
+        }
+    }
     let mut files = Vec::with_capacity(captured.len());
     for (relative, content) in captured {
         let relative_path = Path::new(&relative);
@@ -971,6 +1122,62 @@ fn collect_runtime_directory(
             content,
         });
     }
+    fn collect_projection_entries(
+        root: &Path,
+        directory: &Path,
+        relative_prefix: &str,
+        files: &mut BTreeSet<String>,
+        directories: &mut BTreeSet<String>,
+    ) -> color_eyre::Result<()> {
+        let entries = fs::read_dir(directory)
+            .wrap_err_with(|| format!("verify prepared runtime projection {}", root.display()))?;
+        for entry in entries {
+            let entry = entry.wrap_err("enumerate prepared runtime projection")?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| eyre!("prepared runtime projection filename is not UTF-8"))?;
+            let relative = if relative_prefix.is_empty() {
+                name
+            } else {
+                format!("{relative_prefix}/{name}")
+            };
+            let file_type = entry
+                .file_type()
+                .wrap_err("inspect prepared runtime projection entry")?;
+            ensure!(
+                !file_type.is_symlink(),
+                "prepared runtime projection {} contains a symbolic link",
+                entry.path().display()
+            );
+            if file_type.is_dir() {
+                directories.insert(relative.clone());
+                collect_projection_entries(root, &entry.path(), &relative, files, directories)?;
+            } else {
+                ensure!(
+                    file_type.is_file(),
+                    "prepared runtime projection {} contains a special file",
+                    entry.path().display()
+                );
+                files.insert(relative);
+            }
+        }
+        Ok(())
+    }
+    let mut projected_files = BTreeSet::new();
+    let mut projected_directories = BTreeSet::new();
+    collect_projection_entries(
+        &validation_dir,
+        &validation_dir,
+        "",
+        &mut projected_files,
+        &mut projected_directories,
+    )?;
+    ensure!(
+        projected_files == expected_files && projected_directories == expected_directories,
+        "content-addressed prepared {label} projection {} contains stale or unexpected entries",
+        validation_dir.display()
+    );
     let validation_dir = fs::canonicalize(&validation_dir).wrap_err_with(|| {
         format!(
             "canonicalize captured prepared {label} directory {}",
@@ -1007,8 +1214,10 @@ fn validate_runtime_projection_policy(
     );
     ensure!(
         source.common.chain == projected.common.chain
-            && source.common.key_pair.public_key() == projected.common.key_pair.public_key(),
-        "container runtime projection changed validator chain or identity"
+            && source.common.key_pair.public_key() == projected.common.key_pair.public_key()
+            && source.common.soranet_transport_key_pair.public_key()
+                == projected.common.soranet_transport_key_pair.public_key(),
+        "container runtime projection changed validator chain, signing identity, or SoraNet transport identity"
     );
     let trusted_keys = |config: &actual::Root| {
         std::iter::once(&config.common.trusted_peers.value().myself)
@@ -1365,6 +1574,261 @@ fn materialize_runtime_projection(
     )
 }
 
+struct CapturedValidationPath {
+    table_path: &'static [&'static str],
+    key: &'static str,
+    source: PathBuf,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_prepared_runtime_file(
+    table: &mut toml::Table,
+    projection_root: &Path,
+    source: &Path,
+    namespace: &str,
+    filename: &str,
+    target: &str,
+    label: &str,
+    max_bytes: u64,
+    table_path: &'static [&'static str],
+    key: &'static str,
+) -> color_eyre::Result<(PreparedRuntimeFile, CapturedValidationPath)> {
+    let content = read_runtime_file_bounded(source, label, max_bytes)?;
+    let captured =
+        materialize_container_readable_file(projection_root, namespace, filename, &content)?;
+    set_toml_string(table, table_path, key, target)?;
+    Ok((
+        PreparedRuntimeFile {
+            target: target.to_owned(),
+            content,
+        },
+        CapturedValidationPath {
+            table_path,
+            key,
+            source: captured,
+        },
+    ))
+}
+
+fn ensure_fresh_state_directory(
+    path: &Path,
+    label: &str,
+    config_path: &Path,
+) -> color_eyre::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "inspect {label} selected by prepared validator {}",
+                    config_path.display()
+                )
+            });
+        }
+    };
+    ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "prepared validator {} {label} {} is not a regular directory",
+        config_path.display(),
+        path.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        ensure!(
+            metadata.uid() == rustix::process::geteuid().as_raw() && metadata.mode() & 0o022 == 0,
+            "prepared validator {} {label} {} must be owner-held and not group/world writable",
+            config_path.display(),
+            path.display()
+        );
+    }
+    ensure!(
+        fs::read_dir(path)
+            .wrap_err_with(|| format!("read prepared {label} {}", path.display()))?
+            .next()
+            .transpose()
+            .wrap_err_with(|| format!("enumerate prepared {label} {}", path.display()))?
+            .is_none(),
+        "prepared validator {} {label} {} is non-empty; prepared Compose only admits fresh-genesis state and does not migrate live state",
+        config_path.display(),
+        path.display()
+    );
+    Ok(())
+}
+
+fn ensure_fresh_state_file(path: &Path, label: &str, config_path: &Path) -> color_eyre::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "inspect {label} selected by prepared validator {}",
+                    config_path.display()
+                )
+            });
+        }
+    };
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == 0,
+        "prepared validator {} {label} {} contains existing state; prepared Compose only admits fresh-genesis state",
+        config_path.display(),
+        path.display()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        ensure!(
+            metadata.uid() == rustix::process::geteuid().as_raw()
+                && metadata.nlink() == 1
+                && metadata.mode() & 0o022 == 0,
+            "prepared validator {} {label} {} must be owner-held, single-link, and not group/world writable",
+            config_path.display(),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_fresh_prepared_state(
+    config: &actual::Root,
+    config_path: &Path,
+) -> color_eyre::Result<()> {
+    let config_root = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let resolve = |path: &Path| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            config_root.join(path)
+        }
+    };
+    let directory =
+        |path: &Path, label: &str| ensure_fresh_state_directory(&resolve(path), label, config_path);
+    let file =
+        |path: &Path, label: &str| ensure_fresh_state_file(&resolve(path), label, config_path);
+
+    directory(config.kura.store_dir.value(), "Kura store")?;
+    directory(config.snapshot.store_dir.value(), "snapshot store")?;
+    directory(&config.torii.data_dir, "Torii data")?;
+    file(
+        Path::new(
+            config
+                .network
+                .soranet_handshake
+                .pow
+                .revocation_store_path
+                .as_ref(),
+        ),
+        "SoraNet ticket-revocation store",
+    )?;
+    directory(
+        &config.torii.da_ingest.replay_cache_store_dir,
+        "DA replay-cache store",
+    )?;
+    directory(
+        &config.torii.da_ingest.manifest_store_dir,
+        "DA manifest store",
+    )?;
+    directory(&config.torii.sorafs_storage.data_dir, "SoraFS data store")?;
+    if let Some(pop_credentials) = config.torii.sorafs_storage.pop_credentials.as_ref() {
+        directory(&pop_credentials.issuer_state_dir, "SoraFS PoP issuer state")?;
+        directory(&pop_credentials.wallet_state_dir, "SoraFS PoP wallet state")?;
+    }
+    if let Some(moderation) = config.torii.sorafs_storage.moderation_orchestrator.as_ref() {
+        file(&moderation.checkpoint_path, "SoraFS moderation checkpoint")?;
+    }
+    if let Some(evidence_viewer) = config.torii.sorafs_storage.evidence_viewer.as_ref() {
+        file(
+            &evidence_viewer.checkpoint_path,
+            "SoraFS evidence-viewer checkpoint",
+        )?;
+    }
+    file(
+        &config.torii.sorafs_discovery.replay_checkpoint_path,
+        "SoraFS discovery replay checkpoint",
+    )?;
+    directory(&config.torii.sorafs_por.state_dir, "SoraFS PoR state")?;
+    file(
+        &config.torii.sorafs_por.vrf_state_path,
+        "SoraFS PoR VRF state",
+    )?;
+    if let Some(path) = config.torii.sorafs_gc.state_dir.as_deref() {
+        directory(path, "SoraFS GC state")?;
+    }
+    if let Some(compliance) = config.torii.sorafs_gateway.compliance.as_ref() {
+        file(
+            &compliance.checkpoint_path,
+            "SoraFS gateway-compliance checkpoint",
+        )?;
+    }
+    if let Some(issuer) = config.torii.privacy_bootle_lantern_issuer.as_ref() {
+        directory(&issuer.state_dir, "privacy issuer state")?;
+    }
+    directory(
+        &config.soracloud_runtime.state_dir,
+        "Soracloud runtime state",
+    )?;
+    if let Some(path) = config.tiered_state.cold_store_root.as_deref() {
+        directory(path, "tiered cold state")?;
+    }
+    if let Some(path) = config.tiered_state.da_store_root.as_deref() {
+        directory(path, "tiered DA state")?;
+    }
+    directory(
+        &config.streaming.session_store_dir,
+        "streaming session state",
+    )?;
+    directory(
+        &config.streaming.soranet.provision_spool_dir,
+        "streaming SoraNet spool",
+    )?;
+    directory(
+        &config.streaming.soravpn.provision_spool_dir,
+        "streaming SoraVPN spool",
+    )?;
+    if let Some(path) = config.telemetry_integrity.state_dir.as_deref() {
+        directory(path, "telemetry-integrity state")?;
+    }
+    if let Some(path) = config.dev_telemetry.out_file.as_ref() {
+        file(path.value(), "development telemetry output")?;
+    }
+    if let Some(runtime) = config.torii.sorafs_storage.reputation_runtime.as_ref() {
+        directory(&runtime.state_dir, "SoraFS reputation state")?;
+        directory(
+            &runtime.finalized_archive_root,
+            "SoraFS finalized reputation archive",
+        )?;
+    }
+    if let Some(runtime) = config.torii.sorafs_storage.hedging_billing_runtime.as_ref() {
+        directory(&runtime.state_dir, "SoraFS hedging state")?;
+    }
+    if let Some(path) = config.torii.sorafs_storage.governance_dag_dir.as_deref() {
+        directory(path, "SoraFS Governance DAG state/feed")?;
+    }
+    if let Some(path) = config
+        .torii
+        .sorafs_storage
+        .governance_dag_service
+        .state_dir
+        .as_deref()
+    {
+        directory(path, "SoraFS Governance DAG service state")?;
+    }
+    if config.torii.iso_bridge.enabled {
+        if let Some(path) = config.torii.iso_bridge.store_dir.as_deref() {
+            directory(path, "ISO bridge state")?;
+        }
+        if let Some(path) = config.torii.iso_bridge.audit_export_dir.as_deref() {
+            directory(path, "ISO bridge audit export")?;
+        }
+        if let Some(path) = config.torii.iso_bridge.reference_data.cache_dir.as_deref() {
+            directory(path, "ISO reference-data cache")?;
+        }
+    }
+    Ok(())
+}
+
 fn project_prepared_runtime_config(
     config_dir: &Path,
     projection_root: &Path,
@@ -1388,12 +1852,15 @@ fn project_prepared_runtime_config(
     const LANE_CACHE_TARGET: &str = "/config/runtime/lane-cache";
     const LANE_POLICY_TARGET: &str = "/config/runtime/lane-policies";
     const SORAFS_ADMISSION_TARGET: &str = "/config/runtime/sorafs-admission";
+    const SORAFS_SALT_TARGET: &str = "/config/runtime/sorafs-salt-schedule";
+    const KAGEMUSHA_ARTIFACT_TARGET: &str = "/config/runtime/kagemusha-artifacts";
     const SITE_BINDINGS_TARGET: &str = "/config/runtime/sorafs_sites.json";
 
     let source_table = table.clone();
     let (effective_source, source_requires_sora) =
         effective_runtime_config(source.clone(), &source_table);
     let source = &effective_source;
+    ensure_fresh_prepared_state(source, &config_dir.join(format!("peer{index}.toml")))?;
     rewrite_container_network(&mut table, index, peers)?;
     set_toml_string(
         &mut table,
@@ -1402,9 +1869,11 @@ fn project_prepared_runtime_config(
         "/storage/network/soranet-ticket-revocations.norito",
     )?;
 
-    let rans_source = fs::canonicalize(&source.streaming.codec.rans_tables_path)
-        .wrap_err("canonicalize prepared rANS table")?;
-    let rans_content = read_runtime_file_bounded(&rans_source, "rANS table", RANS_TABLE_MAX_BYTES)?;
+    let rans_content = read_runtime_file_bounded(
+        &source.streaming.codec.rans_tables_path,
+        "rANS table",
+        RANS_TABLE_MAX_BYTES,
+    )?;
     let captured_rans_source = materialize_container_readable_file(
         projection_root,
         "rans",
@@ -1416,6 +1885,7 @@ fn project_prepared_runtime_config(
         content: rans_content,
     }];
     let mut secret_files = Vec::new();
+    let mut captured_validation_paths = Vec::new();
 
     set_toml_string(
         &mut table,
@@ -1767,6 +2237,198 @@ fn project_prepared_runtime_config(
         captured_faucet_private_key = Some(captured);
     }
 
+    if let Some(path) = source
+        .torii
+        .tx_history
+        .as_ref()
+        .and_then(|history| history.mandatory_aliases_path.as_deref())
+    {
+        let (file, captured) = capture_prepared_runtime_file(
+            &mut table,
+            projection_root,
+            path,
+            "tx-history-aliases",
+            "mandatory_aliases.norito",
+            "/config/runtime/tx-history-mandatory-aliases.norito",
+            "transaction-history mandatory-alias policy",
+            16 * 1024 * 1024,
+            &["torii", "tx_history"],
+            "mandatory_aliases_path",
+        )?;
+        runtime_files.push(file);
+        captured_validation_paths.push(captured);
+    }
+    if source.torii.sorafs_storage.moderation_screening_enabled {
+        let path = source
+            .torii
+            .sorafs_storage
+            .moderation_screening_authority_bundle_path
+            .as_deref()
+            .ok_or_else(|| {
+                eyre!("prepared SoraFS moderation screening requires an authority-bundle path")
+            })?;
+        let (file, captured) = capture_prepared_runtime_file(
+            &mut table,
+            projection_root,
+            path,
+            "sorafs-moderation-authority",
+            "authority_bundle.norito",
+            "/config/runtime/sorafs-moderation-authority.norito",
+            "SoraFS moderation authority bundle",
+            16 * 1024 * 1024,
+            &["sorafs", "storage"],
+            "moderation_screening_authority_bundle_path",
+        )?;
+        runtime_files.push(file);
+        captured_validation_paths.push(captured);
+    }
+    if let Some(path) = source
+        .torii
+        .sorafs_storage
+        .reputation_trust_policy_path
+        .as_deref()
+    {
+        let (file, captured) = capture_prepared_runtime_file(
+            &mut table,
+            projection_root,
+            path,
+            "sorafs-reputation-trust",
+            "trust_policy.norito",
+            "/config/runtime/sorafs-reputation-trust.norito",
+            "SoraFS reputation trust policy",
+            16 * 1024 * 1024,
+            &["sorafs", "storage"],
+            "reputation_trust_policy_path",
+        )?;
+        runtime_files.push(file);
+        captured_validation_paths.push(captured);
+    }
+    if let Some(path) = source
+        .torii
+        .sorafs_storage
+        .hedging_feed_trust_policy_path
+        .as_deref()
+    {
+        let (file, captured) = capture_prepared_runtime_file(
+            &mut table,
+            projection_root,
+            path,
+            "sorafs-hedging-feed-trust",
+            "trust_policy.norito",
+            "/config/runtime/sorafs-hedging-feed-trust.norito",
+            "SoraFS hedging feed trust policy",
+            16 * 1024 * 1024,
+            &["sorafs", "storage"],
+            "hedging_feed_trust_policy_path",
+        )?;
+        runtime_files.push(file);
+        captured_validation_paths.push(captured);
+    }
+    if let Some(runtime) = source.torii.sorafs_storage.hedging_billing_runtime.as_ref() {
+        let (file, captured) = capture_prepared_runtime_file(
+            &mut table,
+            projection_root,
+            &runtime.service_policy_path,
+            "sorafs-hedging-service-policy",
+            "service_policy.norito",
+            "/config/runtime/sorafs-hedging-service-policy.norito",
+            "SoraFS hedging service policy",
+            16 * 1024 * 1024,
+            &["sorafs", "storage", "hedging_billing_runtime"],
+            "service_policy_path",
+        )?;
+        runtime_files.push(file);
+        captured_validation_paths.push(captured);
+    }
+    if source.torii.iso_bridge.enabled {
+        let reference_data = &source.torii.iso_bridge.reference_data;
+        for (key, path, filename) in [
+            (
+                "isin_crosswalk_path",
+                reference_data.isin_crosswalk_path.as_deref(),
+                "isin_crosswalk.snapshot",
+            ),
+            (
+                "bic_lei_path",
+                reference_data.bic_lei_path.as_deref(),
+                "bic_lei.snapshot",
+            ),
+            (
+                "mic_directory_path",
+                reference_data.mic_directory_path.as_deref(),
+                "mic_directory.snapshot",
+            ),
+            (
+                "csd_venue_path",
+                reference_data.csd_venue_path.as_deref(),
+                "csd_venue.snapshot",
+            ),
+            (
+                "securities_account_path",
+                reference_data.securities_account_path.as_deref(),
+                "securities_account.snapshot",
+            ),
+            (
+                "cash_leg_path",
+                reference_data.cash_leg_path.as_deref(),
+                "cash_leg.snapshot",
+            ),
+        ] {
+            let Some(path) = path else {
+                continue;
+            };
+            let target = format!("/config/runtime/iso-reference/{filename}");
+            let namespace = format!("iso-reference-{}", key.replace('_', "-"));
+            let (file, captured) = capture_prepared_runtime_file(
+                &mut table,
+                projection_root,
+                path,
+                &namespace,
+                filename,
+                &target,
+                "ISO reference-data snapshot",
+                64 * 1024 * 1024,
+                &["torii", "iso_bridge", "reference_data"],
+                key,
+            )?;
+            runtime_files.push(file);
+            captured_validation_paths.push(captured);
+        }
+    }
+    let offline = &source.settlement.offline;
+    if let Some(path) = offline.kagemusha_release_policy_path.as_deref() {
+        let (file, captured) = capture_prepared_runtime_file(
+            &mut table,
+            projection_root,
+            path,
+            "kagemusha-release-policy",
+            "release_policy.norito",
+            "/config/runtime/kagemusha-release-policy.norito",
+            "Kagemusha release policy",
+            64 * 1024 * 1024,
+            &["settlement", "offline"],
+            "kagemusha_release_policy_path",
+        )?;
+        runtime_files.push(file);
+        captured_validation_paths.push(captured);
+    }
+    if let Some(path) = offline.kagemusha_catalog_qualification_seal_path.as_deref() {
+        let (file, captured) = capture_prepared_runtime_file(
+            &mut table,
+            projection_root,
+            path,
+            "kagemusha-catalog-seal",
+            "catalog_seal.norito",
+            "/config/runtime/kagemusha-catalog-seal.norito",
+            "Kagemusha catalog qualification seal",
+            64 * 1024 * 1024,
+            &["settlement", "offline"],
+            "kagemusha_catalog_qualification_seal_path",
+        )?;
+        runtime_files.push(file);
+        captured_validation_paths.push(captured);
+    }
+
     let captured_manifest_directory = if source.nexus.enabled {
         if let Some(manifest_directory) = source.nexus.registry.manifest_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
@@ -1859,17 +2521,53 @@ fn project_prepared_runtime_config(
         } else {
             None
         };
+    if let Some(salt_directory) = source.torii.sorafs_gateway.salt_schedule_dir.as_deref() {
+        let (files, validation_directory) = collect_runtime_directory(
+            salt_directory,
+            projection_root,
+            "sorafs-salt-schedule",
+            SORAFS_SALT_TARGET,
+            "SoraFS salt schedule",
+        )?;
+        runtime_files.extend(files);
+        set_toml_string(
+            &mut table,
+            &["sorafs", "gateway"],
+            "salt_schedule_dir",
+            SORAFS_SALT_TARGET,
+        )?;
+        captured_validation_paths.push(CapturedValidationPath {
+            table_path: &["sorafs", "gateway"],
+            key: "salt_schedule_dir",
+            source: validation_directory,
+        });
+    }
+    if let Some(artifact_directory) = offline.kagemusha_artifact_dir.as_deref() {
+        let (files, validation_directory) = collect_runtime_directory(
+            artifact_directory,
+            projection_root,
+            "kagemusha-artifacts",
+            KAGEMUSHA_ARTIFACT_TARGET,
+            "Kagemusha release artifact",
+        )?;
+        runtime_files.extend(files);
+        set_toml_string(
+            &mut table,
+            &["settlement", "offline"],
+            "kagemusha_artifact_dir",
+            KAGEMUSHA_ARTIFACT_TARGET,
+        )?;
+        captured_validation_paths.push(CapturedValidationPath {
+            table_path: &["settlement", "offline"],
+            key: "kagemusha_artifact_dir",
+            source: validation_directory,
+        });
+    }
 
     let mut captured_site_bindings = None;
     if let Some(site_bindings) = source.torii.sorafs_gateway.site_bindings.path.as_deref() {
-        let site_source = fs::canonicalize(site_bindings).wrap_err_with(|| {
-            format!(
-                "canonicalize prepared SoraFS site bindings {}",
-                site_bindings.display()
-            )
-        })?;
         let site_content = read_runtime_file_bounded(
-            &site_source,
+            site_bindings,
             "SoraFS site bindings",
             SITE_BINDINGS_MAX_BYTES,
         )?;
@@ -1892,6 +2590,14 @@ fn project_prepared_runtime_config(
     }
 
     let mut validation_table = table.clone();
+    for captured in &captured_validation_paths {
+        set_toml_string(
+            &mut validation_table,
+            captured.table_path,
+            captured.key,
+            captured.source.to_string_lossy(),
+        )?;
+    }
     set_toml_string(
         &mut validation_table,
         &["streaming", "codec"],
@@ -2013,6 +2719,7 @@ fn load_prepared_bundle(
     let mut chain = None;
     let mut admitted = Vec::with_capacity(config_paths.len());
     let mut validator_keys = BTreeSet::new();
+    let mut soranet_transport_keys = BTreeSet::new();
     let mut exposed_ports = BTreeSet::new();
     for (index, path) in config_paths.iter().enumerate() {
         let ParsedPreparedPeerConfig {
@@ -2112,6 +2819,26 @@ fn load_prepared_bundle(
         ensure!(
             validator_keys.insert(validator_key.clone()),
             "prepared validator identity {validator_key} is duplicated"
+        );
+        let soranet_transport_key = config
+            .common
+            .soranet_transport_key_pair
+            .public_key()
+            .clone();
+        ensure!(
+            soranet_transport_key.algorithm() == iroha_crypto::Algorithm::Ed25519,
+            "prepared validator config {} SoraNet transport key must use Ed25519",
+            path.display()
+        );
+        ensure!(
+            soranet_transport_key != validator_key,
+            "prepared validator config {} reuses its signing identity for SoraNet transport",
+            path.display()
+        );
+        ensure!(
+            soranet_transport_keys.insert(soranet_transport_key),
+            "prepared validator config {} duplicates another validator's SoraNet transport identity",
+            path.display()
         );
         let pop = validated
             .validator_pops
@@ -2280,6 +3007,12 @@ fn load_prepared_bundle(
             name: peer.service_name.clone(),
             p2p_port: peer.p2p_port,
             api_port: peer.api_port,
+            soranet_transport_public_key: admitted
+                .config
+                .common
+                .soranet_transport_key_pair
+                .public_key()
+                .clone(),
             key_pair: admitted.key_pair,
             pop: admitted.pop,
             requires_sora_profile,
@@ -2731,7 +3464,7 @@ mod tests {
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
         assert_eq!(
             output
-                .matches("target: /config/runtime/rans_seed0.toml")
+                .matches("target: /run/secrets/iroha_runtime_")
                 .count(),
             4
         );
@@ -2757,7 +3490,7 @@ mod tests {
         let peer0_directory = fs::read_dir(&projection_root)
             .expect("read projection root")
             .map(|entry| entry.expect("read projection entry"))
-            .find(|entry| entry.file_name().to_string_lossy().starts_with("peer0-"))
+            .find(|entry| entry.path().join("peer0.toml").is_file())
             .expect("peer0 projection directory")
             .path();
         let peer0_projection = peer0_directory.join("peer0.toml");
@@ -2855,8 +3588,30 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some("/config/runtime/rans_seed0.toml")
         );
-        assert!(!table_at("torii").contains_key("account_onboarding"));
-        assert!(!table_at("torii").contains_key("faucet"));
+        assert_eq!(
+            table_at("torii")
+                .get("account_onboarding")
+                .and_then(toml::Value::as_table)
+                .and_then(|onboarding| onboarding.get("private_key_file"))
+                .and_then(toml::Value::as_str),
+            Some("/run/secrets/iroha_peer0_onboarding_private_key")
+        );
+        assert!(
+            output.contains("target: /run/secrets/iroha_peer0_onboarding_private_key"),
+            "prepared onboarding signer must be mounted as a Compose secret"
+        );
+        assert_eq!(
+            table_at("torii")
+                .get("faucet")
+                .and_then(toml::Value::as_table)
+                .and_then(|faucet| faucet.get("private_key_file"))
+                .and_then(toml::Value::as_str),
+            Some("/run/secrets/iroha_peer0_faucet_private_key")
+        );
+        assert!(
+            output.contains("target: /run/secrets/iroha_peer0_faucet_private_key"),
+            "prepared faucet signer must be mounted as a Compose secret"
+        );
         let original_peer0 =
             fs::read_to_string(config_dir.join("peer0.toml")).expect("read source peer0 config");
         let original_peer0 = original_peer0
@@ -2924,6 +3679,75 @@ mod tests {
                 "unexpected {forbidden}: {output}"
             );
         }
+    }
+
+    #[test]
+    fn prepared_bundle_allows_loopback_but_rejects_bridge_trust_cidrs() {
+        let temp_dir = tempfile::tempdir().expect("prepared CIDR temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let count = NonZeroU16::new(4).expect("non-zero");
+        load_test_prepared_bundle(
+            &config_dir,
+            &temp_dir.path().join("loopback-projection"),
+            count,
+        )
+        .expect("generated loopback-only Torii CIDRs remain local inside each container");
+
+        let peer0_path = config_dir.join("peer0.toml");
+        let mut peer0 = fs::read_to_string(&peer0_path)
+            .expect("read peer0 fixture")
+            .parse::<toml::Table>()
+            .expect("parse peer0 fixture");
+        peer0
+            .get_mut("torii")
+            .and_then(toml::Value::as_table_mut)
+            .expect("peer0 Torii table")
+            .insert(
+                "internal_api_trusted_cidrs".to_owned(),
+                toml::Value::Array(vec![toml::Value::String("172.16.0.1/32".to_owned())]),
+            );
+        fs::write(
+            &peer0_path,
+            toml::to_string_pretty(&peer0).expect("serialize mutated peer0 fixture"),
+        )
+        .expect("write mutated peer0 fixture");
+
+        let error = load_test_prepared_bundle(
+            &config_dir,
+            &temp_dir.path().join("bridge-projection"),
+            count,
+        )
+        .expect_err("bridge CIDR trust must not silently change behind Compose NAT");
+        assert!(
+            error.to_string().contains("non-loopback source CIDRs"),
+            "unexpected bridge-CIDR rejection: {error:#}"
+        );
+    }
+
+    #[test]
+    fn prepared_bundle_rejects_existing_default_projected_state() {
+        let temp_dir = tempfile::tempdir().expect("prepared state temp dir");
+        let config_dir = generate_prepared_bundle(temp_dir.path());
+        let revocations = config_dir
+            .join("storage")
+            .join("soranet")
+            .join("ticket_revocations.norito");
+        fs::create_dir_all(revocations.parent().expect("revocation-store parent"))
+            .expect("create default revocation-store parent");
+        fs::write(&revocations, b"existing state").expect("write existing revocation state");
+
+        let error = load_test_prepared_bundle(
+            &config_dir,
+            &temp_dir.path().join("state-projection"),
+            NonZeroU16::new(4).expect("non-zero"),
+        )
+        .expect_err("prepared projection must reject source state it would replace");
+        assert!(
+            error
+                .to_string()
+                .contains("SoraNet ticket-revocation store"),
+            "unexpected state rejection: {error:#}"
+        );
     }
 
     #[test]

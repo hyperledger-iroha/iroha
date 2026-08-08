@@ -2782,6 +2782,87 @@ def test_get_governance_contract_parses_response() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "",
+        ".",
+        ".hidden",
+        "selector/alias",
+        "selector%2Falias",
+        "selector alias",
+        "selector\nalias",
+        "sélector",
+        "a" * 129,
+    ],
+)
+def test_governance_selectors_reject_before_transport(selector: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    operations = [
+        lambda: client.get_governance_locks(selector),
+        lambda: client.get_governance_referendum(selector),
+        lambda: client.get_governance_tally(selector),
+        lambda: client.submit_plain_ballot(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            referendum_id=selector,
+            owner=CANONICAL_OWNER,
+            amount="1",
+            duration_blocks=1,
+            direction="Aye",
+        ),
+        lambda: client.submit_zk_ballot_v1(
+            authority=CANONICAL_OWNER,
+            chain_id="chain",
+            election_id=selector,
+            backend="halo2/ipa",
+            envelope_b64="AAAA",
+        ),
+    ]
+    for operation in operations:
+        with pytest.raises(RuntimeError, match="canonical governance selector V1"):
+            operation()
+    assert session.calls == []
+
+
+def test_governance_selector_accepts_exact_boundaries() -> None:
+    for selector in ("a", "a" * 128, "A9_selector~with.dots"):
+        assert (
+            ToriiClient._require_governance_selector_v1(
+                selector,
+                context="selector",
+            )
+            == selector
+        )
+
+
+@pytest.mark.parametrize(
+    "proposal_id",
+    ["a" * 63, "A" * 64, "0x" + "a" * 64, "a" * 63 + "/"],
+)
+def test_governance_proposal_ids_reject_before_transport(proposal_id: str) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    for operation in [
+        lambda: client.get_governance_proposal(proposal_id),
+        lambda: client.enact_proposal(proposal_id=proposal_id),
+        lambda: client.finalize_referendum(
+            referendum_id="a" * 64,
+            proposal_id=proposal_id,
+        ),
+        lambda: client.finalize_referendum(
+            referendum_id=proposal_id,
+            proposal_id="a" * 64,
+        ),
+    ]:
+        with pytest.raises(RuntimeError, match="lowercase 32-byte hex"):
+            operation()
+    assert session.calls == []
+
+
 def _governance_locks_payload(amount: Any) -> Dict[str, Any]:
     return {
         "found": True,
@@ -5835,69 +5916,219 @@ def test_get_sumeragi_evidence_count_returns_int() -> None:
     assert session.calls[0]["url"].endswith("/v1/sumeragi/evidence/count")
 
 
+def _sumeragi_evidence_common(*, admitted: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "recorded_height": 40,
+        "recorded_view": 2,
+        "recorded_ms": 1_700_000_000_000,
+        "consensus_admitted_height": admitted,
+    }
+
+
+def _sumeragi_v2_equivocation_record(
+    *, evidence_class: str = "phase_vote"
+) -> Dict[str, Any]:
+    return {
+        "kind": "SumeragiV2Equivocation",
+        "class": evidence_class,
+        "height": 31,
+        "view": 4,
+        "epoch": 2,
+        "signer": 3,
+        "context_id": "11" * 32,
+        "artifact_hash_1": "22" * 32,
+        "artifact_hash_2": "33" * 32,
+        **_sumeragi_evidence_common(admitted=41),
+    }
+
+
+def _sumeragi_censorship_record() -> Dict[str, Any]:
+    return {
+        "kind": "Censorship",
+        "tx_hash": "44" * 32,
+        "receipt_count": 2,
+        "signers": ["alice@test", "bob@test"],
+        "submitted_at_height_min": 20,
+        "submitted_at_height_max": 22,
+        **_sumeragi_evidence_common(),
+    }
+
+
 def test_list_sumeragi_evidence_parses_records() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "total": 3,
+                "total": 4,
                 "items": [
                     {
                         "kind": "DoublePrepare",
                         "recorded_height": 1,
                         "recorded_view": 2,
                         "recorded_ms": 3,
+                        "consensus_admitted_height": None,
                         "phase": "Prepare",
                         "height": 4,
                         "view": 5,
                         "epoch": 6,
-                        "signer": "ed011122",
-                        "block_hash_1": "aa11",
-                        "block_hash_2": "bb22",
+                        "signer": 1,
+                        "block_hash_1": "aa" * 32,
+                        "block_hash_2": "bb" * 32,
                     },
                     {
                         "kind": "InvalidProposal",
                         "recorded_height": 7,
                         "recorded_view": 8,
                         "recorded_ms": 9,
+                        "consensus_admitted_height": None,
                         "height": 10,
                         "view": 11,
                         "epoch": 12,
-                        "subject_block_hash": "cc33",
-                        "payload_hash": "dd44",
+                        "subject_block_hash": "cc" * 32,
+                        "payload_hash": "dd" * 32,
                         "reason": "payload mismatch",
                     },
-                    {
-                        "kind": "UnknownEvidence",
-                        "recorded_height": 13,
-                        "recorded_view": 14,
-                        "recorded_ms": 15,
-                        "detail": "unknown entry",
-                    },
+                    _sumeragi_censorship_record(),
+                    _sumeragi_v2_equivocation_record(),
                 ],
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_sumeragi_evidence(limit=5, offset=1, kind="DoublePrepare")
+    page = client.list_sumeragi_evidence(
+        limit=5, offset=1, kind="SumeragiV2Equivocation"
+    )
 
-    assert page.total == 3
-    assert len(page.items) == 3
+    assert page.total == 4
+    assert len(page.items) == 4
     prevote = page.items[0]
+    assert isinstance(prevote, client_module.SumeragiDoubleVoteEvidenceRecord)
     assert prevote.kind == "DoublePrepare"
     assert prevote.phase == "Prepare"
-    assert prevote.block_hash_1 == "aa11"
-    assert prevote.block_hash_2 == "bb22"
+    assert prevote.signer == 1
+    assert prevote.block_hash_1 == "aa" * 32
+    assert prevote.block_hash_2 == "bb" * 32
     invalid_proposal = page.items[1]
-    assert invalid_proposal.payload_hash == "dd44"
+    assert isinstance(
+        invalid_proposal, client_module.SumeragiInvalidProposalEvidenceRecord
+    )
+    assert invalid_proposal.payload_hash == "dd" * 32
     assert invalid_proposal.reason == "payload mismatch"
-    unknown = page.items[2]
-    assert unknown.kind == "UnknownEvidence"
-    assert unknown.detail == "unknown entry"
+    censorship = page.items[2]
+    assert isinstance(censorship, client_module.SumeragiCensorshipEvidenceRecord)
+    assert censorship.submitted_at_height_min == 20
+    assert censorship.submitted_at_height_max == 22
+    equivocation = page.items[3]
+    assert isinstance(
+        equivocation, client_module.SumeragiV2EquivocationEvidenceRecord
+    )
+    assert equivocation.class_ == "phase_vote"
+    assert equivocation.signer == 3
+    assert equivocation.context_id == "11" * 32
+    assert equivocation.consensus_admitted_height == 41
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
-    assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrepare"}
+    assert call["params"] == {
+        "limit": 5,
+        "offset": 1,
+        "kind": "SumeragiV2Equivocation",
+    }
+
+
+@pytest.mark.parametrize("evidence_class", ["proposal", "phase_vote", "timeout_vote"])
+def test_sumeragi_v2_equivocation_accepts_exact_classes(evidence_class: str) -> None:
+    parsed = ToriiClient._parse_sumeragi_evidence_record(
+        _sumeragi_v2_equivocation_record(evidence_class=evidence_class),
+        context="evidence",
+    )
+
+    assert isinstance(parsed, client_module.SumeragiV2EquivocationEvidenceRecord)
+    assert parsed.class_ == evidence_class
+
+
+def test_sumeragi_evidence_rejects_unknown_record_kind() -> None:
+    record = {"kind": "UnknownEvidence", **_sumeragi_evidence_common()}
+
+    with pytest.raises(RuntimeError, match=r"kind must be one of"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        "min_height",
+        "max_height",
+        "minHeight",
+        "maxHeight",
+        "submittedAtHeightMin",
+        "submittedAtHeightMax",
+    ],
+)
+def test_sumeragi_censorship_rejects_retired_height_aliases(alias: str) -> None:
+    record = _sumeragi_censorship_record()
+    record[alias] = 20
+
+    with pytest.raises(RuntimeError, match=rf"unexpected {alias}"):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("class", "Prepare", r"class must be one of"),
+        ("signer", "3", r"signer must be a non-negative JSON integer"),
+        ("signer", True, r"signer must be a non-negative JSON integer"),
+        ("signer", 0x1_0000_0000, r"signer must be <= 4294967295"),
+        ("context_id", "AA" * 32, r"exact lowercase 32-byte hex"),
+        ("artifact_hash_2", "22" * 32, r"distinct artifacts"),
+    ],
+)
+def test_sumeragi_v2_equivocation_rejects_noncanonical_fields(
+    field: str, value: Any, match: str
+) -> None:
+    record = _sumeragi_v2_equivocation_record()
+    record[field] = value
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(("field", "match"), [("context_id", "missing context_id")])
+def test_sumeragi_v2_equivocation_rejects_missing_fields(
+    field: str, match: str
+) -> None:
+    record = _sumeragi_v2_equivocation_record()
+    del record[field]
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
+
+
+@pytest.mark.parametrize(
+    ("receipt_count", "signers", "height_min", "height_max", "match"),
+    [
+        (2, ["alice@test"], 20, 22, r"receipt_count must equal len\(signers\)"),
+        (2, ["alice@test", "bob@test"], 23, 22, r"submitted_at_height_min"),
+    ],
+)
+def test_sumeragi_censorship_rejects_inconsistent_receipt_metadata(
+    receipt_count: int,
+    signers: List[str],
+    height_min: int,
+    height_max: int,
+    match: str,
+) -> None:
+    record = _sumeragi_censorship_record()
+    record.update(
+        receipt_count=receipt_count,
+        signers=signers,
+        submitted_at_height_min=height_min,
+        submitted_at_height_max=height_max,
+    )
+
+    with pytest.raises(RuntimeError, match=match):
+        ToriiClient._parse_sumeragi_evidence_record(record, context="evidence")
 
 
 def test_list_sumeragi_evidence_validates_limit() -> None:
@@ -6105,7 +6336,11 @@ def test_finalize_referendum_posts_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    draft = client.finalize_referendum(referendum_id="ref-1", proposal_id="a" * 64)
+    proposal_id = "a" * 64
+    draft = client.finalize_referendum(
+        referendum_id=proposal_id,
+        proposal_id=proposal_id,
+    )
 
     assert draft.ok is True
     assert len(draft.tx_instructions) == 1
@@ -6113,8 +6348,8 @@ def test_finalize_referendum_posts_payload() -> None:
     assert call["method"] == "POST"
     assert call["url"].endswith("/v1/gov/finalize")
     assert json.loads(call["data"]) == {
-        "referendum_id": "ref-1",
-        "proposal_id": "a" * 64,
+        "referendum_id": proposal_id,
+        "proposal_id": proposal_id,
     }
 
 
@@ -6583,6 +6818,69 @@ def _offline_top_up_finality_proof(
     **overrides: Any,
 ) -> Dict[str, Any]:
     bound_anchor = anchor if anchor is not None else _offline_top_up_anchor()
+    context_id = _canonical_hash(0xA0)
+
+    def execution_commitment(*, includes_top_up: bool, seed: int) -> Dict[str, Any]:
+        commitment = {
+            "parent_state_root": _canonical_hash(seed),
+            "post_state_root": _canonical_hash(seed + 1),
+            "ordinary_writes_root": _canonical_hash(seed + 2),
+            "topup_anchor_root": None,
+            "topup_anchor_count": 0,
+            "native_amx_application_manifest_version": 1,
+            "native_amx_application_manifest_root": (
+                _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+            ),
+            "native_amx_application_manifest_count": 0,
+            "merge_carrier": None,
+            "executed_block_wire_len": 123,
+            "executed_block_wire_hash": _canonical_hash(seed + 3),
+        }
+        if includes_top_up:
+            commitment["topup_anchor_root"] = _canonical_hash(seed + 4)
+            commitment["topup_anchor_count"] = 1
+        return commitment
+
+    def certificate(
+        *,
+        height: int,
+        certificate_context_id: str,
+        includes_top_up: bool,
+        seed: int,
+    ) -> Dict[str, Any]:
+        round_ = {
+            "context_id": [certificate_context_id],
+            "height": height,
+            "view": 0,
+        }
+        return {
+            "round": round_,
+            "proposal_round": copy.deepcopy(round_),
+            "phase": {"phase": "commit", "details": None},
+            "subject": {
+                "parent_block_hash": (
+                    None if height == 1 else _canonical_hash(seed + 5)
+                ),
+                "block_hash": _canonical_hash(seed + 6),
+                "payload_hash": _canonical_hash(seed + 7),
+            },
+            "execution_commitment": execution_commitment(
+                includes_top_up=includes_top_up,
+                seed=seed + 8,
+            ),
+            "signers": [0],
+            "aggregate_signature": [seed] * 96,
+        }
+
+    parent_commit_qc = None
+    if finalized_height > 1:
+        parent_commit_qc = certificate(
+            height=finalized_height - 1,
+            certificate_context_id=_canonical_hash(0xA1),
+            includes_top_up=False,
+            seed=0x21,
+        )
+
     proof = {
         "version": 1,
         "anchor": {
@@ -6595,13 +6893,37 @@ def _offline_top_up_finality_proof(
         },
         "commit_qc": {
             "height_context": {
+                "context_id": [context_id],
+                "chain_id": "wonderland",
+                "protocol_version": 4,
                 "height": finalized_height,
-                "opaque_context": {"protocol_version": 3},
+                "epoch": 0,
+                "epoch_end_height": max(100, finalized_height),
+                "next_epoch_snapshot": None,
+                "mode": {"mode": "permissioned", "details": None},
+                "parent_commit_qc": parent_commit_qc,
+                "snapshot_bootstrap": None,
+                "nexus_amx_context_hash": _canonical_hash(0xA2),
+                "execution_policy_hash": _canonical_hash(0xA3),
+                "da_layout": {
+                    "encoding": {
+                        "encoding": "reed_solomon16",
+                        "details": None,
+                    },
+                    "chunk_size_bytes": 4,
+                    "data_shards": 1,
+                    "parity_shards": 1,
+                    "max_payload_size_bytes": 4,
+                    "max_chunk_count": 2,
+                },
+                "leader_seed": _offline_fixed_bytes(0xA4),
             },
-            "certificate": {
-                "round": {"height": finalized_height, "view": 0},
-                "opaque_certificate": [1, 2, 3],
-            },
+            "certificate": certificate(
+                height=finalized_height,
+                certificate_context_id=context_id,
+                includes_top_up=True,
+                seed=0x31,
+            ),
         },
         "anchor_path": {"leaf_index": 0, "leaf_count": 1, "siblings": []},
     }
@@ -7125,10 +7447,8 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
 
 
-def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_internals() -> None:
+def test_offline_top_up_finality_proof_is_closed_and_direct_typed() -> None:
     proof = _offline_top_up_finality_proof()
-    proof["commit_qc"]["future_qc_field"] = {"opaque": [7, 8, 9]}
-    proof["anchor_path"]["future_path_field"] = "preserved"
     session = RecordingSession()
     session.queue(
         StubResponse(payload=_offline_applied_top_up_status(finality_proof=proof))
@@ -7145,11 +7465,244 @@ def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_inte
     assert typed_proof.version == 1
     assert typed_proof.anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
     assert typed_proof.anchor.anchor_digest == tuple(_offline_fixed_bytes(0x71))
-    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
-    assert typed_proof.anchor_path["future_path_field"] == "preserved"
+    assert typed_proof.commit_qc.height_context.protocol_version == 4
+    assert (
+        typed_proof.commit_qc.height_context.da_layout.encoding.encoding
+        == "reed_solomon16"
+    )
+    assert typed_proof.commit_qc.height_context.da_layout.data_shards == 1
+    assert typed_proof.commit_qc.height_context.da_layout.parity_shards == 1
+    assert typed_proof.commit_qc.certificate.round.height == 12
+    assert (
+        typed_proof.commit_qc.certificate.proposal_round
+        == typed_proof.commit_qc.certificate.round
+    )
+    assert typed_proof.commit_qc.height_context.snapshot_bootstrap is None
+    assert typed_proof.anchor_path.leaf_count == 1
 
-    proof["commit_qc"]["future_qc_field"]["opaque"][0] = 255
-    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
+
+def test_offline_top_up_public_parser_types_snapshot_and_omitted_genesis_authorities() -> None:
+    snapshot_proof = _offline_top_up_finality_proof()
+    snapshot_context = snapshot_proof["commit_qc"]["height_context"]
+    snapshot_context["parent_commit_qc"] = None
+    snapshot_context["snapshot_bootstrap"] = {
+        "snapshot_height": 11,
+        "snapshot_block_hash": _canonical_hash(0xA6),
+        "snapshot_block_creation_time_ms": 1_000,
+        "snapshot_state_hash": _canonical_hash(0xA7),
+    }
+    snapshot_session = RecordingSession()
+    snapshot_session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(finality_proof=snapshot_proof)
+        )
+    )
+
+    snapshot_status = ToriiClient(
+        "http://node.test", session=snapshot_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(snapshot_status, OfflineAppliedOperation)
+    snapshot_bootstrap = (
+        snapshot_status.result.result.finality_proof.commit_qc.height_context.snapshot_bootstrap
+    )
+    assert snapshot_bootstrap is not None
+    assert snapshot_bootstrap.snapshot_height == 11
+    assert snapshot_bootstrap.snapshot_block_creation_time_ms == 1_000
+
+    genesis_anchor = _offline_top_up_anchor(finalized_height=1)
+    genesis_proof = _offline_top_up_finality_proof(
+        genesis_anchor,
+        finalized_height=1,
+    )
+    genesis_context = genesis_proof["commit_qc"]["height_context"]
+    for optional_field in (
+        "next_epoch_snapshot",
+        "parent_commit_qc",
+        "snapshot_bootstrap",
+    ):
+        genesis_context.pop(optional_field)
+    genesis_session = RecordingSession()
+    genesis_session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(
+                genesis_anchor,
+                finalized_block_height=1,
+                finality_proof=genesis_proof,
+            )
+        )
+    )
+
+    genesis_status = ToriiClient(
+        "http://node.test", session=genesis_session
+    ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(genesis_status, OfflineAppliedOperation)
+    genesis_height_context = (
+        genesis_status.result.result.finality_proof.commit_qc.height_context
+    )
+    assert genesis_height_context.next_epoch_snapshot is None
+    assert genesis_height_context.parent_commit_qc is None
+    assert genesis_height_context.snapshot_bootstrap is None
+
+
+def test_offline_top_up_public_parser_rejects_noncanonical_da_layouts() -> None:
+    invalid_proofs = []
+
+    missing_encoding = copy.deepcopy(_offline_top_up_finality_proof())
+    missing_encoding["commit_qc"]["height_context"]["da_layout"].pop("encoding")
+    invalid_proofs.append(
+        (missing_encoding, r"da_layout\.encoding is required")
+    )
+
+    missing_variant = copy.deepcopy(_offline_top_up_finality_proof())
+    missing_variant["commit_qc"]["height_context"]["da_layout"]["encoding"] = {
+        "details": None,
+    }
+    invalid_proofs.append(
+        (missing_variant, r"da_layout\.encoding\.encoding is required")
+    )
+
+    for retired_or_unknown in ("plain", "rs16"):
+        invalid_encoding = copy.deepcopy(_offline_top_up_finality_proof())
+        layout = invalid_encoding["commit_qc"]["height_context"]["da_layout"]
+        layout["encoding"]["encoding"] = retired_or_unknown
+        invalid_proofs.append(
+            (
+                invalid_encoding,
+                r"da_layout\.encoding\.encoding must be reed_solomon16",
+            )
+        )
+
+    for field in ("data_shards", "parity_shards"):
+        zero_shard = copy.deepcopy(_offline_top_up_finality_proof())
+        zero_shard["commit_qc"]["height_context"]["da_layout"][field] = 0
+        invalid_proofs.append(
+            (zero_shard, rf"da_layout\.{field} must be between 1 and 65535")
+        )
+
+    for proof, expected_error in invalid_proofs:
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_applied_top_up_status(finality_proof=proof)
+            )
+        )
+        with pytest.raises(RuntimeError, match=expected_error):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_top_up_public_parser_rejects_unknown_finality_projection_fields() -> None:
+    def next_epoch_snapshot() -> Dict[str, Any]:
+        return {
+            "epoch": 1,
+            "epoch_end_height": 100,
+            "mode": {"mode": "permissioned", "details": None},
+            "roster": [{"validator": _NATIVE_AMX_VALIDATOR_SET[0], "power": 1}],
+            "validator_set_pops": [[1] * 96],
+            "quorum": {"min_signers": 1, "total_power": 1},
+            "leader_seed": _offline_fixed_bytes(0xA5),
+        }
+
+    invalid_proofs: List[tuple[Dict[str, Any], str]] = []
+
+    def reject_unknown(
+        proof: Dict[str, Any], target: Dict[str, Any], field: str, context: str
+    ) -> None:
+        target[field] = "retired-extension"
+        invalid_proofs.append((proof, rf"{context}\.{field} is not part"))
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    reject_unknown(proof, height_context, "future_context", r"height_context")
+
+    proof = _offline_top_up_finality_proof()
+    certificate = proof["commit_qc"]["certificate"]
+    reject_unknown(proof, certificate, "future_certificate", r"certificate")
+
+    for component in ("round", "proposal_round", "phase", "subject"):
+        proof = _offline_top_up_finality_proof()
+        nested = proof["commit_qc"]["certificate"][component]
+        reject_unknown(proof, nested, f"future_{component}", rf"certificate\.{component}")
+
+    proof = _offline_top_up_finality_proof()
+    execution = proof["commit_qc"]["certificate"]["execution_commitment"]
+    reject_unknown(
+        proof,
+        execution,
+        "future_execution",
+        r"certificate\.execution_commitment",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    mode = proof["commit_qc"]["height_context"]["mode"]
+    reject_unknown(proof, mode, "future_mode", r"height_context\.mode")
+
+    proof = _offline_top_up_finality_proof()
+    reject_unknown(proof, proof["anchor_path"], "future_path", r"anchor_path")
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"],
+        "future_snapshot",
+        r"next_epoch_snapshot",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"]["roster"][0],
+        "future_validator",
+        r"roster\[0\]",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["epoch_end_height"] = 12
+    height_context["next_epoch_snapshot"] = next_epoch_snapshot()
+    reject_unknown(
+        proof,
+        height_context["next_epoch_snapshot"]["quorum"],
+        "future_quorum",
+        r"next_epoch_snapshot\.quorum",
+    )
+
+    proof = _offline_top_up_finality_proof()
+    height_context = proof["commit_qc"]["height_context"]
+    height_context["parent_commit_qc"] = None
+    height_context["snapshot_bootstrap"] = {
+        "snapshot_height": 11,
+        "snapshot_block_hash": _canonical_hash(0xA6),
+        "snapshot_block_creation_time_ms": 1_000,
+        "snapshot_state_hash": _canonical_hash(0xA7),
+    }
+    reject_unknown(
+        proof,
+        height_context["snapshot_bootstrap"],
+        "future_bootstrap",
+        r"snapshot_bootstrap",
+    )
+
+    for proof, expected_error in invalid_proofs:
+        session = RecordingSession()
+        session.queue(
+            StubResponse(
+                payload=_offline_applied_top_up_status(finality_proof=proof)
+            )
+        )
+        with pytest.raises(RuntimeError, match=expected_error):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confused_fields() -> None:
@@ -7177,6 +7730,7 @@ def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confu
         mutated("commit_qc", "certificate", []),
         mutated("commit_qc", "certificate", "round", []),
         mutated("commit_qc", "certificate", "round", "height", 13),
+        mutated("commit_qc", "certificate", "proposal_round", "view", 1),
         mutated("anchor_path", []),
     ]
     for payload in invalid:
@@ -7642,572 +8196,3 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
     assert snapshot.status.consensus_caps is not None
     assert snapshot.status.consensus_caps.collectors_k == 2
     assert snapshot.status.consensus_caps.rbc_chunk_max_bytes == 1024
-
-
-def test_decode_pdp_commitment_header_handles_mapping() -> None:
-    payload = b"\x01\x02\x03"
-    header_value = base64.b64encode(payload).decode("ascii")
-
-    decoded = decode_pdp_commitment_header({"sora-pdp-commitment": header_value})
-
-    assert decoded == payload
-
-
-def test_decode_pdp_commitment_header_is_case_insensitive() -> None:
-    payload = b"\xAA\xBB"
-    header_value = base64.b64encode(payload).decode("ascii")
-
-    decoded = decode_pdp_commitment_header({"Sora-PDP-Commitment": header_value})
-
-    assert decoded == payload
-
-
-def test_decode_pdp_commitment_header_rejects_invalid_payload() -> None:
-    try:
-        decode_pdp_commitment_header({"sora-pdp-commitment": "###"})
-    except RuntimeError as exc:
-        assert "Failed to decode" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError for invalid header")
-
-
-def test_decode_pdp_commitment_header_returns_none_when_missing() -> None:
-    assert decode_pdp_commitment_header({}) is None
-    assert decode_pdp_commitment_header(None) is None
-
-
-def test_submit_plain_ballot_requires_canonical_lossless_quantity() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    client.submit_plain_ballot(
-        authority=CANONICAL_OWNER,
-        chain_id="chain",
-        referendum_id="ref-1",
-        owner=CANONICAL_OWNER,
-        amount=CANONICAL_LARGE_FRACTION,
-        duration_blocks=5,
-        direction="Aye",
-    )
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["amount"] == CANONICAL_LARGE_FRACTION
-
-    overflowing = "9" * 155
-    for invalid in [
-        1,
-        1.5,
-        "+1",
-        "01",
-        "1.0",
-        "1.2300",
-        " 1",
-        "1 ",
-        "-1",
-        overflowing,
-    ]:
-        with pytest.raises(RuntimeError, match="quantity|512-bit"):
-            client.submit_plain_ballot(
-                authority=CANONICAL_OWNER,
-                chain_id="chain",
-                referendum_id="ref-1",
-                owner=CANONICAL_OWNER,
-                amount=invalid,  # type: ignore[arg-type]
-                duration_blocks=5,
-                direction="Aye",
-            )
-
-
-def test_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="durationBlocks"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": "100",
-                "durationBlocks": 5,
-            },
-        )
-
-
-def test_submit_zk_ballot_normalizes_public_inputs() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "accepted": True,
-                "reason": None,
-                "tx_instructions": [],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    client.submit_zk_ballot(
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        chain_id="chain",
-        election_id="election-1",
-        proof_b64="AAAA",
-        public={
-            "owner": CANONICAL_OWNER,
-            "amount": CANONICAL_LARGE_FRACTION,
-            "duration_blocks": 5,
-            "root_hint": f"0x{'Cc' * 32}",
-            "nullifier": bytes.fromhex("DD" * 32),
-        },
-    )
-
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    public = payload["public"]
-    assert public["amount"] == CANONICAL_LARGE_FRACTION
-    assert public["root_hint"] == "cc" * 32
-    assert public["nullifier"] == "dd" * 32
-
-
-@pytest.mark.parametrize(
-    "amount",
-    [1, 1.5, "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", "9" * 155],
-)
-def test_submit_zk_ballot_lock_hints_reject_noncanonical_quantity(
-    amount: Any,
-) -> None:
-    session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="quantity"):
-        client.submit_zk_ballot(
-            authority=CANONICAL_OWNER,
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": amount,
-                "duration_blocks": 5,
-            },
-        )
-    with pytest.raises(RuntimeError, match="quantity"):
-        client.submit_zk_ballot_v1(
-            authority=CANONICAL_OWNER,
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            owner=CANONICAL_OWNER,
-            amount=amount,  # type: ignore[arg-type]
-            duration_blocks=5,
-        )
-
-
-def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="root_hint"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": CANONICAL_OWNER,
-                "amount": "100",
-                "duration_blocks": 5,
-                "root_hint": "not-hex",
-            },
-        )
-
-
-def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={"owner": CANONICAL_OWNER},
-        )
-
-
-def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="canonical I105 account id"):
-        client.submit_zk_ballot(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            proof_b64="AAAA",
-            public={
-                "owner": "soradead",
-                "amount": "100",
-                "duration_blocks": 5,
-            },
-        )
-
-
-def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
-        client.submit_zk_ballot_v1(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            owner=CANONICAL_OWNER,
-        )
-
-
-def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="canonical I105 account id"):
-        client.submit_zk_ballot_v1(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            owner="soradead",
-            amount="100",
-            duration_blocks=5,
-        )
-
-
-def test_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    client.submit_zk_ballot_v1(
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        chain_id="chain",
-        election_id="election-1",
-        backend="halo2/ipa",
-        envelope_b64="AAAA",
-        root_hint=f"0x{'Aa' * 32}",
-        owner=CANONICAL_OWNER,
-        amount=CANONICAL_LARGE_FRACTION,
-        duration_blocks=5,
-        nullifier=f"blake2b32:{'BB' * 32}",
-    )
-
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["root_hint"] == "aa" * 32
-    assert payload["amount"] == CANONICAL_LARGE_FRACTION
-    assert payload["nullifier"] == "bb" * 32
-
-
-def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True}))
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match="root_hint"):
-        client.submit_zk_ballot_v1(
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            chain_id="chain",
-            election_id="election-1",
-            backend="halo2/ipa",
-            envelope_b64="AAAA",
-            root_hint="not-hex",
-        )
-
-
-def test_list_subscription_plans_encodes_params() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "items": [
-                    {
-                        "plan_id": "plan#subs",
-                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", "pricing": {"kind": "fixed"}},
-                    }
-                ],
-                "total": 1,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_subscription_plans(provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", limit=10, offset=5)
-
-    assert page.total == 1
-    assert page.items[0].plan_id == "plan#subs"
-    assert page.items[0].plan["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-    assert session.calls[0]["params"] == {
-        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "limit": 10,
-        "offset": 5,
-    }
-
-
-def test_create_subscription_plan_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                **_app_api_transaction_draft(),
-                "plan_id": "plan#subs",
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.create_subscription_plan(
-        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        plan_id="plan#subs",
-        plan={"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
-    )
-
-    assert result.submitted is False
-    assert result.plan_id == "plan#subs"
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-    assert "private_key" not in payload
-    assert payload["plan_id"] == "plan#subs"
-    assert payload["plan"]["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-
-
-def test_list_subscriptions_encodes_params() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "items": [
-                    {
-                        "subscription_id": "sub-1$subscriptions",
-                        "subscription": {"status": "active"},
-                        "invoice": {"amount": "120"},
-                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
-                    }
-                ],
-                "total": 1,
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_subscriptions(
-        owned_by="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        status="ACTIVE",
-        limit=25,
-        offset=0,
-    )
-
-    assert page.total == 1
-    assert page.items[0].subscription_id == "sub-1$subscriptions"
-    assert page.items[0].subscription["status"] == "active"
-    assert session.calls[0]["params"] == {
-        "owned_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "status": "active",
-        "limit": 25,
-        "offset": 0,
-    }
-
-
-def test_list_subscriptions_rejects_invalid_status() -> None:
-    client = ToriiClient("http://node.test", session=RecordingSession())
-
-    with pytest.raises(ValueError, match="subscriptions.status"):
-        client.list_subscriptions(status="unknown")
-
-
-def test_create_subscription_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "subscription_id": "sub-1$subscriptions",
-                "billing_trigger_id": "sub-bill",
-                "usage_trigger_id": "sub-usage",
-                "first_charge_ms": 1_704_067_200_000,
-                "tx_hash_hex": "deadbeef",
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.create_subscription(
-        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        private_key="ed25519:priv",
-        subscription_id="sub-1$subscriptions",
-        plan_id="plan#subs",
-        billing_trigger_id="sub-bill",
-        usage_trigger_id="sub-usage",
-        first_charge_ms=1_704_067_200_000,
-        grant_usage_to_provider=True,
-    )
-
-    assert result.subscription_id == "sub-1$subscriptions"
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-    assert payload["private_key"] == "ed25519:priv"
-    assert payload["billing_trigger_id"] == "sub-bill"
-    assert payload["usage_trigger_id"] == "sub-usage"
-    assert payload["first_charge_ms"] == 1_704_067_200_000
-    assert payload["grant_usage_to_provider"] is True
-
-
-def test_get_subscription_encodes_path_and_parses_response() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "subscription_id": "sub-1$subscriptions",
-                "subscription": {"status": "active"},
-                "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    record = client.get_subscription("sub-1$subscriptions")
-
-    assert record is not None
-    assert record.subscription_id == "sub-1$subscriptions"
-    assert session.calls[0]["url"].endswith("/v1/subscriptions/sub-1%24subscriptions")
-
-
-def test_get_subscription_returns_none_on_404() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(status_code=404, payload=None))
-    client = ToriiClient("http://node.test", session=session)
-
-    assert client.get_subscription("sub-404$subscriptions") is None
-
-
-def test_subscription_actions_post_payloads() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "a"}))
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "b"}))
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "c"}))
-    session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "d"}))
-    client = ToriiClient("http://node.test", session=session)
-
-    client.pause_subscription("sub-1", authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", private_key="ed25519:priv")
-    client.resume_subscription(
-        "sub-1",
-        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        private_key="ed25519:priv",
-        charge_at_ms=1_704_067_200_000,
-    )
-    client.cancel_subscription("sub-1", authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", private_key="ed25519:priv")
-    client.charge_subscription_now(
-        "sub-1",
-        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        private_key="ed25519:priv",
-        charge_at_ms=1_704_067_200_000,
-    )
-
-    pause_body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert pause_body["authority"] == "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-    resume_body = json.loads(session.calls[1]["data"].decode("utf-8"))
-    assert resume_body["charge_at_ms"] == 1_704_067_200_000
-    cancel_body = json.loads(session.calls[2]["data"].decode("utf-8"))
-    assert cancel_body["private_key"] == "ed25519:priv"
-    charge_body = json.loads(session.calls[3]["data"].decode("utf-8"))
-    assert charge_body["charge_at_ms"] == 1_704_067_200_000
-
-
-def test_record_subscription_usage_uses_canonical_quantity_boundary() -> None:
-    session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
-    canonical_values = [
-        "0",
-        "12.5",
-        str((1 << 511) - 1),
-        f"0.{'0' * 27}1",
-    ]
-    for canonical in canonical_values:
-        session.queue(
-            StubResponse(
-                payload={
-                    **_app_api_transaction_draft(canonical.encode("utf-8")),
-                    "subscription_id": "sub-1",
-                }
-            )
-        )
-        result = client.record_subscription_usage(
-            "sub-1",
-            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-            unit_key="compute_ms",
-            delta=canonical,
-            usage_trigger_id="sub-usage",
-        )
-        assert result.submitted is False
-        payload = json.loads(session.calls[-1]["data"].decode("utf-8"))
-        assert payload["unit_key"] == "compute_ms"
-        assert payload["delta"] == canonical
-        assert payload["usage_trigger_id"] == "sub-usage"
-        assert "private_key" not in payload
-
-    invalid_values: List[Any] = [
-        0,
-        1,
-        1.25,
-        "+1",
-        "01",
-        "00",
-        "00.1",
-        "1.0",
-        "1.20",
-        "0.0",
-        "-0",
-        "-1",
-        str(1 << 511),
-        f"0.{'0' * 28}1",
-    ]
-    submitted = len(session.calls)
-    for invalid in invalid_values:
-        with pytest.raises(RuntimeError, match="quantity"):
-            client.record_subscription_usage(
-                "sub-1",
-                authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-                unit_key="compute_ms",
-                delta=invalid,  # type: ignore[arg-type]
-            )
-    assert len(session.calls) == submitted

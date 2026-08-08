@@ -38,8 +38,8 @@ and C# tests consume the same files at their public SDK boundaries. The
 generated files are mandatory: an absent fixture is a failing test, not a
 capability skip.
 
-Regenerate the payloads from the typed Rust model, then reseal the signed
-reference-SDK inventory:
+Regenerate the payloads from the typed Rust model, then reseal the test-only
+signed reference-SDK inventory:
 
 ```sh
 cargo run --locked -p iroha_data_model --features test-fixtures,dev-tools \

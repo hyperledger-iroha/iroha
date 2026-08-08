@@ -141,7 +141,11 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
-const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+// Exact-release JSON repeats the bounded dependency vector in the authoritative home record and
+// the universal resolver row. Byte-budgeted resolver pages share this Musubi-specific ceiling,
+// which remains below the shared HTTP client's 64 MiB default.
+const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES: usize =
+    iroha_data_model::musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -179,8 +183,10 @@ pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
 pub enum PublicMusubiQueryPathV1 {
     /// Fetch one exact structural package record.
     ExactPackage,
-    /// Fetch one exact immutable release record.
+    /// Fetch one exact paired home/universal release snapshot.
     ExactRelease,
+    /// Fetch one exact immutable provider bundle-attestation record.
+    ProviderBundleAttestation,
     /// Fetch one finalized resolver-index page.
     ResolverIndex,
     /// Fetch one finalized structured-version page.
@@ -206,6 +212,7 @@ impl PublicMusubiQueryPathV1 {
         match self {
             Self::ExactPackage => "/v1/musubi/queries/exact-package",
             Self::ExactRelease => "/v1/musubi/queries/exact-release",
+            Self::ProviderBundleAttestation => "/v1/musubi/queries/provider-bundle-attestation",
             Self::ResolverIndex => "/v1/musubi/queries/resolver-index",
             Self::Versions => "/v1/musubi/queries/versions",
             Self::Maintainers => "/v1/musubi/queries/maintainers",
@@ -1730,6 +1737,10 @@ pub struct MultisigSpecResponse {
 )]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
+#[expect(
+    clippy::struct_field_names,
+    reason = "the public wire fields retain their stable max_ names"
+)]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     #[norito(rename = "max_governed_lanes")]
@@ -1761,6 +1772,10 @@ pub struct SccpRegistryLimits {
 )]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
+#[expect(
+    clippy::struct_field_names,
+    reason = "the public wire fields retain their stable max_ names"
+)]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     #[norito(rename = "max_outbound_messages_per_block")]
@@ -4577,6 +4592,10 @@ fn expected_zk_vk_status(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the verifier-key draft reconstruction keeps its ordered fail-closed validation in one audit surface"
+)]
 fn expected_zk_vk_record_from_request(
     request: &norito::json::Value,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
@@ -7388,6 +7407,43 @@ impl Client {
         ))
     }
 
+    fn require_governance_selector_v1(value: &str, field: &str) -> Result<()> {
+        if iroha_data_model::governance::is_valid_governance_selector_v1(value) {
+            return Ok(());
+        }
+        Err(eyre!(
+            "{field} must match canonical governance selector V1 `{}`",
+            iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN
+        ))
+    }
+
+    fn require_json_string_field<'a>(
+        value: &'a JsonValue,
+        field: &str,
+        context: &str,
+    ) -> Result<&'a str> {
+        value
+            .as_object()
+            .ok_or_else(|| eyre!("{context} must be a JSON object"))?
+            .get(field)
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| eyre!("{context}.{field} must be a string"))
+    }
+
+    fn require_json_governance_selector_v1(
+        value: &JsonValue,
+        field: &str,
+        context: &str,
+    ) -> Result<()> {
+        let selector = Self::require_json_string_field(value, field, context)?;
+        Self::require_governance_selector_v1(selector, &format!("{context}.{field}"))
+    }
+
+    fn require_json_lower_hex_32(value: &JsonValue, field: &str, context: &str) -> Result<()> {
+        let hex = Self::require_json_string_field(value, field, context)?;
+        Self::require_lower_hex_32(hex, &format!("{context}.{field}"))
+    }
+
     fn validate_offline_operation_reference(
         response: &Response<Vec<u8>>,
         reference: &OfflineOperationReference,
@@ -7567,6 +7623,23 @@ impl Client {
         Ok(status)
     }
 
+    /// Compatibility alias for clients that previously selected one asset.
+    ///
+    /// Offline capability is universal. The selector is intentionally ignored
+    /// and no query parameter is sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same transport, response, representation, and capability
+    /// validation errors as [`Self::get_offline_capability`].
+    #[deprecated(note = "use get_offline_capability(); offline capability is asset-neutral")]
+    pub fn get_offline_readiness(
+        &self,
+        _asset_definition_id: &AssetDefinitionId,
+    ) -> Result<OfflineStatus> {
+        self.get_offline_capability()
+    }
+
     /// Submit a signed online-to-offline top-up operation.
     ///
     /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
@@ -7677,38 +7750,6 @@ impl Client {
         )?;
         Self::validate_offline_operation_status(&status, operation_id)?;
         Ok(status)
-    }
-
-    fn build_evidence_request_body(evidence_hex: &str) -> Result<Vec<u8>> {
-        let mut payload = norito::json::Map::new();
-        payload.insert(
-            "evidence_hex".to_owned(),
-            norito::json::Value::from(evidence_hex),
-        );
-        Ok(norito::json::to_vec(&norito::json::Value::from(payload))?)
-    }
-
-    fn evidence_status_payload(status: StatusCode) -> norito::json::Value {
-        let mut status_map = norito::json::Map::new();
-        status_map.insert(
-            "status".to_owned(),
-            norito::json::Value::from(status.as_u16()),
-        );
-        norito::json::Value::from(status_map)
-    }
-
-    fn parse_evidence_post_response(response: &Response<Vec<u8>>) -> Result<norito::json::Value> {
-        if !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED) {
-            return Err(
-                ResponseReport::with_msg("Failed to submit sumeragi evidence", response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        if response.body().is_empty() {
-            return Ok(Self::evidence_status_payload(response.status()));
-        }
-        Ok(norito::json::from_slice(response.body())?)
     }
 
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -8191,23 +8232,6 @@ impl Client {
                 eyre!("Failed to decode sumeragi evidence list Norito payload: {err}")
             })?;
         Ok(decoded)
-    }
-
-    /// POST `/v1/sumeragi/evidence` — submit Norito-framed evidence (hex string).
-    ///
-    /// # Errors
-    /// Returns an error if the request fails, the response is unexpected, or JSON parsing fails.
-    pub fn post_sumeragi_evidence_hex(&self, evidence_hex: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        let body = Self::build_evidence_request_body(evidence_hex)?;
-        let response = self.send_builder(
-            // Evidence submission is an operator endpoint guarded by operator signatures.
-            self.operator_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        let value = Self::parse_evidence_post_response(&response)?;
-        Ok(value)
     }
 }
 
@@ -8839,54 +8863,6 @@ mod evidence_response_tests {
     use norito::json::Value;
 
     use super::*;
-
-    #[test]
-    fn build_evidence_request_body_serializes_hex_field() {
-        let body = Client::build_evidence_request_body("deadbeef").expect("body");
-        let value: Value = norito::json::from_slice(&body).expect("valid json");
-        let map = value.as_object().expect("payload encoded as JSON object");
-        let field = map.get("evidence_hex").expect("field present");
-        match field {
-            Value::String(s) => assert_eq!(s, "deadbeef"),
-            _ => panic!("expected string field for evidence_hex, got {field:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_evidence_post_response_returns_status_map_for_empty_body() {
-        let response = HttpResponse::builder()
-            .status(StatusCode::OK)
-            .body(Vec::new())
-            .unwrap();
-        let json = Client::parse_evidence_post_response(&response).expect("success");
-        let map = json.as_object().expect("status payload is object");
-        match map.get("status") {
-            Some(Value::Number(num)) if num.as_u64() == Some(200) => {}
-            other => panic!("unexpected status payload: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_evidence_post_response_decodes_json_body() {
-        let mut payload = norito::json::Map::new();
-        payload.insert("ok".to_owned(), Value::Bool(true));
-        let body = norito::json::to_vec(&Value::from(payload.clone())).unwrap();
-        let response = HttpResponse::builder()
-            .status(StatusCode::ACCEPTED)
-            .body(body)
-            .unwrap();
-        let json = Client::parse_evidence_post_response(&response).expect("success");
-        assert_eq!(json.as_object(), Some(&payload));
-    }
-
-    #[test]
-    fn parse_evidence_post_response_errors_on_unexpected_status() {
-        let response = HttpResponse::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(b"nope".to_vec())
-            .unwrap();
-        assert!(Client::parse_evidence_post_response(&response).is_err());
-    }
 
     #[test]
     fn parse_json_ok_response_returns_decoded_value() {
@@ -10641,102 +10617,6 @@ mod evidence_http_tests {
             .pin_policy(sorafs_manifest::PinPolicy::default())
             .build()
             .expect("manifest build")
-    }
-
-    #[test]
-    fn post_evidence_sends_json_body_and_headers() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
-
-        let json = with_mock_http(
-            respond_with(
-                &snapshots,
-                json_response(StatusCode::ACCEPTED, r#"{"ok":true}"#),
-            ),
-            || client.post_sumeragi_evidence_hex("deadbeef"),
-        )
-        .expect("call succeeds");
-        assert_eq!(
-            json.as_object()
-                .and_then(|map| map.get("ok"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
-        let headers: HashMap<_, _> = snapshot
-            .headers
-            .iter()
-            .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
-            .collect();
-        assert_eq!(
-            headers.get("content-type"),
-            Some(&"application/json".to_owned())
-        );
-        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-        let payload: norito::json::Value =
-            norito::json::from_slice(&snapshot.body).expect("json body");
-        let map = payload.as_object().expect("payload object");
-        assert_eq!(
-            map.get("evidence_hex"),
-            Some(&norito::json::Value::String("deadbeef".to_owned()))
-        );
-    }
-
-    #[test]
-    fn post_evidence_empty_body_returns_status_map() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
-
-        let json = with_mock_http(
-            respond_with(&snapshots, empty_response(StatusCode::OK)),
-            || client.post_sumeragi_evidence_hex("abcd"),
-        )
-        .expect("call succeeds");
-        let status_value = json
-            .as_object()
-            .and_then(|map| map.get("status"))
-            .expect("status field present");
-        match status_value {
-            norito::json::Value::Number(number) => {
-                assert_eq!(number.as_u64(), Some(200));
-            }
-            other => panic!("unexpected status payload: {other:?}"),
-        }
-
-        let snapshot = snapshots
-            .lock()
-            .expect("lock snapshots")
-            .first()
-            .cloned()
-            .expect("snapshot captured");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sumeragi/evidence");
-    }
-
-    #[test]
-    fn post_evidence_propagates_error_status() {
-        let client = client_with_base_url(base_url());
-        let err = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                json_response(StatusCode::BAD_REQUEST, r#"{"error":"invalid"}"#),
-            ),
-            || client.post_sumeragi_evidence_hex("bad"),
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Failed to submit sumeragi evidence"),
-            "unexpected error: {err}"
-        );
     }
 
     #[test]
@@ -13379,6 +13259,10 @@ impl Client {
     }
 
     /// Encode and hash a signed transaction once for later submission.
+    #[expect(
+        clippy::unused_self,
+        reason = "this remains an instance method in the stable client workflow API"
+    )]
     pub fn prepare_transaction_payload(
         transaction: &SignedTransaction,
     ) -> PreparedTransactionPayload {
@@ -14237,8 +14121,7 @@ impl Client {
                 reveal.signed_transaction().hash() == target
             }
             crate::data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
-            | crate::data_model::transaction::TransactionEntrypoint::Time(_)
-            | crate::data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => false,
+            | crate::data_model::transaction::TransactionEntrypoint::Time(_) => false,
         }
     }
 
@@ -18914,6 +18797,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_zk_vote_tally_json(&self, election_id: &str) -> Result<norito::json::Value> {
+        Self::require_governance_selector_v1(election_id, "election_id")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/vote/tally");
         let body = norito::json::to_vec(&norito::json!({
             "election_id": election_id,
@@ -19384,14 +19268,19 @@ impl Client {
         Ok(result)
     }
 
-    /// POST `/v1/gov/ballots/zk` with a JSON DTO body.
+    /// POST `/v1/gov/ballots/zk-v1` with the canonical flat envelope DTO.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_ballot_zk_json(
+    pub fn post_gov_ballot_zk_v1_json(
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/ballots/zk");
+        Self::require_json_governance_selector_v1(
+            value,
+            "election_id",
+            "governance ZK ballot request",
+        )?;
+        let url = join_torii_url(&self.torii_url, "v1/gov/ballots/zk-v1");
         let body = norito::json::to_vec(value)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -19401,7 +19290,7 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to submit zk ballot: {} {}",
+                "Failed to submit ZK V1 ballot: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -19416,6 +19305,11 @@ impl Client {
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
+        Self::require_json_governance_selector_v1(
+            value,
+            "referendum_id",
+            "governance plain ballot request",
+        )?;
         let url = join_torii_url(&self.torii_url, "v1/gov/ballots/plain");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -19463,7 +19357,8 @@ impl Client {
     }
 
     /// POST `/v1/gov/finalize` with a JSON DTO body.
-    /// Expected body shape: `{ referendum_id: String, proposal_id: Hex64 }`.
+    /// Expected body shape: `{ referendum_id: Hex64, proposal_id: Hex64 }`, where both fields
+    /// contain the same exact lowercase proposal fingerprint.
     /// Returns JSON with `{ ok, tx_instructions: [{ wire_id, payload_hex }] }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -19471,6 +19366,17 @@ impl Client {
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
+        Self::require_json_lower_hex_32(value, "referendum_id", "governance finalize request")?;
+        Self::require_json_lower_hex_32(value, "proposal_id", "governance finalize request")?;
+        let referendum_id =
+            Self::require_json_string_field(value, "referendum_id", "governance finalize request")?;
+        let proposal_id =
+            Self::require_json_string_field(value, "proposal_id", "governance finalize request")?;
+        if referendum_id != proposal_id {
+            return Err(eyre!(
+                "governance finalize request.referendum_id must equal proposal_id"
+            ));
+        }
         let url = join_torii_url(&self.torii_url, "v1/gov/finalize");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -19493,6 +19399,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_gov_enact_json(&self, value: &norito::json::Value) -> Result<norito::json::Value> {
+        Self::require_json_lower_hex_32(value, "proposal_id", "governance enact request")?;
         let url = join_torii_url(&self.torii_url, "v1/gov/enact");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -19515,6 +19422,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_proposal_json(&self, id_hex: &str) -> Result<norito::json::Value> {
+        Self::require_lower_hex_32(id_hex, "proposal_id")?;
         let path = format!("v1/gov/proposals/{id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
@@ -19532,6 +19440,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_locks_json(&self, rid: &str) -> Result<norito::json::Value> {
+        Self::require_governance_selector_v1(rid, "referendum_id")?;
         let path = format!("v1/gov/locks/{rid}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
@@ -19581,6 +19490,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_referendum_json(&self, id: &str) -> Result<norito::json::Value> {
+        Self::require_governance_selector_v1(id, "referendum_id")?;
         let path = format!("v1/gov/referenda/{id}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
@@ -19599,6 +19509,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn get_gov_tally_json(&self, id: &str) -> Result<norito::json::Value> {
+        Self::require_governance_selector_v1(id, "referendum_id")?;
         let path = format!("v1/gov/tally/{id}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
@@ -24094,7 +24005,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
     use iroha_data_model::{
-        account::AccountAddress,
+        account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},
         alias_setup::{
             AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
             AliasAutoRenewPlanRequestV1, AliasFramedInstructionV1, AliasIntentV1,
@@ -24138,8 +24049,34 @@ mod tests {
             },
         },
         domain::DomainId,
-        isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
+        id::MAX_CHAIN_ID_BYTES,
+        isi::{
+            alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
+            musubi::PublishMusubiReleaseV1,
+        },
+        musubi::{
+            ArchiveId, MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1, MUSUBI_MAX_DEPENDENCIES_V1,
+            MUSUBI_MAX_EXPORTS_V1, MUSUBI_MAX_KEYWORDS_V1,
+            MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1, MUSUBI_MAX_PRERELEASE_IDENTIFIERS_V1,
+            MUSUBI_MAX_VERSION_COMPARATORS_V1, MUSUBI_REGISTRY_VERSION_V1,
+            MUSUBI_RESOLVER_PAGE_JSON_ITEMS_BUDGET_BYTES_V1, MusubiAbiBindingV1,
+            MusubiArchiveAvailabilityV1, MusubiArtifactGovernanceStateV1, MusubiArtifactTakedownV1,
+            MusubiComparatorOpV1, MusubiContentDigestV1, MusubiDependencyKindV1,
+            MusubiDependencyReqV1, MusubiDescriptionV1, MusubiDocumentRefV1,
+            MusubiExactDependencyEdgeV1, MusubiExactReleaseSnapshotV1,
+            MusubiGovernanceActionDigestV1, MusubiKeywordV1, MusubiKotodamaEditionV1,
+            MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageScopeV1,
+            MusubiPrereleaseIdentifierV1, MusubiPublicationV1, MusubiReasonV1,
+            MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiReleaseManifestV1,
+            MusubiReleaseMetadataV1, MusubiReleaseRecordV1, MusubiReleaseRevisionsV1,
+            MusubiReleaseSelectionStateV1, MusubiReleaseYankV1, MusubiResolutionProofV1,
+            MusubiResolverReleaseRowV1, MusubiStorageAvailabilityV1, MusubiVerificationLockV1,
+            MusubiVerificationNodeV1, MusubiVersionComparatorV1, MusubiVersionReqV1,
+            MusubiVersionV1, validate_musubi_account_id_v1,
+        },
+        name::{MAX_NAME_BYTES, Name},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
+        parameter::system::Parameters,
         peer::PeerId,
         privacy::{
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
@@ -24161,6 +24098,7 @@ mod tests {
     use iroha_telemetry::metrics::GovernanceStatus;
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use iroha_version::codec::DecodeVersioned;
+    use norito::json::Value;
     use sorafs_car::{
         fetch_plan::try_chunk_fetch_plan_to_json,
         multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport},
@@ -24195,79 +24133,82 @@ mod tests {
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
     #[test]
-    fn public_musubi_query_uses_fixed_route_without_account_headers() {
-        let response = json_response(StatusCode::OK, r#"{"result":"finalized"}"#);
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let query = norito::json!({"package": "apps.sora/demo"});
-        let result: PublicMusubiQueryResultV1<Value> =
-            with_mock_http(respond_with(&snapshots, response), || {
-                post_public_musubi_query_v1(
-                    &base_url(),
-                    PublicMusubiQueryPathV1::ExactPackage,
-                    &query,
-                    Duration::from_secs(1),
-                )
-            })
-            .expect("public Musubi query");
-        assert!(matches!(result, PublicMusubiQueryResultV1::Found(_)));
-
-        let snapshot = snapshots.lock().expect("snapshot lock")[0].clone();
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/musubi/queries/exact-package");
-        assert_eq!(
-            snapshot.max_response_bytes,
-            MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES
-        );
-        assert!(snapshot.headers.iter().all(|(name, _)| {
-            ![
-                HEADER_ACCOUNT,
-                HEADER_SIGNATURE,
-                HEADER_TIMESTAMP_MS,
-                HEADER_NONCE,
-                "authorization",
-            ]
-            .iter()
-            .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
-        }));
+    fn governance_selector_client_validation_matches_canonical_v1() {
+        for valid in [
+            "a".to_owned(),
+            "A9_selector~with.dots".to_owned(),
+            "a".repeat(128),
+        ] {
+            Client::require_governance_selector_v1(&valid, "selector").expect("canonical selector");
+        }
+        for invalid in [
+            String::new(),
+            ".".to_owned(),
+            ".hidden".to_owned(),
+            "selector/alias".to_owned(),
+            "selector%2Falias".to_owned(),
+            "selector alias".to_owned(),
+            "selector\nalias".to_owned(),
+            "sélector".to_owned(),
+            "a".repeat(129),
+        ] {
+            let _ = Client::require_governance_selector_v1(&invalid, "selector")
+                .expect_err("noncanonical selector");
+        }
     }
 
     #[test]
-    fn public_musubi_query_surfaces_missing_and_stale_cursor() {
-        let query = norito::json!({"limit": 1_u64});
-        let missing: PublicMusubiQueryResultV1<Value> = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                empty_response(StatusCode::NOT_FOUND),
-            ),
-            || {
-                post_public_musubi_query_v1(
-                    &base_url(),
-                    PublicMusubiQueryPathV1::Versions,
-                    &query,
-                    Duration::from_secs(1),
-                )
-            },
-        )
-        .expect("missing query result");
-        assert!(matches!(missing, PublicMusubiQueryResultV1::NotFound));
+    fn governance_client_rejects_noncanonical_targets_before_http() {
+        fn assert_no_http(call: impl FnOnce() -> Result<JsonValue>) {
+            let _ = with_mock_http(
+                |_| panic!("invalid governance input reached HTTP transport"),
+                call,
+            )
+            .expect_err("invalid governance input must fail locally");
+        }
 
-        let stale: PublicMusubiQueryResultV1<Value> = with_mock_http(
-            respond_with(
-                &Arc::new(Mutex::new(Vec::new())),
-                empty_response(StatusCode::GONE),
-            ),
-            || {
-                post_public_musubi_query_v1(
-                    &base_url(),
-                    PublicMusubiQueryPathV1::OrderedPrefix,
-                    &query,
-                    Duration::from_secs(1),
-                )
-            },
-        )
-        .expect("stale query result");
-        assert!(matches!(stale, PublicMusubiQueryResultV1::StaleCursor));
+        let client = client_with_base_url(base_url());
+        assert_no_http(|| client.post_zk_vote_tally_json("election/alias"));
+        assert_no_http(|| {
+            client.post_gov_ballot_zk_v1_json(&norito::json!({
+                "election_id": ".hidden"
+            }))
+        });
+        assert_no_http(|| {
+            client.post_gov_ballot_plain_json(&norito::json!({
+                "referendum_id": "referendum alias"
+            }))
+        });
+        assert_no_http(|| {
+            client.post_gov_finalize_json(&norito::json!({
+                "referendum_id": "referendum/alias",
+                "proposal_id": ("11".repeat(32))
+            }))
+        });
+        assert_no_http(|| {
+            client.post_gov_finalize_json(&norito::json!({
+                "referendum_id": ("AA".repeat(32)),
+                "proposal_id": ("aa".repeat(32))
+            }))
+        });
+        assert_no_http(|| {
+            client.post_gov_finalize_json(&norito::json!({
+                "referendum_id": ("11".repeat(32)),
+                "proposal_id": ("22".repeat(32))
+            }))
+        });
+        assert_no_http(|| {
+            client.post_gov_enact_json(&norito::json!({
+                "proposal_id": ("AA".repeat(32))
+            }))
+        });
+        assert_no_http(|| client.get_gov_proposal_json("11/../../status"));
+        assert_no_http(|| client.get_gov_locks_json("lock?cursor=alias"));
+        assert_no_http(|| client.get_gov_referendum_json(".hidden"));
+        assert_no_http(|| client.get_gov_tally_json("tally#fragment"));
     }
+
+    include!("client/musubi_tests.rs");
 
     fn validation_fee_plain_ballot_draft_fixture() -> (
         String,

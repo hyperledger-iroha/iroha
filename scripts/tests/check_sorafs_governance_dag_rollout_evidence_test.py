@@ -31,6 +31,8 @@ GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
 DIGEST_3 = "ef" * 32
+DIGEST_4 = "12" * 32
+DIGEST_5 = "34" * 32
 DEPLOYMENT_ID = "governance-dag-production-a"
 ENVIRONMENT = "production"
 CHECKER = TopologyBoundChecker(
@@ -87,11 +89,29 @@ def publisher_service(*, head_age: int = 300, block_count: int = 6) -> dict:
     payload.update(
         {
             "dag_builder_daemonized": True,
-            "ipfs_cluster_pinning_enabled": True,
-            "ipns_head_publication_enabled": True,
+            "kubo_unixfs_profile": MODULE.KUBO_UNIXFS_PROFILE,
+            "unixfs_chunk_size_bytes": MODULE.KUBO_UNIXFS_CHUNK_SIZE_BYTES,
+            "unixfs_raw_leaves": True,
+            "unixfs_balanced_layout": True,
+            "unixfs_max_links_per_node": MODULE.KUBO_UNIXFS_MAX_LINKS_PER_NODE,
+            "cid_version": MODULE.KUBO_CID_VERSION,
+            "cid_multihash": MODULE.KUBO_CID_MULTIHASH,
+            "locally_derived_cids_verified": True,
+            "signed_http_head_cas_enabled": True,
+            "strong_single_etag_verified": True,
+            "conditional_cas_readback_verified": True,
             "signed_head_verified": True,
             "parent_chain_verified": True,
-            "car_segments_pinned": True,
+            "objects_pinned": True,
+            "authenticated_ingress_qualified": True,
+            "ingress_enforcement": MODULE.INGRESS_ENFORCEMENT,
+            "replay_posture": MODULE.REPLAY_POSTURE,
+            "ingress_scope_binding_verified": True,
+            "receiver_policy_digest_hex": DIGEST,
+            "replay_namespace_digest_hex": DIGEST_2,
+            "replica_set_digest_hex": DIGEST_3,
+            "kubo_ingress_binding_digest_hex": DIGEST_4,
+            "signed_head_ingress_binding_digest_hex": DIGEST_5,
             "public_head_cid_hex": DIGEST,
             "policy_digest_hex": DIGEST,
             "pin_lag_seconds": 120,
@@ -101,7 +121,6 @@ def publisher_service(*, head_age: int = 300, block_count: int = 6) -> dict:
             "payload_kind_count": 8,
             "payload_kinds": payload_kinds(),
             "raw_head_included": False,
-            "raw_car_included": False,
         }
     )
     return payload
@@ -112,13 +131,18 @@ def mirror_datastore(*, drift: bool = False) -> dict:
     payload.update(
         {
             "public_head_cid_hex": DIGEST,
-            "rocksdb_ipld_enabled": True,
+            "sealed_typed_store_enabled": True,
             "query_service_enabled": True,
             "mirror_index_verified": True,
             "head_lookup_verified": True,
             "block_lookup_verified": True,
             "node_lookup_verified": True,
             "digest_lookup_verified": True,
+            "retention_max_entries": MODULE.MIRROR_RETENTION_MAX_ENTRIES,
+            "retention_max_bytes": MODULE.MIRROR_RETENTION_MAX_BYTES,
+            "exact_retained_source_suffix_verified": True,
+            "fresh_checkpoint_coherent_reads_verified": True,
+            "liveness_bound_reader_verified": True,
             "mirror_drift_detected": drift,
             "missing_block_count": 0,
             "raw_blocks_included": False,
@@ -135,8 +159,12 @@ def operator_recovery() -> dict:
             "live_head_fetch_verified": True,
             "public_checkpoint_published": True,
             "checkpoint_recovery_verified": True,
-            "public_recovery_cli_verified": True,
+            "derived_mirror_recovery_verified": True,
             "recovered_head_matches_public_head": True,
+            "post_loss_repair_verified": True,
+            "head_object_repaired_with_same_cid": True,
+            "block_object_repaired_with_same_cid": True,
+            "public_head_unchanged_during_repair": True,
             "checkpoint_digest_hex": DIGEST,
             "raw_checkpoint_included": False,
         }
@@ -170,7 +198,11 @@ def dashboard_api(*, latency_ms: int = 200, passed: bool = True) -> dict:
             "public_head_cid_hex": DIGEST,
             "route_count": len(routes),
             "passed_route_count": len(routes) if passed else 0,
-            "runtime_ipfs_backed": True,
+            "service_mirror_capability_installed": True,
+            "fresh_checkpoint_coherent_reads_verified": True,
+            "liveness_bound_reader_verified": True,
+            "unready_reader_rejected": True,
+            "reader_withdrawal_verified": True,
             "response_bodies_included": False,
             "routes": routes,
         }
@@ -186,7 +218,12 @@ def observability(*, critical: bool = False) -> dict:
             "metrics_scrape_success": True,
             "dashboard_provisioned": True,
             "alert_rules_installed": True,
-            "ipfs_ipns_metrics_present": True,
+            "publication_metrics_present": True,
+            "first_full_audit_verified": True,
+            "readiness_withheld_until_full_audit": True,
+            "bounded_rotating_audit_verified": True,
+            "audit_max_entries_per_poll": MODULE.STEADY_AUDIT_MAX_ENTRIES_PER_POLL,
+            "audit_max_bytes_per_poll": MODULE.STEADY_AUDIT_MAX_BYTES_PER_POLL,
             "critical_alerts_firing": critical,
             "metrics": [
                 "sorafs_governance_dag_publish_total",
@@ -195,7 +232,7 @@ def observability(*, critical: bool = False) -> dict:
                 "sorafs_governance_dag_backlog",
                 "sorafs_governance_dag_head_age_seconds",
                 "sorafs_governance_dag_ipfs_pin_lag_seconds",
-                "sorafs_governance_dag_ipns_update_total",
+                "sorafs_governance_dag_validation_failure_total",
                 "sorafs_governance_dag_mirror_drift",
             ],
             "metric_count": len(MODULE.REQUIRED_METRICS),
@@ -205,17 +242,24 @@ def observability(*, critical: bool = False) -> dict:
     return payload
 
 
-def ipfs_ipns_e2e(*, block_count: int = 6) -> dict:
-    payload = base("sorafs.governance_dag.ipfs_ipns_e2e_canary.v1")
+def publication_e2e(*, block_count: int = 6) -> dict:
+    payload = base("sorafs.governance_dag.publication_e2e_canary.v1")
     payload.update(
         {
             "public_head_cid_hex": DIGEST,
-            "local_ipfs_backed_tests_passed": True,
-            "public_head_resolved": True,
+            "local_kubo_tests_passed": True,
+            "deterministic_unixfs_profile_verified": True,
+            "signed_http_head_resolved": True,
+            "strong_single_etag_cas_verified": True,
+            "authenticated_ingress_qualification_verified": True,
+            "replay_attack_rejected": True,
             "block_replay_verified": True,
             "duplicate_payload_rejected": True,
             "invalid_parent_quarantined": True,
-            "pinning_outage_tested": True,
+            "post_loss_same_cid_repair_verified": True,
+            "bounded_rotating_audit_verified": True,
+            "fresh_torii_reads_verified": True,
+            "stopped_service_reads_rejected": True,
             "publisher_key_failure_tested": True,
             "block_count": block_count,
             "block_refs": block_refs(block_count),
@@ -236,9 +280,17 @@ def governance_approval() -> dict:
             "governance_vote_recorded": True,
             "iroha_config_bound": True,
             "publisher_keys_governed": True,
-            "ipns_name_governed": True,
-            "mirror_retention_policy_bound": True,
-            "emergency_pause_tested": True,
+            "signed_http_head_endpoint_governed": True,
+            "ingress_receiver_policy_governed": True,
+            "replay_namespace_governed": True,
+            "fixed_retention_contract_bound": True,
+            "receiver_policy_digest_hex": DIGEST,
+            "replay_namespace_digest_hex": DIGEST_2,
+            "replica_set_digest_hex": DIGEST_3,
+            "kubo_ingress_binding_digest_hex": DIGEST_4,
+            "signed_head_ingress_binding_digest_hex": DIGEST_5,
+            "retention_max_entries": MODULE.MIRROR_RETENTION_MAX_ENTRIES,
+            "retention_max_bytes": MODULE.MIRROR_RETENTION_MAX_BYTES,
             "config_source": "iroha_config",
             "policy_digest_hex": DIGEST,
         }
@@ -253,7 +305,7 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "operator-recovery.json", operator_recovery())
     write_json(root / "dashboard-api.json", dashboard_api())
     write_json(root / "observability.json", observability())
-    write_json(root / "ipfs-ipns-e2e.json", ipfs_ipns_e2e())
+    write_json(root / "publication-e2e.json", publication_e2e())
     write_json(root / "governance-approval.json", governance_approval())
 
 
@@ -262,7 +314,7 @@ PUBLIC_HEAD_BOUND_FIXTURES = (
     ("operator_recovery", "operator-recovery.json", operator_recovery),
     ("dashboard_api", "dashboard-api.json", dashboard_api),
     ("observability", "observability.json", observability),
-    ("ipfs_ipns_e2e", "ipfs-ipns-e2e.json", ipfs_ipns_e2e),
+    ("publication_e2e", "publication-e2e.json", publication_e2e),
     ("governance_approval", "governance-approval.json", governance_approval),
 )
 
@@ -301,6 +353,337 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
     )
+
+
+def test_evidence_payloads_are_schema_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["ipns_head_publication_enabled"] = True
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = result["required"]["publisher_service"]["artifacts"][0]["errors"]
+    assert (
+        "publisher_service payload contains unknown fields: "
+        "ipns_head_publication_enabled"
+    ) in errors
+
+
+def test_dashboard_route_rows_are_schema_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = dashboard_api()
+    payload["routes"][0]["cached_body"] = True
+    write_json(tmp_path / "dashboard-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = result["required"]["dashboard_api"]["artifacts"][0]["errors"]
+    assert "routes[0] contains unknown fields: cached_body" in errors
+
+
+def test_publisher_requires_fixed_unixfs_and_signed_http_contract(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("kubo_unixfs_profile", "legacy-kubo-default"),
+        ("unixfs_chunk_size_bytes", MODULE.KUBO_UNIXFS_CHUNK_SIZE_BYTES // 2),
+        ("unixfs_max_links_per_node", MODULE.KUBO_UNIXFS_MAX_LINKS_PER_NODE - 1),
+        ("cid_version", 0),
+        ("cid_multihash", "blake3-256"),
+        ("unixfs_raw_leaves", False),
+        ("unixfs_balanced_layout", False),
+        ("locally_derived_cids_verified", False),
+        ("signed_http_head_cas_enabled", False),
+        ("strong_single_etag_verified", False),
+        ("conditional_cas_readback_verified", False),
+    )
+    for field, invalid in cases:
+        case_dir = tmp_path / field
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = publisher_service()
+        payload[field] = invalid
+        write_json(case_dir / "publisher-service.json", payload)
+
+        assert run_gate(case_dir) == 1
+
+
+def test_publisher_requires_qualified_exclusive_ingress_and_shared_replay(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("authenticated_ingress_qualified", False),
+        ("ingress_enforcement", "shared_receiver"),
+        ("replay_posture", "process_local_cache"),
+        ("ingress_scope_binding_verified", False),
+        ("receiver_policy_digest_hex", "not-a-digest"),
+        ("replay_namespace_digest_hex", "not-a-digest"),
+        ("replica_set_digest_hex", "not-a-digest"),
+        ("kubo_ingress_binding_digest_hex", "not-a-digest"),
+        ("signed_head_ingress_binding_digest_hex", "not-a-digest"),
+    )
+    for field, invalid in cases:
+        case_dir = tmp_path / field
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = publisher_service()
+        payload[field] = invalid
+        write_json(case_dir / "publisher-service.json", payload)
+
+        assert run_gate(case_dir) == 1
+
+
+def test_governance_approval_must_bind_publisher_ingress_qualification(
+    tmp_path: Path,
+) -> None:
+    for field in (
+        "receiver_policy_digest_hex",
+        "replay_namespace_digest_hex",
+        "replica_set_digest_hex",
+        "kubo_ingress_binding_digest_hex",
+        "signed_head_ingress_binding_digest_hex",
+    ):
+        case_dir = tmp_path / field
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = governance_approval()
+        payload[field] = "56" * 32
+        write_json(case_dir / "governance-approval.json", payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        errors = result["required"]["governance_approval"]["artifacts"][0][
+            "errors"
+        ]
+        assert (
+            f"governance_approval {field} must match a valid "
+            f"publisher_service {field}"
+        ) in errors
+
+
+def test_governance_only_gate_requires_publisher_policy_and_ingress_anchors(
+    tmp_path: Path,
+) -> None:
+    write_json(tmp_path / "governance-approval.json", governance_approval())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-kind",
+            "governance_approval",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex requires a valid "
+        "publisher_service policy_digest_hex"
+    ) in artifact["errors"]
+    for field in (
+        "receiver_policy_digest_hex",
+        "replay_namespace_digest_hex",
+        "replica_set_digest_hex",
+        "kubo_ingress_binding_digest_hex",
+        "signed_head_ingress_binding_digest_hex",
+    ):
+        assert (
+            f"governance_approval {field} requires a valid "
+            f"publisher_service {field}"
+        ) in artifact["errors"]
+
+
+def test_optional_bound_artifact_cannot_escape_missing_publisher_anchor(
+    tmp_path: Path,
+) -> None:
+    write_json(tmp_path / "ingest-service.json", ingest_service())
+    write_json(tmp_path / "governance-approval.json", governance_approval())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-kind",
+            "ingest_service",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    approval = next(
+        artifact
+        for artifact in result["recognized_artifacts"]
+        if artifact["kind"] == "governance_approval"
+    )
+    assert approval["valid"] is False
+    assert (
+        "governance_approval public_head_cid_hex requires a valid "
+        "publisher_service public_head_cid_hex"
+    ) in approval["errors"]
+
+
+def test_publisher_security_identity_digests_reject_zero(tmp_path: Path) -> None:
+    for field in (
+        "policy_digest_hex",
+        "receiver_policy_digest_hex",
+        "replay_namespace_digest_hex",
+        "replica_set_digest_hex",
+        "kubo_ingress_binding_digest_hex",
+        "signed_head_ingress_binding_digest_hex",
+    ):
+        case_dir = tmp_path / field
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = publisher_service()
+        payload[field] = "0" * 64
+        write_json(case_dir / "publisher-service.json", payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        errors = result["required"]["publisher_service"]["artifacts"][0][
+            "errors"
+        ]
+        assert f"{field} must not be the zero digest" in errors
+
+
+def test_fixed_retention_contract_is_exact_across_mirror_and_approval(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        (
+            "mirror_datastore",
+            "mirror-datastore.json",
+            mirror_datastore,
+            "retention_max_entries",
+            MODULE.MIRROR_RETENTION_MAX_ENTRIES - 1,
+        ),
+        (
+            "mirror_datastore",
+            "mirror-datastore.json",
+            mirror_datastore,
+            "retention_max_bytes",
+            MODULE.MIRROR_RETENTION_MAX_BYTES + 1,
+        ),
+        (
+            "governance_approval",
+            "governance-approval.json",
+            governance_approval,
+            "retention_max_entries",
+            MODULE.MIRROR_RETENTION_MAX_ENTRIES + 1,
+        ),
+        (
+            "governance_approval",
+            "governance-approval.json",
+            governance_approval,
+            "retention_max_bytes",
+            MODULE.MIRROR_RETENTION_MAX_BYTES - 1,
+        ),
+    )
+    for kind, filename, factory, field, invalid in cases:
+        case_dir = tmp_path / f"{kind}-{field}"
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload[field] = invalid
+        write_json(case_dir / filename, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        errors = result["required"][kind]["artifacts"][0]["errors"]
+        assert any(error.startswith(f"{field} must equal") for error in errors)
+
+
+def test_rollout_requires_repair_audit_and_live_fresh_read_guarantees(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        (
+            "operator_recovery",
+            "operator-recovery.json",
+            operator_recovery,
+            "post_loss_repair_verified",
+        ),
+        (
+            "operator_recovery",
+            "operator-recovery.json",
+            operator_recovery,
+            "head_object_repaired_with_same_cid",
+        ),
+        (
+            "mirror_datastore",
+            "mirror-datastore.json",
+            mirror_datastore,
+            "exact_retained_source_suffix_verified",
+        ),
+        (
+            "mirror_datastore",
+            "mirror-datastore.json",
+            mirror_datastore,
+            "fresh_checkpoint_coherent_reads_verified",
+        ),
+        (
+            "dashboard_api",
+            "dashboard-api.json",
+            dashboard_api,
+            "reader_withdrawal_verified",
+        ),
+        (
+            "publication_e2e",
+            "publication-e2e.json",
+            publication_e2e,
+            "stopped_service_reads_rejected",
+        ),
+    )
+    for kind, filename, factory, field in cases:
+        case_dir = tmp_path / f"{kind}-{field}"
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload[field] = False
+        write_json(case_dir / filename, payload)
+
+        assert run_gate(case_dir) == 1
+
+
+def test_rotating_audit_budgets_are_fixed_v1_values(tmp_path: Path) -> None:
+    for field, invalid in (
+        ("audit_max_entries_per_poll", MODULE.STEADY_AUDIT_MAX_ENTRIES_PER_POLL + 1),
+        ("audit_max_bytes_per_poll", MODULE.STEADY_AUDIT_MAX_BYTES_PER_POLL - 1),
+    ):
+        case_dir = tmp_path / field
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = observability()
+        payload[field] = invalid
+        write_json(case_dir / "observability.json", payload)
+
+        assert run_gate(case_dir) == 1
+
+
+def test_retired_ipns_publication_schema_is_not_recognized(tmp_path: Path) -> None:
+    path = write_json(
+        tmp_path / "retired.json",
+        base("sorafs.governance_dag.ipfs_ipns_e2e_canary.v1"),
+    )
+
+    assert CHECKER(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -344,7 +727,7 @@ def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
             "publisher-service.json",
             "publisher_service",
             publisher_service,
-            ("raw_head_included", "raw_car_included"),
+            ("raw_head_included",),
         ),
         (
             "mirror-datastore.json",
@@ -371,9 +754,9 @@ def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
             ("critical_alerts_firing", "response_bodies_included"),
         ),
         (
-            "ipfs-ipns-e2e.json",
-            "ipfs_ipns_e2e",
-            ipfs_ipns_e2e,
+            "publication-e2e.json",
+            "publication_e2e",
+            publication_e2e,
             ("raw_blocks_included",),
         ),
     )
@@ -412,22 +795,22 @@ def test_dashboard_requires_public_head_binding(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
-def test_ipfs_e2e_public_head_binding_must_match_publisher(tmp_path: Path) -> None:
+def test_publication_e2e_public_head_binding_must_match_publisher(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
-    payload = ipfs_ipns_e2e()
+    payload = publication_e2e()
     payload["public_head_cid_hex"] = DIGEST_2
-    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    write_json(tmp_path / "publication-e2e.json", payload)
 
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
-    required = payload["required"]["ipfs_ipns_e2e"]
+    required = payload["required"]["publication_e2e"]
     artifact = required["artifacts"][0]
     assert required["valid"] is False
     assert artifact["valid"] is False
     assert artifact["errors"] == [
-        "ipfs_ipns_e2e public_head_cid_hex must match a valid "
+        "publication_e2e public_head_cid_hex must match a valid "
         "publisher_service public_head_cid_hex"
     ]
 
@@ -762,66 +1145,66 @@ def test_publisher_payload_kinds_must_not_include_unknown_values(
     assert "payload_kinds must not include unknown values" in artifact["errors"]
 
 
-def test_ipfs_block_refs_must_not_duplicate(tmp_path: Path) -> None:
+def test_publication_block_refs_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
-    payload = ipfs_ipns_e2e()
+    payload = publication_e2e()
     payload["block_refs"].append(payload["block_refs"][0])
     payload["block_count"] = len(payload["block_refs"])
-    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    write_json(tmp_path / "publication-e2e.json", payload)
     summary = tmp_path / "summary.json"
 
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    artifact = payload["required"]["publication_e2e"]["artifacts"][0]
     assert "block_refs must not contain duplicate values" in artifact["errors"]
     assert "block_count must match unique block_refs count" in artifact["errors"]
 
 
-def test_ipfs_block_refs_must_use_production_family(tmp_path: Path) -> None:
+def test_publication_block_refs_must_use_production_family(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
-    payload = ipfs_ipns_e2e()
+    payload = publication_e2e()
     payload["block_refs"][0] = "governance-block-00"
-    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    write_json(tmp_path / "publication-e2e.json", payload)
     summary = tmp_path / "summary.json"
 
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    artifact = payload["required"]["publication_e2e"]["artifacts"][0]
     assert MODULE.BLOCK_REF_LABEL_ERROR in artifact["errors"]
 
 
-def test_ipfs_payload_kinds_must_not_duplicate(tmp_path: Path) -> None:
+def test_publication_payload_kinds_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
-    payload = ipfs_ipns_e2e()
+    payload = publication_e2e()
     payload["payload_kinds"].append(payload["payload_kinds"][0])
     payload["payload_kind_count"] = len(payload["payload_kinds"])
-    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    write_json(tmp_path / "publication-e2e.json", payload)
     summary = tmp_path / "summary.json"
 
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    artifact = payload["required"]["publication_e2e"]["artifacts"][0]
     assert "payload_kinds must not contain duplicate values" in artifact["errors"]
     assert "payload_kind_count must match unique payload_kinds count" in artifact[
         "errors"
     ]
 
 
-def test_ipfs_payload_kinds_must_not_include_unknown_values(tmp_path: Path) -> None:
+def test_publication_payload_kinds_must_not_include_unknown_values(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
-    payload = ipfs_ipns_e2e()
+    payload = publication_e2e()
     payload["payload_kinds"].append("unknown-governance-payload")
     payload["payload_kind_count"] = len(payload["payload_kinds"])
-    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    write_json(tmp_path / "publication-e2e.json", payload)
     summary = tmp_path / "summary.json"
 
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    artifact = payload["required"]["publication_e2e"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "payload_kinds must not include unknown values" in artifact["errors"]
 
@@ -837,7 +1220,7 @@ def test_payload_kinds_reject_trim_normalized_and_unicode_variants(
             publisher_service,
             "payload_kind_count",
         ),
-        ("ipfs_ipns_e2e", "ipfs-ipns-e2e.json", ipfs_ipns_e2e, "payload_kind_count"),
+        ("publication_e2e", "publication-e2e.json", publication_e2e, "payload_kind_count"),
     )
     suffixes = (" ", "\u200d", "\u202e")
 
@@ -994,9 +1377,9 @@ def test_mirror_drift_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
-def test_ipfs_e2e_requires_minimum_blocks(tmp_path: Path) -> None:
+def test_publication_e2e_requires_minimum_blocks(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
-    write_json(tmp_path / "ipfs-ipns-e2e.json", ipfs_ipns_e2e(block_count=2))
+    write_json(tmp_path / "publication-e2e.json", publication_e2e(block_count=2))
 
     assert run_gate(tmp_path) == 1
 

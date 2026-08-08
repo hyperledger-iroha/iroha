@@ -4,9 +4,8 @@
 //! blocking signing, body fsync/validation, state application, and certified
 //! body serving execute on one ordered I/O worker and return tagged
 //! completions. Control messages use the bounded committee topology: proposal
-//! manifests reach the full committee, first-send body chunks reach Set A,
-//! votes go directly to the proxy tail, and timeout/QC recovery remains
-//! committee-wide.
+//! manifests and phase votes reach the full committee, first-send body chunks
+//! reach Set A, and timeout/QC recovery remains committee-wide.
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -95,11 +94,11 @@ use super::{
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
-        CertifiedBodyFetchCompletionDisposition, CompletionDisposition, ConsensusSignTask,
-        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectRuntime,
-        EffectTransportError, EffectWorkId, PayloadChunkLifecycleDisposition,
-        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
-        V2EffectExecutor, V2EffectServices,
+        CertifiedBodyFetchCompletionDisposition, CompletionDisposition,
+        ConsensusBroadcastDisposition, ConsensusSignTask, DurableApplyCompletion,
+        EffectExecutorError, EffectExecutorStatus, EffectRuntime, EffectTransportError,
+        EffectWorkId, PayloadChunkLifecycleDisposition, PendingTipRecoveryAttemptResult,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{
         DurableLaneRolloverAuthority, V2LaneWorkEffect, durable_historical_lane_output_source_hash,
@@ -13236,6 +13235,65 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
     Ok(())
 }
 
+fn payload_chunk_output_has_applied_height_authority(
+    messages: &[NetworkMessage],
+    manifest: &wire::PayloadManifest,
+    artifact: &wire::finality::V2FinalityArtifact,
+) -> Result<(), String> {
+    let context = &artifact.height_context;
+    manifest.validate(context).map_err(|error| {
+        format!("payload-chunk rollover manifest is invalid for the applied context: {error}")
+    })?;
+    let manifest_hash = HashOf::new(manifest);
+    if messages.len() != manifest.chunk_hashes.len() {
+        return Err("payload-chunk rollover changed the exact chunk count".to_owned());
+    }
+    for (expected_index, message) in messages.iter().enumerate() {
+        if message.progress_reconstruction() != ProgressReconstruction::Retransmit {
+            return Err(
+                "payload-chunk rollover contains non-reconstructible transport traffic".to_owned(),
+            );
+        }
+        let NetworkMessage::SumeragiBlock(envelope) = message else {
+            return Err("payload-chunk rollover contains non-Sumeragi traffic".to_owned());
+        };
+        let BlockMessage::V2(message) = envelope.as_message() else {
+            return Err("payload-chunk rollover contains lane traffic".to_owned());
+        };
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
+            return Err("payload-chunk rollover contains another v2 payload".to_owned());
+        };
+        if chunk.manifest_hash != manifest_hash
+            || usize::try_from(chunk.index).ok() != Some(expected_index)
+        {
+            return Err(
+                "payload-chunk rollover differs from its exact manifest coordinates".to_owned(),
+            );
+        }
+        chunk.validate(context, manifest).map_err(|error| {
+            format!("payload-chunk rollover is invalid for its exact manifest: {error}")
+        })?;
+        let sender_index = usize::try_from(chunk.sender)
+            .map_err(|_| "payload-chunk rollover sender is not representable".to_owned())?;
+        let sender = context.roster.get(sender_index).ok_or_else(|| {
+            "payload-chunk rollover sender is outside the applied roster".to_owned()
+        })?;
+        let preimage = chunk
+            .signature_preimage(context, manifest)
+            .map_err(|error| error.to_string())?;
+        Signature::try_from_bytes(&chunk.signature)
+            .map_err(|error| format!("payload-chunk rollover has an invalid signature: {error}"))?
+            .verify(sender.validator.public_key(), &preimage)
+            .map_err(|error| {
+                format!("payload-chunk rollover signature is not owned by its sender: {error}")
+            })?;
+    }
+    Ok(())
+}
+
 fn applied_height_reconstruction_covers(
     messages: &[NetworkMessage],
     peers: &[PeerId],
@@ -13258,6 +13316,9 @@ fn applied_height_reconstruction_covers(
     })?;
     if !scope.covers(artifact) {
         return Err("Sumeragi v2 output claim belongs to another creation scope".to_owned());
+    }
+    if let ExactOutputRolloverClaim::PayloadChunks { manifest, .. } = rollover_claim {
+        return payload_chunk_output_has_applied_height_authority(messages, manifest, artifact);
     }
     if let ExactOutputRolloverClaim::AutonomousLane {
         local_peer,
@@ -13368,7 +13429,6 @@ fn applied_height_reconstruction_covers(
         )
         .map(|source| source.is_some())
     };
-    let mut manifest_hashes = BTreeSet::new();
     for message in messages {
         let NetworkMessage::SumeragiBlock(envelope) = message else {
             return Err(
@@ -13382,17 +13442,14 @@ fn applied_height_reconstruction_covers(
                 message
                     .validate_version()
                     .map_err(|error| error.to_string())?;
-                match &message.payload {
-                    wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                        manifest_hashes.insert(HashOf::new(&proposal.manifest));
-                    }
-                    wire::ConsensusMessageV2Payload::PayloadManifest(manifest)
-                    | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
-                        wire::CertifiedBodyResponse { manifest, .. },
-                    ) => {
-                        manifest_hashes.insert(HashOf::new(manifest));
-                    }
-                    _ => {}
+                if matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::PayloadChunk(_)
+                ) {
+                    return Err(
+                        "Sumeragi v2 payload chunks require an exact manifest rollover claim"
+                            .to_owned(),
+                    );
                 }
             }
             lane_message @ (BlockMessage::LaneBlockProposal(_)
@@ -13444,9 +13501,7 @@ fn applied_height_reconstruction_covers(
                     wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => {
                         round_matches(manifest.round)
                     }
-                    wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
-                        manifest_hashes.contains(&chunk.manifest_hash)
-                    }
+                    wire::ConsensusMessageV2Payload::PayloadChunk(_) => false,
                     wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
                         round_matches(request.round)
                     }
@@ -16146,8 +16201,6 @@ impl ProductionV2Services {
         Ok(outcome)
     }
 
-    include!("v2_worker/current_lane_output_rollover_claim.rs");
-
     /// Retry every currently schedulable exact semantic-output target.
     ///
     /// Returns `true` while an exact actor-backpressured target remains owned.
@@ -17475,6 +17528,8 @@ impl ProductionV2Services {
     }
 }
 
+include!("v2_worker/current_lane_output_rollover_claim.rs");
+
 impl Drop for ProductionV2Services {
     fn drop(&mut self) {
         let restart_required = !self.clean_teardown;
@@ -17594,7 +17649,7 @@ impl V2EffectServices for ProductionV2Services {
     fn broadcast_consensus(
         &mut self,
         message: wire::ConsensusMessageV2,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<ConsensusBroadcastDisposition, Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
@@ -17604,11 +17659,8 @@ impl V2EffectServices for ProductionV2Services {
             .map_err(|error| error.to_string())?;
 
         let control_targets = match &message.payload {
-            wire::ConsensusMessageV2Payload::Vote(vote) => {
-                let committee = self.committee_for_round(vote.round)?;
-                self.remote_voters_for_indices(&[committee.proxy_tail()])?
-            }
             wire::ConsensusMessageV2Payload::Proposal(_)
+            | wire::ConsensusMessageV2Payload::Vote(_)
             | wire::ConsensusMessageV2Payload::QuorumCertificate(_)
             | wire::ConsensusMessageV2Payload::TimeoutVote(_)
             | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
@@ -17656,7 +17708,10 @@ impl V2EffectServices for ProductionV2Services {
             source_retained |= self.enqueue_exact_fanout_while_guarded(
                 encoded_chunks,
                 payload_targets,
-                ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+                ExactOutputRolloverClaim::PayloadChunks {
+                    scope: self.exact_output_scope(),
+                    manifest: proposal.manifest.clone(),
+                },
                 operation.permit(),
             )? == ExactFanoutOwnership::SourceRetained;
         }
@@ -17664,7 +17719,11 @@ impl V2EffectServices for ProductionV2Services {
             iroha_logger::debug!("deferred Sumeragi v2 control fanout to reducer retransmission");
         }
         operation.complete();
-        Ok(())
+        Ok(if source_retained {
+            ConsensusBroadcastDisposition::SourceRetained
+        } else {
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        })
     }
 
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
@@ -21785,11 +21844,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn prepare_and_commit_votes_target_only_the_current_view_proxy_tail() {
+    fn prepare_and_commit_votes_reach_every_remote_voter_across_views() {
         let (mut service, _) = fixture();
         let observations = install_consensus_route_observer(&mut service);
         let roster_len =
             u64::try_from(service.context.roster.len()).expect("fixture roster length");
+        let expected = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
 
         for view in 0..roster_len {
             let round = wire::ConsensusRound {
@@ -21797,26 +21857,13 @@ pub(super) mod tests {
                 height: service.context.height,
                 view,
             };
-            let committee = service
-                .committee_for_round(round)
-                .expect("project current-view committee");
-            let proxy_tail = service.context.roster
-                [usize::try_from(committee.proxy_tail()).expect("proxy-tail index")]
-            .validator
-            .clone();
-            let expected = if proxy_tail == service.local_peer {
-                BTreeSet::new()
-            } else {
-                BTreeSet::from([proxy_tail])
-            };
-
             for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
                 let vote = routing_vote(&service, view, phase);
                 service
                     .broadcast_consensus(wire::ConsensusMessageV2::new(
                         wire::ConsensusMessageV2Payload::Vote(vote),
                     ))
-                    .expect("route vote to the projected proxy tail");
+                    .expect("route phase vote to every remote voter");
                 let routed = take_consensus_route_observations(&observations);
                 let targets = routed
                     .iter()
@@ -21829,7 +21876,10 @@ pub(super) mod tests {
                         _ => None,
                     })
                     .collect::<BTreeSet<_>>();
-                assert_eq!(targets, expected);
+                assert_eq!(
+                    targets, expected,
+                    "phase vote fanout differs in view {view}"
+                );
                 assert_eq!(routed.len(), expected.len());
             }
         }
@@ -21923,6 +21973,72 @@ pub(super) mod tests {
             proposal_route_targets(&retransmission, proposal.round, &manifest),
             expected_all
         );
+    }
+
+    #[test]
+    fn proposal_broadcast_reports_source_retained_until_corridor_acceptance() {
+        let (mut service, keys) = fixture_with_block_payload();
+        service
+            .set_exact_output_shared_unit_capacity_for_test(1)
+            .expect("install one-unit adversarial output corridor");
+        service.set_exact_output_admission_hook(|post, ticket| {
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket,
+                rank: 1,
+            })
+        });
+
+        let blocking_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
+        assert_eq!(
+            service
+                .broadcast_consensus(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Vote(blocking_vote),
+                ))
+                .expect("the first control transfers into the exact corridor"),
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        );
+        assert!(
+            service
+                .has_pending_exact_output()
+                .expect("inspect actor-backpressured control")
+        );
+
+        let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        set_local_validator(&mut service, &keys, proposal.proposer);
+        service
+            .register_outbound_payload(service.active_tag, payload)
+            .expect("retain proposal chunks before broadcast");
+        let message = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+            proposal.clone(),
+        ));
+        assert_eq!(
+            service
+                .broadcast_consensus(message.clone())
+                .expect("corridor pressure is a typed ownership disposition"),
+            ConsensusBroadcastDisposition::SourceRetained,
+            "a full same-class corridor must not masquerade as Proposal acceptance"
+        );
+        assert!(!service.output_guard.restart_required());
+
+        service.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
+        assert!(
+            !service
+                .retry_pending_exact_output()
+                .expect("network recovery drains the previously accepted exact suffix")
+        );
+        assert_eq!(
+            service
+                .broadcast_consensus(message)
+                .expect("the retained Proposal source retries after corridor recovery"),
+            ConsensusBroadcastDisposition::ExactServiceAccepted
+        );
+        assert!(
+            !service
+                .has_pending_exact_output()
+                .expect("accepted retransmission drains immediately")
+        );
+        assert!(!service.output_guard.restart_required());
     }
 
     #[test]
@@ -22150,364 +22266,7 @@ pub(super) mod tests {
         assert_eq!(restored, payload);
     }
 
-    #[cfg(feature = "bls")]
-    #[test]
-    fn nonzero_view_proposal_intent_replays_through_production_services() {
-        let (mut service, keys) = fixture();
-        allow_fixture_block_payload(&mut service.context);
-        let context = service.context.clone();
-        let target_view = (1_u64
-            ..=u64::try_from(context.roster.len()).expect("fixture roster length fits u64"))
-            .find(|view| context.leader(*view) == 0)
-            .expect("round-robin leader rotation returns to genesis authority");
-        let local_validator = context.leader(target_view);
-        let local_index = usize::try_from(local_validator).expect("fixture leader index");
-        assert_eq!(local_index, 0);
-        service.local_validator = Some(local_validator);
-        service.local_peer = context.roster[local_index].validator.clone();
-        service.key_pair = keys[local_index].clone();
-        let signature_policy =
-            BlockSignaturePolicy::GenesisAuthority(keys[local_index].public_key().clone());
-
-        let proofs_of_possession = keys
-            .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture proof of possession")
-            })
-            .collect::<Vec<_>>();
-        let fingerprints = AdapterFingerprints {
-            node: Hash::new(b"nonzero-view-restart-node"),
-            build: Hash::new(b"nonzero-view-restart-build"),
-            config: Hash::new(b"nonzero-view-restart-config"),
-        };
-        let consensus_key_hash = [0xA6; 32];
-        let directory = TempDir::new().expect("restart storage root");
-        let wal_path = directory
-            .path()
-            .join("wal")
-            .join("00000000000000000001.wal");
-        let body_root = directory.path().join("bodies");
-        std::fs::create_dir_all(wal_path.parent().expect("WAL parent directory"))
-            .expect("create WAL parent directory");
-        let verified =
-            VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.clone())
-                .expect("verify restart context");
-        let (mut adapter, startup) = SumeragiV2Adapter::open(
-            wal_path.clone(),
-            verified,
-            Some(local_validator),
-            Generation::new(context.height),
-            consensus_key_hash,
-            fingerprints,
-            DeferredAdmissionOrdinalSource::new(0),
-        )
-        .expect("open pre-crash adapter");
-        assert!(startup.is_empty());
-
-        let timeout_round = wire::ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: target_view - 1,
-        };
-        let timeout_signers = vec![0, 1, 2];
-        let timeout_shares = timeout_signers
-            .iter()
-            .map(|signer| {
-                let vote = wire::TimeoutVote {
-                    round: timeout_round,
-                    highest_prepare_qc: None,
-                    signer: *signer,
-                    signature: Vec::new(),
-                };
-                Signature::new(
-                    keys[usize::try_from(*signer).expect("fixture timeout signer")].private_key(),
-                    &vote.signature_preimage(),
-                )
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let timeout_share_refs = timeout_shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let timeout_certificate = wire::TimeoutCertificate {
-            round: timeout_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: None,
-                signers: timeout_signers,
-                aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(
-                    &timeout_share_refs,
-                )
-                .expect("aggregate fixture timeout certificate"),
-            }],
-        };
-        let authenticated_timeout = adapter
-            .authenticate(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate.clone()),
-            ))
-            .expect("authenticate timeout certificate");
-        let view_effects = adapter
-            .receive_authenticated(authenticated_timeout)
-            .expect("durably install timeout certificate")
-            .into_effects();
-        let pre_crash_tag = view_effects
-            .iter()
-            .find_map(|effect| match effect {
-                AdapterEffect::EnterView { tag, .. } => Some(*tag),
-                _ => None,
-            })
-            .expect("timeout certificate enters its successor view");
-        assert_eq!(pre_crash_tag.view(), target_view);
-        let directive = adapter
-            .local_proposal_directive()
-            .expect("read post-timeout proposal directive");
-        assert_eq!(directive.tag(), pre_crash_tag);
-        assert_eq!(directive.leader(), local_validator);
-
-        let (canonical_wire, payload) =
-            proposal_body_and_payload_at_view(&context, &keys, target_view);
-        let proposal_round = payload.manifest().round;
-        let proposal_subject = payload.manifest().subject;
-        let mut body_store =
-            V2BodyStore::open_with_policy(&body_root, context.clone(), signature_policy.clone())
-                .expect("open pre-crash body store");
-        let durable = body_store
-            .store(payload.manifest().clone(), canonical_wire)
-            .expect("persist exact nonzero-view body");
-        let validation_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"restart parent state"),
-            Hash::new(b"restart post state"),
-            Hash::new(b"restart ordinary writes"),
-            1,
-            Hash::new(b"restart executed block wire"),
-        );
-        let validated = body_store
-            .validate(&durable, |_| Ok::<_, &'static str>(validation_commitment))
-            .expect("persist exact nonzero-view validation marker");
-        let signing = adapter
-            .local_proposal_ready(
-                directive.tag(),
-                payload.manifest().clone(),
-                &durable,
-                &validated,
-            )
-            .expect("persist nonzero-view proposal intent")
-            .into_effects();
-        assert!(matches!(
-            signing.as_slice(),
-            [AdapterEffect::Sign {
-                tag,
-                request: SignRequest::Proposal(proposal),
-            }] if *tag == pre_crash_tag
-                && proposal.round == proposal_round
-                && proposal.subject == proposal_subject
-                && matches!(
-                    &proposal.justification,
-                    wire::ProposalJustification::Timeout(timeout)
-                        if timeout.timeout_certificate == timeout_certificate
-                )
-        ));
-        drop(adapter);
-        drop(body_store);
-
-        let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession)
-            .expect("reverify restart context");
-        let (adapter, startup_effects) = SumeragiV2Adapter::open(
-            wal_path,
-            verified,
-            Some(local_validator),
-            Generation::new(context.height),
-            consensus_key_hash,
-            fingerprints,
-            DeferredAdmissionOrdinalSource::new(0),
-        )
-        .expect("reopen adapter from safety WAL");
-        let replayed_tag = match startup_effects.as_slice() {
-            [
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::Proposal(proposal),
-                },
-            ] => {
-                assert_eq!(proposal.round, proposal_round);
-                assert_eq!(proposal.subject, proposal_subject);
-                assert!(matches!(
-                    &proposal.justification,
-                    wire::ProposalJustification::Timeout(timeout)
-                        if timeout.timeout_certificate == timeout_certificate
-                ));
-                *tag
-            }
-            effects => panic!("unexpected nonzero-view startup effects: {effects:?}"),
-        };
-        let expected_replayed_tag =
-            EventTag::new(context.height, target_view, Generation::new(context.height));
-        assert_eq!(replayed_tag, expected_replayed_tag);
-
-        let started_at = Instant::now();
-        let (runtime, startup_effects) = SerializedV2Runtime::new(
-            adapter,
-            startup_effects,
-            started_at,
-            Duration::from_secs(2),
-            RuntimeQueueConfig::new(8, 2, 2),
-        )
-        .expect("construct replay runtime");
-        let output_guard = ConsensusOutputGuard::isolated();
-        let (mut executor, reopened_body_store) = V2EffectExecutor::open(
-            runtime,
-            &body_root,
-            context.clone(),
-            service.local_peer.clone(),
-            Some(local_validator),
-            signature_policy,
-            Arc::clone(&output_guard),
-            EffectQueueConfig::default(),
-        )
-        .expect("reopen exact-body executor");
-        assert_eq!(executor.current_tag(), replayed_tag);
-        assert!(
-            reopened_body_store
-                .recovered(proposal_round, proposal_subject)
-                .expect("read recovered proposal body")
-                .is_some()
-        );
-
-        let (command_tx, command_rx, admission) = test_io_command_channel(4);
-        let (completion_tx, completion_rx) = mpsc::sync_channel(4);
-        service.active_tag = replayed_tag;
-        service.output_guard = Arc::clone(&output_guard);
-        service.io = Some(V2IoHandle {
-            command_tx,
-            completion_rx,
-            join: None,
-            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission,
-        });
-        let expected_targets = service.remote_voters().into_iter().collect::<BTreeSet<_>>();
-        let expected_chunk_targets = {
-            let committee = service
-                .committee_for_round(proposal_round)
-                .expect("project replayed proposal committee");
-            service
-                .remote_voters_for_indices(committee.set_a())
-                .expect("resolve Set A peers")
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-        };
-        let admitted_posts = Arc::new(Mutex::new(Vec::new()));
-        let admitted_posts_for_hook = Arc::clone(&admitted_posts);
-        service.set_exact_output_admission_hook(move |post, ticket| {
-            assert!(ticket.is_none());
-            admitted_posts_for_hook
-                .lock()
-                .expect("lock admitted replay outputs")
-                .push(post);
-            Ok(())
-        });
-        executor
-            .consume_effects(startup_effects, &mut service)
-            .expect("dispatch replayed proposal signature");
-        assert_eq!(executor.status().pending_signatures, 1);
-        let (proposal_work_id, proposal_completion) = match command_rx.try_recv() {
-            Ok(V2IoCommand::Sign {
-                task,
-                restore_outbound_payload,
-            }) => {
-                assert!(restore_outbound_payload);
-                assert_eq!(task.tag(), replayed_tag);
-                assert!(matches!(
-                    task.request(),
-                    SignRequest::Proposal(proposal)
-                        if proposal.round == proposal_round
-                            && proposal.subject == proposal_subject
-                ));
-                let work_id = task.id();
-                let completion = sign_consensus_task(
-                    &reopened_body_store,
-                    &context,
-                    &service.key_pair,
-                    task,
-                    restore_outbound_payload,
-                )
-                .expect("sign replayed production proposal");
-                (work_id, completion)
-            }
-            _ => panic!("expected replayed production proposal signature"),
-        };
-        command_rx.complete_work(proposal_work_id);
-        completion_tx
-            .try_send(proposal_completion)
-            .expect("return production signature completion");
-        assert_eq!(
-            service
-                .drain_completions(&mut executor)
-                .expect("restore replayed outbound chunks"),
-            1
-        );
-        let retained = service
-            .outbound_chunks
-            .get(&HashOf::new(payload.manifest()))
-            .expect("replayed proposal restores exact outbound chunks before broadcast");
-        assert_eq!(retained.owner, replayed_tag);
-        assert_eq!(retained.round, proposal_round);
-        assert_eq!(retained.subject, proposal_subject);
-
-        executor
-            .arm_live_clocks(started_at)
-            .expect("arm post-recovery pacemaker");
-        assert_eq!(
-            executor
-                .step(started_at, &mut service)
-                .expect("broadcast replayed proposal and continue consensus"),
-            EffectExecutorStep::Advanced { effects: 2 }
-        );
-        let prepare = match command_rx.try_recv() {
-            Ok(V2IoCommand::Sign {
-                task,
-                restore_outbound_payload: false,
-            }) => task,
-            _ => panic!("proposal broadcast must re-enter progress with a Prepare vote"),
-        };
-        assert_eq!(prepare.tag(), replayed_tag);
-        assert!(matches!(
-            prepare.request(),
-            SignRequest::Vote(vote)
-                if vote.phase == wire::GlobalPhase::Prepare
-                    && vote.round == proposal_round
-                    && vote.subject == proposal_subject
-        ));
-        assert_eq!(executor.current_tag(), replayed_tag);
-        assert_eq!(service.active_tag, replayed_tag);
-        assert_eq!(executor.status().pending_signatures, 1);
-        let admitted_posts = admitted_posts
-            .lock()
-            .expect("inspect admitted replay outputs");
-        let mut proposal_targets = BTreeSet::new();
-        let mut chunk_targets = BTreeSet::new();
-        for post in admitted_posts.iter() {
-            let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
-                panic!("replayed proposal emitted a non-Sumeragi message");
-            };
-            let BlockMessage::V2(message) = envelope.as_message() else {
-                panic!("replayed proposal emitted a lane message");
-            };
-            match &message.payload {
-                wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                    assert_eq!(proposal.round, proposal_round);
-                    assert_eq!(proposal.subject, proposal_subject);
-                    assert!(proposal_targets.insert(post.peer_id.clone()));
-                }
-                wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
-                    assert_eq!(chunk.manifest_hash, HashOf::new(payload.manifest()));
-                    chunk_targets.insert(post.peer_id.clone());
-                }
-                payload => panic!("unexpected replay output payload: {payload:?}"),
-            }
-        }
-        assert_eq!(proposal_targets, expected_targets);
-        assert_eq!(chunk_targets, expected_chunk_targets);
-        drop(service.io.take());
-    }
+    include!("tests/v2_worker_nonzero_view_restart.rs");
 
     #[test]
     fn replayed_proposal_signature_rejects_missing_durable_payload() {
@@ -23838,12 +23597,17 @@ pub(super) mod tests {
         let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
         let mut invalid_body = body.clone();
         invalid_body[0] ^= 1;
+        let invalid_chunks = wire::encode_payload_chunks(service.context.da_layout, &invalid_body)
+            .expect("canonically encode the alternate reconstruction body");
+        // Deliberate negative data: the alternate bytes use complete RS16
+        // geometry, but the manifest remains bound to the original proposal
+        // subject so reconstruction reaches the semantic payload-hash check.
         let invalid_manifest = wire::PayloadManifest::derive(
             &service.context,
             proposal.round,
             proposal.subject,
-            u64::try_from(body.len()).expect("body length"),
-            std::slice::from_ref(&invalid_body),
+            u64::try_from(invalid_body.len()).expect("body length"),
+            &invalid_chunks,
         )
         .expect("structurally valid invalid manifest");
         assert_ne!(invalid_manifest, *payload.manifest());
@@ -23859,7 +23623,7 @@ pub(super) mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&invalid_manifest),
             index: 0,
-            bytes: invalid_body,
+            bytes: invalid_chunks[0].clone(),
             sender: 0,
             signature: Vec::new(),
         };

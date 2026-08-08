@@ -1,13 +1,13 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 import {
   buildRegisterAssetDefinitionInstruction,
-  buildUnshieldInstruction,
   encodeInstruction,
 } from "../src/instructionBuilders.js";
+import * as instructionBuilderExports from "../src/instructionBuilders.js";
 import { AccountAddress } from "../src/address.js";
-import { ValidationErrorCode } from "../src/validationError.js";
 import {
   noritoDecodeInstruction,
   noritoEncodeInstruction,
@@ -17,10 +17,7 @@ import {
   nativeBinding,
   noritoRequiredMethods,
 } from "./helpers/native.js";
-import {
-  toByteArray,
-  withPureJsInstructionCodec,
-} from "./helpers/instructionCodec.js";
+import { withPureJsInstructionCodec } from "./helpers/instructionCodec.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const descriptorTest = baseTest;
@@ -32,6 +29,82 @@ const ACCOUNT_ADDRESS = AccountAddress.fromAccount({
 });
 const ACCOUNT_ID_INPUT = ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const RETIRED_GENERIC_CONFIDENTIAL_VARIANTS = Object.freeze([
+  ["Shi", "eld"].join(""),
+  ["Zk", "Transfer"].join(""),
+  ["Un", "shield"].join(""),
+]);
+
+function proofAttachment(verifyingKeyName) {
+  return {
+    backend: "halo2/ipa",
+    proof: {
+      backend: "halo2/ipa",
+      bytes: Array.from(Buffer.from("proof")),
+    },
+    vk_ref: { backend: "halo2/ipa", name: verifyingKeyName },
+  };
+}
+
+function retiredInstruction(variant) {
+  let payload;
+  switch (variant) {
+    case RETIRED_GENERIC_CONFIDENTIAL_VARIANTS[0]:
+      payload = {
+        asset: ASSET_DEFINITION_ID,
+        from: ACCOUNT_ID_INPUT,
+        amount: "1",
+        note_commitment: Array(32).fill(0x11),
+        enc_payload: {
+          version: 1,
+          ephemeral_pubkey: Array(32).fill(0x22),
+          nonce: Array(24).fill(0x33),
+          ciphertext: Buffer.from("ciphertext").toString("base64"),
+        },
+      };
+      break;
+    case RETIRED_GENERIC_CONFIDENTIAL_VARIANTS[1]:
+      payload = {
+        asset: ASSET_DEFINITION_ID,
+        inputs: [Array(32).fill(0x44)],
+        outputs: [Array(32).fill(0x55)],
+        proof: proofAttachment("vk_transfer"),
+        root_hint: null,
+      };
+      break;
+    case RETIRED_GENERIC_CONFIDENTIAL_VARIANTS[2]:
+      payload = {
+        asset: ASSET_DEFINITION_ID,
+        to: ACCOUNT_ID_INPUT,
+        public_amount: "1",
+        inputs: [Array(32).fill(0x66)],
+        proof: proofAttachment("vk_unshield"),
+        root_hint: null,
+      };
+      break;
+    default:
+      throw new Error(`unknown retired confidential instruction ${variant}`);
+  }
+  return { zk: { [variant]: payload } };
+}
+
+function namedImportDataUrl(builderName) {
+  const moduleUrl = new URL("../src/instructionBuilders.js", import.meta.url).href;
+  const source = `import { ${builderName} } from ${JSON.stringify(moduleUrl)};`;
+  return `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+}
+
+function assertRetiredInstructionRejected(operation, variant) {
+  assert.throws(operation, (error) => {
+    assert.equal(error?.name, "TypeError", variant);
+    assert.equal(
+      error?.message,
+      `zk.${variant} is retired in ABI V1; use the typed Kagemusha flow`,
+      variant,
+    );
+    return true;
+  });
+}
 
 function canonicalizeValue(value) {
   if (Array.isArray(value)) return value.map(canonicalizeValue);
@@ -115,72 +188,52 @@ test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
   );
 });
 
-test("buildUnshieldInstruction honours optional root hints", () => {
-  const instruction = buildUnshieldInstruction({
-    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-    destinationAccountId: ACCOUNT_ID_INPUT,
-    publicAmount: "18446744073709551616.25",
-    inputs: [Buffer.alloc(32, 0x55)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-    },
-    rootHint: Buffer.alloc(32, 0x66),
-  });
-  const payload = encodeAndDecode(instruction).zk.Unshield;
-  assert.equal(payload.public_amount, "18446744073709551616.25");
-  assert.deepEqual(payload.root_hint, toByteArray(Buffer.alloc(32, 0x66)));
-  assert.deepEqual(Object.keys(payload).sort(), [
-    "asset",
-    "inputs",
-    "proof",
-    "public_amount",
-    "root_hint",
-    "to",
-  ]);
+descriptorTest("retired confidential builders are absent from runtime and declarations", async () => {
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  const noritoSource = readFileSync(new URL("../src/norito.js", import.meta.url), "utf8");
+
+  for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
+    const builderName = ["build", variant, "Instruction"].join("");
+    const inputTypeName = [variant, "InstructionInput"].join("");
+    const wireId = ["iroha_data_model::isi::zk::", variant].join("");
+    assert.equal(
+      Object.hasOwn(instructionBuilderExports, builderName),
+      false,
+      `${builderName} runtime export`,
+    );
+    assert.doesNotMatch(
+      declarations,
+      new RegExp(`\\bexport\\s+function\\s+${builderName}\\b`, "u"),
+      `${builderName} declaration`,
+    );
+    assert.doesNotMatch(
+      declarations,
+      new RegExp(`\\bexport\\s+(?:interface|type)\\s+${inputTypeName}\\b`, "u"),
+      `${inputTypeName} declaration`,
+    );
+    assert.equal(noritoSource.includes(wireId), false, `${wireId} codec discriminant`);
+
+    await assert.rejects(import(namedImportDataUrl(builderName)), (error) => {
+      assert.equal(error?.name, "SyntaxError", builderName);
+      assert.match(String(error?.message), /does not provide an export named/u, builderName);
+      assert.match(String(error?.message), new RegExp(`\\b${builderName}\\b`, "u"));
+      return true;
+    });
+  }
 });
 
-descriptorTest("Unshield builders and the pure codec reject the retired outputs field", () => {
-  const options = {
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    destinationAccountId: ACCOUNT_ID_INPUT,
-    publicAmount: "1",
-    inputs: [Buffer.alloc(32, 0x55)],
-    proof: {
-      backend: "halo2/ipa",
-      proof: Buffer.from("proof"),
-      verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-    },
-  };
-  assert.throws(
-    () => buildUnshieldInstruction({ ...options, outputs: [Buffer.alloc(32, 0x77)] }),
-    (error) => {
-      assert.equal(error?.code, ValidationErrorCode.INVALID_OBJECT);
-      assert.match(String(error?.message), /unshield\.outputs.*not supported/i);
-      return true;
-    },
-  );
-
-  const canonical = canonicalizeClone(buildUnshieldInstruction(options));
-  const encoded = withPureJsInstructionCodec(() => noritoEncodeInstruction(canonical));
-  const decoded = withPureJsInstructionCodec(() => noritoDecodeInstruction(encoded));
-  assert.deepEqual(decoded, canonical);
-  assert.deepEqual(Object.keys(decoded.zk.Unshield).sort(), [
-    "asset",
-    "inputs",
-    "proof",
-    "public_amount",
-    "root_hint",
-    "to",
-  ]);
-
-  const stale = canonicalizeClone(canonical);
-  stale.zk.Unshield.outputs = [Array(32).fill(0x77)];
-  assert.throws(
-    () => withPureJsInstructionCodec(() => noritoEncodeInstruction(stale)),
-    /zk\.Unshield contains unknown field outputs/i,
-  );
+descriptorTest("public and pure-JS codecs reject every retired confidential instruction", () => {
+  for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
+    const instruction = retiredInstruction(variant);
+    assertRetiredInstructionRejected(
+      () => encodeInstruction(instruction),
+      variant,
+    );
+    assertRetiredInstructionRejected(
+      () => withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+      variant,
+    );
+  }
 
   assert.throws(
     () =>
@@ -189,34 +242,26 @@ descriptorTest("Unshield builders and the pure codec reject the retired outputs 
           Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
         ),
       ),
-    /trailing bytes/i,
+    /instruction contains non-zero alignment padding or trailing bytes/u,
   );
 });
 
-test("native Unshield codec rejects the retired output-bearing shape", () => {
-  const instruction = canonicalizeClone(
-    buildUnshieldInstruction({
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      destinationAccountId: ACCOUNT_ID_INPUT,
-      publicAmount: "1",
-      inputs: [Buffer.alloc(32, 0x55)],
-      proof: {
-        backend: "halo2/ipa",
-        proof: Buffer.from("proof"),
-        verifyingKeyRef: { backend: "halo2/ipa", name: "vk_unshield" },
-      },
-    }),
-  );
-  instruction.zk.Unshield.outputs = [Array(32).fill(0x77)];
-  assert.throws(
-    () => nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
-    /outputs|unknown field/i,
-  );
+test("native codec rejects every retired confidential instruction", () => {
+  for (const variant of RETIRED_GENERIC_CONFIDENTIAL_VARIANTS) {
+    assert.throws(
+      () =>
+        nativeBinding.noritoEncodeInstruction(
+          JSON.stringify(retiredInstruction(variant)),
+        ),
+      /unsupported zk instruction variant/u,
+      variant,
+    );
+  }
   assert.throws(
     () =>
       nativeBinding.noritoDecodeInstruction(
         Buffer.from(LEGACY_UNSHIELD_WITH_OUTPUT_WIRE_BASE64, "base64"),
       ),
-    /decode|canonical|trailing|field/i,
+    /decode|canonical|trailing|field|not registered|unknown instruction/u,
   );
 });

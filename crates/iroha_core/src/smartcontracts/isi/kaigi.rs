@@ -1,7 +1,7 @@
 //! Host-side execution of Kaigi instruction family.
 use std::{collections::BTreeSet, convert::TryFrom};
 
-use iroha_crypto::{Hash, derive_non_signing_ed25519_public_key};
+use iroha_crypto::Hash;
 use iroha_data_model::{
     HasMetadata,
     events::{
@@ -12,7 +12,6 @@ use iroha_data_model::{
         prelude::{DomainEvent, MetadataChanged},
     },
     isi::{
-        InstructionBox,
         error::{InstructionExecutionError as Error, InvalidParameterError},
         kaigi::{
             CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
@@ -27,7 +26,6 @@ use iroha_data_model::{
     },
     prelude::{AccountId, DomainId, Json, Name},
     query::error::FindError,
-    transaction::{PrivateKaigiAction, PrivateKaigiTemplate, PrivateKaigiTransaction},
 };
 use mv::storage::StorageReadOnly;
 use privacy::{HostPrivacyArtifacts, PrivacyArtifacts};
@@ -39,150 +37,16 @@ use crate::{
 
 mod privacy;
 
-fn opaque_account_from_fields(domain: &str, fields: &[&[u8]]) -> AccountId {
-    AccountId::new(derive_non_signing_ed25519_public_key(
-        domain.as_bytes(),
-        fields,
-    ))
-}
-
-fn opaque_host_account(commitment: &KaigiParticipantCommitment) -> AccountId {
-    opaque_account_from_fields(
-        "iroha.private_kaigi.host.v1",
-        &[commitment.commitment.as_ref()],
-    )
-}
-
-fn opaque_participant_account(
-    call_id: &KaigiId,
-    commitment: &KaigiParticipantCommitment,
-) -> AccountId {
-    let call_id = call_id.to_string();
-    opaque_account_from_fields(
-        "iroha.private_kaigi.participant.v1",
-        &[call_id.as_bytes(), commitment.commitment.as_ref()],
-    )
-}
-
-fn private_template_to_new_kaigi(
-    template: &PrivateKaigiTemplate,
-    host: AccountId,
-) -> iroha_data_model::kaigi::NewKaigi {
-    iroha_data_model::kaigi::NewKaigi {
-        id: template.id.clone(),
-        host,
-        title: template.title.clone(),
-        description: template.description.clone(),
-        max_participants: template.max_participants,
-        gas_rate_per_minute: template.gas_rate_per_minute,
-        metadata: template.metadata.clone(),
-        scheduled_start_ms: template.scheduled_start_ms,
-        billing_account: None,
-        privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-        room_policy: template.room_policy,
-        relay_manifest: template.relay_manifest.clone(),
-    }
-}
-
-pub(crate) fn private_instruction_box(
-    tx: &PrivateKaigiTransaction,
-) -> Result<InstructionBox, Error> {
-    Ok(match &tx.action {
-        PrivateKaigiAction::Create(create) => {
-            let host = opaque_host_account(&tx.artifacts.commitment);
-            CreateKaigi {
-                call: private_template_to_new_kaigi(&create.call, host),
-                commitment: Some(tx.artifacts.commitment.clone()),
-                nullifier: Some(tx.artifacts.nullifier.clone()),
-                roster_root: Some(tx.artifacts.roster_root),
-                proof: Some(tx.artifacts.proof.clone()),
-            }
-            .into()
-        }
-        PrivateKaigiAction::Join(join) => {
-            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment);
-            JoinKaigi {
-                call_id: join.call_id.clone(),
-                participant,
-                commitment: Some(tx.artifacts.commitment.clone()),
-                nullifier: Some(tx.artifacts.nullifier.clone()),
-                roster_root: Some(tx.artifacts.roster_root),
-                proof: Some(tx.artifacts.proof.clone()),
-            }
-            .into()
-        }
-        PrivateKaigiAction::End(end) => EndKaigi {
-            call_id: end.call_id.clone(),
-            ended_at_ms: end.ended_at_ms,
-            commitment: Some(tx.artifacts.commitment.clone()),
-            nullifier: Some(tx.artifacts.nullifier.clone()),
-            roster_root: Some(tx.artifacts.roster_root),
-            proof: Some(tx.artifacts.proof.clone()),
-        }
-        .into(),
-    })
-}
-
-pub(crate) fn execute_private_transaction(
-    tx: &PrivateKaigiTransaction,
-    state_transaction: &mut StateTransaction<'_, '_>,
-) -> Result<(), Error> {
-    match &tx.action {
-        PrivateKaigiAction::Create(create) => {
-            let host = opaque_host_account(&tx.artifacts.commitment);
-            let call = private_template_to_new_kaigi(&create.call, host);
-            CreateKaigi {
-                call,
-                commitment: Some(tx.artifacts.commitment.clone()),
-                nullifier: Some(tx.artifacts.nullifier.clone()),
-                roster_root: Some(tx.artifacts.roster_root),
-                proof: Some(tx.artifacts.proof.clone()),
-            }
-            .execute_authorized(KaigiAuthorization::PrivacyProof, state_transaction)
-        }
-        PrivateKaigiAction::Join(join) => {
-            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment);
-            JoinKaigi {
-                call_id: join.call_id.clone(),
-                participant,
-                commitment: Some(tx.artifacts.commitment.clone()),
-                nullifier: Some(tx.artifacts.nullifier.clone()),
-                roster_root: Some(tx.artifacts.roster_root),
-                proof: Some(tx.artifacts.proof.clone()),
-            }
-            .execute_authorized(KaigiAuthorization::PrivacyProof, state_transaction)
-        }
-        PrivateKaigiAction::End(end) => EndKaigi {
-            call_id: end.call_id.clone(),
-            ended_at_ms: end.ended_at_ms,
-            commitment: Some(tx.artifacts.commitment.clone()),
-            nullifier: Some(tx.artifacts.nullifier.clone()),
-            roster_root: Some(tx.artifacts.roster_root),
-            proof: Some(tx.artifacts.proof.clone()),
-        }
-        .execute_authorized(KaigiAuthorization::PrivacyProof, state_transaction),
-    }
-}
-
-/// Authorization source for a Kaigi state transition.
-///
-/// The dedicated private entrypoint is authority-free: its proof is the
-/// authorization and its derived opaque account is only a roster identity.
-/// Keeping that mode distinct prevents an opaque identity from being mistaken
-/// for a signature-authenticated account.
+/// Signature-authenticated account authorizing a Kaigi state transition.
 #[derive(Clone, Copy, Debug)]
 enum KaigiAuthorization<'a> {
     SignedAccount(&'a AccountId),
-    PrivacyProof,
 }
 
 impl<'a> KaigiAuthorization<'a> {
-    fn signed_account(self, operation: &str) -> Result<&'a AccountId, Error> {
+    fn signed_account(self) -> &'a AccountId {
         match self {
-            Self::SignedAccount(authority) => Ok(authority),
-            Self::PrivacyProof => Err(unauthorized(format!(
-                "{operation} requires a signature-authenticated account"
-            ))),
+            Self::SignedAccount(authority) => authority,
         }
     }
 }
@@ -219,7 +83,7 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
 
         match template.privacy_mode {
             KaigiPrivacyMode::Transparent => {
-                let authority = authorization.signed_account("transparent Kaigi creation")?;
+                let authority = authorization.signed_account();
                 if !same_account_subject(authority, template.host()) {
                     return Err(unauthorized("only the host account may create a Kaigi"));
                 }
@@ -237,14 +101,11 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
                     || nullifier.is_some()
                     || roster_root.is_some()
                     || proof.is_some();
-                if let KaigiAuthorization::SignedAccount(authority) = authorization
-                    && !same_account_subject(authority, template.host())
-                {
+                let authority = authorization.signed_account();
+                if !same_account_subject(authority, template.host()) {
                     return Err(unauthorized("only the host account may create a Kaigi"));
                 }
-                if matches!(authorization, KaigiAuthorization::PrivacyProof)
-                    || has_privacy_artifacts
-                {
+                if has_privacy_artifacts {
                     let host_artifacts = HostPrivacyArtifacts {
                         commitment: commitment.as_ref(),
                         nullifier: nullifier.as_ref(),
@@ -329,12 +190,7 @@ impl ExecuteKaigiAuthorized for JoinKaigi {
         let mut nullifier = nullifier;
         let mut roster_root = roster_root;
 
-        let allow_unassociated = match authorization {
-            KaigiAuthorization::SignedAccount(authority) => {
-                same_account_subject(authority, &participant)
-            }
-            KaigiAuthorization::PrivacyProof => false,
-        };
+        let allow_unassociated = same_account_subject(authorization.signed_account(), &participant);
         apply_with_record_authorized(
             state_transaction,
             &call_id,
@@ -397,7 +253,7 @@ impl Execute for LeaveKaigi {
             |stx, record| {
                 if record.privacy_mode == KaigiPrivacyMode::ZkRosterV1 {
                     return Err(privacy_error(
-                        "private Kaigi leave is off-chain only; use local session disconnect or host end",
+                        "privacy-mode Kaigi leave is off-chain only; use local session disconnect or host end",
                     ));
                 }
                 process_leave(
@@ -448,8 +304,7 @@ impl ExecuteKaigiAuthorized for EndKaigi {
                 }
                 match record.privacy_mode {
                     KaigiPrivacyMode::Transparent => {
-                        let authority =
-                            authorization.signed_account("transparent Kaigi termination")?;
+                        let authority = authorization.signed_account();
                         privacy::ensure_transparent_payload(&PrivacyArtifacts {
                             subject: authority,
                             host: &record.host,
@@ -834,12 +689,9 @@ where
         .try_into_any_norito()
         .map_err(|err| Error::Conversion(err.to_string()))?;
 
-    let mut associated = match authorization {
-        KaigiAuthorization::SignedAccount(authority) => {
-            same_account_subject(authority, &record.host) || record.has_participant(authority)
-        }
-        KaigiAuthorization::PrivacyProof => false,
-    };
+    let authority = authorization.signed_account();
+    let mut associated =
+        same_account_subject(authority, &record.host) || record.has_participant(authority);
 
     let grant: AccessGrant = f(state_transaction, &mut record)?;
 
@@ -1216,7 +1068,7 @@ fn process_join(
 
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
-            let authority = authorization.signed_account("transparent Kaigi join")?;
+            let authority = authorization.signed_account();
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
                 subject: authority,
                 host: &record.host,
@@ -1252,17 +1104,12 @@ fn process_join(
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
-            let proof_subject = match authorization {
-                KaigiAuthorization::SignedAccount(authority) => {
-                    if !same_account_subject(authority, participant) {
-                        return Err(unauthorized(
-                            "signed privacy-mode joins must be submitted by the participant",
-                        ));
-                    }
-                    authority
-                }
-                KaigiAuthorization::PrivacyProof => participant,
-            };
+            let proof_subject = authorization.signed_account();
+            if !same_account_subject(proof_subject, participant) {
+                return Err(unauthorized(
+                    "signed privacy-mode joins must be submitted by the participant",
+                ));
+            }
 
             let commitment = commitment
                 .take()
@@ -1363,7 +1210,7 @@ fn process_leave(
                 proof,
             );
             Err(privacy_error(
-                "private Kaigi leave is off-chain only; use local session disconnect or host end",
+                "privacy-mode Kaigi leave is off-chain only; use local session disconnect or host end",
             ))
         }
     }
@@ -1381,10 +1228,6 @@ mod tests {
         },
         kaigi::{KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, NewKaigi},
         prelude::*,
-        transaction::{
-            PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiArtifacts,
-            PrivateKaigiFeeSpend,
-        },
     };
     use iroha_test_samples::{ALICE_ID, gen_account_in};
 
@@ -1403,196 +1246,6 @@ mod tests {
             }
             other => panic!("unexpected error variant {other:?}"),
         }
-    }
-
-    #[test]
-    fn opaque_account_derivation_is_stable_and_domain_separated() {
-        let seed = Hash::new(b"private-kaigi-seed");
-        let first = opaque_account_from_fields("iroha.private_kaigi.test", &[seed.as_ref()]);
-        let second = opaque_account_from_fields("iroha.private_kaigi.test", &[seed.as_ref()]);
-        let different_label =
-            opaque_account_from_fields("iroha.private_kaigi.other", &[seed.as_ref()]);
-
-        assert_eq!(first, second);
-        assert_ne!(first, different_label);
-    }
-
-    #[test]
-    fn private_entrypoint_uses_proof_authorization_without_a_synthetic_account_gate() {
-        let (domain, unrelated_account, _) = sample_ids();
-        let commitment = sample_commitment();
-        let nullifier = sample_nullifier(0x91);
-        let call_id = KaigiId::new(
-            domain.clone(),
-            Name::from_str("proof-authorized").expect("call name"),
-        );
-        let template = PrivateKaigiTemplate {
-            id: call_id.clone(),
-            title: None,
-            description: None,
-            max_participants: Some(4),
-            gas_rate_per_minute: 1,
-            metadata: Metadata::default(),
-            scheduled_start_ms: None,
-            privacy_mode: KaigiPrivacyMode::ZkRosterV1,
-            room_policy: Default::default(),
-            relay_manifest: None,
-        };
-        let tx = PrivateKaigiTransaction {
-            chain: "kaigi-proof-authorization".parse().expect("chain id"),
-            creation_time_ms: 1,
-            nonce: None,
-            metadata: Metadata::default(),
-            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
-                call: template.clone(),
-            }),
-            artifacts: PrivateKaigiArtifacts {
-                commitment: commitment.clone(),
-                nullifier: nullifier.clone(),
-                roster_root: kaigi_zk::empty_roster_root_hash(),
-                proof: vec![1, 2, 3],
-            },
-            fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::derive_from_components(
-                    domain.clone(),
-                    Name::from_str("unused-fee-fixture").expect("asset name"),
-                ),
-                anchor_root: Hash::new(b"unused-anchor"),
-                nullifiers: vec![[1; 32]],
-                output_commitments: Vec::new(),
-                encrypted_change_payloads: Vec::new(),
-                proof: vec![1],
-            },
-        };
-
-        with_seeded_kaigi_state_transaction(&domain, &[], |stx| {
-            execute_private_transaction(&tx, stx)
-                .expect("the dedicated entrypoint is authorized by its verified proof");
-
-            let key = kaigi_metadata_key(&call_id.call_name).expect("metadata key");
-            let record: KaigiRecord = stx
-                .world
-                .domain(&domain)
-                .expect("domain")
-                .metadata()
-                .get(&key)
-                .expect("private Kaigi record")
-                .clone()
-                .try_into_any_norito()
-                .expect("decode private Kaigi record");
-            assert_eq!(record.host, opaque_host_account(&commitment));
-            assert_eq!(record.host_commitment.as_ref(), Some(&commitment));
-
-            let join_commitment = KaigiParticipantCommitment {
-                commitment: Hash::prehashed([0x22; Hash::LENGTH]),
-                alias_tag: Some("private-participant".to_owned()),
-            };
-            let join_tx = PrivateKaigiTransaction {
-                action: PrivateKaigiAction::Join(PrivateJoinKaigi {
-                    call_id: call_id.clone(),
-                }),
-                artifacts: PrivateKaigiArtifacts {
-                    commitment: join_commitment.clone(),
-                    nullifier: sample_nullifier(0x92),
-                    roster_root: record.roster_root(),
-                    proof: vec![4, 5, 6],
-                },
-                ..tx.clone()
-            };
-            execute_private_transaction(&join_tx, stx)
-                .expect("a private join is authorized by its roster proof");
-
-            let joined_record: KaigiRecord = stx
-                .world
-                .domain(&domain)
-                .expect("domain")
-                .metadata()
-                .get(&key)
-                .expect("joined private Kaigi record")
-                .clone()
-                .try_into_any_norito()
-                .expect("decode joined private Kaigi record");
-            assert!(joined_record.has_commitment(&join_commitment));
-
-            let end_tx = PrivateKaigiTransaction {
-                action: PrivateKaigiAction::End(PrivateEndKaigi {
-                    call_id: call_id.clone(),
-                    ended_at_ms: Some(9),
-                }),
-                artifacts: PrivateKaigiArtifacts {
-                    commitment: commitment.clone(),
-                    nullifier: sample_nullifier(0x93),
-                    roster_root: joined_record.roster_root(),
-                    proof: vec![7, 8, 9],
-                },
-                ..tx.clone()
-            };
-            execute_private_transaction(&end_tx, stx)
-                .expect("a private host action is authorized by its host proof");
-            let ended_record: KaigiRecord = stx
-                .world
-                .domain(&domain)
-                .expect("domain")
-                .metadata()
-                .get(&key)
-                .expect("ended private Kaigi record")
-                .clone()
-                .try_into_any_norito()
-                .expect("decode ended private Kaigi record");
-            assert_eq!(ended_record.status, KaigiStatus::Ended);
-
-            let signed_call_id = KaigiId::new(
-                domain.clone(),
-                Name::from_str("signed-account-gate").expect("call name"),
-            );
-            let signed_host = opaque_host_account(&commitment);
-            let signed_instruction = CreateKaigi {
-                call: private_template_to_new_kaigi(
-                    &PrivateKaigiTemplate {
-                        id: signed_call_id,
-                        ..template.clone()
-                    },
-                    signed_host,
-                ),
-                commitment: Some(commitment.clone()),
-                nullifier: Some(nullifier.clone()),
-                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
-                proof: Some(vec![4, 5, 6]),
-            };
-            let error = signed_instruction
-                .execute(&unrelated_account, stx)
-                .expect_err("signed instructions still require the declared host account");
-            assert!(matches!(
-                error,
-                Error::InvalidParameter(InvalidParameterError::SmartContract(message))
-                    if message == "only the host account may create a Kaigi"
-            ));
-        });
-    }
-
-    #[test]
-    fn proof_authorization_cannot_enter_a_transparent_kaigi_path() {
-        let (domain, host, _) = sample_ids();
-        let call_id = KaigiId::new(
-            domain.clone(),
-            Name::from_str("transparent-proof").expect("call name"),
-        );
-        with_seeded_kaigi_state_transaction(&domain, &[], |stx| {
-            let error = CreateKaigi {
-                call: NewKaigi::with_defaults(call_id.clone(), host.clone()),
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            }
-            .execute_authorized(KaigiAuthorization::PrivacyProof, stx)
-            .expect_err("proof authorization is only valid for private Kaigi mode");
-            assert!(matches!(
-                error,
-                Error::InvalidParameter(InvalidParameterError::SmartContract(message))
-                    if message.contains("requires a signature-authenticated account")
-            ));
-        });
     }
 
     #[test]
@@ -2013,7 +1666,7 @@ mod tests {
                 proof: Some(vec![1, 2, 3]),
             }
             .execute(&host, stx)
-            .expect("create private kaigi");
+            .expect("create privacy-mode Kaigi");
 
             let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
             let domain = stx.world.domain(&call.domain_id).expect("domain");
@@ -2048,7 +1701,7 @@ mod tests {
                 proof: Some(vec![4, 5, 6]),
             }
             .execute(&host, stx)
-            .expect("create private kaigi");
+            .expect("create privacy-mode Kaigi");
 
             EndKaigi {
                 call_id: call.clone(),
@@ -2059,7 +1712,7 @@ mod tests {
                 proof: Some(vec![7, 8, 9]),
             }
             .execute(&participant, stx)
-            .expect("end private kaigi with host proof");
+            .expect("end privacy-mode Kaigi with host proof");
 
             let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
             let domain = stx.world.domain(&call.domain_id).expect("domain");

@@ -884,9 +884,9 @@ fn smoke_transaction_result_in_block(
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     reveal.signed_transaction().hash() == *tx_hash
                 }
-                TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::PrivateKaigi(_)
-                | TransactionEntrypoint::Time(_) => false,
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    false
+                }
             };
             is_match.then(|| match result.as_ref() {
                 Ok(_) => Ok(block.header().height().get()),
@@ -4917,9 +4917,6 @@ fn data_summary(event: &DataEvent) -> (String, String) {
         DataEvent::Configuration(config) => ("Configuration".to_owned(), format!("{config:?}")),
         DataEvent::Executor(executor) => ("Executor".to_owned(), format!("{executor:?}")),
         DataEvent::Proof(proof) => ("Proof".to_owned(), format!("{proof:?}")),
-        DataEvent::Confidential(confidential) => {
-            ("Confidential".to_owned(), format!("{confidential:?}"))
-        }
         DataEvent::VerifyingKey(key) => ("VerifyingKey".to_owned(), format!("{key:?}")),
         DataEvent::RuntimeUpgrade(upgrade) => ("RuntimeUpgrade".to_owned(), format!("{upgrade:?}")),
         DataEvent::SmartContract(contract) => ("SmartContract".to_owned(), format!("{contract:?}")),

@@ -895,8 +895,7 @@ public final class SumeragiV2Wire {
 
   /** Deterministic payload encoding. */
   public enum PayloadEncoding {
-    PLAIN(0),
-    REED_SOLOMON_16(1);
+    REED_SOLOMON_16(0);
 
     public final long discriminant;
 
@@ -938,6 +937,10 @@ public final class SumeragiV2Wire {
       requireU16(dataShards, "dataShards");
       requireU16(parityShards, "parityShards");
       requireU32(maxChunkCount, "maxChunkCount");
+      if (dataShards == 0 || parityShards == 0) {
+        throw new IllegalArgumentException(
+            "ReedSolomon16 data availability requires positive shard counts");
+      }
       this.chunkSizeBytes = chunkSizeBytes;
       this.dataShards = dataShards;
       this.parityShards = parityShards;
@@ -1980,7 +1983,8 @@ public final class SumeragiV2Wire {
   public enum LivenessBlocker {
     MISSING_PROPOSAL(0), BODY_UNAVAILABLE(1), PREPARE_QUORUM_MISSING(2),
     COMMIT_QUORUM_MISSING(3), TIMEOUT_CERTIFICATE_MISSING(4),
-    SCHEDULER_STARVATION(5), APPLICATION_PENDING(6), LOCAL_CONTROL_PENDING(7);
+    SCHEDULER_STARVATION(5), APPLICATION_PENDING(6),
+    SUCCESSOR_ACTIVATION_PENDING(7), LOCAL_CONTROL_PENDING(8);
     public final long discriminant;
     LivenessBlocker(long discriminant) { this.discriminant = discriminant; }
     byte[] encode() { return u32(discriminant); }

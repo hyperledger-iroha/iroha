@@ -475,7 +475,7 @@ fn validate_seekable_expected_layout(
         ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Galois => {
             if ordinal == 0
                 || expected.entry.galois_exponent() == 0
-                || expected.entry.galois_exponent() % 2 == 0
+                || expected.entry.galois_exponent().is_multiple_of(2)
             {
                 return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
             }
@@ -3327,6 +3327,10 @@ fn evaluated_key_evidence_digest(
     Ok(keccak256(&frame))
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the derivation binds each governed evaluated-key context axis explicitly"
+)]
 fn derive_target_a(
     profile: &BgvProfile,
     roster: &ZkAmsMkheGovernedRosterWireV1,
@@ -3483,6 +3487,10 @@ where
     })
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the canonical header commits each protocol field in a fixed order"
+)]
 fn seekable_publication_header_bytes(
     profile: &BgvProfile,
     profile_digest: [u8; 32],
@@ -3577,7 +3585,7 @@ where
                 ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Relinearization
             ) != (ordinal == 0 && exponent == 0)
             || matches!(purpose, ZkAmsMkheCollectiveEvaluatedKeyPurposeV1::Galois)
-                && (ordinal == 0 || exponent == 0 || exponent % 2 == 0)
+                && (ordinal == 0 || exponent == 0 || exponent.is_multiple_of(2))
         {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -4393,7 +4401,7 @@ where
         let mut source_constant = RnsPolynomial::zero(&context.profile);
         let mut source_components: [RnsPolynomial; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
             std::array::from_fn(|_| RnsPolynomial::zero(&context.profile));
-        for party_index in 0..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+        for (party_index, source_component) in source_components.iter_mut().enumerate() {
             let ephemeral = sample_nonzero_ternary(&context.profile, random)?;
             let error_zero = SecretPolynomial::sample_error(&context.profile, random)?;
             let error_one = SecretPolynomial::sample_error(&context.profile, random)?;
@@ -4487,7 +4495,7 @@ where
             )?;
             source_evidence.source(&evidence, sink)?;
             source_constant = source_constant.add(&constant, &context.profile)?;
-            source_components[party_index] = linear;
+            *source_component = linear;
         }
         let stored_b = compact_source_digit(
             &context,

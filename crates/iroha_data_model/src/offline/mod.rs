@@ -575,23 +575,7 @@ pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Transparent backend used by the independent confidential transfer circuits.
 pub const KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND: &str = "halo2/ipa";
 
-/// Canonical public-input schema hash for the ABI-21/V4 `StepEq` verifier record.
-#[must_use]
-pub fn kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4() -> [u8; 32] {
-    Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4).into()
-}
-
-/// Canonical public-input schema hash for the ABI-21/V4 `StepEp` verifier record.
-#[must_use]
-pub fn kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4() -> [u8; 32] {
-    Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4).into()
-}
-
-/// Compute the SHA-256 content identifier used by Kagemusha release files.
-#[must_use]
-pub fn kagemusha_recursive_spend_release_sha256(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
-}
+include!("kagemusha_schema_hashes.rs");
 
 /// Error returned when canonical Kagemusha data fails validation.
 #[derive(Debug)]
@@ -5680,6 +5664,10 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
         Ok(candidate)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the fixed V4 manifest validator keeps all consensus-critical invariants in one auditable path"
+    )]
     fn validate_with_attestation_state(
         &self,
         finalized: bool,

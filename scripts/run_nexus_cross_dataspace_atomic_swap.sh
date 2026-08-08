@@ -12,7 +12,7 @@ Options:
   --release               Run tests with --release
   --all-nexus             Run the full Nexus integration subset (nexus:: filter)
   --cross-dataspace-fault-soak
-                          Run the ignored two-hour 12-peer rotating-validator soak
+                          Run the ignored two-hour 13-peer global rotating-validator soak
   --cross-dataspace-seed <SEED>
                           Soak seed (nexus-cross-dataspace-v1-seed-00..09)
   --cross-dataspace-soak-duration-secs <SECONDS>

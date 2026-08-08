@@ -4115,7 +4115,7 @@ public final class HttpClientTransportTests {
               object(loadSharedBfvFixture(), "operation_vectors");
           final Map<String, Object> material =
               object(operationVectors, "full_bootstrap_material");
-          material.put("vk_commitment_hex", string(material, "parameter_digest_hex"));
+          material.put("vk_commitment_hex", string(material, "expected_material_digest_hex"));
           assertBfvOperationKeyComponentVectors(operationVectors);
         },
         "full-bootstrap verifier commitment drift must be rejected");

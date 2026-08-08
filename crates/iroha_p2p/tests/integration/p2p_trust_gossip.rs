@@ -15,11 +15,8 @@ use iroha_config::parameters::{
     },
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::{
-    KeyPair,
-    soranet::handshake::{
-        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-    },
+use iroha_crypto::soranet::handshake::{
+    DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
 };
 use iroha_data_model::prelude::{ChainId, Peer};
 use iroha_futures::supervisor::ShutdownSignal;
@@ -290,11 +287,11 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
         .expect("static test chain id is canonical");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
-    let kp_a = KeyPair::random();
-    let kp_b = KeyPair::random();
+    let kp_a = super::random_node_key_pair();
+    let kp_b = super::random_node_key_pair();
 
     let (net_a, _) = match NetworkHandle::start(
-        kp_a.clone(),
+        super::p2p_identity_keys(kp_a.clone()),
         make_config(&addr_a, TRUST_GOSSIP),
         chain_id.clone(),
         None,
@@ -310,7 +307,7 @@ async fn trust_gossip_disabled_drops_frames_and_keeps_peer_gossip() {
         }
     };
     let (net_b, _) = match NetworkHandle::start(
-        kp_b.clone(),
+        super::p2p_identity_keys(kp_b.clone()),
         make_config(&addr_b, false),
         chain_id.clone(),
         None,
@@ -394,11 +391,11 @@ async fn trust_gossip_enabled_reaches_both_peers() {
         .expect("static test chain id is canonical");
     let addr_a = socket_addr!(127.0.0.1: {next_port()});
     let addr_b = socket_addr!(127.0.0.1: {next_port()});
-    let kp_a = KeyPair::random();
-    let kp_b = KeyPair::random();
+    let kp_a = super::random_node_key_pair();
+    let kp_b = super::random_node_key_pair();
 
     let (net_a, _) = match NetworkHandle::start(
-        kp_a.clone(),
+        super::p2p_identity_keys(kp_a.clone()),
         make_config(&addr_a, TRUST_GOSSIP),
         chain_id.clone(),
         None,
@@ -414,7 +411,7 @@ async fn trust_gossip_enabled_reaches_both_peers() {
         }
     };
     let (net_b, _) = match NetworkHandle::start(
-        kp_b.clone(),
+        super::p2p_identity_keys(kp_b.clone()),
         make_config(&addr_b, TRUST_GOSSIP),
         chain_id.clone(),
         None,

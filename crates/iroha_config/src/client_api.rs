@@ -30,22 +30,44 @@ use crate::{
     parameters::{actual as base, defaults},
 };
 
+fn parse_exact_value_via_tape<'input, T>(
+    parser: &mut json::Parser<'input>,
+    parse: impl FnOnce(&mut TapeWalker<'input>, &mut Arena) -> Result<T, NoritoError>,
+) -> Result<T, json::Error> {
+    let input = parser.input();
+    let start = parser.position();
+
+    // Bound and validate exactly the next value before building the structural
+    // tape. In particular, do not rebuild a tape for the entire enclosing
+    // document for every element when this bridge is used under `Vec<T>`.
+    let mut boundary = *parser;
+    boundary.skip_value()?;
+    let end = boundary.position();
+    let subtree = input
+        .get(start..end)
+        .ok_or_else(|| json::Error::Message("JSON value bounds are not UTF-8 boundaries".into()))?;
+
+    let mut walker = TapeWalker::new(subtree);
+    walker.ensure_document_depth()?;
+    let mut arena = Arena::new();
+    let value =
+        parse(&mut walker, &mut arena).map_err(|err| json::Error::Message(err.to_string()))?;
+    walker.skip_ws();
+    if walker.raw_pos() != subtree.len() {
+        return Err(json::Error::Message(
+            "fast JSON parser did not consume the exact JSON value".into(),
+        ));
+    }
+
+    *parser = boundary;
+    Ok(value)
+}
+
 fn parse_via_fast<T>(parser: &mut json::Parser<'_>) -> Result<T, json::Error>
 where
     for<'a> T: FastFromJson<'a>,
 {
-    let input = parser.input();
-    let start = parser.position();
-    let mut walker = TapeWalker::new(input);
-    walker.sync_to_raw(start);
-    let mut arena = Arena::new();
-    let value =
-        T::parse(&mut walker, &mut arena).map_err(|err| json::Error::Message(err.to_string()))?;
-    let end = walker.raw_pos();
-    while parser.position() < end {
-        let _ = parser.bump();
-    }
-    Ok(value)
+    parse_exact_value_via_tape(parser, T::parse)
 }
 
 // Manual Norito fast JSON writers for small DTOs used on the client path
@@ -3250,17 +3272,7 @@ impl JsonDeserialize for SoranetHandshakePowUpdate {
 
 impl JsonDeserialize for SoranetHandshakePuzzleUpdate {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        let input = parser.input();
-        let start = parser.position();
-        let mut walker = TapeWalker::new(input);
-        walker.sync_to_raw(start);
-        let value = parse_soranet_puzzle_update(&mut walker)
-            .map_err(|err| json::Error::Message(err.to_string()))?;
-        let end = walker.raw_pos();
-        while parser.position() < end {
-            let _ = parser.bump();
-        }
-        Ok(value)
+        parse_exact_value_via_tape(parser, |walker, _arena| parse_soranet_puzzle_update(walker))
     }
 }
 
@@ -3442,6 +3454,29 @@ mod test {
     use nonzero_ext::nonzero;
 
     use super::*;
+
+    std::thread_local! {
+        static FAST_BRIDGE_TAPE_BYTES: std::cell::Cell<usize> = const {
+            std::cell::Cell::new(0)
+        };
+    }
+
+    struct CountingLogger(Logger);
+
+    impl<'a> FastFromJson<'a> for CountingLogger {
+        fn parse(walker: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
+            FAST_BRIDGE_TAPE_BYTES.with(|bytes| {
+                bytes.set(bytes.get().saturating_add(walker.input().len()));
+            });
+            <Logger as FastFromJson<'a>>::parse(walker, arena).map(Self)
+        }
+    }
+
+    impl JsonDeserialize for CountingLogger {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            parse_via_fast(parser)
+        }
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -3790,5 +3825,74 @@ mod test {
             err.to_string().contains("exceeds u32::MAX"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn generic_collection_fast_bridge_builds_tapes_only_for_exact_elements() {
+        const ELEMENT_COUNT: usize = 64;
+        let element = r#"{"level":"INFO","filter":null}"#;
+        let payload = format!("[{}]", vec![element; ELEMENT_COUNT].join(","));
+        FAST_BRIDGE_TAPE_BYTES.with(|bytes| bytes.set(0));
+
+        let parsed = norito::json::from_json::<Vec<CountingLogger>>(&payload)
+            .expect("decode logger collection through the generic-to-fast bridge");
+        assert_eq!(parsed.len(), ELEMENT_COUNT);
+        assert!(
+            parsed
+                .iter()
+                .all(|logger| logger.0.level == Level::INFO && logger.0.filter.is_none())
+        );
+        FAST_BRIDGE_TAPE_BYTES.with(|bytes| {
+            assert_eq!(
+                bytes.get(),
+                ELEMENT_COUNT * element.len(),
+                "each bridge invocation must build its tape from only its exact element"
+            );
+        });
+    }
+
+    #[test]
+    fn parse_via_fast_accepts_global_depth_boundary_and_rejects_next_level() {
+        let boundary_wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 2;
+        let boundary_nested = format!(
+            "{}null{}",
+            "[".repeat(boundary_wrappers),
+            "]".repeat(boundary_wrappers)
+        );
+        let boundary_payload = format!(r#"{{"level":"INFO","unknown":{boundary_nested}}}"#);
+        let mut boundary_parser = norito::json::Parser::new(&boundary_payload);
+        let parsed = parse_via_fast::<Logger>(&mut boundary_parser)
+            .expect("complete-document depth boundary must decode");
+        assert_eq!(parsed.level, Level::INFO);
+        assert_eq!(boundary_parser.position(), boundary_payload.len());
+
+        let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;
+        let nested = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+        let payload = format!(r#"{{"unknown":{nested}}}"#);
+        let mut parser = norito::json::Parser::new(&payload);
+        assert!(matches!(
+            parse_via_fast::<SoranetVpnSummary>(&mut parser),
+            Err(json::Error::NestingDepthExceeded {
+                depth,
+                limit: norito::json::MAX_JSON_VALUE_NESTING_DEPTH,
+                context: "JSON value",
+            }) if depth == norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1
+        ));
+    }
+
+    #[test]
+    fn puzzle_update_custom_parser_rejects_globally_overdeep_documents() {
+        let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;
+        let nested = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+        let payload = format!(r#"{{"unknown":{nested}}}"#);
+        let mut parser = norito::json::Parser::new(&payload);
+        assert!(matches!(
+            <SoranetHandshakePuzzleUpdate as JsonDeserialize>::json_deserialize(&mut parser),
+            Err(json::Error::NestingDepthExceeded {
+                depth,
+                limit: norito::json::MAX_JSON_VALUE_NESTING_DEPTH,
+                context: "JSON value",
+            }) if depth == norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1
+        ));
     }
 }

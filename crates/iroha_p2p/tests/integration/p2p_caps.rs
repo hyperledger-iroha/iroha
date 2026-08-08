@@ -10,11 +10,8 @@ use iroha_config::parameters::{
     defaults::network::{PEER_GOSSIP_PERIOD, RELAY_TTL},
 };
 use iroha_config_base::WithOrigin;
-use iroha_crypto::{
-    KeyPair,
-    soranet::handshake::{
-        DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-    },
+use iroha_crypto::soranet::handshake::{
+    DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
 };
 use iroha_data_model::{ChainId, prelude::Peer};
 use iroha_futures::supervisor::ShutdownSignal;
@@ -330,8 +327,8 @@ async fn topic_cap_violation_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
     let chain = ChainId::from("test_chain");
-    let kp1 = KeyPair::random();
-    let kp2 = KeyPair::random();
+    let kp1 = super::random_node_key_pair();
+    let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
     let a2 = super::next_addr();
 
@@ -340,7 +337,7 @@ async fn topic_cap_violation_disconnects() {
     let cfg = |addr: SocketAddr| make_config(&addr, &addr, 16 * 1024, 1024);
 
     let started1 = NetworkHandle::<BigMsg>::start(
-        kp1.clone(),
+        super::p2p_identity_keys(kp1.clone()),
         cfg(a1.clone()),
         chain.clone(),
         None,
@@ -353,7 +350,7 @@ async fn topic_cap_violation_disconnects() {
         Err(_) => return,
     };
     let started2 = NetworkHandle::<BigMsg>::start(
-        kp2.clone(),
+        super::p2p_identity_keys(kp2.clone()),
         cfg(a2.clone()),
         chain.clone(),
         None,
@@ -430,8 +427,8 @@ async fn tcp_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
     let chain = ChainId::from("test_chain_tcp");
-    let kp_listener = KeyPair::random();
-    let kp_dialer = KeyPair::random();
+    let kp_listener = super::random_node_key_pair();
+    let kp_dialer = super::random_node_key_pair();
 
     // Reserve a concrete TCP port for the listener so the dialer can reach it reliably.
     let probe = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
@@ -450,7 +447,7 @@ async fn tcp_global_frame_cap_disconnects() {
     let dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
 
     let started_listener = NetworkHandle::<BigMsg>::start(
-        kp_listener.clone(),
+        super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
         chain.clone(),
         None,
@@ -464,7 +461,7 @@ async fn tcp_global_frame_cap_disconnects() {
     };
 
     let started_dialer = NetworkHandle::<BigMsg>::start(
-        kp_dialer.clone(),
+        super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
         chain.clone(),
         None,
@@ -556,8 +553,8 @@ async fn tls_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
     let chain = ChainId::from("test_chain_tls");
-    let kp_listener = KeyPair::random();
-    let kp_dialer = KeyPair::random();
+    let kp_listener = super::random_node_key_pair();
+    let kp_dialer = super::random_node_key_pair();
 
     // Reserve a TCP port for TLS listener (the same port is reused for QUIC-less TCP listener).
     let probe = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
@@ -584,7 +581,7 @@ async fn tls_global_frame_cap_disconnects() {
     dialer_cfg.tls_enabled = true;
 
     let started_listener = NetworkHandle::<BigMsg>::start(
-        kp_listener.clone(),
+        super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
         chain.clone(),
         None,
@@ -598,7 +595,7 @@ async fn tls_global_frame_cap_disconnects() {
     };
 
     let started_dialer = NetworkHandle::<BigMsg>::start(
-        kp_dialer.clone(),
+        super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
         chain.clone(),
         None,
@@ -691,8 +688,8 @@ async fn quic_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
     let chain = ChainId::from("test_chain_quic");
-    let kp_listener = KeyPair::random();
-    let kp_dialer = KeyPair::random();
+    let kp_listener = super::random_node_key_pair();
+    let kp_dialer = super::random_node_key_pair();
 
     // Reserve a UDP/TCP port for QUIC + TCP listener pair.
     let probe = match std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
@@ -722,7 +719,7 @@ async fn quic_global_frame_cap_disconnects() {
     dialer_cfg.quic_enabled = true;
 
     let started_listener = NetworkHandle::<BigMsg>::start(
-        kp_listener.clone(),
+        super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
         chain.clone(),
         None,
@@ -736,7 +733,7 @@ async fn quic_global_frame_cap_disconnects() {
     };
 
     let started_dialer = NetworkHandle::<BigMsg>::start(
-        kp_dialer.clone(),
+        super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
         chain.clone(),
         None,
@@ -823,8 +820,8 @@ async fn ws_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
     let chain = ChainId::from("test_chain_ws");
-    let kp_listener = KeyPair::random();
-    let kp_dialer = KeyPair::random();
+    let kp_listener = super::random_node_key_pair();
+    let kp_dialer = super::random_node_key_pair();
 
     let ws_listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
@@ -841,7 +838,7 @@ async fn ws_global_frame_cap_disconnects() {
     let listener_addr = super::next_addr();
     let listener_cfg = make_config(&listener_addr, &listener_addr, 1_024, 16 * 1024);
     let (network_listener, _child_listener) = NetworkHandle::<BigMsg>::start(
-        kp_listener.clone(),
+        super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
         chain.clone(),
         None,
@@ -860,7 +857,7 @@ async fn ws_global_frame_cap_disconnects() {
     let mut dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
     dialer_cfg.prefer_ws_fallback = true;
     let (net_dialer, _child_dialer) = NetworkHandle::<BigMsg>::start(
-        kp_dialer.clone(),
+        super::p2p_identity_keys(kp_dialer.clone()),
         dialer_cfg,
         chain.clone(),
         None,

@@ -1,15 +1,15 @@
 {
   "root": "specs/sdk/android/generated",
-  "tree_sha256": "12cf40d746ad92dc6c4afc1dbc089d99c3f464ff3f9bb7d76039e2f7f64aab0b",
+  "tree_sha256": "1ee981cb62b1a7ad4a8574aa115e3622d114010a39e8bc1d9e67ca219d0b7b74",
   "files": [
     {
       "path": "specs/sdk/android/generated/builders.md",
-      "sha256": "176410215c2915e186e6817824c37c1752675d37f1991b98116c953ba55aaf84",
-      "size": 44584
+      "sha256": "9c7bfe2c280f56475f475eb2730477c3a97bc30018b707665824f80c777d7fb3",
+      "size": 43474
     },
     {
       "path": "specs/sdk/android/generated/codegen_manifest_metadata.json",
-      "sha256": "58c1f38f21caa28631b2cb887f537e30d7c5b9945047dde793890bbeb0d68622",
+      "sha256": "f48a838ead49f3c8f240697e4bb55e80c0e267f2e7713df6bbf46fe71391477a",
       "size": 272
     },
     {
@@ -24,13 +24,13 @@
     },
     {
       "path": "specs/sdk/android/generated/instructions.md",
-      "sha256": "0b55b290bbfa1f38c6cdd49708342aa3d96ad51fb8effc7fc1042545a8d1ab8e",
-      "size": 58489
+      "sha256": "2c1f0760fe257aa61e746157d48bc558a5417803498b7dbd8233fa72d987c95b",
+      "size": 56798
     },
     {
       "path": "specs/sdk/android/generated/manifest_catalog.md",
-      "sha256": "139f0e4875cb453dc5742083d01073d427688a19c19ed7ca54cee64e329782b8",
-      "size": 58487
+      "sha256": "146d43d8d8d389d6c75c3c69f2fb819e0462816afae33795f9c419c104c9865a",
+      "size": 57110
     }
   ]
 }

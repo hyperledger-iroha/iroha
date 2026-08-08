@@ -37,6 +37,7 @@ use crate::{
     sumeragi::{
         v2_apply::V2ApplyService,
         v2_body_store::{BlockSignaturePolicy, V2BodyStore},
+        v2_chunks::encode_payload,
         v2_effects::ApplyTask,
     },
 };
@@ -424,14 +425,10 @@ impl StrictReplayFixture {
             height: HEIGHT,
             view: 0,
         };
-        let payload_manifest = wire::PayloadManifest::derive(
-            &context,
-            round,
-            subject,
-            u64::try_from(canonical_wire.len()).expect("body size fits u64"),
-            std::slice::from_ref(&canonical_wire),
-        )
-        .expect("derive exact payload manifest");
+        let payload_manifest = encode_payload(&context, round, subject, &canonical_wire)
+            .expect("encode exact replay payload")
+            .manifest()
+            .clone();
         let execution_commitment = service
             .validate_candidate(&context, &body)
             .expect("derive exact execution commitment");
@@ -588,14 +585,10 @@ impl StrictReplayFixture {
             height: 2,
             view: 0,
         };
-        let payload_manifest = wire::PayloadManifest::derive(
-            &second_context,
-            round,
-            subject,
-            u64::try_from(canonical_wire.len()).expect("height-two body size fits u64"),
-            std::slice::from_ref(&canonical_wire),
-        )
-        .expect("derive height-two payload manifest");
+        let payload_manifest = encode_payload(&second_context, round, subject, &canonical_wire)
+            .expect("encode exact height-two replay payload")
+            .manifest()
+            .clone();
         let execution_commitment = self
             .apply_service
             .validate_candidate(&second_context, &body)

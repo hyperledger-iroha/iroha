@@ -3636,24 +3636,20 @@ fn zk_paths() -> Map {
     );
     paths.insert(
         "/v1/zk/roots".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
+        Value::Object(zk_state_query_operation(
             "Fetch ZK roots.",
             "Fetch roots for any asset with a validated persisted confidential tree profile, including unshield-only registration, from one exact committed snapshot.",
             "#/components/schemas/ZkRootsGetRequest",
             "#/components/schemas/ZkRootsGetResponse",
-            Vec::new(),
         )),
     );
     paths.insert(
         "/v1/zk/merkle-path".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
+        Value::Object(zk_state_query_operation(
             "Fetch ZK Merkle paths.",
             "Fetch current confidential-v2 commitment inclusion paths bound to one exact committed snapshot.",
             "#/components/schemas/ZkMerklePathGetRequest",
             "#/components/schemas/ZkMerklePathGetResponse",
-            Vec::new(),
         )),
     );
     paths.insert(
@@ -3867,7 +3863,7 @@ fn zk_verify_batch_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Verify a bounded batch of zero-knowledge proof envelopes supplied as JSON or canonical Norito. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
+            "Verify a bounded batch of zero-knowledge proof envelopes supplied with one exact JSON or canonical-Norito Content-Type. The route is available only when Halo2 verification is enabled and moves admitted decode/verification work to a cancellation-safe blocking worker. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
                 .to_owned(),
         ),
     );
@@ -3883,6 +3879,49 @@ fn zk_verify_batch_operation() -> Map {
             "#/components/schemas/ZkVerifyBatchResponse",
         )),
     );
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn zk_state_query_operation(
+    summary: &str,
+    description: &str,
+    request_schema: &str,
+    response_schema: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("ZK".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(request_schema)),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        typed_dual_format_response(
+            "Typed result from one immutable committed state snapshot.",
+            response_schema,
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response("The typed request is invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "404".into(),
+        json_response(
+            "The requested asset or commitment does not exist in the committed state snapshot.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".into(), Value::Object(operation));
     methods
@@ -3920,6 +3959,13 @@ fn zk_vote_tally_operation() -> Map {
         ),
     );
     responses.insert(
+        "400".into(),
+        json_response(
+            "The election identifier is not a canonical governance selector V1.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "404".into(),
         json_response(
             "The requested election does not exist in the committed state snapshot.",
@@ -3941,7 +3987,7 @@ fn governance_paths() -> Map {
             "Ministry",
             "Draft a Ministry agenda proposal submission.",
             "Build a detached-signature-ready Ministry agenda proposal transaction and return the canonical payload bytes for Connect signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/MinistryAgendaProposalDraftRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -3953,9 +3999,10 @@ fn governance_paths() -> Map {
             "Fetch a submitted Ministry agenda proposal.",
             "Fetch a persisted Ministry agenda proposal submission record by proposal id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param(
+            vec![patterned_string_path_param(
                 "proposal_id",
-                "Agenda proposal identifier.",
+                "Exact agenda proposal identifier in AC-YYYY-### form.",
+                "^AC-[0-9]{4}-[0-9]{3}$",
             )],
         )),
     );
@@ -3965,7 +4012,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Propose contract deployment.",
             "Submit a governance proposal for contract deployment and receive draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceProposeDeployContractRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4028,9 +4075,10 @@ fn governance_paths() -> Map {
             "Fetch one validation-fee Parliament proposal.",
             "Return the exact native proposal, plain referendum, seven-body snapshot, finalization evidence, and enactment status.",
             "#/components/schemas/ValidationFeeProposalDetailV1",
-            vec![string_path_param(
+            vec![patterned_string_path_param(
                 "proposal_id",
                 "Exact lowercase 32-byte native proposal fingerprint.",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
             )],
         )),
     );
@@ -4046,9 +4094,10 @@ fn governance_paths() -> Map {
             "Validate the authenticated citizen against the retained proposal electorate and return one exact CastPlainBallot instruction. Amount and duration are forced from the immutable proposal rules.",
             "#/components/schemas/ValidationFeePlainBallotDraftRequestV1",
             "#/components/schemas/ValidationFeePlainBallotDraftResponseV1",
-            vec![string_path_param(
+            vec![patterned_string_path_param(
                 "proposal_id",
                 "Exact lowercase 32-byte native proposal fingerprint.",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
             )],
         )),
     );
@@ -4059,7 +4108,11 @@ fn governance_paths() -> Map {
             "Fetch a proposal.",
             "Fetch a governance proposal by id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("id", "Proposal identifier.")],
+            vec![patterned_string_path_param(
+                "id",
+                "Exact lowercase 32-byte proposal fingerprint.",
+                GOVERNANCE_LOWER_HEX32_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4069,7 +4122,11 @@ fn governance_paths() -> Map {
             "Fetch governance locks.",
             "Fetch governance lock records by referendum id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("rid", "Referendum identifier.")],
+            vec![patterned_string_path_param(
+                "rid",
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4079,7 +4136,11 @@ fn governance_paths() -> Map {
             "Fetch a referendum.",
             "Fetch a referendum by id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("id", "Referendum identifier.")],
+            vec![patterned_string_path_param(
+                "id",
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4089,18 +4150,11 @@ fn governance_paths() -> Map {
             "Fetch a tally snapshot.",
             "Fetch a tally snapshot by referendum id.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("id", "Referendum identifier.")],
-        )),
-    );
-    paths.insert(
-        "/v1/gov/ballots/zk".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Submit a ZK ballot.",
-            "Submit a zero-knowledge ballot and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![patterned_string_path_param(
+                "id",
+                "Canonical V1 referendum selector: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot.",
+                GOVERNANCE_SELECTOR_V1_PATTERN,
+            )],
         )),
     );
     paths.insert(
@@ -4109,7 +4163,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a ZK ballot (v1).",
             "Submit a ZK ballot using the v1 envelope and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceZkBallotEnvelopeRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4120,7 +4174,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a ballot proof.",
             "Submit a ZK ballot proof bundle and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceZkBallotProofRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4131,7 +4185,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a plain ballot.",
             "Submit a non-ZK ballot and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernancePlainBallotRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4142,7 +4196,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Submit a parliament ballot.",
             "Submit a parliament ballot and receive deterministic draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceParliamentBallotRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4153,7 +4207,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Finalize a referendum.",
             "Finalize referendum tally and status and receive draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceFinalizeRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4172,7 +4226,7 @@ fn governance_paths() -> Map {
                 "Governance",
                 "Update protected namespaces.",
                 "Submit protected namespace updates.",
-                "#/components/schemas/JsonValue",
+                "#/components/schemas/GovernanceProtectedNamespacesRequestV1",
                 "#/components/schemas/JsonValue",
                 Vec::new(),
             );
@@ -4214,7 +4268,7 @@ fn governance_paths() -> Map {
             "Governance",
             "Enact a referendum.",
             "Enact an approved referendum and receive draft instructions for local signing.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/GovernanceEnactRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -8519,7 +8573,11 @@ role- and sponsor-gated responses always return `Cache-Control: private, no-stor
 all canonical authentication headers. Existing protected bundles authenticate and authorize \
 before file lookup: absent or invalid proof returns 401, authorization mismatch returns 403, \
 and a missing file returns 404 only after successful authorization. Unknown or expired bundles \
-also return 404."
+also return 404. The Torii origin is a byte-delivery boundary, not a web-hosting origin: safe \
+inert media retain their type, while active, unknown, or invalid media types are returned as \
+`application/octet-stream` attachments. Every successful response sends `X-Content-Type-Options: \
+nosniff` and a restrictive sandbox Content Security Policy without changing byte or range \
+semantics."
                         .to_owned(),
                 ),
             );
@@ -8536,7 +8594,7 @@ also return 404."
             responses.insert(
                 "200".to_owned(),
                 content_binary_response(
-                    "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable.",
+                    "Complete content payload. Cache headers are selected from the bundle manifest: public bundles may use their configured public policy, while role- and sponsor-gated bundles are private and non-storable. Active, unknown, and invalid media types are delivered as non-sniffable `application/octet-stream` attachments from the Torii origin; byte and range semantics are unchanged.",
                 ),
             );
             responses.insert(
@@ -8586,6 +8644,27 @@ fn content_binary_response(description: &str) -> Value {
                 "schema": {
                     "type": "string",
                     "const": (crate::content::CANONICAL_CONTENT_AUTH_VARY)
+                }
+            },
+            "X-Content-Type-Options": {
+                "description": "Always `nosniff` so content bytes cannot override the selected inert representation type.",
+                "schema": {
+                    "type": "string",
+                    "const": "nosniff"
+                }
+            },
+            "Content-Security-Policy": {
+                "description": "A restrictive sandbox fallback for every response served from the Torii origin.",
+                "schema": {
+                    "type": "string",
+                    "const": "sandbox; default-src 'none'"
+                }
+            },
+            "Content-Disposition": {
+                "description": "Present as `attachment` when a requested media type is active, unknown, or invalid; absent for the inert inline allow-list.",
+                "schema": {
+                    "type": "string",
+                    "const": "attachment"
                 }
             }
         }),
@@ -8876,31 +8955,13 @@ fn sumeragi_paths() -> Map {
     );
     paths.insert(
         "/v1/sumeragi/evidence".to_owned(),
-        Value::Object({
-            let get_op = json_get_operation(
-                "Sumeragi",
-                "List evidence entries.",
-                "List evidence entries recorded by the node.",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let post_op = json_post_operation(
-                "Sumeragi",
-                "Submit evidence.",
-                "Submit consensus evidence payloads.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
-            methods
-        }),
+        Value::Object(json_get_operation(
+            "Sumeragi",
+            "List evidence entries.",
+            "List evidence entries recorded by the node.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths.insert(
         "/v1/sumeragi/status".to_owned(),
@@ -9127,28 +9188,6 @@ fn sumeragi_paths() -> Map {
                 "Epoch identifier.",
                 Some("uint64"),
             )],
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/commit".to_owned(),
-        Value::Object(json_post_operation(
-            "Sumeragi",
-            "Submit VRF commit.",
-            "Submit an authenticated VRF commit payload.",
-            "#/components/schemas/SumeragiVrfCommitRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/reveal".to_owned(),
-        Value::Object(json_post_operation(
-            "Sumeragi",
-            "Submit VRF reveal.",
-            "Submit an authenticated VRF reveal payload.",
-            "#/components/schemas/SumeragiVrfRevealRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths
@@ -12113,9 +12152,6 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
                 | "/v1/internal/torii/proxy"
                 | "/v1/nexus/lifecycle"
                 | "/v1/nexus/lane-lifecycle"
-                | "/v1/sumeragi/evidence"
-                | "/v1/sumeragi/vrf/commit"
-                | "/v1/sumeragi/vrf/reveal"
                 | "/v1/gov/protected-namespaces"
         )
 }
@@ -14851,6 +14887,9 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "parent_commit_qc": {
                         "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                     },
+                    "snapshot_bootstrap": {
+                        "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+                    },
                     "nexus_amx_context_hash": { "$ref": "#/components/schemas/Hash" },
                     "execution_policy_hash": { "$ref": "#/components/schemas/Hash" },
                     "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
@@ -17533,6 +17572,30 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SumeragiV2SnapshotBootstrapAnchor".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "snapshot_height", "snapshot_block_hash",
+                "snapshot_block_creation_time_ms", "snapshot_state_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "snapshot_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "snapshot_block_hash": { "$ref": "#/components/schemas/Hash" },
+                "snapshot_block_creation_time_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "snapshot_state_hash": { "$ref": "#/components/schemas/Hash" }
+            },
+            "description": "Audited snapshot boundary that replaces an unavailable parent CommitQC and binds the restored ledger geometry and WSV."
+        }),
+    );
+    schemas.insert(
         "SumeragiV2BlsProof".to_owned(),
         norito::json!({
             "type": "array",
@@ -17668,37 +17731,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "type": "integer", "format": "uint32", "minimum": 1,
                     "maximum": 4294967295_u64
                 }
-            },
-            "oneOf": [
-                {
-                    "properties": {
-                        "encoding": {
-                            "type": "object",
-                            "required": ["encoding", "details"],
-                            "properties": {
-                                "encoding": { "enum": ["plain"] },
-                                "details": { "type": "null" }
-                            }
-                        },
-                        "data_shards": { "const": 0 },
-                        "parity_shards": { "const": 0 }
-                    }
-                },
-                {
-                    "properties": {
-                        "encoding": {
-                            "type": "object",
-                            "required": ["encoding", "details"],
-                            "properties": {
-                                "encoding": { "enum": ["reed_solomon16"] },
-                                "details": { "type": "null" }
-                            }
-                        },
-                        "data_shards": { "minimum": 1 },
-                        "parity_shards": { "minimum": 1 }
-                    }
-                }
-            ]
+            }
         }),
     );
     schemas.insert(
@@ -17847,12 +17880,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "round", "phase", "subject", "execution_commitment", "signers",
-                "aggregate_signature"
+                "round", "proposal_round", "phase", "subject", "execution_commitment",
+                "signers", "aggregate_signature"
             ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2GlobalPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "execution_commitment": {
@@ -17876,12 +17910,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "round", "phase", "subject", "execution_commitment", "signers",
-                "aggregate_signature"
+                "round", "proposal_round", "phase", "subject", "execution_commitment",
+                "signers", "aggregate_signature"
             ],
             "additionalProperties": false,
             "properties": {
                 "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
                 "phase": { "$ref": "#/components/schemas/SumeragiV2CommitPhase" },
                 "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "execution_commitment": {
@@ -17932,6 +17967,9 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "parent_commit_qc": {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
+                "snapshot_bootstrap": {
+                    "$ref": "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+                },
                 "roster": {
                     "type": "array", "minItems": 4, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
@@ -17944,7 +17982,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
                 "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
             },
-            "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is present exactly at an epoch-ending height; parent_commit_qc is omitted only at height one."
+            "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is present exactly at an epoch-ending height; parent_commit_qc is omitted only at height one or an audited snapshot boundary, where snapshot_bootstrap is required instead."
         }),
     );
     schemas.insert(
@@ -19141,6 +19179,482 @@ fn tagged_unit_schema(tag: &str, values: &[&str]) -> Value {
     let mut schema = Map::new();
     schema.insert("oneOf".to_owned(), Value::Array(cases));
     Value::Object(schema)
+}
+
+const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
+    "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
+const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
+const GOVERNANCE_EXACT_TOKEN_PATTERN: &str = r"^[^\s\u0000-\u001F\u007F-\u009F]+$";
+const GOVERNANCE_SELECTOR_V1_PATTERN: &str =
+    iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN;
+const GOVERNANCE_NAMESPACE_TOKEN_PATTERN: &str = "^[!-~]+$";
+const GOVERNANCE_U64_DECIMAL_PATTERN: &str = concat!(
+    "^(?:0|[1-9][0-9]{0,18}|",
+    "1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|",
+    "1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|",
+    "1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|",
+    "1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|",
+    "1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|",
+    "184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|",
+    "18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|",
+    "1844674407370955161[0-4]|18446744073709551615)$"
+);
+
+fn governance_mutation_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "GovernanceCanonicalAccountIdV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 1,
+            "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN),
+            "description": "Exact canonical domainless I105 AccountId. Runtime admission verifies the complete I105 alphabet, checksum, controller encoding, and byte-for-byte canonical re-rendering; aliases and noncanonical spellings are rejected."
+        }),
+    );
+    schemas.insert(
+        "GovernanceAtWindowV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Inclusive governance block window; upper must be greater than or equal to lower.",
+            "required": ["lower", "upper"],
+            "properties": {
+                "lower": { "type": "integer", "format": "uint64", "minimum": 0, "maximum": (u64::MAX) },
+                "upper": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": (u64::MAX),
+                    "description": "Inclusive upper bound; must be greater than or equal to lower."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceManifestProvenanceV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["signer", "signature"],
+            "properties": {
+                "signer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical public key; private signing material is never accepted."
+                },
+                "signature": { "type": "string", "minLength": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceBallotProofV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["backend", "envelope_bytes"],
+            "properties": {
+                "backend": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "envelope_bytes": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "minLength": 4
+                },
+                "root_hint": {
+                    "oneOf": [
+                        { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) },
+                        { "type": "null" }
+                    ]
+                },
+                "owner": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "nullifier": {
+                    "oneOf": [
+                        { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) },
+                        { "type": "null" }
+                    ]
+                },
+                "amount": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Quantity" },
+                        { "type": "null" }
+                    ]
+                },
+                "duration_blocks": {
+                    "type": ["integer", "null"],
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "direction": {
+                    "type": ["string", "null"],
+                    "enum": ["Aye", "Nay", "Abstain", null]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceProposeDeployContractRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["abi_version", "code_hash", "abi_hash"],
+            "oneOf": [
+                {
+                    "required": ["contract_address"],
+                    "properties": {
+                        "contract_address": { "type": "string", "minLength": 1 },
+                        "contract_alias": { "type": "null" }
+                    }
+                },
+                {
+                    "required": ["contract_alias"],
+                    "properties": {
+                        "contract_address": { "type": "null" },
+                        "contract_alias": { "type": "string", "minLength": 1 }
+                    }
+                }
+            ],
+            "properties": {
+                "contract_address": { "type": ["string", "null"], "minLength": 1 },
+                "contract_alias": { "type": ["string", "null"], "minLength": 1 },
+                "abi_version": { "type": "string", "const": "1" },
+                "code_hash": {
+                    "type": "string",
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                },
+                "abi_hash": {
+                    "type": "string",
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                },
+                "window": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceAtWindowV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "mode": {
+                    "type": ["string", "null"],
+                    "enum": ["Zk", "Plain", null],
+                    "description": "Exact first-release voting mode; omitted or null defaults to `Zk`."
+                },
+                "manifest_provenance": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceManifestProvenanceV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernancePlainBallotRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "authority", "chain_id", "referendum_id", "owner", "amount",
+                "duration_blocks", "direction"
+            ],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "referendum_id": {
+                    "type": "string", "minLength": 1,
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
+                },
+                "owner": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "amount": { "$ref": "#/components/schemas/Quantity" },
+                "duration_blocks": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN),
+                    "description": "Canonical unsigned decimal u64 in the inclusive range 0..18446744073709551615."
+                },
+                "direction": { "type": "string", "enum": ["Aye", "Nay", "Abstain"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceParliamentBallotRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "chain_id", "proposal_id", "body", "decision"],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "proposal_id": { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) },
+                "body": {
+                    "type": "string",
+                    "enum": [
+                        "rules-committee", "agenda-council", "interest-panel", "review-panel",
+                        "policy-jury", "oversight-committee", "fma-committee"
+                    ]
+                },
+                "decision": {
+                    "type": "string",
+                    "enum": ["approve", "reject", "abstain"]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceZkBallotEnvelopeRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "chain_id", "election_id", "backend", "envelope_b64"],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "election_id": {
+                    "type": "string", "minLength": 1,
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
+                },
+                "backend": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "envelope_b64": { "type": "string", "contentEncoding": "base64", "minLength": 4 },
+                "root_hint": {
+                    "type": ["string", "null"],
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                },
+                "owner": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "amount": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/Quantity" },
+                        { "type": "null" }
+                    ]
+                },
+                "duration_blocks": {
+                    "type": ["integer", "null"], "format": "uint64",
+                    "minimum": 0, "maximum": (u64::MAX)
+                },
+                "direction": {
+                    "type": ["string", "null"],
+                    "enum": ["Aye", "Nay", "Abstain", null]
+                },
+                "nullifier": {
+                    "type": ["string", "null"],
+                    "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN)
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceZkBallotProofRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["authority", "chain_id", "election_id", "ballot"],
+            "properties": {
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                "chain_id": {
+                    "type": "string", "minLength": 1,
+                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
+                },
+                "election_id": {
+                    "type": "string", "minLength": 1,
+                    "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
+                    "pattern": (GOVERNANCE_SELECTOR_V1_PATTERN)
+                },
+                "ballot": { "$ref": "#/components/schemas/GovernanceBallotProofV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceFinalizeRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["referendum_id", "proposal_id"],
+            "properties": {
+                "referendum_id": {
+                    "type": "string", "minLength": 64, "maxLength": 64,
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; must equal proposal_id."
+                },
+                "proposal_id": {
+                    "type": "string", "minLength": 64, "maxLength": 64,
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; referendum_id must equal this value."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceEnactRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["proposal_id"],
+            "properties": {
+                "proposal_id": {
+                    "type": "string",
+                    "pattern": (GOVERNANCE_LOWER_HEX32_PATTERN),
+                    "description": "Exact lowercase proposal fingerprint; Torii derives the preimage and referendum window from committed state."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceProtectedNamespacesRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["namespaces"],
+            "properties": {
+                "namespaces": {
+                    "type": "array",
+                    "items": {
+                        "type": "string", "minLength": 1,
+                        "pattern": (GOVERNANCE_NAMESPACE_TOKEN_PATTERN)
+                    }
+                },
+                "authority": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalSummaryV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["title", "motivation", "expected_impact"],
+            "properties": {
+                "title": { "type": "string", "minLength": 1 },
+                "motivation": { "type": "string", "minLength": 1 },
+                "expected_impact": { "type": "string", "minLength": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalTargetV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["label", "hash_family", "hash_hex", "reason"],
+            "properties": {
+                "label": { "type": "string", "minLength": 1 },
+                "hash_family": { "type": "string", "minLength": 1 },
+                "hash_hex": { "type": "string", "minLength": 32, "pattern": "^[0-9a-fA-F]+$" },
+                "reason": { "type": "string", "minLength": 1 }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaEvidenceAttachmentV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["kind", "uri"],
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["url", "torii-case", "sorafs-cid", "attachment"]
+                },
+                "uri": { "type": "string", "minLength": 1 },
+                "digest_blake3_hex": {
+                    "oneOf": [
+                        { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+                        { "type": "null" }
+                    ]
+                },
+                "description": { "type": ["string", "null"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalSubmitterV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["name", "contact"],
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "contact": { "type": "string", "minLength": 1 },
+                "organization": { "type": ["string", "null"] },
+                "pgp_fingerprint": { "type": ["string", "null"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": [
+                "version", "proposal_id", "submitted_at_unix_ms", "language",
+                "action", "summary", "targets", "evidence", "submitter"
+            ],
+            "properties": {
+                "version": { "type": "integer", "const": 1 },
+                "proposal_id": { "type": "string", "pattern": "^AC-[0-9]{4}-[0-9]{3}$" },
+                "submitted_at_unix_ms": {
+                    "type": "integer", "format": "uint64",
+                    "minimum": 1, "maximum": (u64::MAX)
+                },
+                "language": { "type": "string", "minLength": 1 },
+                "action": {
+                    "type": "string",
+                    "enum": ["add-to-denylist", "remove-from-denylist", "amend-policy"]
+                },
+                "summary": { "$ref": "#/components/schemas/MinistryAgendaProposalSummaryV1" },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "csam", "malware", "fraud", "harassment", "impersonation",
+                            "policy-escalation", "terrorism", "spam"
+                        ]
+                    }
+                },
+                "targets": {
+                    "type": "array", "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/MinistryAgendaProposalTargetV1" }
+                },
+                "evidence": {
+                    "type": "array", "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/MinistryAgendaEvidenceAttachmentV1" }
+                },
+                "submitter": { "$ref": "#/components/schemas/MinistryAgendaProposalSubmitterV1" },
+                "duplicates": { "type": "array", "items": { "type": "string" } }
+            }
+        }),
+    );
+    schemas.insert(
+        "MinistryAgendaProposalDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["proposal", "authority"],
+            "properties": {
+                "proposal": { "$ref": "#/components/schemas/MinistryAgendaProposalV1" },
+                "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" }
+            }
+        }),
+    );
 }
 
 fn app_api_local_signing_schemas(schemas: &mut Map) {
@@ -21727,6 +22241,7 @@ fn insert_openapi_schemas_part_1(schemas: &mut Map) {
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(schemas);
     validation_fee_schemas(schemas);
+    governance_mutation_schemas(schemas);
     app_api_local_signing_schemas(schemas);
     subscription_schemas(schemas);
     insert_musubi_v1_schemas(schemas);
@@ -22002,8 +22517,9 @@ fn insert_openapi_schemas_part_1(schemas: &mut Map) {
                 "election_id": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 256,
-                    "description": "Exact on-chain election identifier."
+                    "maxLength": 128,
+                    "pattern": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_PATTERN),
+                    "description": "Canonical governance selector V1: 1-128 RFC 3986 unreserved ASCII bytes, without a leading dot."
                 }
             }
         }),
@@ -25613,62 +26129,6 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
         }),
     );
     schemas.insert(
-        "SumeragiVrfCommitRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["epoch", "signer", "commitment_hex", "bls_sig_hex"],
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sumeragi VRF epoch number."
-                },
-                "signer": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Validator index in the active topology for the epoch height."
-                },
-                "commitment_hex": {
-                    "type": "string",
-                    "description": "32-byte VRF reveal commitment encoded as hex."
-                },
-                "bls_sig_hex": {
-                    "type": "string",
-                    "description": "BLS signature over the Sumeragi VRF commit preimage, encoded as non-empty hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "SumeragiVrfRevealRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["epoch", "signer", "reveal_hex", "bls_sig_hex"],
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sumeragi VRF epoch number."
-                },
-                "signer": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "description": "Validator index in the active topology for the epoch height."
-                },
-                "reveal_hex": {
-                    "type": "string",
-                    "description": "32-byte VRF reveal value encoded as hex."
-                },
-                "bls_sig_hex": {
-                    "type": "string",
-                    "description": "BLS signature over the Sumeragi VRF reveal preimage, encoded as non-empty hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
         "AccountReadResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -29137,6 +29597,7 @@ mod tests {
                 | "SumeragiV2FinalizedNextEpochSnapshot"
                 | "SumeragiV2ConsensusMode"
                 | "SumeragiV2CommitQuorumCertificate"
+                | "SumeragiV2SnapshotBootstrapAnchor"
                 | "SumeragiV2DataAvailabilityLayout"
                 | "SumeragiV2Bytes32"
         )
@@ -31963,6 +32424,10 @@ mod tests {
             "authenticate and authorize before file lookup",
             "absent or invalid proof returns 401",
             "missing file returns 404 only after successful authorization",
+            "byte-delivery boundary",
+            "active, unknown, or invalid media types",
+            "X-Content-Type-Options",
+            "without changing byte or range semantics",
         ] {
             assert!(
                 description.contains(phrase),
@@ -32026,6 +32491,23 @@ mod tests {
                 .and_then(Value::as_str),
             Some(crate::content::CANONICAL_CONTENT_AUTH_VARY)
         );
+        for (name, expected) in [
+            ("X-Content-Type-Options", "nosniff"),
+            ("Content-Security-Policy", "sandbox; default-src 'none'"),
+            ("Content-Disposition", "attachment"),
+        ] {
+            assert_eq!(
+                success_headers
+                    .get(name)
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some(expected),
+                "content response must document the {name} boundary"
+            );
+        }
 
         let unauthorized = responses
             .get("401")
@@ -32045,7 +32527,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_batch_and_tally_openapi_match_runtime_media_and_status_contracts() {
+    fn zk_openapi_matches_runtime_media_and_status_contracts() {
         fn content_types(container: &Map) -> BTreeSet<&str> {
             container
                 .get("content")
@@ -32062,6 +32544,10 @@ mod tests {
             "ZkVerifyBatchRequest",
             "ZkVerifyBatchOutcome",
             "ZkVerifyBatchResponse",
+            "ZkRootsGetRequest",
+            "ZkRootsGetResponse",
+            "ZkMerklePathGetRequest",
+            "ZkMerklePathGetResponse",
             "ZkVoteGetTallyRequest",
             "ZkVoteGetTallyResponse",
         ] {
@@ -32161,6 +32647,73 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/ZkVoteGetTallyResponse")
         );
+
+        for (path, request_schema, response_schema) in [
+            (
+                "/v1/zk/roots",
+                "#/components/schemas/ZkRootsGetRequest",
+                "#/components/schemas/ZkRootsGetResponse",
+            ),
+            (
+                "/v1/zk/merkle-path",
+                "#/components/schemas/ZkMerklePathGetRequest",
+                "#/components/schemas/ZkMerklePathGetResponse",
+            ),
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            let request = operation
+                .get("requestBody")
+                .and_then(Value::as_object)
+                .expect("ZK state-query request body");
+            assert_eq!(
+                content_types(request),
+                BTreeSet::from(["application/json", "application/x-norito"]),
+                "request media mismatch for {path}"
+            );
+            assert_eq!(
+                request
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(request_schema),
+                "request schema mismatch for {path}"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("ZK state-query responses");
+            assert!(
+                responses.contains_key("406"),
+                "missing negotiation failure for {path}"
+            );
+            let success = responses
+                .get("200")
+                .and_then(Value::as_object)
+                .expect("ZK state-query success response");
+            assert_eq!(
+                content_types(success),
+                BTreeSet::from(["application/json", "application/x-norito"]),
+                "response media mismatch for {path}"
+            );
+            assert_eq!(
+                success
+                    .get("content")
+                    .and_then(Value::as_object)
+                    .and_then(|content| content.get("application/json"))
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(response_schema),
+                "response schema mismatch for {path}"
+            );
+        }
 
         let roots = openapi_operation(&document, "/v1/zk/roots", "post");
         let roots_description = roots
@@ -34354,6 +34907,30 @@ mod tests {
             "#/components/schemas/OfflineTopUpFinalityCompactQc"
         );
         assert_eq!(
+            component_required(schemas, "OfflineTopUpFinalityHeightContext"),
+            [
+                "context_id",
+                "chain_id",
+                "protocol_version",
+                "height",
+                "epoch",
+                "epoch_end_height",
+                "mode",
+                "nexus_amx_context_hash",
+                "execution_policy_hash",
+                "da_layout",
+                "leader_seed",
+            ]
+        );
+        assert_eq!(
+            property_ref(
+                schemas,
+                "OfflineTopUpFinalityHeightContext",
+                "snapshot_bootstrap",
+            ),
+            "#/components/schemas/SumeragiV2SnapshotBootstrapAnchor"
+        );
+        assert_eq!(
             property_ref(schemas, "OfflineTopUpFinalityProof", "anchor_path"),
             "#/components/schemas/OfflineTopUpAnchorMerkleProof"
         );
@@ -35128,7 +35705,7 @@ mod tests {
             .iter()
             .map(|route| route.path())
             .collect::<BTreeSet<_>>();
-        assert_eq!(musubi_routes::ROUTES.len(), 29);
+        assert_eq!(musubi_routes::ROUTES.len(), 31);
         assert_eq!(actual, expected);
 
         let mut schema_roots = BTreeSet::new();
@@ -35184,11 +35761,10 @@ mod tests {
                 (response_type, response_schema_reference),
             ] {
                 assert!(model_type.ends_with("V1"), "{path} exact V1 model");
-                let expected_schema_reference =
-                    format!("{COMPONENT_SCHEMA_REF_PREFIX}{model_type}");
+                let expected_reference = format!("{COMPONENT_SCHEMA_REF_PREFIX}{model_type}");
                 assert_eq!(
                     schema_reference,
-                    Some(expected_schema_reference.as_str()),
+                    Some(expected_reference.as_str()),
                     "{path} must reference its declared exact model"
                 );
                 let schema = schemas
@@ -35274,7 +35850,7 @@ mod tests {
             .and_then(|schema| schema.get("oneOf"))
             .and_then(Value::as_array)
             .expect("Musubi instruction preview variants");
-        assert_eq!(variants.len(), 18);
+        assert_eq!(variants.len(), 19);
 
         let mut bindings = BTreeSet::new();
         let mut wire_ids = BTreeSet::new();
@@ -35384,6 +35960,39 @@ mod tests {
         assert_eq!(
             provider_id.get("pattern").and_then(Value::as_str),
             Some("^[0-9A-Fa-f]{64}$")
+        );
+    }
+
+    #[test]
+    fn musubi_cursor_and_ordered_prefix_bounds_match_the_wire_types() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let cursor_last_key = schemas
+            .get("MusubiFinalizedCursorV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("last_key"))
+            .and_then(Value::as_object)
+            .expect("Musubi finalized-cursor last-key schema");
+        assert_eq!(
+            cursor_last_key.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(iroha_data_model::musubi::MUSUBI_MAX_CURSOR_KEY_BYTES_V1)
+                    .expect("cursor-key bound fits u64")
+            )
+        );
+
+        let ordered_prefix = schemas
+            .get("MusubiOrderedPrefixV1")
+            .and_then(Value::as_object)
+            .expect("Musubi ordered-prefix schema");
+        assert_eq!(
+            ordered_prefix.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(iroha_data_model::musubi::MUSUBI_MAX_ORDERED_PREFIX_BYTES_V1)
+                    .expect("ordered-prefix bound fits u64")
+            )
         );
     }
 
@@ -35584,35 +36193,27 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_vrf_signature_payloads() {
-        fn post_request_schema_ref<'a>(doc: &'a Value, path: &str) -> Option<&'a str> {
-            doc.get("paths")?
-                .as_object()?
-                .get(path)?
-                .as_object()?
-                .get("post")?
-                .as_object()?
-                .get("requestBody")?
-                .as_object()?
-                .get("content")?
-                .as_object()?
-                .get("application/json")?
-                .as_object()?
-                .get("schema")?
-                .as_object()?
-                .get("$ref")?
-                .as_str()
-        }
-
+    fn retired_sumeragi_mutation_surfaces_are_absent() {
         let doc = generate_spec();
-        assert_eq!(
-            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/commit"),
-            Some("#/components/schemas/SumeragiVrfCommitRequest")
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let evidence = paths
+            .get("/v1/sumeragi/evidence")
+            .and_then(Value::as_object)
+            .expect("retained evidence-list path");
+        assert!(evidence.contains_key("get"));
+        assert!(
+            !evidence.contains_key("post"),
+            "retired evidence submission operation remains documented"
         );
-        assert_eq!(
-            post_request_schema_ref(&doc, "/v1/sumeragi/vrf/reveal"),
-            Some("#/components/schemas/SumeragiVrfRevealRequest")
-        );
+        for retired_path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+            assert!(
+                !paths.contains_key(retired_path),
+                "retired Sumeragi mutation path remains documented: {retired_path}"
+            );
+        }
 
         let schemas = doc
             .get("components")
@@ -35620,18 +36221,10 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("schemas section");
-        for schema_name in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
-            let required = schemas
-                .get(schema_name)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("required"))
-                .and_then(Value::as_array)
-                .expect("VRF request required fields");
+        for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
             assert!(
-                required
-                    .iter()
-                    .any(|field| field.as_str() == Some("bls_sig_hex")),
-                "{schema_name} should require bls_sig_hex"
+                !schemas.contains_key(retired_schema),
+                "retired Sumeragi mutation schema remains documented: {retired_schema}"
             );
         }
     }
@@ -37603,2736 +38196,7 @@ mod tests {
         assert_eq!(reasons.as_slice(), expected_reasons.as_slice());
     }
 
-    #[test]
-    fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
-        fn schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
-            schemas
-                .get(name)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing object schema {name}"))
-        }
+    include!("openapi/tests/finality_app_contracts.rs");
 
-        fn string_set(value: Option<&Value>, label: &str) -> Vec<String> {
-            let mut values = value
-                .and_then(Value::as_array)
-                .unwrap_or_else(|| panic!("{label} must be an array"))
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .unwrap_or_else(|| panic!("{label} entries must be strings"))
-                        .to_owned()
-                })
-                .collect::<Vec<_>>();
-            values.sort_unstable();
-            values
-        }
-
-        fn assert_closed_shape(schemas: &Map, name: &str, required: &[&str], properties: &[&str]) {
-            let schema = schema(schemas, name);
-            assert_eq!(
-                schema.get("additionalProperties"),
-                Some(&Value::Bool(false)),
-                "{name} must reject unknown fields"
-            );
-            let mut expected_required = required
-                .iter()
-                .map(|field| (*field).to_owned())
-                .collect::<Vec<_>>();
-            expected_required.sort_unstable();
-            assert_eq!(
-                string_set(schema.get("required"), &format!("{name}.required")),
-                expected_required,
-                "{name} required-field drift"
-            );
-            let mut actual_properties = schema
-                .get("properties")
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{name}.properties must be an object"))
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
-            actual_properties.sort_unstable();
-            let mut expected_properties = properties
-                .iter()
-                .map(|field| (*field).to_owned())
-                .collect::<Vec<_>>();
-            expected_properties.sort_unstable();
-            assert_eq!(
-                actual_properties, expected_properties,
-                "{name} property-set drift"
-            );
-        }
-
-        fn property<'a>(schemas: &'a Map, schema_name: &str, field: &str) -> &'a Map {
-            schema(schemas, schema_name)
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get(field))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing {schema_name}.{field} schema"))
-        }
-
-        fn assert_ref(schemas: &Map, schema_name: &str, field: &str, expected: &str) {
-            assert_eq!(
-                property(schemas, schema_name, field)
-                    .get("$ref")
-                    .and_then(Value::as_str),
-                Some(expected),
-                "{schema_name}.{field} reference drift"
-            );
-        }
-
-        let schemas = openapi_schemas();
-        let max_validators =
-            u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
-                .expect("Sumeragi validator bound must fit in u64");
-        assert_closed_shape(
-            &schemas,
-            "BridgeFinalityProof",
-            &["version", "block_header", "finality_artifact"],
-            &["version", "block_header", "finality_artifact"],
-        );
-        assert_closed_shape(
-            &schemas,
-            "BridgeFinalityAttestationV1",
-            &["body", "signature"],
-            &["body", "signature"],
-        );
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2FinalityArtifact",
-            &[
-                "format_version",
-                "protocol_version",
-                "height",
-                "height_context",
-                "subject",
-                "block_hash",
-                "commit_qc",
-                "validator_set_pops",
-            ],
-            &[
-                "format_version",
-                "protocol_version",
-                "height",
-                "height_context",
-                "subject",
-                "block_hash",
-                "commit_qc",
-                "validator_set_pops",
-            ],
-        );
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2HeightContext",
-            &[
-                "chain_id",
-                "protocol_version",
-                "height",
-                "epoch",
-                "epoch_end_height",
-                "mode",
-                "roster",
-                "quorum",
-                "nexus_amx_context_hash",
-                "execution_policy_hash",
-                "da_layout",
-                "leader_seed",
-            ],
-            &[
-                "chain_id",
-                "protocol_version",
-                "height",
-                "epoch",
-                "epoch_end_height",
-                "next_epoch_snapshot",
-                "mode",
-                "parent_commit_qc",
-                "roster",
-                "quorum",
-                "nexus_amx_context_hash",
-                "execution_policy_hash",
-                "da_layout",
-                "leader_seed",
-            ],
-        );
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2ValidatorPower",
-            &["validator", "power"],
-            &["validator", "power"],
-        );
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2DualQuorum",
-            &["min_signers", "total_power"],
-            &["min_signers", "total_power"],
-        );
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2BlockSubject",
-            &["block_hash", "payload_hash"],
-            &["parent_block_hash", "block_hash", "payload_hash"],
-        );
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2MergeCarrierCommitment",
-            &["version", "entry_hash"],
-            &["version", "entry_hash"],
-        );
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2ExecutionCommitment",
-            &[
-                "parent_state_root",
-                "post_state_root",
-                "ordinary_writes_root",
-                "topup_anchor_count",
-                "native_amx_application_manifest_version",
-                "native_amx_application_manifest_root",
-                "native_amx_application_manifest_count",
-                "merge_carrier",
-                "executed_block_wire_len",
-                "executed_block_wire_hash",
-            ],
-            &[
-                "parent_state_root",
-                "post_state_root",
-                "ordinary_writes_root",
-                "topup_anchor_root",
-                "topup_anchor_count",
-                "native_amx_application_manifest_version",
-                "native_amx_application_manifest_root",
-                "native_amx_application_manifest_count",
-                "merge_carrier",
-                "executed_block_wire_len",
-                "executed_block_wire_hash",
-            ],
-        );
-        for certificate in [
-            "SumeragiV2QuorumCertificate",
-            "SumeragiV2CommitQuorumCertificate",
-        ] {
-            assert_closed_shape(
-                &schemas,
-                certificate,
-                &[
-                    "round",
-                    "phase",
-                    "subject",
-                    "execution_commitment",
-                    "signers",
-                    "aggregate_signature",
-                ],
-                &[
-                    "round",
-                    "phase",
-                    "subject",
-                    "execution_commitment",
-                    "signers",
-                    "aggregate_signature",
-                ],
-            );
-        }
-        assert_closed_shape(
-            &schemas,
-            "SumeragiV2FinalizedNextEpochSnapshot",
-            &[
-                "epoch",
-                "epoch_end_height",
-                "mode",
-                "roster",
-                "validator_set_pops",
-                "quorum",
-                "leader_seed",
-            ],
-            &[
-                "epoch",
-                "epoch_end_height",
-                "mode",
-                "roster",
-                "validator_set_pops",
-                "quorum",
-                "leader_seed",
-            ],
-        );
-        assert_closed_shape(
-            &schemas,
-            "BridgeCommitment",
-            &[
-                "chain_id",
-                "height_context_id",
-                "block_height",
-                "block_hash",
-            ],
-            &[
-                "chain_id",
-                "height_context_id",
-                "block_height",
-                "block_hash",
-            ],
-        );
-        assert_closed_shape(
-            &schemas,
-            "BridgeFinalityBundle",
-            &["commitment", "finality_proof"],
-            &["commitment", "finality_proof"],
-        );
-        assert_closed_shape(
-            &schemas,
-            "BlockHeader",
-            &[
-                "height",
-                "prev_block_hash",
-                "merkle_root",
-                "result_merkle_root",
-                "da_proof_policies_hash",
-                "da_commitments_hash",
-                "da_pin_intents_hash",
-                "prev_roster_evidence_hash",
-                "sccp_commitment_root",
-                "creation_time_ms",
-                "view_change_index",
-                "confidential_features",
-            ],
-            &[
-                "height",
-                "prev_block_hash",
-                "merkle_root",
-                "result_merkle_root",
-                "da_proof_policies_hash",
-                "da_commitments_hash",
-                "da_pin_intents_hash",
-                "prev_roster_evidence_hash",
-                "npos_effects_hash",
-                "sccp_commitment_root",
-                "creation_time_ms",
-                "view_change_index",
-                "confidential_features",
-                "execution_context_hash",
-            ],
-        );
-
-        assert_eq!(
-            property(&schemas, "BridgeFinalityProof", "version")
-                .get("enum")
-                .and_then(Value::as_array),
-            Some(&vec![Value::from(2_u64)])
-        );
-        for (schema_name, field, version) in [
-            ("SumeragiV2FinalityArtifact", "format_version", 4_u64),
-            ("SumeragiV2FinalityArtifact", "protocol_version", 4_u64),
-            ("SumeragiV2HeightContext", "protocol_version", 4_u64),
-        ] {
-            assert_eq!(
-                property(&schemas, schema_name, field)
-                    .get("enum")
-                    .and_then(Value::as_array),
-                Some(&vec![Value::from(version)]),
-                "{schema_name}.{field} must be version-exact"
-            );
-        }
-
-        let roster = property(&schemas, "SumeragiV2HeightContext", "roster");
-        assert_eq!(roster.get("minItems").and_then(Value::as_u64), Some(4));
-        assert_eq!(
-            roster.get("maxItems").and_then(Value::as_u64),
-            Some(max_validators)
-        );
-        assert_eq!(
-            roster.get("uniqueItems").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            roster
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2ValidatorPower")
-        );
-        assert_eq!(
-            property(&schemas, "SumeragiV2ValidatorPower", "power")
-                .get("enum")
-                .and_then(Value::as_array),
-            Some(&vec![Value::from(1_u64)])
-        );
-        assert_ref(
-            &schemas,
-            "SumeragiV2ValidatorPower",
-            "validator",
-            "#/components/schemas/SumeragiV2BlsValidatorId",
-        );
-        assert_eq!(
-            schema(&schemas, "SumeragiV2BlsValidatorId")
-                .get("pattern")
-                .and_then(Value::as_str),
-            Some("^ea0130[0-9A-F]{96}$")
-        );
-
-        for owner in [
-            "SumeragiV2FinalityArtifact",
-            "SumeragiV2FinalizedNextEpochSnapshot",
-        ] {
-            let pops = property(&schemas, owner, "validator_set_pops");
-            assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(4));
-            assert_eq!(
-                pops.get("maxItems").and_then(Value::as_u64),
-                Some(max_validators)
-            );
-            assert_eq!(
-                pops.get("items")
-                    .and_then(Value::as_object)
-                    .and_then(|items| items.get("$ref"))
-                    .and_then(Value::as_str),
-                Some("#/components/schemas/SumeragiV2BlsProof")
-            );
-        }
-        let bls_proof = schema(&schemas, "SumeragiV2BlsProof");
-        assert_eq!(bls_proof.get("minItems").and_then(Value::as_u64), Some(96));
-        assert_eq!(bls_proof.get("maxItems").and_then(Value::as_u64), Some(96));
-        let bls_byte = bls_proof
-            .get("items")
-            .and_then(Value::as_object)
-            .expect("BLS proof byte schema");
-        assert_eq!(bls_byte.get("minimum").and_then(Value::as_u64), Some(0));
-        assert_eq!(bls_byte.get("maximum").and_then(Value::as_u64), Some(255));
-
-        for certificate in [
-            "SumeragiV2QuorumCertificate",
-            "SumeragiV2CommitQuorumCertificate",
-        ] {
-            let signers = property(&schemas, certificate, "signers");
-            assert_eq!(signers.get("minItems").and_then(Value::as_u64), Some(1));
-            assert_eq!(
-                signers.get("maxItems").and_then(Value::as_u64),
-                Some(max_validators)
-            );
-            assert_eq!(
-                signers.get("uniqueItems").and_then(Value::as_bool),
-                Some(true)
-            );
-        }
-        assert_eq!(
-            property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster")
-                .get("minItems")
-                .and_then(Value::as_u64),
-            Some(4)
-        );
-        assert_eq!(
-            property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster")
-                .get("maxItems")
-                .and_then(Value::as_u64),
-            Some(max_validators)
-        );
-        assert_eq!(
-            property(&schemas, "SumeragiV2DualQuorum", "min_signers")
-                .get("maximum")
-                .and_then(Value::as_u64),
-            Some(max_validators)
-        );
-        assert_ref(
-            &schemas,
-            "SumeragiV2MergeCarrierCommitment",
-            "entry_hash",
-            "#/components/schemas/Hash",
-        );
-        assert_eq!(
-            property(&schemas, "SumeragiV2MergeCarrierCommitment", "version")
-                .get("const")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            property(&schemas, "SumeragiV2ExecutionCommitment", "merge_carrier")
-                .get("oneOf")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2),
-            "merge_carrier must admit exactly null or the V1 tagged commitment"
-        );
-        let executed_wire_len = property(
-            &schemas,
-            "SumeragiV2ExecutionCommitment",
-            "executed_block_wire_len",
-        );
-        assert_eq!(
-            executed_wire_len.get("format").and_then(Value::as_str),
-            Some("uint64")
-        );
-        assert_eq!(
-            executed_wire_len.get("minimum").and_then(Value::as_u64),
-            Some(1),
-            "executed_block_wire_len must exclude zero"
-        );
-        assert_ref(
-            &schemas,
-            "SumeragiV2FinalityArtifact",
-            "commit_qc",
-            "#/components/schemas/SumeragiV2CommitQuorumCertificate",
-        );
-        for certificate in [
-            "SumeragiV2QuorumCertificate",
-            "SumeragiV2CommitQuorumCertificate",
-        ] {
-            assert_ref(
-                &schemas,
-                certificate,
-                "execution_commitment",
-                "#/components/schemas/SumeragiV2ExecutionCommitment",
-            );
-        }
-        let topup_count = property(
-            &schemas,
-            "SumeragiV2ExecutionCommitment",
-            "topup_anchor_count",
-        );
-        assert_eq!(topup_count.get("minimum").and_then(Value::as_u64), Some(0));
-        assert_eq!(
-            topup_count.get("maximum").and_then(Value::as_u64),
-            Some(u64::from(
-                iroha_data_model::block::consensus_v2::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
-            ))
-        );
-        assert_eq!(
-            schema(&schemas, "SumeragiV2ExecutionCommitment")
-                .get("oneOf")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2),
-            "top-up root/count presence must be encoded as an exact two-branch contract"
-        );
-        let native_manifest_version = property(
-            &schemas,
-            "SumeragiV2ExecutionCommitment",
-            "native_amx_application_manifest_version",
-        );
-        assert_eq!(
-            native_manifest_version.get("const").and_then(Value::as_u64),
-            Some(u64::from(
-                iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            ))
-        );
-        let native_manifest_count = property(
-            &schemas,
-            "SumeragiV2ExecutionCommitment",
-            "native_amx_application_manifest_count",
-        );
-        assert_eq!(
-            native_manifest_count.get("minimum").and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            native_manifest_count.get("maximum").and_then(Value::as_u64),
-            Some(u64::from(
-                iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,
-            ))
-        );
-        assert_eq!(
-            schema(&schemas, "SumeragiV2ExecutionCommitment")
-                .get("allOf")
-                .and_then(Value::as_array)
-                .and_then(|all_of| all_of.first())
-                .and_then(Value::as_object)
-                .and_then(|manifest_contract| manifest_contract.get("oneOf"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2),
-            "Native AMX manifest count/root emptiness must be encoded as an exact two-branch contract"
-        );
-        assert_eq!(
-            property(&schemas, "SumeragiV2CommitPhase", "phase")
-                .get("enum")
-                .and_then(Value::as_array),
-            Some(&vec![Value::from("commit")])
-        );
-        let context_id = schema(&schemas, "SumeragiV2HeightContextId");
-        assert_eq!(context_id.get("minItems").and_then(Value::as_u64), Some(1));
-        assert_eq!(context_id.get("maxItems").and_then(Value::as_u64), Some(1));
-
-        let mut bridge_components = Map::new();
-        for name in [
-            "BridgeFinalityProof",
-            "BridgeFinalityAttestationBodyV1",
-            "BridgeFinalityAttestationV1",
-            "BridgeCommitment",
-            "BridgeFinalityBundle",
-            "SumeragiV2FinalityArtifact",
-            "SumeragiV2FinalizedNextEpochSnapshot",
-            "SumeragiV2HeightContext",
-            "SumeragiV2ValidatorPower",
-            "SumeragiV2DualQuorum",
-            "SumeragiV2BlockSubject",
-            "SumeragiV2MergeCarrierCommitment",
-            "SumeragiV2ExecutionCommitment",
-            "SumeragiV2QuorumCertificate",
-            "SumeragiV2CommitQuorumCertificate",
-        ] {
-            bridge_components.insert(
-                name.to_owned(),
-                schemas
-                    .get(name)
-                    .unwrap_or_else(|| panic!("missing bridge component {name}"))
-                    .clone(),
-            );
-        }
-        let serialized = norito::json::to_string(&Value::Object(bridge_components))
-            .expect("serialize bridge finality schemas");
-        for retired in [
-            "authority_set",
-            "next_authority_set",
-            "justification",
-            "signatures",
-            "validator_set_hash",
-            "validator_set_hash_version",
-            "validator_set",
-            "subject_block_hash",
-            "mode_tag",
-            "highest_qc",
-            "aggregate",
-            "signers_bitmap",
-            "bls_aggregate_signature",
-            "mmr_root",
-            "mmr_leaf_index",
-            "mmr_peaks",
-        ] {
-            assert!(
-                !serialized.contains(&format!("\"{retired}\"")),
-                "retired v1 bridge-finality field `{retired}` reappeared"
-            );
-        }
-    }
-
-    #[test]
-    fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
-        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        let proof = iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-            .expect("decode exact SCCP v2 finality fixture");
-        let value = norito::json::to_value(&proof).expect("serialize exact finality proof");
-        let proof_object = value.as_object().expect("proof JSON object");
-        let mut proof_fields = proof_object.keys().map(String::as_str).collect::<Vec<_>>();
-        proof_fields.sort_unstable();
-        assert_eq!(
-            proof_fields,
-            ["block_header", "finality_artifact", "version"]
-        );
-
-        let header = proof_object
-            .get("block_header")
-            .and_then(Value::as_object)
-            .expect("block header JSON object");
-        for required in [
-            "height",
-            "prev_block_hash",
-            "merkle_root",
-            "result_merkle_root",
-            "da_proof_policies_hash",
-            "da_commitments_hash",
-            "da_pin_intents_hash",
-            "prev_roster_evidence_hash",
-            "sccp_commitment_root",
-            "creation_time_ms",
-            "view_change_index",
-            "confidential_features",
-        ] {
-            assert!(
-                header.contains_key(required),
-                "serialized block header omitted required JSON field {required}"
-            );
-        }
-        assert!(!header.contains_key("npos_effects_hash"));
-        assert!(!header.contains_key("execution_context_hash"));
-        let expected_commitment_root = hex::encode_upper(fixture.bundle.commitment_root);
-        assert_eq!(
-            header.get("sccp_commitment_root").and_then(Value::as_str),
-            Some(expected_commitment_root.as_str())
-        );
-
-        let document = generate_spec();
-        let schemas = component_schemas(&document);
-        let bytes32 = schemas
-            .get("SumeragiV2Bytes32")
-            .and_then(Value::as_object)
-            .expect("Sumeragi v2 bytes32 schema");
-        assert_eq!(bytes32.get("type").and_then(Value::as_str), Some("string"));
-        assert_eq!(bytes32.get("minLength").and_then(Value::as_u64), Some(64));
-        assert_eq!(bytes32.get("maxLength").and_then(Value::as_u64), Some(64));
-        assert_eq!(
-            bytes32.get("pattern").and_then(Value::as_str),
-            Some("^[0-9A-F]{64}$")
-        );
-        let fixed_bytes32 = schemas
-            .get("SumeragiV2Fixed32ByteArray")
-            .and_then(Value::as_object)
-            .expect("Sumeragi v2 fixed bytes32 adapter schema");
-        assert_eq!(
-            fixed_bytes32.get("type").and_then(Value::as_str),
-            Some("array")
-        );
-        assert_eq!(
-            fixed_bytes32.get("minItems").and_then(Value::as_u64),
-            Some(32)
-        );
-        assert_eq!(
-            fixed_bytes32.get("maxItems").and_then(Value::as_u64),
-            Some(32)
-        );
-
-        let artifact = proof_object
-            .get("finality_artifact")
-            .and_then(Value::as_object)
-            .expect("v2 artifact JSON object");
-        let mut artifact_fields = artifact.keys().map(String::as_str).collect::<Vec<_>>();
-        artifact_fields.sort_unstable();
-        assert_eq!(
-            artifact_fields,
-            [
-                "block_hash",
-                "commit_qc",
-                "format_version",
-                "height",
-                "height_context",
-                "protocol_version",
-                "subject",
-                "validator_set_pops",
-            ]
-        );
-        assert_eq!(
-            artifact.get("format_version").and_then(Value::as_u64),
-            Some(4)
-        );
-        assert_eq!(
-            artifact.get("protocol_version").and_then(Value::as_u64),
-            Some(4)
-        );
-        let context = artifact
-            .get("height_context")
-            .and_then(Value::as_object)
-            .expect("height context JSON object");
-        assert_eq!(
-            context.get("protocol_version").and_then(Value::as_u64),
-            Some(4)
-        );
-        assert!(!context.contains_key("next_epoch_snapshot"));
-        assert!(!context.contains_key("parent_commit_qc"));
-        let mode = context
-            .get("mode")
-            .and_then(Value::as_object)
-            .expect("adjacently tagged consensus mode");
-        assert_eq!(mode.get("mode").and_then(Value::as_str), Some("npos"));
-        assert_eq!(mode.get("details"), Some(&Value::Null));
-        let encoding = context
-            .get("da_layout")
-            .and_then(Value::as_object)
-            .and_then(|layout| layout.get("encoding"))
-            .and_then(Value::as_object)
-            .expect("adjacently tagged payload encoding");
-        assert_eq!(
-            encoding.get("encoding").and_then(Value::as_str),
-            Some("plain")
-        );
-        assert_eq!(encoding.get("details"), Some(&Value::Null));
-
-        let roster = context
-            .get("roster")
-            .and_then(Value::as_array)
-            .expect("powered roster array");
-        assert_eq!(roster.len(), 4);
-        for validator in roster {
-            let validator = validator.as_object().expect("validator-power object");
-            let public_key = validator
-                .get("validator")
-                .and_then(Value::as_str)
-                .expect("validator id string");
-            assert_eq!(public_key.len(), 102);
-            assert!(public_key.starts_with("ea0130"));
-            assert!(
-                public_key[6..]
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
-            );
-            assert!(validator.get("power").and_then(Value::as_u64).is_some());
-        }
-        let quorum = context
-            .get("quorum")
-            .and_then(Value::as_object)
-            .expect("dual quorum object");
-        assert_eq!(quorum.len(), 2);
-        assert!(quorum.get("min_signers").and_then(Value::as_u64).is_some());
-        assert!(quorum.get("total_power").and_then(Value::as_u64).is_some());
-
-        let subject = artifact
-            .get("subject")
-            .and_then(Value::as_object)
-            .expect("block subject object");
-        assert!(!subject.contains_key("parent_block_hash"));
-        for hash_field in ["block_hash", "payload_hash"] {
-            let hash = subject
-                .get(hash_field)
-                .and_then(Value::as_str)
-                .expect("canonical hash literal");
-            assert!(hash.starts_with("hash:"));
-            assert_eq!(hash.len(), 74);
-        }
-
-        let commit_qc = artifact
-            .get("commit_qc")
-            .and_then(Value::as_object)
-            .expect("commit QC object");
-        let phase = commit_qc
-            .get("phase")
-            .and_then(Value::as_object)
-            .expect("adjacently tagged commit phase");
-        assert_eq!(phase.get("phase").and_then(Value::as_str), Some("commit"));
-        assert_eq!(phase.get("details"), Some(&Value::Null));
-        assert!(
-            commit_qc
-                .get("round")
-                .and_then(Value::as_object)
-                .and_then(|round| round.get("context_id"))
-                .and_then(Value::as_array)
-                .is_some_and(|context_id| context_id.len() == 1)
-        );
-        let execution_commitment = commit_qc
-            .get("execution_commitment")
-            .and_then(Value::as_object)
-            .expect("mandatory execution commitment object");
-        let mut execution_fields = execution_commitment
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        execution_fields.sort_unstable();
-        assert_eq!(
-            execution_fields,
-            [
-                "executed_block_wire_hash",
-                "executed_block_wire_len",
-                "native_amx_application_manifest_count",
-                "native_amx_application_manifest_root",
-                "native_amx_application_manifest_version",
-                "merge_carrier",
-                "ordinary_writes_root",
-                "parent_state_root",
-                "post_state_root",
-                "topup_anchor_count",
-            ],
-            "zero-top-up commitment must omit only its optional top-up root"
-        );
-        for root in [
-            "parent_state_root",
-            "post_state_root",
-            "ordinary_writes_root",
-            "native_amx_application_manifest_root",
-        ] {
-            assert!(
-                execution_commitment
-                    .get(root)
-                    .and_then(Value::as_str)
-                    .is_some_and(|hash| hash.starts_with("hash:") && hash.len() == 74),
-                "execution commitment omitted canonical {root}"
-            );
-        }
-        assert_eq!(
-            execution_commitment.get("merge_carrier"),
-            Some(&Value::Null),
-            "ordinary finality commitment must serialize an explicit null merge carrier"
-        );
-        assert!(
-            execution_commitment
-                .get("executed_block_wire_len")
-                .and_then(Value::as_u64)
-                .is_some_and(|len| len > 0),
-            "execution commitment must serialize the exact non-zero block wire length"
-        );
-        assert_eq!(
-            execution_commitment
-                .get("topup_anchor_count")
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-        assert_eq!(
-            execution_commitment
-                .get("native_amx_application_manifest_version")
-                .and_then(Value::as_u64),
-            Some(u64::from(
-                iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            ))
-        );
-        assert_eq!(
-            execution_commitment
-                .get("native_amx_application_manifest_count")
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-        let expected_native_manifest_empty_root = norito::json::to_value(
-            &iroha_data_model::block::consensus_v2::native_amx_application_manifest_empty_root(),
-        )
-        .expect("serialize canonical Native AMX application manifest empty root");
-        assert_eq!(
-            execution_commitment.get("native_amx_application_manifest_root"),
-            Some(&expected_native_manifest_empty_root)
-        );
-        assert!(
-            commit_qc
-                .get("aggregate_signature")
-                .and_then(Value::as_array)
-                .is_some_and(|signature| signature.len() == 96)
-        );
-
-        let pops = artifact
-            .get("validator_set_pops")
-            .and_then(Value::as_array)
-            .expect("validator PoP array");
-        assert_eq!(pops.len(), roster.len());
-        assert!(pops.iter().all(|pop| {
-            pop.as_array().is_some_and(|bytes| {
-                bytes.len() == 96
-                    && bytes
-                        .iter()
-                        .all(|byte| byte.as_u64().is_some_and(|byte| byte <= 255))
-            })
-        }));
-
-        let mut missing_execution = value.clone();
-        let removed = missing_execution
-            .as_object_mut()
-            .and_then(|proof| proof.get_mut("finality_artifact"))
-            .and_then(Value::as_object_mut)
-            .and_then(|artifact| artifact.get_mut("commit_qc"))
-            .and_then(Value::as_object_mut)
-            .expect("mutable commit QC object")
-            .remove("execution_commitment");
-        assert!(
-            removed.is_some(),
-            "fixture commit QC must carry execution commitment"
-        );
-        assert!(
-            norito::json::from_value::<iroha_data_model::bridge::BridgeFinalityProof>(
-                missing_execution,
-            )
-            .is_err(),
-            "BridgeFinalityProof JSON decoder accepted a CommitQC without its execution commitment"
-        );
-
-        for retired in [
-            "height",
-            "chain_id",
-            "block_hash",
-            "commit_qc",
-            "validator_set_pops",
-            "authority_set",
-            "next_authority_set",
-            "justification",
-            "signatures",
-            "validator_set_hash",
-            "validator_set_hash_version",
-            "validator_set",
-            "subject_block_hash",
-            "parent_state_root",
-            "post_state_root",
-            "mode_tag",
-            "highest_qc",
-            "aggregate",
-            "signers_bitmap",
-            "bls_aggregate_signature",
-        ] {
-            let mut hostile = value.clone();
-            hostile
-                .as_object_mut()
-                .expect("proof JSON object")
-                .insert(retired.to_owned(), Value::Null);
-            assert!(
-                norito::json::from_value::<iroha_data_model::bridge::BridgeFinalityProof>(hostile)
-                    .is_err(),
-                "BridgeFinalityProof JSON decoder accepted retired v1 field {retired}"
-            );
-        }
-    }
-
-    #[test]
-    fn bridge_finality_operations_describe_durable_v2_evidence() {
-        let paths = generate_spec()
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths")
-            .clone();
-        for (path, response_schema) in [
-            (
-                "/v1/bridge/finality/{height}",
-                "#/components/schemas/BridgeFinalityProof",
-            ),
-            (
-                "/v1/bridge/finality/attestation/{height}",
-                "#/components/schemas/BridgeFinalityAttestationV1",
-            ),
-            (
-                "/v1/bridge/finality/bundle/{height}",
-                "#/components/schemas/BridgeFinalityBundle",
-            ),
-        ] {
-            let operation = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("get"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing GET operation for {path}"));
-            let description = operation
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("missing GET description for {path}"));
-            assert!(description.contains("Sumeragi-v2"));
-            assert!(description.contains("durable"));
-            assert!(!description.contains("validator set signatures"));
-            assert!(!description.contains("block header and commit certificate"));
-
-            let content = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("content"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing successful response content for {path}"));
-            assert_eq!(
-                content
-                    .get("application/json")
-                    .and_then(Value::as_object)
-                    .and_then(|media| media.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some(response_schema),
-                "{path} JSON response schema"
-            );
-            let norito = content
-                .get("application/x-norito")
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing Norito response schema for {path}"));
-            assert_eq!(norito.get("type").and_then(Value::as_str), Some("string"));
-            assert_eq!(norito.get("format").and_then(Value::as_str), Some("binary"));
-        }
-
-        let attestation = paths
-            .get("/v1/bridge/finality/attestation/{height}")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .expect("attestation GET");
-        let challenge = attestation
-            .get("parameters")
-            .and_then(Value::as_array)
-            .and_then(|parameters| {
-                parameters.iter().find(|parameter| {
-                    parameter
-                        .as_object()
-                        .and_then(|parameter| parameter.get("name"))
-                        .and_then(Value::as_str)
-                        == Some("X-Iroha-Finality-Challenge")
-                })
-            })
-            .and_then(Value::as_object)
-            .expect("attestation challenge parameter");
-        assert_eq!(challenge.get("in").and_then(Value::as_str), Some("header"));
-        assert_eq!(
-            challenge.get("required").and_then(Value::as_bool),
-            Some(true)
-        );
-        let responses = attestation
-            .get("responses")
-            .and_then(Value::as_object)
-            .expect("attestation responses");
-        for status in ["200", "400", "404", "406", "503"] {
-            let headers = responses
-                .get(status)
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("headers"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("attestation {status} response headers"));
-            assert_eq!(
-                headers
-                    .get("Cache-Control")
-                    .and_then(Value::as_object)
-                    .and_then(|header| header.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("const"))
-                    .and_then(Value::as_str),
-                Some("no-store"),
-                "attestation {status} Cache-Control"
-            );
-            assert_eq!(
-                headers
-                    .get("Vary")
-                    .and_then(Value::as_object)
-                    .and_then(|header| header.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("const"))
-                    .and_then(Value::as_str),
-                Some("X-Iroha-Finality-Challenge, Accept"),
-                "attestation {status} Vary"
-            );
-        }
-    }
-
-    #[test]
-    fn generated_spec_documents_read_only_nexus_lifecycle_status() {
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-        let path = paths
-            .get("/v1/nexus/lifecycle")
-            .and_then(Value::as_object)
-            .expect("Nexus lifecycle path");
-        let get = path
-            .get("get")
-            .and_then(Value::as_object)
-            .expect("Nexus lifecycle GET operation");
-        let responses = get
-            .get("responses")
-            .and_then(Value::as_object)
-            .expect("Nexus lifecycle GET responses");
-        let status_schema_ref = responses
-            .get("200")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("content"))
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("application/json"))
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str);
-        assert_eq!(
-            status_schema_ref,
-            Some("#/components/schemas/NexusLaneLifecycleStatusV1")
-        );
-        let content = responses
-            .get("200")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("content"))
-            .and_then(Value::as_object)
-            .expect("lifecycle status response content");
-        assert!(content.contains_key("application/json"));
-        assert!(content.contains_key("application/x-norito"));
-
-        assert!(
-            !path.contains_key("post"),
-            "the first-release lifecycle resource is read-only"
-        );
-
-        let schema = doc
-            .get("components")
-            .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .and_then(|schemas| schemas.get("NexusLaneLifecycleStatusV1"))
-            .and_then(Value::as_object)
-            .expect("NexusLaneLifecycleStatusV1 schema");
-        assert_eq!(
-            schema.get("additionalProperties"),
-            Some(&Value::Bool(false))
-        );
-        let required = schema
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("required lifecycle response fields");
-        for field in [
-            "version",
-            "nexus_enabled",
-            "lane_count",
-            "lanes",
-            "catalog_hash",
-            "incarnations",
-            "incarnation_root",
-        ] {
-            assert!(
-                required.iter().any(|value| value.as_str() == Some(field)),
-                "Nexus lifecycle status should require {field}"
-            );
-        }
-        let properties = schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("lifecycle response properties");
-        assert_eq!(
-            properties
-                .get("lanes")
-                .and_then(Value::as_object)
-                .and_then(|property| property.get("type"))
-                .and_then(Value::as_str),
-            Some("array")
-        );
-        assert!(properties.contains_key("catalog_hash"));
-        assert!(properties.contains_key("incarnations"));
-        assert!(properties.contains_key("incarnation_root"));
-        assert_eq!(
-            properties
-                .get("incarnations")
-                .and_then(Value::as_object)
-                .and_then(|property| property.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/NexusLaneLifecycleIncarnationEntry")
-        );
-    }
-
-    #[test]
-    fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-        let status_schema_ref = paths
-            .get("/v1/sumeragi/status")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|operation| operation.get("responses"))
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get("200"))
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("content"))
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("application/json"))
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str);
-        let status_enabled =
-            catalog_openapi_route_enabled(CatalogHttpMethod::Get, "/v1/sumeragi/status");
-        assert_eq!(
-            status_schema_ref,
-            status_enabled.then_some("#/components/schemas/SumeragiStatusResponse"),
-            "authoritative status presence and schema must follow the enabled catalog OpenAPI projection"
-        );
-
-        let schemas = doc
-            .get("components")
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("components schemas");
-        let max_validators =
-            u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
-                .expect("Sumeragi validator bound must fit in u64");
-        let status_schema = schemas
-            .get("SumeragiStatusResponse")
-            .and_then(Value::as_object)
-            .expect("status response schema");
-        assert_eq!(
-            status_schema
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let status_properties = status_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("status response properties");
-        assert_eq!(
-            status_properties
-                .get("protocol_version")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("minimum"))
-                .and_then(Value::as_u64),
-            Some(4)
-        );
-        assert!(status_properties.contains_key("height_context_id"));
-        assert!(status_properties.contains_key("restart_required"));
-        assert!(status_properties.contains_key("pending_persistence_id"));
-        assert!(status_properties.contains_key("last_committed_subject"));
-        assert!(status_properties.contains_key("height_context"));
-        assert!(status_properties.contains_key("last_commit_qc"));
-        assert!(status_properties.contains_key("liveness"));
-        assert!(!status_properties.contains_key("lane_settlement_commitments"));
-        assert!(!status_properties.contains_key("lane_relay_envelopes"));
-        assert!(!status_properties.contains_key("rbc_status"));
-        assert!(!status_properties.contains_key("missing_qc_total"));
-        for field in [
-            "node_fingerprint",
-            "build_fingerprint",
-            "config_fingerprint",
-        ] {
-            assert_eq!(
-                status_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some("#/components/schemas/Hash")
-            );
-        }
-        let height_context = status_properties
-            .get("height_context_id")
-            .and_then(Value::as_object)
-            .expect("height context id schema");
-        assert_eq!(
-            height_context.get("$ref").and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2HeightContextId")
-        );
-        for (field, schema_ref) in [
-            ("phase", "#/components/schemas/SumeragiV2StatusPhase"),
-            ("body_state", "#/components/schemas/SumeragiV2BodyState"),
-            (
-                "locked_prepare_qc",
-                "#/components/schemas/SumeragiV2QuorumCertificateRef",
-            ),
-            (
-                "highest_prepare_qc",
-                "#/components/schemas/SumeragiV2QuorumCertificateRef",
-            ),
-            (
-                "last_timeout_certificate",
-                "#/components/schemas/SumeragiV2TimeoutCertificateRef",
-            ),
-            (
-                "last_committed_subject",
-                "#/components/schemas/SumeragiV2BlockSubject",
-            ),
-            (
-                "height_context",
-                "#/components/schemas/SumeragiV2HeightContextStatus",
-            ),
-            (
-                "last_commit_qc",
-                "#/components/schemas/SumeragiV2CommitQcStatus",
-            ),
-            ("liveness", "#/components/schemas/SumeragiV2LivenessStatus"),
-        ] {
-            assert_eq!(
-                status_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some(schema_ref),
-                "status field {field} must retain its exact consensus type"
-            );
-        }
-        let required = status_schema
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("status required fields");
-        for field in ["restart_required", "height_context", "liveness"] {
-            assert!(
-                required.iter().any(|value| value.as_str() == Some(field)),
-                "status must require {field}"
-            );
-        }
-        assert!(
-            !required
-                .iter()
-                .any(|value| value.as_str() == Some("last_commit_qc")),
-            "last CommitQC must remain optional before an authenticated summary exists"
-        );
-
-        let context_schema = schemas
-            .get("SumeragiV2HeightContextStatus")
-            .and_then(Value::as_object)
-            .expect("height context status schema");
-        let context_properties = context_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("height context status properties");
-        assert_eq!(
-            context_properties
-                .get("mode")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2ConsensusMode")
-        );
-        assert_eq!(
-            context_properties
-                .get("quorum")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2DualQuorum")
-        );
-        assert_eq!(
-            context_properties
-                .get("validator_count")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maximum"))
-                .and_then(Value::as_u64),
-            Some(max_validators)
-        );
-
-        let commit_schema = schemas
-            .get("SumeragiV2CommitQcStatus")
-            .and_then(Value::as_object)
-            .expect("CommitQC status schema");
-        let commit_properties = commit_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("CommitQC status properties");
-        assert_eq!(
-            commit_properties
-                .get("certificate")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2QuorumCertificateRef")
-        );
-        for field in ["validator_count", "signer_count", "min_signers"] {
-            assert_eq!(
-                commit_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("maximum"))
-                    .and_then(Value::as_u64),
-                Some(max_validators),
-                "CommitQC status {field} must match the reducer validator bound"
-            );
-        }
-
-        let diagnostics_schema_ref = paths
-            .get("/v1/sumeragi/diagnostics")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|operation| operation.get("responses"))
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get("200"))
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("content"))
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("application/json"))
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str);
-        let diagnostics_enabled =
-            catalog_openapi_route_enabled(CatalogHttpMethod::Get, "/v1/sumeragi/diagnostics");
-        assert_eq!(
-            diagnostics_schema_ref,
-            diagnostics_enabled.then_some("#/components/schemas/SumeragiDiagnosticsResponse"),
-            "operator diagnostics presence and schema must follow the enabled catalog OpenAPI projection"
-        );
-        let diagnostics_schema = schemas
-            .get("SumeragiDiagnosticsResponse")
-            .and_then(Value::as_object)
-            .expect("diagnostics response schema");
-        assert_eq!(
-            diagnostics_schema
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let diagnostics_properties = diagnostics_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("diagnostics response properties");
-        assert!(diagnostics_properties.contains_key("npos"));
-        for (field, schema_ref) in [
-            (
-                "lane_commitments",
-                "#/components/schemas/SumeragiLaneCommitment",
-            ),
-            (
-                "dataspace_commitments",
-                "#/components/schemas/SumeragiDataspaceCommitment",
-            ),
-            (
-                "lane_payload_ownerships",
-                "#/components/schemas/SumeragiLanePayloadOwnership",
-            ),
-            (
-                "committed_lane_blocks",
-                "#/components/schemas/SumeragiCommittedLaneBlock",
-            ),
-            (
-                "lane_block_sessions",
-                "#/components/schemas/SumeragiLaneBlockSessionStatus",
-            ),
-            (
-                "lane_governance",
-                "#/components/schemas/SumeragiLaneGovernance",
-            ),
-        ] {
-            assert_eq!(
-                diagnostics_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("items"))
-                    .and_then(Value::as_object)
-                    .and_then(|items| items.get("$ref"))
-                    .and_then(Value::as_str),
-                Some(schema_ref),
-                "diagnostics field {field} must retain its exact wire type"
-            );
-        }
-        for canonical_field in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
-            assert!(
-                !diagnostics_properties.contains_key(canonical_field),
-                "diagnostics must not duplicate canonical field {canonical_field}"
-            );
-        }
-
-        let commitment_properties = schemas
-            .get("LaneSettlementCommitment")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("lane settlement commitment properties");
-        assert_eq!(
-            commitment_properties
-                .get("native_amx_receipts")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/NativeAmxReceipt")
-        );
-        assert_eq!(
-            commitment_properties
-                .get("native_amx_receipts")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maxItems"))
-                .and_then(Value::as_u64),
-            Some(4_096)
-        );
-        assert_eq!(
-            commitment_properties
-                .get("nexus_fee_receipts")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/NexusFeeReceipt")
-        );
-        assert_eq!(
-            schemas
-                .get("LaneSettlementCommitment")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("additionalProperties"))
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            schemas
-                .get("LaneSettlementCommitment")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("required"))
-                .and_then(Value::as_array)
-                .is_some_and(|required| required
-                    .iter()
-                    .any(|field| field.as_str() == Some("lane_incarnation")))
-        );
-
-        let receipt_properties = schemas
-            .get("NativeAmxReceipt")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("native AMX receipt properties");
-        let receipt_required = schemas
-            .get("NativeAmxReceipt")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("required"))
-            .and_then(Value::as_array)
-            .expect("native AMX receipt required fields");
-        for field in [
-            "chain_id_hash",
-            "lane_incarnation",
-            "authority_context_height",
-            "lane_block_height",
-            "lane_block_view",
-            "coordinator_proposal_hash",
-        ] {
-            assert!(
-                receipt_required
-                    .iter()
-                    .any(|required| required.as_str() == Some(field)),
-                "native AMX receipt must require {field}"
-            );
-        }
-        assert_eq!(
-            receipt_properties
-                .get("legs")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/NativeAmxLegRecord")
-        );
-        let legs_schema = receipt_properties
-            .get("legs")
-            .and_then(Value::as_object)
-            .expect("native AMX legs schema");
-        assert_eq!(legs_schema.get("minItems").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            legs_schema.get("maxItems").and_then(Value::as_u64),
-            Some(255)
-        );
-        assert_eq!(
-            legs_schema.get("uniqueItems").and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let leg_properties = schemas
-            .get("NativeAmxLegRecord")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("native AMX leg properties");
-        assert!(
-            !leg_properties.contains_key("lane_incarnation"),
-            "native AMX v2 legs bind participant context through both QCs, not a duplicated top-level incarnation"
-        );
-        assert_eq!(
-            component_required(schemas, "NativeAmxLegRecord"),
-            [
-                "lane_id",
-                "dataspace_id",
-                "participant_proposal",
-                "participant_settlement",
-                "participant_settlement_hash",
-                "prepare_qc",
-                "commit_qc",
-            ]
-        );
-        for (field, schema_ref) in [
-            (
-                "participant_proposal",
-                "#/components/schemas/NativeAmxParticipantLaneBlockProposal",
-            ),
-            (
-                "participant_settlement",
-                "#/components/schemas/NativeAmxParticipantSettlementCommitment",
-            ),
-            ("participant_settlement_hash", "#/components/schemas/Hash"),
-        ] {
-            assert_eq!(
-                leg_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some(schema_ref),
-                "{field} should reference its exact participant-finality schema"
-            );
-        }
-        let participant_settlement = schemas
-            .get("NativeAmxParticipantSettlementCommitment")
-            .and_then(Value::as_object)
-            .expect("Native AMX participant settlement schema");
-        assert_eq!(
-            participant_settlement
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let participant_settlement_properties = participant_settlement
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("Native AMX participant settlement properties");
-        for field in [
-            "total_local_amount",
-            "total_xor_due",
-            "total_xor_after_haircut",
-            "total_xor_variance",
-        ] {
-            assert_eq!(
-                participant_settlement_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("const"))
-                    .and_then(Value::as_str),
-                Some("0"),
-                "participant settlement {field} must be zero"
-            );
-        }
-        for field in ["nexus_fee_receipts", "native_amx_receipts"] {
-            assert_eq!(
-                participant_settlement_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("maxItems"))
-                    .and_then(Value::as_u64),
-                Some(0),
-                "participant settlement {field} must be empty"
-            );
-        }
-        let participant_receipts = participant_settlement_properties
-            .get("receipts")
-            .and_then(Value::as_object)
-            .expect("Native AMX participant receipts schema");
-        assert_eq!(
-            participant_receipts.get("minItems").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            participant_receipts.get("maxItems").and_then(Value::as_u64),
-            Some(4_096)
-        );
-        assert_eq!(
-            participant_receipts
-                .get("uniqueItems")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            participant_receipts
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/NativeAmxParticipantSettlementReceipt")
-        );
-        for qc_field in ["prepare_qc", "commit_qc"] {
-            assert_eq!(
-                leg_properties
-                    .get(qc_field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some("#/components/schemas/NativeAmxAttestationQc"),
-                "{qc_field} should reference the QC schema"
-            );
-        }
-
-        let qc_properties = schemas
-            .get("NativeAmxAttestationQc")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("native AMX QC properties");
-        assert_eq!(
-            qc_properties
-                .get("body")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/NativeAmxAttestationBody")
-        );
-        let validator_set = qc_properties
-            .get("validator_set")
-            .and_then(Value::as_object)
-            .expect("native AMX validator set schema");
-        assert_eq!(
-            validator_set.get("minItems").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            validator_set.get("maxItems").and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            validator_set.get("uniqueItems").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            validator_set
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2BlsValidatorId")
-        );
-        let validator_set_pops = qc_properties
-            .get("validator_set_pops")
-            .and_then(Value::as_object)
-            .expect("native AMX validator proof-of-possession schema");
-        assert_eq!(
-            validator_set_pops.get("minItems").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            validator_set_pops.get("maxItems").and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            validator_set_pops
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2BlsProof")
-        );
-        assert_eq!(
-            qc_properties
-                .get("signers_bitmap")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("minItems"))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            qc_properties
-                .get("signers_bitmap")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maxItems"))
-                .and_then(Value::as_u64),
-            Some(16)
-        );
-        assert_eq!(
-            qc_properties
-                .get("bls_aggregate_signature")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2BlsProof")
-        );
-
-        let descriptor_properties = schemas
-            .get("NativeAmxParticipantLaneBlockDescriptor")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("Native AMX participant descriptor properties");
-        for field in ["accepted_candidate_indices", "accepted_transaction_hashes"] {
-            let accepted = descriptor_properties
-                .get(field)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("Native AMX descriptor {field} schema"));
-            assert_eq!(accepted.get("minItems").and_then(Value::as_u64), Some(1));
-            assert_eq!(
-                accepted.get("maxItems").and_then(Value::as_u64),
-                Some(4_096)
-            );
-            assert_eq!(
-                accepted.get("uniqueItems").and_then(Value::as_bool),
-                Some(true)
-            );
-        }
-
-        let body_schema = schemas
-            .get("NativeAmxAttestationBody")
-            .and_then(Value::as_object)
-            .expect("native AMX body schema");
-        let body_required = body_schema
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("native AMX body required fields");
-        for field in [
-            "round",
-            "epoch",
-            "chain_id_hash",
-            "coordinator_lane_incarnation",
-            "participant_lane_incarnation",
-            "participant_previous_block_height",
-            "participant_previous_block_descriptor_hash",
-            "participant_lane_block_height",
-            "participant_lane_block_view",
-            "participant_proposal_hash",
-            "participant_settlement_commitment",
-            "participant_validator_set_hash",
-            "participant_validator_count",
-            "participant_min_quorum",
-            "authority_context_height",
-            "coordinator_lane_block_view",
-            "coordinator_proposal_hash",
-            "planned_coordinator_block_height",
-        ] {
-            assert!(
-                body_required
-                    .iter()
-                    .any(|required| required.as_str() == Some(field)),
-                "native AMX body must require {field}"
-            );
-        }
-        assert!(
-            !body_required
-                .iter()
-                .any(|required| required.as_str() == Some("coordinator_lane_block_height"))
-        );
-        let body_properties = body_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("native AMX body properties");
-        for field in ["participant_validator_count", "participant_min_quorum"] {
-            assert_eq!(
-                body_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("maximum"))
-                    .and_then(Value::as_u64),
-                Some(128),
-                "native AMX body must cap {field}"
-            );
-        }
-        let body_phase = body_properties
-            .get("phase")
-            .and_then(Value::as_object)
-            .expect("native AMX phase schema");
-        assert_eq!(
-            body_phase.get("$ref").and_then(Value::as_str),
-            Some("#/components/schemas/NativeAmxPhase")
-        );
-        let native_phase = schemas
-            .get("NativeAmxPhase")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("native AMX tagged phase properties");
-        let phase_values = native_phase
-            .get("phase")
-            .and_then(Value::as_object)
-            .and_then(|phase| phase.get("enum"))
-            .and_then(Value::as_array)
-            .expect("native AMX phase enum");
-        assert!(
-            phase_values
-                .iter()
-                .any(|value| value.as_str() == Some("prepare"))
-        );
-        assert!(
-            phase_values
-                .iter()
-                .any(|value| value.as_str() == Some("commit"))
-        );
-        assert_eq!(
-            native_phase
-                .get("detail")
-                .and_then(Value::as_object)
-                .and_then(|detail| detail.get("type"))
-                .and_then(Value::as_str),
-            Some("null")
-        );
-
-        for (schema_name, tag, values) in [
-            (
-                "LaneLiquidityProfile",
-                "profile",
-                &["Tier1", "Tier2", "Tier3"][..],
-            ),
-            (
-                "LaneVolatilityClass",
-                "bucket",
-                &["Stable", "Elevated", "Dislocated"][..],
-            ),
-        ] {
-            let properties = schemas
-                .get(schema_name)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{schema_name} tagged enum properties"));
-            let actual = properties
-                .get(tag)
-                .and_then(Value::as_object)
-                .and_then(|tag| tag.get("enum"))
-                .and_then(Value::as_array)
-                .unwrap_or_else(|| panic!("{schema_name}.{tag} enum"));
-            for expected in values {
-                assert!(
-                    actual.iter().any(|value| value.as_str() == Some(*expected)),
-                    "{schema_name}.{tag} must include {expected}"
-                );
-            }
-        }
-        assert_eq!(
-            schemas
-                .get("LaneSwapMetadata")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("liquidity_profile"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/LaneLiquidityProfile")
-        );
-        assert_eq!(
-            schemas
-                .get("LaneSwapMetadata")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("volatility_class"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/LaneVolatilityClass")
-        );
-
-        for field in [
-            "total_local_amount",
-            "total_xor_due",
-            "total_xor_after_haircut",
-            "total_xor_variance",
-        ] {
-            let property = commitment_properties
-                .get(field)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("lane settlement {field} schema"));
-            assert_eq!(
-                property.get("$ref").and_then(Value::as_str),
-                Some("#/components/schemas/Quantity")
-            );
-        }
-        for retired in [
-            "total_local_micro",
-            "total_xor_due_micro",
-            "total_xor_after_haircut_micro",
-            "total_xor_variance_micro",
-        ] {
-            assert!(
-                !commitment_properties.contains_key(retired),
-                "retired fixed-unit field leaked into the settlement schema: {retired}"
-            );
-        }
-        let settlement_receipt_properties = schemas
-            .get("LaneSettlementReceipt")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("lane settlement receipt properties");
-        assert_eq!(
-            settlement_receipt_properties
-                .get("source_id")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9A-F]{64}$")
-        );
-        for field in [
-            "local_amount",
-            "xor_due",
-            "xor_after_haircut",
-            "xor_variance",
-        ] {
-            assert_eq!(
-                settlement_receipt_properties
-                    .get(field)
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("$ref"))
-                    .and_then(Value::as_str),
-                Some("#/components/schemas/Quantity"),
-                "lane settlement receipt {field} must use the canonical Quantity schema"
-            );
-        }
-        for retired in [
-            "local_amount_micro",
-            "xor_due_micro",
-            "xor_after_haircut_micro",
-            "xor_variance_micro",
-        ] {
-            assert!(
-                !settlement_receipt_properties.contains_key(retired),
-                "retired fixed-unit field leaked into the settlement receipt schema: {retired}"
-            );
-        }
-
-        for (schema_name, field_name) in [
-            ("NexusFeeReceipt", "lane_id"),
-            ("NativeAmxAttestationBody", "coordinator_lane_id"),
-            ("NativeAmxAttestationBody", "participant_lane_id"),
-            ("NativeAmxLegRecord", "lane_id"),
-            ("NativeAmxReceipt", "lane_id"),
-            ("LaneSettlementCommitment", "lane_id"),
-            ("LaneRelayEnvelope", "lane_id"),
-        ] {
-            let maximum = schemas
-                .get(schema_name)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get(field_name))
-                .and_then(Value::as_object)
-                .and_then(|property| property.get("maximum"))
-                .and_then(Value::as_u64);
-            assert_eq!(
-                maximum,
-                Some(u64::from(u32::MAX)),
-                "{schema_name}.{field_name} must retain an unsigned uint32 maximum"
-            );
-        }
-    }
-
-    #[test]
-    fn generated_spec_documents_soracloud_private_uploaded_model_routes() {
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-        assert!(paths.contains_key("/v1/soracloud/status"));
-        assert!(paths.contains_key("/v1/soracloud/hf/deploy"));
-        assert!(paths.contains_key("/v1/soracloud/model/upload/private/execute"));
-        assert!(paths.contains_key("/v1/soracloud/model/upload/private/receipts"));
-        let status_description = paths
-            .get("/v1/soracloud/status")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|get| get.get("description"))
-            .and_then(Value::as_str)
-            .expect("Soracloud status description");
-        assert!(status_description.contains("configured_lane_count"));
-        assert!(status_description.contains("declared_lane_count"));
-        assert!(status_description.contains("active lane ids/count"));
-        assert!(status_description.contains("autoscale-capacity lane ids/count"));
-
-        let hf_deploy = paths
-            .get("/v1/soracloud/hf/deploy")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .expect("Soracloud HF deploy POST operation");
-        assert_eq!(
-            hf_deploy
-                .get(SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION)
-                .and_then(Value::as_str),
-            Some(SORACLOUD_HF_DEPLOY_CONTRACT_V1)
-        );
-        assert_eq!(
-            hf_deploy
-                .get("responses")
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SoracloudHfDeployDraftV1")
-        );
-        let documented_headers = hf_deploy
-            .get("parameters")
-            .and_then(Value::as_array)
-            .expect("Soracloud HF deploy canonical request headers");
-        for header in [
-            "X-Iroha-Account",
-            "X-Iroha-Signature",
-            "X-Iroha-Timestamp-Ms",
-            "X-Iroha-Nonce",
-            "X-Iroha-Witness",
-        ] {
-            assert!(
-                documented_headers.iter().any(|parameter| {
-                    parameter
-                        .as_object()
-                        .and_then(|parameter| parameter.get("name"))
-                        .and_then(Value::as_str)
-                        == Some(header)
-                }),
-                "Soracloud HF deploy header missing {header}"
-            );
-        }
-
-        let schemas = doc
-            .get("components")
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("schema section");
-        let hf_draft = schemas
-            .get("SoracloudHfDeployDraftV1")
-            .and_then(Value::as_object)
-            .expect("Soracloud HF deploy draft schema");
-        assert_eq!(
-            hf_draft
-                .get(SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION)
-                .and_then(Value::as_str),
-            Some(SORACLOUD_HF_DEPLOY_CONTRACT_V1)
-        );
-        let tx_instructions = hf_draft
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("tx_instructions"))
-            .and_then(Value::as_object)
-            .expect("Soracloud HF deploy draft tx_instructions schema");
-        assert_eq!(
-            tx_instructions.get("minItems").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            tx_instructions.get("maxItems").and_then(Value::as_u64),
-            Some(3)
-        );
-        let payload_hex = schemas
-            .get("SoracloudTxInstruction")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("payload_hex"))
-            .and_then(Value::as_object)
-            .expect("Soracloud transaction instruction payload_hex schema");
-        assert_eq!(
-            payload_hex.get("pattern").and_then(Value::as_str),
-            Some("^(?:[0-9a-f]{2})+$")
-        );
-        let response = schemas
-            .get("PrivateUploadedModelReceiptListResponse")
-            .and_then(Value::as_object)
-            .expect("receipt-list schema");
-        let properties = response
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("receipt-list properties");
-        for key in [
-            "total",
-            "returned_items",
-            "remaining_items",
-            "has_more",
-            "count_mode",
-            "continue_cursor",
-        ] {
-            assert!(properties.contains_key(key), "metadata field missing {key}");
-        }
-    }
-
-    #[test]
-    fn generated_spec_documents_app_query_page_metadata() {
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-        for (path, method, expected_ref) in [
-            (
-                "/v1/accounts",
-                "get",
-                "#/components/schemas/AccountListResponse",
-            ),
-            (
-                "/v1/accounts/query",
-                "post",
-                "#/components/schemas/AccountQueryResponse",
-            ),
-            (
-                "/v1/domains",
-                "get",
-                "#/components/schemas/DomainListResponse",
-            ),
-            (
-                "/v1/domains/query",
-                "post",
-                "#/components/schemas/DomainQueryResponse",
-            ),
-            (
-                "/v1/accounts/{account_id}/assets",
-                "get",
-                "#/components/schemas/AccountAssetListResponse",
-            ),
-            (
-                "/v1/accounts/{account_id}/assets/query",
-                "post",
-                "#/components/schemas/AccountAssetQueryResponse",
-            ),
-            (
-                "/v1/assets/definitions",
-                "get",
-                "#/components/schemas/AssetDefinitionListResponse",
-            ),
-            (
-                "/v1/assets/definitions/query",
-                "post",
-                "#/components/schemas/AssetDefinitionQueryResponse",
-            ),
-            (
-                "/v1/assets/{definition_id}/holders",
-                "get",
-                "#/components/schemas/AssetHolderListResponse",
-            ),
-            (
-                "/v1/assets/{definition_id}/holders/query",
-                "post",
-                "#/components/schemas/AssetHolderQueryResponse",
-            ),
-            ("/v1/nfts", "get", "#/components/schemas/NftListResponse"),
-            (
-                "/v1/nfts/query",
-                "post",
-                "#/components/schemas/NftQueryResponse",
-            ),
-            ("/v1/rwas", "get", "#/components/schemas/RwaListResponse"),
-            (
-                "/v1/rwas/query",
-                "post",
-                "#/components/schemas/RwaQueryResponse",
-            ),
-            (
-                "/v1/repo/agreements",
-                "get",
-                "#/components/schemas/RepoAgreementListResponse",
-            ),
-            (
-                "/v1/repo/agreements/query",
-                "post",
-                "#/components/schemas/RepoAgreementListResponse",
-            ),
-        ] {
-            let schema_ref = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path_item| path_item.get(method))
-                .and_then(Value::as_object)
-                .and_then(|operation| operation.get("responses"))
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str)
-                .expect("path response schema ref");
-            assert_eq!(schema_ref, expected_ref, "{method} {path}");
-        }
-
-        let schemas = doc
-            .get("components")
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("schema section");
-        let metadata = schemas
-            .get("AppPageMetadata")
-            .and_then(Value::as_object)
-            .expect("app page metadata schema");
-        let required = metadata
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("metadata required fields");
-        for field in ["items", "has_more", "count_mode"] {
-            assert!(
-                required.iter().any(|value| value.as_str() == Some(field)),
-                "metadata required fields should include {field}"
-            );
-        }
-        assert!(
-            !required.iter().any(|value| value.as_str() == Some("total")),
-            "bounded count responses must not require total"
-        );
-        let properties = metadata
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("metadata properties");
-        for field in [
-            "total",
-            "has_more",
-            "count_mode",
-            "indexed_height",
-            "indexed_block_hash",
-            "query_source",
-        ] {
-            assert!(
-                properties.contains_key(field),
-                "metadata properties should include {field}"
-            );
-        }
-
-        let repo_agreement = schemas
-            .get("RepoAgreement")
-            .and_then(Value::as_object)
-            .expect("repo agreement schema");
-        let repo_required = repo_agreement
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("repo agreement required fields");
-        let repo_properties = repo_agreement
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("repo agreement properties");
-        for field in [
-            "cash_source",
-            "collateral_custody_asset",
-            "settlement_timestamp_ms",
-            "status",
-        ] {
-            assert!(
-                repo_required
-                    .iter()
-                    .any(|value| value.as_str() == Some(field)),
-                "repo agreement should require {field}"
-            );
-            assert!(
-                repo_properties.contains_key(field),
-                "repo agreement should document {field}"
-            );
-        }
-
-        let repo_request_properties = schemas
-            .get("RepoAgreementsQueryRequest")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .expect("repo query request properties");
-        for field in ["filter", "select", "aggregate", "fetch_size", "count_mode"] {
-            assert!(
-                repo_request_properties.contains_key(field),
-                "repo query request should document {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn alias_openapi_documents_optional_public_and_exact_restricted_auth() {
-        let document = generate_spec();
-        let canonical_headers = vec![
-            ("X-Iroha-Account".to_owned(), false),
-            ("X-Iroha-Signature".to_owned(), false),
-            ("X-Iroha-Timestamp-Ms".to_owned(), false),
-            ("X-Iroha-Nonce".to_owned(), false),
-            ("X-Iroha-Witness".to_owned(), false),
-        ];
-
-        for path in ["/v1/aliases/resolve-index", "/v1/aliases/by-account"] {
-            let operation = openapi_operation(&document, path, "post");
-            assert_eq!(
-                operation_header_requirements(operation),
-                canonical_headers,
-                "POST {path} canonical authentication headers"
-            );
-            assert_alias_auth_required_response(operation, path);
-            assert!(
-                operation
-                    .get("responses")
-                    .and_then(Value::as_object)
-                    .is_some_and(|responses| responses.contains_key("403")),
-                "POST {path} must distinguish authorization failure from missing authentication"
-            );
-        }
-
-        let lookup_description = openapi_operation(&document, "/v1/aliases/by-account", "post")
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("alias by-account description");
-        assert!(lookup_description.contains("Canonical authentication is optional"));
-        assert!(lookup_description.contains("required for restricted data"));
-
-        let exact_resolve = openapi_operation(&document, "/v1/aliases/resolve", "post");
-        assert_eq!(
-            operation_header_requirements(exact_resolve),
-            canonical_headers,
-            "POST /v1/aliases/resolve canonical authentication headers"
-        );
-        assert_alias_auth_required_response(exact_resolve, "/v1/aliases/resolve");
-        assert!(
-            exact_resolve
-                .get("description")
-                .and_then(Value::as_str)
-                .is_some_and(
-                    |description| description.contains("Public dataspaces may be read unsigned")
-                )
-        );
-
-        let setup_plan = openapi_operation(&document, "/v1/aliases/setup/plan", "post");
-        assert_eq!(
-            operation_header_requirements(setup_plan),
-            canonical_headers,
-            "POST /v1/aliases/setup/plan canonical authentication headers"
-        );
-        assert_alias_auth_required_response(setup_plan, "/v1/aliases/setup/plan");
-        assert!(
-            setup_plan
-                .get("responses")
-                .and_then(Value::as_object)
-                .is_some_and(|responses| responses.contains_key("409")),
-            "planner must document structured drift conflicts"
-        );
-        for path in [
-            "/v1/aliases/lease/renew/plan",
-            "/v1/aliases/auto-renew/plan",
-        ] {
-            let operation = openapi_operation(&document, path, "post");
-            assert_eq!(
-                operation_header_requirements(operation),
-                canonical_headers,
-                "POST {path} canonical authentication headers"
-            );
-            assert_alias_auth_required_response(operation, path);
-            assert!(
-                operation
-                    .get("responses")
-                    .and_then(Value::as_object)
-                    .is_some_and(|responses| responses.contains_key("409")),
-                "POST {path} must document live CAS/owner/quote conflicts"
-            );
-        }
-        assert!(
-            exact_resolve
-                .get("responses")
-                .and_then(Value::as_object)
-                .is_some_and(|responses| responses.contains_key("403")),
-            "the exact alias resolve route must distinguish permission failure from missing authentication"
-        );
-
-        for (path, reject_code, requires_authorization_response) in [
-            (
-                "/v1/retail/recipients/lookup",
-                "recipient_lookup_signature_required",
-                true,
-            ),
-            (
-                "/v1/retail/recipients/route",
-                "recipient_lookup_signature_required",
-                true,
-            ),
-            (
-                "/v1/fee-sponsor-programs/by-id",
-                "fee_sponsor_program_signature_required",
-                false,
-            ),
-            ("/v1/fees/quote", "fee_quote_signature_required", false),
-        ] {
-            let operation = openapi_operation(&document, path, "post");
-            assert_eq!(
-                operation_header_requirements(operation),
-                canonical_headers,
-                "POST {path} canonical authentication headers"
-            );
-            assert_canonical_auth_required_response(operation, path, reject_code);
-            assert_eq!(
-                operation
-                    .get("responses")
-                    .and_then(Value::as_object)
-                    .is_some_and(|responses| responses.contains_key("403")),
-                requires_authorization_response,
-                "POST {path} authorization response contract"
-            );
-        }
-    }
-
-    #[test]
-    fn protected_contract_identity_openapi_is_signed_and_exact() {
-        let document = generate_spec();
-        let canonical_headers = vec![
-            ("X-Iroha-Account".to_owned(), false),
-            ("X-Iroha-Signature".to_owned(), false),
-            ("X-Iroha-Timestamp-Ms".to_owned(), false),
-            ("X-Iroha-Nonce".to_owned(), false),
-            ("X-Iroha-Witness".to_owned(), false),
-        ];
-
-        for (path, method, response_schema, reject_code, expected_statuses) in [
-            (
-                "/v1/contracts/aliases/resolve",
-                "post",
-                "#/components/schemas/ContractAliasResolveResponse",
-                "alias_auth_required",
-                &["200", "400", "401", "404", "429", "500"][..],
-            ),
-            (
-                "/v1/gov/contracts/{contract_address}",
-                "get",
-                "#/components/schemas/GovernedContractResponse",
-                "contract_code_auth_required",
-                &["200", "400", "401", "404", "429", "500"][..],
-            ),
-            (
-                "/v1/contracts/code-bytes/{code_hash}",
-                "get",
-                "#/components/schemas/JsonValue",
-                "contract_code_auth_required",
-                &["200", "400", "401", "404", "429"][..],
-            ),
-        ] {
-            let operation = openapi_operation(&document, path, method);
-            assert_eq!(
-                operation_header_requirements(operation),
-                canonical_headers,
-                "{method} {path} canonical authentication headers"
-            );
-            assert_canonical_auth_required_response(operation, path, reject_code);
-            assert_eq!(
-                operation_response_schema_ref(operation, "200", path),
-                response_schema,
-                "{method} {path} success schema"
-            );
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .expect("operation responses");
-            assert_eq!(
-                responses
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<BTreeSet<_>>(),
-                expected_statuses.iter().copied().collect(),
-                "{method} {path} must document the exact fail-closed response surface"
-            );
-        }
-
-        assert_eq!(
-            operation_request_schema_ref(
-                openapi_operation(&document, "/v1/contracts/aliases/resolve", "post"),
-                "/v1/contracts/aliases/resolve",
-            ),
-            "#/components/schemas/ContractAliasResolveRequest"
-        );
-
-        let schemas = document
-            .get("components")
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("schema section");
-        for (name, required_fields) in [
-            ("ContractAliasResolveRequest", vec!["contract_alias"]),
-            (
-                "ContractAliasBinding",
-                vec!["alias", "status", "bound_at_ms"],
-            ),
-            (
-                "ContractAliasResolveResponse",
-                vec![
-                    "contract_alias",
-                    "contract_address",
-                    "contract_subject_account",
-                    "dataspace",
-                    "contract_alias_binding",
-                    "source",
-                ],
-            ),
-        ] {
-            let schema = schemas
-                .get(name)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{name} schema"));
-            assert_eq!(
-                schema.get("additionalProperties"),
-                Some(&Value::Bool(false))
-            );
-            let required = schema
-                .get("required")
-                .and_then(Value::as_array)
-                .expect("required fields")
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>();
-            assert_eq!(
-                required,
-                required_fields.into_iter().collect(),
-                "{name} required fields"
-            );
-            let properties = schema
-                .get("properties")
-                .and_then(Value::as_object)
-                .expect("schema properties");
-            assert_eq!(
-                properties
-                    .keys()
-                    .map(String::as_str)
-                    .collect::<BTreeSet<_>>(),
-                required
-                    .iter()
-                    .copied()
-                    .chain(match name {
-                        "ContractAliasBinding" => {
-                            ["lease_expiry_ms", "grace_until_ms"]
-                                .as_slice()
-                                .iter()
-                                .copied()
-                        }
-                        _ => [].as_slice().iter().copied(),
-                    })
-                    .collect(),
-                "{name} must not advertise undeclared compatibility fields"
-            );
-        }
-
-        let governed = schemas
-            .get("GovernedContractResponse")
-            .and_then(Value::as_object)
-            .expect("governed contract schema");
-        let variants = governed
-            .get("oneOf")
-            .and_then(Value::as_array)
-            .expect("governed response variants");
-        assert_eq!(variants.len(), 2);
-        for (variant, expected) in variants.iter().zip([
-            [
-                "found",
-                "contract_address",
-                "contract_subject_account",
-                "dataspace",
-                "code_hash_hex",
-                "abi_hash_hex",
-                "public_entrypoints",
-            ]
-            .as_slice(),
-            ["found", "contract_address", "dataspace"].as_slice(),
-        ]) {
-            let variant = variant.as_object().expect("governed response variant");
-            assert_eq!(
-                variant.get("additionalProperties"),
-                Some(&Value::Bool(false))
-            );
-            let required = variant
-                .get("required")
-                .and_then(Value::as_array)
-                .expect("variant required fields")
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>();
-            let properties = variant
-                .get("properties")
-                .and_then(Value::as_object)
-                .expect("variant properties")
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            let expected = expected.iter().copied().collect::<BTreeSet<_>>();
-            assert_eq!(required, expected);
-            assert_eq!(properties, expected);
-        }
-    }
-
-    #[test]
-    fn multisig_read_auth_contract_is_path_specific() {
-        let document = generate_spec();
-        let canonical_headers = vec![
-            ("X-Iroha-Account".to_owned(), false),
-            ("X-Iroha-Signature".to_owned(), false),
-            ("X-Iroha-Timestamp-Ms".to_owned(), false),
-            ("X-Iroha-Nonce".to_owned(), false),
-            ("X-Iroha-Witness".to_owned(), false),
-        ];
-
-        for path in [
-            "/v1/multisig/spec",
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/resolve",
-        ] {
-            let operation = openapi_operation(&document, path, "post");
-            assert_eq!(
-                operation_header_requirements(operation),
-                canonical_headers,
-                "POST {path} conditional canonical authentication headers"
-            );
-            assert_canonical_auth_required_response(operation, path, "multisig_read_auth_required");
-            let description = operation
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("POST {path} description"));
-            assert!(description.contains("Both canonical `multisig_account_id`"));
-            assert!(description.contains("`multisig_account_alias` selectors require"));
-            assert!(description.contains("body fields never establish signer identity"));
-        }
-
-        for path in [
-            "/v1/multisig/propose",
-            "/v1/multisig/approve",
-            "/v1/multisig/cancel",
-            "/v1/contracts/call/multisig/propose",
-            "/v1/contracts/call/multisig/approve",
-        ] {
-            let operation = openapi_operation(&document, path, "post");
-            assert!(
-                operation_header_requirements(operation).is_empty(),
-                "POST {path} must retain its body-authenticated write contract"
-            );
-        }
-    }
-
-    mod vpn_da;
+    include!("openapi/tests/vpn_da.rs");
 }

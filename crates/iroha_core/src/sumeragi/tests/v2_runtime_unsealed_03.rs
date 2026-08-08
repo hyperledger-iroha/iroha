@@ -14,19 +14,19 @@ fn retiring_exact_body_completion_releases_a_capacity_one_ingress_slot() {
         payload_hash: Hash::new(b"retired-body-payload"),
     };
     let layout = wire::DataAvailabilityLayout {
-        encoding: wire::PayloadEncoding::Plain,
-        chunk_size_bytes: 1,
-        data_shards: 0,
-        parity_shards: 0,
+        encoding: wire::PayloadEncoding::ReedSolomon16,
+        chunk_size_bytes: 2,
+        data_shards: 1,
+        parity_shards: 1,
         max_payload_size_bytes: 1,
-        max_chunk_count: 1,
+        max_chunk_count: 2,
     };
     let original = wire::PayloadManifest {
         round,
         subject,
         payload_size_bytes: 1,
         layout,
-        chunk_hashes: vec![Hash::new(b"retired chunk")],
+        chunk_hashes: vec![Hash::new(b"retired chunk"); 2],
         chunk_root: Hash::new(b"retired root"),
     };
     let replacement = wire::PayloadManifest {
@@ -34,7 +34,7 @@ fn retiring_exact_body_completion_releases_a_capacity_one_ingress_slot() {
             view: round.view + 1,
             ..round
         },
-        chunk_hashes: vec![Hash::new(b"replacement chunk")],
+        chunk_hashes: vec![Hash::new(b"replacement chunk"); 2],
         chunk_root: Hash::new(b"replacement root"),
         ..original.clone()
     };

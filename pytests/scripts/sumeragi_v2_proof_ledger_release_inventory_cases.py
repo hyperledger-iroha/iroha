@@ -38,7 +38,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 834 tests",
+            "must contain exactly 835 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -52,7 +52,7 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
                 f"production ownership regression {test_name} must be pinned exactly once; found 0",
             )
             for test_name in (
-                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+                "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner",
                 "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
                 "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
                 "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
@@ -68,9 +68,9 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             )
         ),
         (
+            "readonly expected_production_liveness_test_count=835",
             "readonly expected_production_liveness_test_count=834",
-            "readonly expected_production_liveness_test_count=833",
-            "production liveness source count must be sealed as 834",
+            "production liveness source count must be sealed as 835",
         ),
         (
             "readonly expected_typed_rollover_formal_mutation_count=45",
@@ -89,26 +89,26 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=474",
-            "readonly expected_multilane_focus_test_count=469",
-            "multilane G-UNIT source count must be sealed as 474",
+            "readonly expected_multilane_focus_test_count=524",
+            "readonly expected_multilane_focus_test_count=519",
+            "multilane G-UNIT source count must be sealed as 524",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 475 ]]; then""",
+                """'[:space:]')" != 525 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-                """'[:space:]')" != 474 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 474 focus rows",
+                """'[:space:]')" != 524 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 524 focus rows",
         ),
         (
-            "The canonical 474-row TSV is",
-            "The canonical 469-row TSV is",
-            "G-UNIT inventory comment must seal 474 rows",
+            "The canonical 524-row TSV is",
+            "The canonical 519-row TSV is",
+            "G-UNIT inventory comment must seal 524 rows",
         ),
         (
-            "including exact 474/474 G-UNIT,",
-            "including exact 473/474 G-UNIT,",
-            "terminal success text must seal exact 474/474 G-UNIT",
+            "including exact 524/524 G-UNIT,",
+            "including exact 523/524 G-UNIT,",
+            "terminal success text must seal exact 524/524 G-UNIT",
         ),
         (
             "  kura::tests::native_amx_prevote_byte_budget_is_exact_per_route_and_finality_width_stable\n",
@@ -713,27 +713,27 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     (
         (
             Path("formal/sumeragi_v2/README.md"),
-            "current inventory to 834 tests across 39 modules.\n"
+            "current inventory to 835 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 86 legs.",
-            "current inventory to 834 tests across 39 modules.\n"
+            "current inventory to 835 tests across 39 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 85 legs.",
         ),
         (
             Path("formal/sumeragi_v2/PROOF.md"),
-            "current 834-test,\n39-module inventory. The complete source-sealed\n"
+            "current 835-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 86 legs",
-            "current 834-test,\n39-module inventory. The complete source-sealed\n"
+            "current 835-test,\n39-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 85 legs",
         ),
         (
             Path("specs/sumeragi_v2_liveness.md"),
-            "current source-bound inventory to 834 exact tests across\n"
+            "current source-bound inventory to 835 exact tests across\n"
             "39 modules and 86 pre-network legs.",
-            "current source-bound inventory to 834 exact tests across\n"
+            "current source-bound inventory to 835 exact tests across\n"
             "39 modules and 85 pre-network legs.",
         ),
     ),
@@ -786,9 +786,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            "_PRODUCTION_TEST_COUNT = 835",
             "_PRODUCTION_TEST_COUNT = 834",
-            "_PRODUCTION_TEST_COUNT = 833",
-            "production test count must equal the exact shell inventory count 834",
+            "production test count must equal the exact shell inventory count 835",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),

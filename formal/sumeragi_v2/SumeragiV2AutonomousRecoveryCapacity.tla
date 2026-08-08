@@ -42,6 +42,8 @@ RecoveryCapacityModes ==
    "ClaimPeakAfterMutation",
    "AssociationPeakAfterMutation",
    "PrunePeakAfterMutation",
+   "PrunePeakDropsRosterGeneration",
+   "PrunePeakDropsReservationEnvelope",
    "DebugAppendBeforeCarrierReservation",
    "DebugRestartDropsAccounting",
    "HashOnlyAutonomousPredecessor"}
@@ -99,6 +101,10 @@ VARIABLES
   \* @type: Bool;
   pruneCapacityPeakAdmitted,
   \* @type: Bool;
+  pruneRosterGenerationCovered,
+  \* @type: Bool;
+  pruneReservationEnvelopeCovered,
+  \* @type: Bool;
   pruneFirstDurableMutation,
   \* @type: Str;
   debugPhase,
@@ -128,7 +134,8 @@ FrontierVars ==
 PeakVars ==
   <<claimSetPeakAdmitted, claimSetFirstMutation,
     associationStagePeakAdmitted, associationStageFirstMutation,
-    pruneCapacityPeakAdmitted, pruneFirstDurableMutation>>
+    pruneCapacityPeakAdmitted, pruneRosterGenerationCovered,
+    pruneReservationEnvelopeCovered, pruneFirstDurableMutation>>
 
 DebugVars ==
   <<debugPhase, debugCarrierReservationDurable, debugAppendDurable,
@@ -160,6 +167,8 @@ Init ==
   /\ associationStagePeakAdmitted = FALSE
   /\ associationStageFirstMutation = FALSE
   /\ pruneCapacityPeakAdmitted = FALSE
+  /\ pruneRosterGenerationCovered = FALSE
+  /\ pruneReservationEnvelopeCovered = FALSE
   /\ pruneFirstDurableMutation = FALSE
   /\ debugPhase = "Idle"
   /\ debugCarrierReservationDurable = FALSE
@@ -307,6 +316,8 @@ AdmitEntrypointClaimSetPeak ==
   /\ claimSetPeakAdmitted' = TRUE
   /\ UNCHANGED <<claimSetFirstMutation, associationStagePeakAdmitted,
                   associationStageFirstMutation, pruneCapacityPeakAdmitted,
+                  pruneRosterGenerationCovered,
+                  pruneReservationEnvelopeCovered,
                   pruneFirstDurableMutation,
                   CarrierVars, PredecessorVars, StartupVars, FrontierVars,
                   DebugVars>>
@@ -317,6 +328,8 @@ BeginEntrypointClaimSetMutation ==
   /\ claimSetFirstMutation' = TRUE
   /\ UNCHANGED <<claimSetPeakAdmitted, associationStagePeakAdmitted,
                   associationStageFirstMutation, pruneCapacityPeakAdmitted,
+                  pruneRosterGenerationCovered,
+                  pruneReservationEnvelopeCovered,
                   pruneFirstDurableMutation,
                   CarrierVars, PredecessorVars, StartupVars, FrontierVars,
                   DebugVars>>
@@ -327,6 +340,8 @@ AdmitCanonicalAssociationStagePeak ==
   /\ associationStagePeakAdmitted' = TRUE
   /\ UNCHANGED <<associationStageFirstMutation, claimSetPeakAdmitted,
                   claimSetFirstMutation, pruneCapacityPeakAdmitted,
+                  pruneRosterGenerationCovered,
+                  pruneReservationEnvelopeCovered,
                   pruneFirstDurableMutation,
                   CarrierVars, PredecessorVars, StartupVars, FrontierVars,
                   DebugVars>>
@@ -338,6 +353,8 @@ BeginCanonicalAssociationStageMutation ==
   /\ associationStageFirstMutation' = TRUE
   /\ UNCHANGED <<associationStagePeakAdmitted, claimSetPeakAdmitted,
                   claimSetFirstMutation, pruneCapacityPeakAdmitted,
+                  pruneRosterGenerationCovered,
+                  pruneReservationEnvelopeCovered,
                   pruneFirstDurableMutation,
                   CarrierVars, PredecessorVars, StartupVars, FrontierVars,
                   DebugVars>>
@@ -346,6 +363,10 @@ AdmitPruneCapacityPeak ==
   /\ ~pruneCapacityPeakAdmitted
   /\ ~pruneFirstDurableMutation
   /\ pruneCapacityPeakAdmitted' = TRUE
+  /\ pruneRosterGenerationCovered' =
+       (Mode # "PrunePeakDropsRosterGeneration")
+  /\ pruneReservationEnvelopeCovered' =
+       (Mode # "PrunePeakDropsReservationEnvelope")
   /\ UNCHANGED <<pruneFirstDurableMutation, claimSetPeakAdmitted,
                   claimSetFirstMutation, associationStagePeakAdmitted,
                   associationStageFirstMutation,
@@ -356,7 +377,9 @@ BeginPruneDurableMutation ==
   /\ ~pruneFirstDurableMutation
   /\ (pruneCapacityPeakAdmitted \/ Mode = "PrunePeakAfterMutation")
   /\ pruneFirstDurableMutation' = TRUE
-  /\ UNCHANGED <<pruneCapacityPeakAdmitted, claimSetPeakAdmitted,
+  /\ UNCHANGED <<pruneCapacityPeakAdmitted,
+                  pruneRosterGenerationCovered,
+                  pruneReservationEnvelopeCovered, claimSetPeakAdmitted,
                   claimSetFirstMutation, associationStagePeakAdmitted,
                   associationStageFirstMutation,
                   CarrierVars, PredecessorVars, StartupVars, FrontierVars,
@@ -453,6 +476,8 @@ AutonomousRecoveryCapacityTypeInvariant ==
   /\ associationStagePeakAdmitted \in BOOLEAN
   /\ associationStageFirstMutation \in BOOLEAN
   /\ pruneCapacityPeakAdmitted \in BOOLEAN
+  /\ pruneRosterGenerationCovered \in BOOLEAN
+  /\ pruneReservationEnvelopeCovered \in BOOLEAN
   /\ pruneFirstDurableMutation \in BOOLEAN
   /\ debugPhase \in DebugPhases
   /\ debugCarrierReservationDurable \in BOOLEAN
@@ -493,7 +518,10 @@ MLCertifiedFrontierCapacityReconstructable ==
 MLMutationPeaksAdmittedBeforeFirstWrite ==
   /\ claimSetFirstMutation => claimSetPeakAdmitted
   /\ associationStageFirstMutation => associationStagePeakAdmitted
-  /\ pruneFirstDurableMutation => pruneCapacityPeakAdmitted
+  /\ pruneFirstDurableMutation =>
+       (pruneCapacityPeakAdmitted /\
+        pruneRosterGenerationCovered /\
+        pruneReservationEnvelopeCovered)
 
 MLDebugAppendReservationAndRestartAccounting ==
   /\ debugAppendDurable => debugCarrierReservationDurable

@@ -1,6 +1,12 @@
 // Directory CAR and chunk-fetch-plan regressions.
 
 #[test]
+fn empty_input_rejected() {
+    let err = CarBuildPlan::single_file(&[]).unwrap_err();
+    assert!(matches!(err, CarPlanError::EmptyInput));
+}
+
+#[test]
 fn windows_directory_chunk_publication_stays_fail_closed() {
     let plan = CarBuildPlan::single_file(b"payload").expect("plan");
     let mut sink = DirectoryChunkSink::new("chunks");

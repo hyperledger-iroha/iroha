@@ -20,8 +20,8 @@ use iroha_data_model::{
             AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
             AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
             RecoverMusubiPackageV1, RegisterMusubiAliasV1, RegisterMusubiArchiveV1,
-            RegisterMusubiNamespaceBindingV1, RemoveMusubiPackageMaintainerV1,
-            RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
+            RegisterMusubiNamespaceBindingV1, RegisterMusubiProviderBundleAttestationV1,
+            RemoveMusubiPackageMaintainerV1, RetargetMusubiAliasV1, RetireMusubiArchiveLocationV1,
             RevokeMusubiPackageMaintainerInvitationV1, SetMusubiArtifactTakedownV1,
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
@@ -31,9 +31,10 @@ use iroha_data_model::{
         MusubiAliasHistoryPageV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
         MusubiArchiveLocationPageV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionPageV1,
         MusubiArchiveRetentionQueryV1, MusubiCursorFailureV1, MusubiExactPackageQueryV1,
-        MusubiExactReleaseQueryV1, MusubiMaintainerPageV1, MusubiOrderedPackagePageV1,
-        MusubiOrderedPrefixQueryV1, MusubiPackagePageQueryV1, MusubiPackageRecordV1,
-        MusubiPageRequestV1, MusubiReleaseRecordV1, MusubiResolverIndexPageV1,
+        MusubiExactReleaseQueryV1, MusubiExactReleaseSnapshotV1, MusubiMaintainerPageV1,
+        MusubiOrderedPackagePageV1, MusubiOrderedPrefixQueryV1, MusubiPackagePageQueryV1,
+        MusubiPackageRecordV1, MusubiPageRequestV1, MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleAttestationRecordV1, MusubiResolverIndexPageV1,
         MusubiResolverIndexQueryV1, MusubiSearchPageV1, MusubiSearchQueryV1, MusubiVersionPageV1,
     },
     query::{SingularQuery, error::QueryExecutionFail, musubi::prelude::*},
@@ -80,11 +81,23 @@ pub async fn handler_find_exact_package(
 pub async fn handler_find_exact_release(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<MusubiExactReleaseQueryV1>,
-) -> Result<JsonBody<MusubiReleaseRecordV1>> {
+) -> Result<JsonBody<MusubiExactReleaseSnapshotV1>> {
     request.release.validate().map_err(invalid_query_request)?;
     Ok(JsonBody(execute_query(
         &app,
         FindMusubiExactReleaseV1::new(request),
+    )?))
+}
+
+/// Execute an exact immutable provider bundle-attestation audit query.
+pub async fn handler_find_provider_bundle_attestation(
+    State(app): State<SharedAppState>,
+    NoritoJson(key): NoritoJson<MusubiProviderBundleAttestationKeyV1>,
+) -> Result<JsonBody<MusubiProviderBundleAttestationRecordV1>> {
+    key.validate().map_err(invalid_query_request)?;
+    Ok(JsonBody(execute_query(
+        &app,
+        FindMusubiProviderBundleAttestationV1::new(key),
     )?))
 }
 
@@ -257,6 +270,11 @@ instruction_handler!(
     handler_build_archive_register,
     RegisterMusubiArchiveV1,
     "Build an unsigned first-release archive registration."
+);
+instruction_handler!(
+    handler_build_provider_bundle_attestation_register,
+    RegisterMusubiProviderBundleAttestationV1,
+    "Build an unsigned immutable first-release provider bundle-attestation registration."
 );
 instruction_handler!(
     handler_build_archive_location_add,

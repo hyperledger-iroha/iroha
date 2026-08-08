@@ -170,12 +170,40 @@ qualification:
   every worker probe, each fetch, and each signer resolution recheck the exact
   role-specific qualification before and after provider work.
 
-Governance DAG IPFS/IPNS authentication, signed-head authentication, and sealed
-monotonic checkpoint/publish-intent storage are separate registry slots. When
-the service is enabled, irohad qualifies their exact stable handles, revisions,
-and public-policy digests before Sumeragi startup, then prepares and supervises
-the service from the already resolved config view. The same service boundary
-rechecks identity around every authenticated request and sealed CAS operation.
+Governance DAG Kubo request authentication, signed-HTTP head CAS
+authentication, and sealed monotonic checkpoint/publish-intent storage are
+separate required registry slots. When the service is enabled, irohad qualifies
+their exact stable handles, revisions, and public-policy digests before Sumeragi
+startup, then prepares and supervises the service from the already resolved
+config view. The Kubo and head adapters must each return a live
+`GovernanceDagRequestIngressQualificationV1` matching the exact configured
+`GovernanceDagRequestIngressBindingV1`, exposed by
+`ipfs_request_ingress_binding()` and `head_request_ingress_binding()`. The only
+accepted ingress contract is an exclusive authenticated receiver backed by one
+shared sealed atomic replay namespace for the complete replica set through
+envelope expiry. The service rechecks identity around every authenticated
+request and sealed CAS operation.
+
+The publisher uses one fixed Kubo UnixFS profile, locally derives every expected
+CID, and publishes the public head only through signed-HTTP strong-ETag CAS.
+Its mirror retains the protocol-fixed suffix of at most 65,536 blocks and 512
+MiB of canonical source bytes. A sealed intent owns the derived mirror candidate;
+checkpoint/source recovery must reproduce its exact digest. All referenced Kubo
+objects are verified or repaired before the public-head CAS, each checkpoint
+generation receives a full first audit, and later polls rotate through the
+retained objects. A missing post-CAS pin or object is restored from authenticated
+bytes only when it reproduces the same deterministic CID.
+
+Preparation also yields the service-owned authenticated mirror-read capability.
+The launcher installs it into the embedded `NodeHandle` exactly once, before
+spawning the service task or sharing the first node clone. Installation checks
+the logical and retained physical producer root, the configured and retained
+signer identity/qualification/peer/key, the sealed-checkpoint-store binding,
+the reader-retained service-state root, and the existing typed mirror store.
+Any mismatch is startup-fatal. Every mirror read authenticates the current typed
+store and sealed checkpoint under the runner's readiness epoch; reconciliation
+failure or runner exit withdraws all retained readers. Torii reads publication,
+runtime, and mirror authority through these path-free typed snapshots.
 The stock Governance DAG binary likewise has no built-in credential loader;
 deployment launchers inject a
 `GovernanceDagServiceRuntimeProviderRegistryV1` through the library entrypoint.

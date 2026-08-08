@@ -249,6 +249,10 @@ impl AssetDefinitionId {
     /// definition. Public textual identifiers remain the Base58 address returned by
     /// [`Self::canonical_address`].
     #[must_use]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the public first-release constructor accepts owned typed components at its API boundary"
+    )]
     pub fn derive_from_components(domain: DomainId, name: Name) -> Self {
         let literal = format!("{name}#{domain}");
         let digest = blake3::hash(literal.as_bytes());

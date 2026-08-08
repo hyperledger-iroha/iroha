@@ -1828,9 +1828,9 @@ INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-        "method",
-        "ProductionV2Services::current_lane_output_rollover_claim",
+        "crates/iroha_core/src/sumeragi/v2_worker/current_lane_output_rollover_claim.rs",
+        "fn",
+        "current_lane_output_rollover_claim",
         (
             "BlockMessage::LaneExecutablePayload",
             "BlockMessage::LaneBlockNewViewVote",
@@ -4019,6 +4019,10 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             "        27u8\n"
             "    };",
         ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        ('include!("v2_worker/current_lane_output_rollover_claim.rs");',),
     ),
     (
         "crates/iroha_core/src/lane_consensus.rs",

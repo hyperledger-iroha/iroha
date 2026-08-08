@@ -1202,6 +1202,7 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+    let authority_reader = Arc::clone(&app);
 
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 
@@ -1362,17 +1363,21 @@ async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finaliz
     );
 
     let governance_dir = temp_dir.path().join("governance");
-    let state_path = governance_dir.join(GOVERNANCE_DAG_PUBLICATION_STATE_FILE);
-    if state_path.exists() {
-        let index = read_publication_section_fixture(&governance_dir, "publish_index");
-        assert!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("appeal_finance_settlement_receipt"))
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty)
-        );
-    }
+    let snapshot = authority_reader
+        .sorafs_node
+        .governance_dag_publication_snapshot()
+        .expect("read typed publication authority")
+        .expect("configured publisher has an initialized authority");
+    let authority: Value = norito::json::from_slice(snapshot.canonical_bytes())
+        .expect("decode typed publication authority");
+    assert!(
+        authority
+            .get("publish_index")
+            .and_then(|index| index.get("by_payload_kind"))
+            .and_then(|value| value.get("appeal_finance_settlement_receipt"))
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    );
     assert!(
         !governance_dir
             .join(GOVERNANCE_DAG_PUBLICATION_SOURCES_DIR)
@@ -1642,11 +1647,11 @@ async fn appeal_finance_writes_require_finance_publisher_role() {
 
 #[tokio::test]
 async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
-    let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+    let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let report = appeal_finance_report_fixture();
     let body = appeal_finance_report_body(report.clone());
 
-    let response = post_appeal_finance_report(app, &auth.provider, body).await;
+    let response = post_appeal_finance_report(app.clone(), &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let body = body::to_bytes(response.into_body(), usize::MAX)
@@ -1667,13 +1672,12 @@ async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
         Some(report_id_hex.as_str())
     );
 
-    let governance_dir = temp_dir.path().join("governance");
-    let sources = publication_source_paths_fixture(&governance_dir, APPEAL_FINANCE_REPORT_KIND);
+    let sources = publication_source_paths_fixture(&app, APPEAL_FINANCE_REPORT_KIND);
     assert_eq!(sources.len(), 1);
     assert!(sources[0].0.exists());
     assert!(sources[0].1.exists());
 
-    let index = read_publication_section_fixture(&governance_dir, "publish_index");
+    let index = read_publication_section_fixture(&app, "publish_index");
     assert_eq!(
         index
             .get("by_payload_kind")
@@ -1683,7 +1687,7 @@ async fn appeal_finance_report_endpoint_publishes_to_governance_dag() {
         Some(1)
     );
     assert_governance_publish_provenance(
-        &governance_dir,
+        &app,
         APPEAL_FINANCE_REPORT_KIND,
         &auth.provider.account,
         "appeal_finance_report",
@@ -1851,7 +1855,7 @@ async fn privacy_aggregate_publish_due_endpoint_requires_cycle_publisher_role() 
 
 #[tokio::test]
 async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
-    let (app, temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
+    let (app, _temp_dir, auth) = sorafs_app_state_with_privacy_aggregate_schedule();
     let source_body = privacy_aggregate_source_event_body(
         privacy_aggregate_source_event_request_at("privacy-event-a", 110),
     );
@@ -1913,7 +1917,7 @@ async fn privacy_aggregate_publish_due_endpoint_publishes_configured_cycle() {
             .is_some_and(|hash| hash.len() == 64)
     );
     assert_governance_publish_provenance(
-        &temp_dir.path().join("governance"),
+        &app,
         TRANSPARENCY_LEDGER_PUBLICATION_KIND,
         &auth.provider.account,
         "privacy_aggregate_publish_due",
@@ -1962,11 +1966,11 @@ async fn privacy_aggregate_publish_due_endpoint_commits_empty_suppression_window
 
 #[tokio::test]
 async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
-    let (app, temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
+    let (app, _temp_dir, auth) = sorafs_app_state_with_appeal_finance_governance_publisher();
     let rollup = appeal_finance_weekly_rollup_fixture();
     let body = appeal_finance_weekly_rollup_body(rollup.clone());
 
-    let response = post_appeal_finance_weekly_rollup(app, &auth.provider, body).await;
+    let response = post_appeal_finance_weekly_rollup(app.clone(), &auth.provider, body).await;
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let body = body::to_bytes(response.into_body(), usize::MAX)
@@ -1986,14 +1990,12 @@ async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
         Some(1)
     );
 
-    let governance_dir = temp_dir.path().join("governance");
-    let sources =
-        publication_source_paths_fixture(&governance_dir, APPEAL_FINANCE_WEEKLY_ROLLUP_KIND);
+    let sources = publication_source_paths_fixture(&app, APPEAL_FINANCE_WEEKLY_ROLLUP_KIND);
     assert_eq!(sources.len(), 1);
     assert!(sources[0].0.exists());
     assert!(sources[0].1.exists());
 
-    let index = read_publication_section_fixture(&governance_dir, "publish_index");
+    let index = read_publication_section_fixture(&app, "publish_index");
     assert_eq!(
         index
             .get("by_payload_kind")
@@ -2003,7 +2005,7 @@ async fn appeal_finance_weekly_rollup_endpoint_publishes_to_governance_dag() {
         Some(1)
     );
     assert_governance_publish_provenance(
-        &governance_dir,
+        &app,
         APPEAL_FINANCE_WEEKLY_ROLLUP_KIND,
         &auth.provider.account,
         "appeal_finance_weekly_rollup",
@@ -2019,17 +2021,6 @@ async fn post_appeal_finance_report(
     let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_REPORTS);
     let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
     handle_post_sorafs_appeal_finance_report(State(app), headers, method, uri, body).await
-}
-
-async fn post_appeal_finance_weekly_rollup(
-    app: SharedAppState,
-    signer: &OrderbookAccountFixture,
-    body: Bytes,
-) -> Response {
-    let method = Method::POST;
-    let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_WEEKLY_ROLLUPS);
-    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-    handle_post_sorafs_appeal_finance_weekly_rollup(State(app), headers, method, uri, body).await
 }
 
 async fn post_privacy_aggregate_source_event(
@@ -2160,4 +2151,15 @@ async fn get_appeal_finance_deposit(
         Path(escrow_id_hex.to_owned()),
     )
     .await
+}
+
+async fn post_appeal_finance_weekly_rollup(
+    app: SharedAppState,
+    signer: &OrderbookAccountFixture,
+    body: Bytes,
+) -> Response {
+    let method = Method::POST;
+    let uri = Uri::from_static(APPEAL_FINANCE_ROUTE_WEEKLY_ROLLUPS);
+    let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+    handle_post_sorafs_appeal_finance_weekly_rollup(State(app), headers, method, uri, body).await
 }
