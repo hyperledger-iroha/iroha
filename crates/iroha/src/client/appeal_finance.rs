@@ -1,5 +1,3 @@
-//! Appeal-finance HTTP client contract tests.
-
 use super::*;
 
 #[test]

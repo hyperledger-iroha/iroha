@@ -85,6 +85,22 @@ fn parse_cli_sandbox_serve_command_and_workspace_root() {
 }
 
 #[test]
+fn parse_cli_sandbox_wipe_rehearsal_command_and_data_root() {
+    let parsed = parse_cli_overrides_from(vec![
+        OsString::from("sandbox"),
+        OsString::from("rehearse-wipe-and-regenerate"),
+        OsString::from("--data-root"),
+        OsString::from("/tmp/disposable-mochi"),
+    ])
+    .expect("parse CLI");
+    assert_eq!(parsed.command, CliCommand::SandboxWipeRehearsal);
+    assert_eq!(
+        parsed.overrides.data_root.as_deref(),
+        Some(Path::new("/tmp/disposable-mochi"))
+    );
+}
+
+#[test]
 fn parse_cli_chain_id_override_sets_value() {
     let args = vec![OsString::from("--chain-id"), OsString::from("demo-chain")];
     let parsed = parse_cli_overrides_from(args).expect("parse CLI");

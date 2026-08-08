@@ -322,23 +322,67 @@
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
-    fn queue_plan_synced_runtime_timing_is_cadence_derived_and_bounded() {
+    fn queue_plan_synced_runtime_timing_uses_the_complete_remaining_route_budget() {
         assert_eq!(
-            super::queue_plan_synced_runtime_timing(Duration::from_millis(1)),
-            (Duration::from_millis(25), Duration::from_secs(2)),
+            super::queue_plan_synced_runtime_timing(
+                Duration::from_millis(1),
+                DEFAULT_ROUTE_TIMEOUT,
+            ),
+            (
+                Duration::from_millis(25),
+                DEFAULT_ROUTE_TIMEOUT.saturating_sub(Duration::from_millis(25)),
+            ),
         );
         assert_eq!(
-            super::queue_plan_synced_runtime_timing(Duration::from_secs(4)),
-            (Duration::from_millis(250), Duration::from_secs(16)),
+            super::queue_plan_synced_runtime_timing(
+                Duration::from_secs(1),
+                DEFAULT_ROUTE_TIMEOUT,
+            ),
+            (
+                Duration::from_millis(250),
+                DEFAULT_ROUTE_TIMEOUT.saturating_sub(Duration::from_millis(250)),
+            ),
         );
         assert_eq!(
-            super::queue_plan_synced_runtime_timing(Duration::from_secs(3_600)),
-            (Duration::from_millis(250), Duration::from_secs(45)),
+            super::queue_plan_synced_runtime_timing(
+                Duration::from_secs(1),
+                Duration::from_secs(13),
+            ),
+            (Duration::from_millis(250), Duration::from_millis(12_750)),
         );
-        let (poll_interval, carrier_wait) = super::queue_plan_synced_runtime_timing(Duration::MAX);
+        let (poll_interval, carrier_wait) = super::queue_plan_synced_runtime_timing(
+            Duration::MAX,
+            DEFAULT_ROUTE_TIMEOUT,
+        );
         assert!(
             DEFAULT_ROUTE_TIMEOUT >= carrier_wait.saturating_add(poll_interval),
-            "the proxy response budget must outlive the remote carrier wait and its final poll"
+            "the request deadline must outlive the canonical carrier wait and its final poll"
+        );
+        assert!(
+            carrier_wait > Duration::from_secs(12),
+            "a one-round prediction must not cause a premature 503 while finality is progressing"
+        );
+        assert_eq!(
+            super::queue_plan_synced_runtime_timing(Duration::from_secs(1), Duration::ZERO),
+            (Duration::from_millis(250), Duration::ZERO),
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn durable_queue_plan_carrier_waits_when_owner_wake_is_deferred() {
+        assert_eq!(
+            super::durable_queue_plan_wake_disposition(Some(false)),
+            super::DurableQueuePlanWakeDisposition::Deferred,
+            "a transient missed wake must not turn a durable certificate into an immediate 503"
+        );
+        assert_eq!(
+            super::durable_queue_plan_wake_disposition(Some(true)),
+            super::DurableQueuePlanWakeDisposition::Delivered
+        );
+        assert_eq!(
+            super::durable_queue_plan_wake_disposition(None),
+            super::DurableQueuePlanWakeDisposition::OwnerMissing
         );
     }
 
@@ -586,15 +630,34 @@
         let authority = AccountId::new(keypair.public_key().clone());
         let ingress_peer_id = PeerId::from(keypair.public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        let local_peer_id = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
-        Arc::get_mut(&mut app)
-            .expect("incoming proxy fixture app must be uniquely owned")
-            .local_peer_id = Some(local_peer_id.clone());
         {
-            let mut topology = app.state.commit_topology.block();
+            let local_signer = checked_torii_test_keypair_from_seed_byte(
+                seed,
+                Algorithm::BlsNormal,
+                "derive incoming proxy validator fixture key",
+            );
+            let local_validator = AccountId::new(local_signer.public_key().clone());
+            let local_peer_id = PeerId::from(local_signer.public_key().clone());
+            let app = Arc::get_mut(&mut app)
+                .expect("incoming proxy fixture app must be uniquely owned");
+            app.torii_proxy_bridge_signer = local_signer.clone();
+            app.local_peer_id = Some(local_peer_id.clone());
+            let state = Arc::get_mut(&mut app.state)
+                .expect("incoming proxy fixture state must be uniquely owned");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &local_validator,
+                &local_signer,
+                "incoming-proxy",
+            );
+            let mut topology = state.commit_topology.block();
             topology.clear();
-            topology.push(local_peer_id);
+            topology.push(local_peer_id.clone());
             topology.commit();
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(LaneId::SINGLE, vec![(local_validator, local_peer_id)])],
+            );
         }
         let transaction = TransactionEntrypoint::External(
             TransactionBuilder::new(
@@ -857,6 +920,106 @@
             })
             .expect("encode QueuePlanSynced test certificate"),
         }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn queue_plan_admission_publication_targets_every_live_successor_except_self() {
+        let (_app, mut request) =
+            incoming_proxy_submit_fixture(0xc0, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        let signers = (0_u8..4)
+            .map(|offset| {
+                checked_torii_test_ed25519_keypair(
+                    0xc1_u8.saturating_add(offset),
+                    "derive QueuePlan publication target fixture key",
+                )
+            })
+            .collect::<Vec<_>>();
+        let authorities = bind_queue_plan_synced_test_authorities(&mut request, &signers);
+        let ToriiProxyRequestKindV4::SubmitTransaction {
+            admission_binding: Some(binding),
+            ..
+        } = &request.request
+        else {
+            panic!("QueuePlan publication target fixture must contain a binding");
+        };
+        let outsider = PeerId::new(
+            checked_torii_test_ed25519_keypair(
+                0xc9,
+                "derive QueuePlan publication target outsider key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let online = BTreeSet::from([
+            authorities[0].clone(),
+            authorities[1].clone(),
+            authorities[2].clone(),
+            outsider,
+        ]);
+
+        assert_eq!(
+            super::queue_plan_admission_publication_targets(
+                &authorities[0],
+                &online,
+                binding,
+            )
+            .expect("resolve certified publication targets"),
+            vec![authorities[1].clone(), authorities[2].clone()],
+            "the local authority, one dead authority, and an online outsider must be excluded"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn queue_plan_admission_publication_validates_and_persists_idempotently() {
+        let (app, request) =
+            incoming_proxy_submit_fixture(0xb0, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        let receipt = exact_queue_plan_synced_test_receipt(
+            &request,
+            &app.torii_proxy_bridge_signer,
+            40_001,
+        );
+        let snapshot = queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]);
+        let publication = QueuePlanAdmissionPublicationV1 {
+            schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+            certificate: snapshot.body,
+        };
+        let expected = super::queue_plan_synced_acceptance_expectation(&request)
+            .expect("publication fixture expectation must validate")
+            .expect("publication fixture must use strict admission");
+
+        assert_eq!(
+            super::validate_queue_plan_admission_publication(&app, &publication)
+                .expect("certified publication must validate against local state"),
+            expected.admission_binding
+        );
+        let first = super::ingest_queue_plan_admission_publication(&app, &publication)
+            .expect("first certified publication must persist");
+        let second = super::ingest_queue_plan_admission_publication(&app, &publication)
+            .expect("exact publication replay must remain idempotent");
+        let (
+            QueuePlanAdmissionPublicationIngestOutcome::Durable {
+                certificate_hash: first_hash,
+                ..
+            },
+            QueuePlanAdmissionPublicationIngestOutcome::Durable {
+                certificate_hash: second_hash,
+                ..
+            },
+        ) = (first, second)
+        else {
+            panic!("an absent registry must retain the exact durable certificate");
+        };
+        assert_eq!(first_hash, second_hash);
+
+        let mut unsupported = publication;
+        unsupported.schema_version = unsupported.schema_version.saturating_add(1);
+        assert!(
+            super::validate_queue_plan_admission_publication(&app, &unsupported)
+                .expect_err("unsupported publication schema must fail")
+                .contains("schema_version")
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -2809,4 +2972,3 @@
             .expect("response body should be readable");
         assert_eq!(body.as_ref(), b"hedged-ok");
     }
-

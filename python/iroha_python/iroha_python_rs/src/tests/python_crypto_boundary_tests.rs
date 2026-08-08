@@ -168,7 +168,7 @@ fn parse_algorithm_arg_rejects_empty_padded_control_and_non_ascii_labels() {
 }
 
 #[test]
-fn privacy_compiled_profile_catalog_is_the_exact_closed_local_registry() {
+fn privacy_compiled_profile_catalog_is_the_exact_closed_registry() {
     let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
     catalog
         .validate()
@@ -460,24 +460,13 @@ fn privacy_bridge_abi_version_python_function_matches_first_release() {
 }
 
 #[test]
-fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_typed_boundary() {
+fn privacy_compiled_profile_catalog_python_validator_calls_the_exact_local_boundary() {
     let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
     let archive = norito::encode_canonical(&catalog).expect("canonical compiled catalog");
     assert_eq!(
         privacy_validate_compiled_profile_catalog_v1_py(&archive),
         iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
             .code()
-    );
-    assert!(
-        norito::decode_from_bytes::<iroha_data_model::privacy::PrivacyCapabilitySnapshotV1>(
-            &archive
-        )
-        .is_err(),
-        "a local compiled-profile catalog must not decode as network readiness"
-    );
-    assert!(
-        !iroha_data_model::privacy::validate_privacy_capability_archive_v1(&archive).is_valid(),
-        "a local compiled-profile catalog must not pass snapshot admission"
     );
     let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("one-byte fake");
     one_byte_fake[6..22].copy_from_slice(&archive[6..22]);

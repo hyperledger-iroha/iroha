@@ -1298,6 +1298,7 @@ impl Reducer {
         }
         if self.awaiting_signature.is_some()
             && !matches!(event, Event::Signed { .. })
+            && !Self::certified_progress_bypasses_signature_fence(&event)
             && !replay_duplicate
         {
             return Ok(StepOutcome::ignored(IgnoreReason::Busy));
@@ -1378,7 +1379,13 @@ impl Reducer {
             pending_state_before: self.pending_persistence.as_ref(),
             pending_state_after: after.pending_persistence.as_ref(),
             pending_before: self.pending_projection(),
-            awaiting_before: self.awaiting_signature.is_some(),
+            // `awaiting_before` is the executable signing-fence predicate,
+            // rather than merely a snapshot of the optional task. A fully
+            // verified TC or CommitQC may supersede that local task through
+            // its own safety-WAL transition; every other event remains
+            // fenced until the exact signature completion arrives.
+            awaiting_before: self.awaiting_signature.is_some()
+                && !Self::certified_progress_bypasses_signature_fence(event),
             replay_before: self.replay_resumed,
             application_before: Self::subject_projection(self.applied_subject),
             application_after: Self::subject_projection(after.applied_subject),
@@ -1668,6 +1675,42 @@ impl Reducer {
             return;
         }
         self.signature_queue.push_back(message);
+    }
+
+    /// Return whether authenticated certificate progress may supersede one
+    /// outstanding local signature task.
+    ///
+    /// The adapter verifies both certificate variants before constructing
+    /// their reducer events, and the reducer validates them again before any
+    /// mutation. PrepareQCs deliberately remain behind the signing fence:
+    /// only a TC, which installs a new reducer incarnation, or a CommitQC,
+    /// which installs the terminal Decision, can retire the old task without
+    /// weakening a local voting guard.
+    pub(crate) fn certified_progress_bypasses_signature_fence(event: &Event) -> bool {
+        matches!(event, Event::TimeoutCertificateReceived { .. })
+            || matches!(
+                event,
+                Event::QuorumCertificateReceived { certificate, .. }
+                    if certificate.phase() == Phase::Commit
+            )
+    }
+
+    /// Park the sole in-flight signing intent before certified progress opens
+    /// a new WAL boundary.
+    ///
+    /// The old adapter task remains externally cancellable until `EnterView`
+    /// or Decision reconciliation consumes it. Reducer ownership moves back
+    /// to the durable-intent queue first, so pending persistence and an
+    /// awaiting signature never overlap. If a same-view TC upgrade leaves the
+    /// intent authorized, acknowledgement reissues it under the new
+    /// generation; otherwise the durable transition filters it out.
+    fn park_awaiting_signature_for_certified_progress(&mut self) {
+        let Some(message) = self.awaiting_signature.take() else {
+            return;
+        };
+        if !self.signature_queue.iter().any(|queued| queued == &message) {
+            self.signature_queue.push_front(message);
+        }
     }
 
     fn tag_projection(tag: EventTag) -> TagProjection {
@@ -4158,6 +4201,7 @@ impl Reducer {
         // higher-view quorum may legitimately decide another subject before
         // this validator learns the superseding PrepareQC. Only an already
         // durable, semantically different Decision conflicts.
+        self.park_awaiting_signature_for_certified_progress();
         let effect = self.start_persistence(
             WalRecord::Decision(certificate.clone()),
             Continuation::Decide {
@@ -4488,6 +4532,7 @@ impl Reducer {
         {
             return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
         }
+        self.park_awaiting_signature_for_certified_progress();
         let effect = self.start_persistence(
             WalRecord::InstallTimeout(certificate.clone()),
             Continuation::InstallTimeout {
@@ -4576,9 +4621,6 @@ impl Reducer {
                 let message = ConsensusMessageV2::TimeoutCertificate(certificate.clone());
                 self.remember_control(message.clone());
                 let mut install_effects = Vec::new();
-                if broadcast {
-                    install_effects.push(Effect::Broadcast(message));
-                }
                 self.generation = next_generation;
                 self.candidate = None;
                 self.candidate_signed = None;
@@ -4589,17 +4631,21 @@ impl Reducer {
                 // ProposalIntent remains append-only non-equivocation
                 // evidence, but an alternate same-round TC changes the exact
                 // latest justification. Retire volatile signing ownership
-                // whose source certificate no longer matches durable state;
-                // the new generation will reject its already-issued
-                // completion tag as stale.
-                if self.awaiting_signature.as_ref().is_some_and(|message| {
-                    !Self::signable_is_durably_authorized_for(&self.durable, message)
-                }) {
-                    self.awaiting_signature = None;
-                }
+                // whose source certificate no longer matches durable state.
+                // A still-authorized task must nevertheless be reissued: the
+                // new generation rejects its already-issued completion tag,
+                // and the effect executor cancels that old tagged task when
+                // it consumes EnterView.
+                let interrupted_signature = self.awaiting_signature.take();
                 self.signature_queue.retain(|message| {
                     Self::signable_is_durably_authorized_for(&self.durable, message)
                 });
+                if let Some(message) = interrupted_signature.filter(|message| {
+                    Self::signable_is_durably_authorized_for(&self.durable, message)
+                }) && !self.signature_queue.iter().any(|queued| queued == &message)
+                {
+                    self.signature_queue.push_front(message);
+                }
                 // Preserve already authenticated shares for the installed
                 // view and its one-round catch-up window. Before this bound
                 // existed every normal TC install cleared shares which had
@@ -4671,6 +4717,14 @@ impl Reducer {
                 });
                 if let Some(locked) = self.durable.locked().cloned() {
                     install_effects.push(self.ensure_body_fetch(&locked));
+                }
+                // The executor installs the new reducer incarnation before
+                // dispatching any other effect from this macro-step. Keep a
+                // protected body's Fetch immediately behind EnterView, then
+                // publish a locally formed TC as the first ordinary control
+                // effect. Remote TC installation has no one-shot broadcast.
+                if broadcast {
+                    install_effects.push(Effect::Broadcast(message));
                 }
                 install_effects
             }
@@ -4777,9 +4831,26 @@ impl Reducer {
                 let signed = SignedTimeoutVote::new(vote, signature);
                 let message = ConsensusMessageV2::TimeoutVote(signed.clone());
                 self.remember_control(message.clone());
-                effects.push(Effect::Broadcast(message));
                 let mut local = self.on_timeout_vote(signed)?.into_effects();
-                effects.append(&mut local);
+                let installs_timeout = local.iter().any(|effect| {
+                    matches!(
+                        effect,
+                        Effect::Persist { entry, .. }
+                            if matches!(entry.record(), WalRecord::InstallTimeout(_))
+                    )
+                });
+                if installs_timeout {
+                    // This signature completed the local timeout quorum. The
+                    // resulting durable TC subsumes the individual old-view
+                    // vote, so expose only its InstallTimeout fence. The
+                    // persisted continuation can then keep EnterView first,
+                    // the TC as its control broadcast, and any reconstructed
+                    // signature request last in the executor macro-step.
+                    effects.append(&mut local);
+                } else {
+                    effects.push(Effect::Broadcast(message));
+                    effects.append(&mut local);
+                }
             }
         }
         if self.pending_persistence.is_none() && self.awaiting_signature.is_none() {

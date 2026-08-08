@@ -184,6 +184,344 @@
             .expect("decode register-domain instruction");
     }
 
+    fn prepared_bundle_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, Vec<u8>) {
+        init_instruction_registry();
+        let topology = (0..4)
+            .map(|_| {
+                let key_pair = checked_genesis_fixture_keypair_with_algorithm(Algorithm::BlsNormal);
+                let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                    .expect("generate validator PoP");
+                GenesisTopologyEntry::new(PeerId::new(key_pair.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-fixture"), ".")
+                .set_topology(topology)
+                .build_raw()
+                .with_consensus_meta();
+        let genesis_key = checked_genesis_fixture_keypair();
+        let block = manifest
+            .clone()
+            .build_and_sign(&genesis_key)
+            .expect("sign verifier fixture")
+            .0;
+        let wire = block.encode_wire().expect("encode verifier fixture");
+        (manifest, genesis_key, block, wire)
+    }
+
+    fn sign_modified_batches(
+        manifest: &RawGenesisTransaction,
+        key_pair: &KeyPair,
+        mutate: impl FnOnce(&mut Vec<Vec<InstructionBox>>),
+    ) -> SignedBlock {
+        let mut batches = manifest
+            .clone()
+            .parse()
+            .expect("expand verifier fixture manifest");
+        mutate(&mut batches);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let transactions = batches
+            .into_iter()
+            .enumerate()
+            .map(|(index, instructions)| {
+                let mut builder = TransactionBuilder::new(
+                    manifest.chain_id().clone(),
+                    authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions(instructions);
+                builder.set_creation_time(Duration::from_millis(
+                    u64::try_from(index).expect("fixture transaction index fits") + 1,
+                ));
+                builder
+                    .try_sign(key_pair.private_key())
+                    .expect("sign modified verifier transaction")
+            })
+            .collect();
+        SignedBlock::genesis(transactions, key_pair.private_key(), None, None)
+    }
+
+    fn sign_modified_envelopes(
+        manifest: &RawGenesisTransaction,
+        key_pair: &KeyPair,
+        mut mutate: impl FnMut(usize, &mut TransactionBuilder),
+    ) -> SignedBlock {
+        let batches = manifest
+            .clone()
+            .parse()
+            .expect("expand verifier fixture manifest");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let transactions = batches
+            .into_iter()
+            .enumerate()
+            .map(|(index, instructions)| {
+                let mut builder = TransactionBuilder::new(
+                    manifest.chain_id().clone(),
+                    authority.clone(),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions(instructions);
+                builder.set_creation_time(Duration::from_millis(
+                    u64::try_from(index).expect("fixture transaction index fits") + 1,
+                ));
+                mutate(index, &mut builder);
+                builder
+                    .try_sign(key_pair.private_key())
+                    .expect("sign modified verifier transaction")
+            })
+            .collect();
+        SignedBlock::genesis(transactions, key_pair.private_key(), None, None)
+    }
+
+    #[test]
+    fn prepared_bundle_verifier_accepts_exact_canonical_bundle() {
+        let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
+        let validated =
+            validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash())
+                .expect("exact bundle validates");
+        assert_eq!(validated.canonical_wire(), wire);
+        assert_eq!(validated.validator_pops().len(), 4);
+    }
+
+    #[test]
+    fn prepared_bundle_verifier_rejects_noncanonical_wrong_hash_and_key() {
+        let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
+        let wrong_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong genesis hash"));
+        let error =
+            validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), wrong_hash)
+                .expect_err("wrong exact hash must fail");
+        assert!(error.to_string().contains("hashes to"));
+
+        let wrong_key = checked_genesis_fixture_keypair();
+        let error = validate_prepared_genesis_bundle(
+            &wire,
+            &manifest,
+            wrong_key.public_key(),
+            block.hash(),
+        )
+        .expect_err("wrong verifier key must fail");
+        assert!(error.to_string().contains("differs from verifier key"));
+
+        let mut noncanonical = wire;
+        noncanonical.push(0);
+        let _ = validate_prepared_genesis_bundle(
+            &noncanonical,
+            &manifest,
+            key_pair.public_key(),
+            block.hash(),
+        )
+        .expect_err("trailing bytes must not be admitted as canonical Norito");
+    }
+
+    #[test]
+    fn prepared_bundle_verifier_rejects_missing_and_duplicate_consensus_metadata() {
+        let (manifest, key_pair, _, _) = prepared_bundle_fixture();
+        let missing = sign_modified_batches(&manifest, &key_pair, |batches| {
+            for batch in batches {
+                batch.retain(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<SetParameter>()
+                        .and_then(|set| match set.inner() {
+                            Parameter::Custom(custom) => Some(custom.id()),
+                            _ => None,
+                        })
+                        != Some(&consensus_metadata::handshake_meta_id())
+                });
+            }
+        });
+        let missing_wire = missing
+            .encode_wire()
+            .expect("encode missing-metadata block");
+        let error = validate_prepared_genesis_bundle(
+            &missing_wire,
+            &manifest,
+            key_pair.public_key(),
+            missing.hash(),
+        )
+        .expect_err("missing consensus metadata must fail");
+        assert!(error.to_string().contains("no consensus metadata"));
+
+        let duplicate = sign_modified_batches(&manifest, &key_pair, |batches| {
+            let metadata = batches
+                .iter()
+                .flatten()
+                .find(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<SetParameter>()
+                        .is_some_and(|set| {
+                            matches!(set.inner(), Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id())
+                        })
+                })
+                .expect("fixture consensus metadata")
+                .clone();
+            batches[0].push(metadata);
+        });
+        let duplicate_wire = duplicate
+            .encode_wire()
+            .expect("encode duplicate-metadata block");
+        let error = validate_prepared_genesis_bundle(
+            &duplicate_wire,
+            &manifest,
+            key_pair.public_key(),
+            duplicate.hash(),
+        )
+        .expect_err("duplicate consensus metadata must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("more than one consensus metadata")
+        );
+    }
+
+    #[test]
+    fn prepared_bundle_verifier_rejects_noncanonical_transaction_envelopes() {
+        let (manifest, key_pair, _, _) = prepared_bundle_fixture();
+        let with_nonce = sign_modified_envelopes(&manifest, &key_pair, |index, builder| {
+            if index == 0 {
+                builder.set_nonce(core::num::NonZeroU32::new(1).expect("non-zero nonce"));
+            }
+        });
+        let wire = with_nonce
+            .encode_wire()
+            .expect("encode nonce-bearing block");
+        let error = validate_prepared_genesis_bundle(
+            &wire,
+            &manifest,
+            key_pair.public_key(),
+            with_nonce.hash(),
+        )
+        .expect_err("a genesis transaction nonce must fail closed");
+        assert!(error.to_string().contains("non-canonical envelope fields"));
+
+        let with_wrong_ttl = sign_modified_envelopes(&manifest, &key_pair, |index, builder| {
+            if index == 0 {
+                builder.set_ttl(Duration::from_secs(1));
+            }
+        });
+        let wire = with_wrong_ttl
+            .encode_wire()
+            .expect("encode wrong-TTL block");
+        let error = validate_prepared_genesis_bundle(
+            &wire,
+            &manifest,
+            key_pair.public_key(),
+            with_wrong_ttl.hash(),
+        )
+        .expect_err("a non-canonical genesis transaction TTL must fail closed");
+        assert!(error.to_string().contains("non-canonical envelope fields"));
+    }
+
+    #[test]
+    fn prepared_bundle_verifier_rejects_nonconsecutive_transaction_times() {
+        let (manifest, key_pair, _, _) = prepared_bundle_fixture();
+        assert!(
+            manifest.clone().parse().expect("expand fixture").len() > 1,
+            "timestamp fixture needs multiple transaction batches"
+        );
+        let block = sign_modified_envelopes(&manifest, &key_pair, |index, builder| {
+            if index == 1 {
+                builder.set_creation_time(Duration::from_millis(1));
+            }
+        });
+        let wire = block.encode_wire().expect("encode timestamp-drift block");
+        let error =
+            validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash())
+                .expect_err("non-consecutive genesis transaction times must fail closed");
+        assert!(error.to_string().contains("next canonical millisecond"));
+    }
+
+    #[test]
+    fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
+        let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
+        let drifted_manifest = manifest
+            .clone()
+            .into_builder()
+            .append_instruction(Register::domain(Domain::new(
+                DomainId::try_new("drift", "universal").expect("domain id"),
+            )))
+            .build_raw()
+            .with_consensus_meta();
+        let error = validate_prepared_genesis_bundle(
+            &wire,
+            &drifted_manifest,
+            key_pair.public_key(),
+            block.hash(),
+        )
+        .expect_err("semantic manifest drift must fail");
+        assert!(error.to_string().contains("differs from genesis manifest"));
+
+        let mut bad_entries = (0..4)
+            .map(|_| {
+                let validator =
+                    checked_genesis_fixture_keypair_with_algorithm(Algorithm::BlsNormal);
+                let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                    .expect("generate validator PoP");
+                GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        bad_entries[0].pop_hex = Some(hex::encode([0_u8; 8]));
+        let bad_manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-bad-pop"), ".")
+                .set_topology(bad_entries)
+                .build_raw()
+                .with_consensus_meta();
+        let bad_block = bad_manifest
+            .clone()
+            .build_and_sign(&key_pair)
+            .expect("sign bad-PoP fixture")
+            .0;
+        let bad_wire = bad_block.encode_wire().expect("encode bad-PoP fixture");
+        let error = validate_prepared_genesis_bundle(
+            &bad_wire,
+            &bad_manifest,
+            key_pair.public_key(),
+            bad_block.hash(),
+        )
+        .expect_err("bad validator PoP must fail");
+        assert!(error.to_string().contains("invalid PoP"));
+
+        let duplicate_block = sign_modified_batches(&manifest, &key_pair, |batches| {
+            let duplicate = batches
+                .iter()
+                .flatten()
+                .find(|instruction| {
+                    matches!(
+                        instruction.as_any().downcast_ref::<RegisterBox>(),
+                        Some(RegisterBox::Peer(_))
+                    )
+                })
+                .expect("fixture validator registration")
+                .clone();
+            let mut registrations = 0;
+            for instruction in batches.iter_mut().flatten() {
+                if matches!(
+                    instruction.as_any().downcast_ref::<RegisterBox>(),
+                    Some(RegisterBox::Peer(_))
+                ) {
+                    registrations += 1;
+                    if registrations == 2 {
+                        *instruction = duplicate;
+                        return;
+                    }
+                }
+            }
+            panic!("fixture must contain a second validator registration");
+        });
+        let duplicate_wire = duplicate_block
+            .encode_wire()
+            .expect("encode duplicate-validator fixture");
+        let error = validate_prepared_genesis_bundle(
+            &duplicate_wire,
+            &manifest,
+            key_pair.public_key(),
+            duplicate_block.hash(),
+        )
+        .expect_err("duplicate validator PoP must fail");
+        assert!(error.to_string().contains("more than once"));
+    }
+
     #[test]
     fn uses_shared_instruction_registry() {
         let shared = iroha_data_model::instruction_registry::default();

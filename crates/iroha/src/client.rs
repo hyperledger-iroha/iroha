@@ -24123,7 +24123,11 @@ mod tests {
         secrecy::SecretString,
     };
 
-    mod appeal_finance;
+    mod appeal_finance {
+        //! Appeal-finance HTTP client contract tests.
+
+        include!("client/appeal_finance.rs");
+    }
 
     const LOGIN: &str = "mad_hatter";
     const PASSWORD: &str = "ilovetea";

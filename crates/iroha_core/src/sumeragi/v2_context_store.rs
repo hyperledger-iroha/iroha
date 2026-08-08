@@ -125,37 +125,6 @@ impl V2ContextStore {
         })
     }
 
-    /// Open an already-created context store without mutating the filesystem.
-    ///
-    /// Evidence validation uses this path so an untrusted payload cannot
-    /// create storage directories as a side effect. `None` means the immutable
-    /// history is absent and the caller must fail admission closed.
-    pub(crate) fn open_existing(
-        root: impl AsRef<Path>,
-    ) -> Result<Option<Self>, V2ContextStoreError> {
-        let root = root.as_ref().to_path_buf();
-        let Some(stable_root) = stable_directory(&root, &root)? else {
-            return Ok(None);
-        };
-        let directory = root.join("contexts");
-        let Some(stable_contexts) = stable_directory(&root, &directory)? else {
-            require_root_identity(&root, &stable_root.metadata)?;
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            root,
-            root_identity: stable_root.metadata,
-            directory,
-            directory_identity: stable_contexts.metadata,
-            #[cfg(test)]
-            lookup_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            #[cfg(test)]
-            read_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            #[cfg(test)]
-            publication_pause: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        }))
-    }
-
     /// Read one context directly from a storage root without creating or synchronizing paths.
     ///
     /// Provisional snapshot authentication uses this to detect an existing immutable conflict

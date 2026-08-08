@@ -1093,7 +1093,9 @@ PROOF
          <2>20, <2>21, <2>22, SMT
          DEF AsyncCompletionLoad
     <2>24. AsyncQueueDepth(node) < AsyncQueueCapacity
-      BY <1>1 DEF ProducerCompletionCanAdmit, CanEnqueueClass
+      BY <1>1
+         DEF ProducerCompletionCanAdmit, CanEnqueueClass,
+             CanEnqueueWithCertifiedFenceCredit
     <2>25. /\ AsyncQueueDepth(node) \in Nat
             /\ AsyncQueueCapacity \in Nat
       BY <1>1, <2>2, LenProperties, SMT
@@ -2952,25 +2954,7 @@ PROOF
         BY <1>1, <3>2, <3>3, Isa
            DEF AsyncOutstandingWorkCount, AsyncIoQueueDepth
       <3>5. AsyncQueueDepth(node) < AsyncQueueCapacity
-        <4>1. CASE candidate.class = "Completion"
-          BY <1>1, <4>1 DEF CanEnqueueClass
-        <4>2. CASE candidate.class # "Completion"
-          <5>1. candidate.class \in {"Normal", "Progress"}
-            BY <1>1, <4>2, SMT
-               DEF AsyncCandidateTyped, AsyncCommandClasses
-          <5>2. /\ AsyncNormalLimit < AsyncQueueCapacity
-               /\ AsyncProgressLimit < AsyncQueueCapacity
-            BY <2>1, AsyncAdmissionLimitsBelowQueueCapacity
-          <5>3. CASE candidate.class = "Normal"
-            <6>1. AsyncQueueDepth(node) < AsyncNormalLimit
-              BY <1>1, <5>3 DEF CanEnqueueClass
-            <6> QED BY <5>2, <6>1, StrictLessTransitive
-          <5>4. CASE candidate.class = "Progress"
-            <6>1. AsyncQueueDepth(node) < AsyncProgressLimit
-              BY <1>1, <5>4 DEF CanEnqueueClass
-            <6> QED BY <5>2, <6>1, StrictLessTransitive
-          <5> QED BY <5>1, <5>3, <5>4
-        <4> QED BY <4>1, <4>2
+        BY <1>1 DEF CanEnqueueClass, CanEnqueueWithCertifiedFenceCredit
       <3>6. /\ AsyncQueueDepth(node)' <= AsyncQueueCapacity
              /\ AsyncIoQueueDepth(node)' <= AsyncIoCapacity
              /\ AsyncOutstandingWorkCount(node)' <=

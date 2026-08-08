@@ -120,23 +120,6 @@ mod kagemusha_candidate_apple;
 mod kagemusha_candidate_scenario;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
-mod proof_attachment_json;
-
-#[cfg(test)]
-use iroha_data_model::{
-    nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
-    proof::{PROOF_BOX_MAX_ENCODED_BYTES_V1, VERIFYING_KEY_ID_MAX_FIELD_BYTES},
-};
-#[cfg(test)]
-use proof_attachment_json::{
-    PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1, decode_canonical_bounded_base64,
-    proof_attachment_json_length_is_valid,
-};
-#[cfg(test)]
-use proof_attachment_json::{
-    PROOF_ATTACHMENT_JSON_MAX_BYTES_V1, parse_proof_attachment_from_json_bytes,
-    parse_proof_attachment_from_json_slice,
-};
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment whenever any NativeSignerBridge JNI method descriptor changes.
@@ -229,7 +212,6 @@ const ERR_INVALID_NOTE_COMMITMENT: c_int = -14;
 const ERR_CONFIDENTIAL_PAYLOAD: c_int = -15;
 const ERR_SM2_VERIFY: c_int = -16;
 const ERR_SM2_PARSE: c_int = -17;
-const ERR_PROOF_ATTACHMENT: c_int = -18;
 const ERR_INVALID_NULLIFIERS: c_int = -19;
 const ERR_INVALID_ROOT_HINT: c_int = -20;
 const ERR_UNSUPPORTED_ALGORITHM: c_int = -21;
@@ -299,7 +281,6 @@ enum BridgeError {
     HashOutBuffer,
     InvalidNoteCommitment,
     ConfidentialPayload,
-    ProofAttachment,
     InvalidNullifiers,
     InvalidRootHint,
     AssetId,
@@ -350,7 +331,6 @@ impl BridgeError {
             BridgeError::HashOutBuffer => ERR_HASH_OUT_LEN,
             BridgeError::InvalidNoteCommitment => ERR_INVALID_NOTE_COMMITMENT,
             BridgeError::ConfidentialPayload => ERR_CONFIDENTIAL_PAYLOAD,
-            BridgeError::ProofAttachment => ERR_PROOF_ATTACHMENT,
             BridgeError::InvalidNullifiers => ERR_INVALID_NULLIFIERS,
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
@@ -699,14 +679,6 @@ fn kagemusha_canonical_decode_limits_with_profile(
             )
             .saturating_add(fixed_allocation_allowance),
         KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH,
-    )
-}
-
-fn kagemusha_canonical_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
-    kagemusha_canonical_decode_limits_with_profile(
-        encoded_len,
-        0,
-        KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
     )
 }
 
@@ -26919,55 +26891,6 @@ mod accel_tests {
         CString::new(s).expect("valid cstring")
     }
 
-    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
-        let hash: [u8; Hash::LENGTH] = Hash::new(bytes).into();
-        hex::encode(hash)
-    }
-
-    fn proof_attachment_json(backend: &str, proof_b64: &str, envelope_hash_hex: &str) -> String {
-        format!(
-            r#"{{"backend":"{backend}","proof_b64":"{proof_b64}","vk_ref":{{"backend":"{backend}","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-        )
-    }
-
-    fn parse_proof_attachment_test_json(json: &str) -> BridgeResult<ProofAttachment> {
-        parse_proof_attachment_from_json_slice(json.as_bytes())
-    }
-
-    fn proof_attachment_json_with_lane(lane: &str) -> String {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
-        json
-    }
-
-    fn json_byte_array(bytes: &[u8]) -> String {
-        format!(
-            "[{}]",
-            bytes
-                .iter()
-                .map(u8::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    }
-
-    fn lane_privacy_json(leaf_index: u64, audit_path: &[Option<Vec<u8>>]) -> String {
-        let leaf = json_byte_array(&[0xAA; 32]);
-        let path = audit_path
-            .iter()
-            .map(|sibling| {
-                sibling
-                    .as_deref()
-                    .map_or_else(|| "null".to_owned(), json_byte_array)
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            r#"{{"commitment_id":7,"witness":{{"kind":"merkle","payload":{{"leaf":{leaf},"proof":{{"leaf_index":{leaf_index},"audit_path":[{path}]}}}}}}}}"#
-        )
-    }
-
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
     }
@@ -28704,372 +28627,6 @@ mod accel_tests {
         assert!(header.contains("allow_unshield"));
         assert!(header.contains("vk_unshield"));
         assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_legacy_inline_vk_field() {
-        for field in [
-            "vk_inline",
-            "vkInline",
-            "verifyingKeyInline",
-            "verifying_key_inline",
-        ] {
-            let json = format!(
-                r#"{{"backend":"groth16","proof_b64":"AA==","vk_ref":{{"backend":"groth16","name":"vk1"}},"{field}":{{"backend":"groth16","bytes_b64":"AQID"}}}}"#
-            );
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("legacy inline verifying-key field rejected");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_accepts_matching_envelope_hash() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        let attachment =
-            parse_proof_attachment_test_json(&json).expect("matching envelope hash should parse");
-        assert_eq!(attachment.envelope_hash, Some(Hash::new([0_u8]).into()));
-    }
-
-    #[test]
-    fn proof_attachment_json_accepts_typed_lane_privacy_and_marks_raw_siblings() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let lane = lane_privacy_json(1, &[Some(vec![0x22; 32]), Some(vec![0x44; 32])]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
-        let attachment = parse_proof_attachment_test_json(&json).expect("typed lane privacy");
-        let lane = attachment.lane_privacy.expect("lane privacy attachment");
-        let iroha_data_model::nexus::LanePrivacyWitness::Merkle(witness) = lane.witness;
-        assert_eq!(witness.proof.leaf_index(), 1);
-        assert_eq!(witness.proof.audit_path().len(), 2);
-        for sibling in witness.proof.audit_path() {
-            let sibling = sibling.as_ref().expect("complete lane path");
-            assert_eq!(sibling.as_ref()[31] & 1, 1);
-        }
-    }
-
-    #[test]
-    fn lane_privacy_json_rejects_incomplete_impossible_and_oversized_paths() {
-        let sibling = Some(vec![0x22; 32]);
-        let too_deep = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
-        let cases = [
-            lane_privacy_json(0, &[]),
-            lane_privacy_json(0, &[None]),
-            lane_privacy_json(2, std::slice::from_ref(&sibling)),
-            lane_privacy_json(0, &[Some(vec![0x22; 31])]),
-            lane_privacy_json(0, &too_deep),
-            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
-                r#""proof":{"#,
-                r#""shadow":0,"proof":{"#,
-                1,
-            ),
-            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
-                r#""merkle""#,
-                r#""snark""#,
-                1,
-            ),
-        ];
-        for lane in cases {
-            let json = proof_attachment_json_with_lane(&lane);
-            let error = parse_proof_attachment_test_json(&json)
-                .expect_err("malformed lane privacy path must reject");
-            assert!(matches!(error, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_base64_is_canonical_and_bounded_before_use() {
-        assert_eq!(
-            decode_canonical_bounded_base64("AA==", 1).expect("canonical one byte"),
-            vec![0]
-        );
-        assert_eq!(
-            decode_canonical_bounded_base64("AAA=", 2).expect("canonical two bytes"),
-            vec![0, 0]
-        );
-        for (value, maximum) in [
-            ("AAAA", 2),
-            ("AB==", 1),
-            ("AAB=", 2),
-            ("AA==\n", 1),
-            ("AA=A", 3),
-            ("AA_-", 3),
-        ] {
-            assert!(
-                decode_canonical_bounded_base64(value, maximum).is_err(),
-                "base64 {value:?} with maximum {maximum} must reject"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_input_is_bounded_before_parsing() {
-        assert_eq!(
-            PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1,
-            PROOF_BOX_MAX_ENCODED_BYTES_V1.div_ceil(3) * 4
-        );
-        assert!(!proof_attachment_json_length_is_valid(0));
-        assert!(proof_attachment_json_length_is_valid(
-            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
-        ));
-        assert!(!proof_attachment_json_length_is_valid(
-            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
-                .checked_add(1)
-                .expect("JSON limit has a successor")
-        ));
-
-        let byte = b'{';
-        let oversized = c_ulong::try_from(PROOF_ATTACHMENT_JSON_MAX_BYTES_V1 + 1)
-            .expect("proof attachment JSON limit fits the C ABI length");
-        assert!(matches!(
-            parse_proof_attachment_from_json_bytes((&byte as *const u8).cast(), oversized),
-            Err(BridgeError::ProofAttachment)
-        ));
-    }
-
-    #[test]
-    fn proof_attachment_json_small_schema_strings_are_prebounded() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let oversized_identifier = "a".repeat(VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1);
-        let oversized_kind = "m".repeat(17);
-        let lane = lane_privacy_json(0, &[Some(vec![0x22; 32])]);
-
-        let cases = [
-            proof_attachment_json(&oversized_identifier, "AA==", &envelope_hash_hex),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"{oversized_identifier}"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            proof_attachment_json("halo2/ipa", "AA==", &format!("{envelope_hash_hex}0")),
-            proof_attachment_json_with_lane(&lane.replacen("merkle", &oversized_kind, 1)),
-        ];
-
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "oversized semantic string must reject before retention"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_rejects_types_duplicates_and_nulls() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let numeric_payload = "0,".repeat(16_384);
-        let cases = [
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":[{numeric_payload}0],"vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}","lane_privacy":null}}"#
-            ),
-        ];
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "adversarial JSON must reject"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_rejects_trailing_commas_at_every_object_depth() {
-        fn insert_before_closing_brace(value: &str, closing_from_end: usize) -> String {
-            let position = value
-                .char_indices()
-                .rev()
-                .filter_map(|(index, character)| (character == '}').then_some(index))
-                .nth(closing_from_end - 1)
-                .expect("requested object depth exists");
-            let mut mutated = value.to_owned();
-            mutated.insert(position, ',');
-            mutated
-        }
-
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let plain = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        let sibling = Some(vec![0x22; 32]);
-        let lane = lane_privacy_json(0, std::slice::from_ref(&sibling));
-
-        let mut cases = vec![
-            insert_before_closing_brace(&plain, 1),
-            plain.replacen(r#""name":"vk1"}"#, r#""name":"vk1",}"#, 1),
-        ];
-        // From the end of the isolated lane object these are respectively the
-        // lane, witness, payload, and Merkle-proof object boundaries.
-        for closing_from_end in 1..=4 {
-            let malformed_lane = insert_before_closing_brace(&lane, closing_from_end);
-            cases.push(proof_attachment_json_with_lane(&malformed_lane));
-        }
-
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "trailing object comma must reject: {json}"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_is_order_independent_and_path_bounded() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let reordered = format!(
-            r#"{{"envelope_hash_hex":"{envelope_hash_hex}","vk_ref":{{"name":"vk1","backend":"halo2/ipa"}},"proof_b64":"AA==","backend":"halo2/ipa"}}"#
-        );
-        parse_proof_attachment_test_json(&reordered).expect("field order is not semantic");
-
-        let sibling = Some(vec![0x22; 32]);
-        let maximum_path = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1];
-        let maximum_lane = lane_privacy_json(0, &maximum_path);
-        parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&maximum_lane))
-            .expect("maximum-depth complete path must parse");
-
-        let oversized_path = vec![sibling; LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
-        let oversized_lane = lane_privacy_json(0, &oversized_path);
-        assert!(
-            parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&oversized_lane))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_missing_envelope_hash() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-        )
-        .expect_err("envelope_hash_hex must be present");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_forged_envelope_hash() {
-        let forged_hash = hex::encode([0x11_u8; 32]);
-        let json = proof_attachment_json("halo2/ipa", "AA==", &forged_hash);
-        let err = parse_proof_attachment_test_json(&json)
-            .expect_err("envelope_hash_hex must match proof bytes");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_noncanonical_envelope_hash_hex() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        for noncanonical in [
-            envelope_hash_hex.to_uppercase(),
-            format!("0x{envelope_hash_hex}"),
-            format!(" {envelope_hash_hex}"),
-        ] {
-            let json = proof_attachment_json("halo2/ipa", "AA==", &noncanonical);
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("envelope_hash_hex must be exact lowercase hex");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_zero_vk_commitment() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(
-            json.len() - 1,
-            r#","vk_commitment_hex":"0000000000000000000000000000000000000000000000000000000000000000""#,
-        );
-        let err =
-            parse_proof_attachment_test_json(&json).expect_err("zero vk commitment must reject");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_empty_proof_bytes() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[]);
-        let json = proof_attachment_json("halo2/ipa", "", &envelope_hash_hex);
-        let err =
-            parse_proof_attachment_test_json(&json).expect_err("empty proof bytes must reject");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_retired_proof_backend_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-        )
-        .expect_err("retired proof_backend field should be rejected by bridge parser");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_bad_fixed_hash_lengths() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_commitment_hex":"abcd"}"#,
-        )
-        .expect_err("short vk_commitment_hex should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_non_string_vk_commitment() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        for non_string in ["null", "false", "0", "[]", "{}"] {
-            let json = format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"vk_commitment_hex":{non_string},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            );
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("a present vk commitment must be canonical lowercase hex");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_vk_ref_backend_mismatch() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri","name":"vk1"}}"#,
-        )
-        .expect_err("vk_ref backend mismatch should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_vk_reference_shadow_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_reference":{"backend":"halo2/ipa","name":"shadow"}}"#,
-        )
-        .expect_err("vk_reference shadow field should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_nested_vk_ref_shadow_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1","vk_reference":"shadow"}}"#,
-        )
-        .expect_err("nested vk_ref shadow field should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_blank_vk_ref_name() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"   "}}"#,
-        )
-        .expect_err("blank vk_ref name should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_blank_backend_fields() {
-        for json in [
-            r#"{"backend":"   ","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"   ","name":"vk1"}}"#,
-        ] {
-            let err = parse_proof_attachment_test_json(json)
-                .expect_err("blank backend field should be rejected");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
     }
 
     #[test]
@@ -32152,27 +31709,6 @@ fn java_fee_payment_intent_from_json(bytes: &[u8]) -> Result<FeePaymentIntent, S
         .validate()
         .map_err(|err| format!("invalid feePayment: {err}"))?;
     Ok(intent)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn java_fixed_array<const N: usize>(
-    env: &mut jni::JNIEnv<'_>,
-    array: &jni::objects::JByteArray<'_>,
-    context: &str,
-) -> Result<[u8; N], String> {
-    let bytes =
-        read_java_byte_array(env, array, context).ok_or_else(|| format!("invalid {context}"))?;
-    if bytes.len() != N {
-        return Err(format!("{context} must be exactly {N} bytes"));
-    }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
 }
 
 #[cfg(any(
@@ -47914,7 +47450,11 @@ mod tests {
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1
         ));
 
-        let limits = kagemusha_canonical_decode_limits(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES);
+        let limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            0,
+            KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
+        );
         assert_eq!(
             limits.max_sequence_elements(),
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES

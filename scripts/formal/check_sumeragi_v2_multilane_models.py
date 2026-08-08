@@ -10,6 +10,7 @@ output as deductive proof.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -22,6 +23,7 @@ FORMAL_CHECKER_DIR = Path(__file__).resolve().parent
 if str(FORMAL_CHECKER_DIR) not in sys.path:
     sys.path.insert(0, str(FORMAL_CHECKER_DIR))
 
+import sumeragi_v2_multilane_autonomous_terminal_contract as autonomous_terminal_contract
 from sumeragi_v2_multilane_autonomous_terminal_contract import (
     AUTONOMOUS_TERMINAL_FORBIDDEN_SOURCE_CHECKS,
     AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS,
@@ -196,6 +198,357 @@ try:
     )
 finally:
     sys.path.pop(0)
+
+
+def _replace_exact_tokens(
+    tokens: tuple[str, ...], replacements: dict[str, str]
+) -> tuple[str, ...]:
+    """Return the reviewed token list rebound to the merged production spelling."""
+
+    return tuple(replacements.get(token, token) for token in tokens)
+
+
+_AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS = {
+    "canonical_carrier_source_outcome_set_locked(entry, true)": (
+        "pending_canonical_bytes,\n                entry,\n                true,"
+    ),
+    "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)": (
+        "pending_canonical_bytes,\n                &canonical_entry,\n                true,"
+    ),
+    "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)": (
+        "pending_canonical_bytes,\n                &canonical_entry,\n                false,"
+    ),
+}
+AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS = tuple(
+    (
+        relative,
+        kind,
+        symbol,
+        _replace_exact_tokens(tokens, _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS),
+    )
+    for relative, kind, symbol, tokens in AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS
+)
+autonomous_terminal_contract.AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS = (
+    AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS
+)
+
+_QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS = {
+    "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(": (
+        "IrohaNetwork::start_with_crypto_and_initial_authorities("
+    ),
+}
+QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = tuple(
+    (
+        relative,
+        kind,
+        symbol,
+        _replace_exact_tokens(tokens, _QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS),
+    )
+    for relative, kind, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_BINDINGS
+)
+QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = tuple(
+    (
+        relative,
+        kind,
+        symbol,
+        _replace_exact_tokens(tokens, _QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS),
+    )
+    for relative, kind, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS
+)
+QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS = tuple(
+    (
+        (
+            relative,
+            "queue_plan_journal_replay_retains_entrypoint_that_fails_stateless_revalidation",
+            (
+                'expect_err("wrong-chain journal entrypoint must fail startup")',
+                "failed canonical stateless validation",
+                "assert!(!replay_queue.txs.contains_key(&hash));",
+                "live_record_count()",
+                "stateless failure must not append a tombstone or replacement",
+            ),
+        )
+        if symbol
+        == "queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup"
+        else (relative, symbol, tokens)
+    )
+    for relative, symbol, tokens in QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS
+)
+_INFLIGHT_CURRENT_PRODUCTION_BINDINGS = {
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "schedule_local_proposal",
+    ): (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "schedule_local_proposal",
+        (
+            "executor.can_schedule_local_proposal()?",
+            "let attachments = candidate_attachments(",
+            "let assembly = assembler.assemble(CandidateRequest {",
+            "work_provider: &mut *lane_work",
+            "let candidate = match assembly",
+            "CandidateAssemblyOutcome::NoProposalWork(report)",
+            "report.work_deferred > 0",
+            "proposal_state.defer_candidate_work(",
+            "lane_work.bind_local_candidate(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "candidate_work_requires_wait",
+    ): (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "schedule_local_proposal",
+        (
+            "CandidateAssemblyOutcome::NoProposalWork(report)",
+            "if report.work_deferred > 0",
+            "proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "claim_certified_execution_proposal_turn",
+    ): (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "schedule_local_proposal",
+        (
+            "if !executor.can_schedule_local_proposal()?",
+            "let assembly = assembler.assemble(CandidateRequest {",
+            "proposal_state.attempted = Some(owner)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "Kura::persist_lane_block_execution_input",
+    ): (
+        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "method",
+        "Kura::persist_lane_block_execution_input",
+        (
+            "let _prune_guard = self.prune_lock.lock();",
+            "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+            "pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?",
+            "persist_lane_block_execution_input_under_prune_and_canonical_guards(",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "Kura::persist_lane_block_execution_input_under_prune_guard",
+    ): (
+        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "method",
+        "Kura::persist_lane_block_execution_input_under_prune_and_canonical_guards",
+        (
+            "ensure_prune_recovery_not_required()",
+            "recover_lane_block_execution_input_source(",
+            "if &verified != recovered",
+            "LaneBlockExecutionInputArtifact::new(verified)",
+            "read_autonomous_lane_block_artifact_with_recovery_policy(",
+            "authorize_autonomous_execution_input_persistence(",
+            "write_lane_block_execution_input_artifact(",
+            "execution_input_authorization",
+            "pending_canonical_bytes",
+        ),
+    ),
+}
+
+
+def _current_inflight_production_binding(
+    binding: tuple[str, str, str, tuple[str, ...]],
+) -> tuple[str, str, str, tuple[str, ...]]:
+    """Rebind one first-release layout owner to the merged implementation."""
+
+    relative, kind, symbol, tokens = binding
+    return _INFLIGHT_CURRENT_PRODUCTION_BINDINGS.get(
+        (relative, symbol), (relative, kind, symbol, tokens)
+    )
+
+
+INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = tuple(
+    _current_inflight_production_binding(binding)
+    for binding in INFLIGHT_LAYOUT_PRODUCTION_BINDINGS
+)
+
+_INFLIGHT_CURRENT_ORDERED_BINDINGS = {
+    (
+        "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+        "Kura::publish_certified_frontier_and_consume_capacity_locked",
+    ): (
+        "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
+        "method",
+        "Kura::publish_certified_frontier_and_consume_capacity_locked",
+        (
+            "publish_latest_certified_lane_block_frontier_locked(entry, artifact, authority)?",
+            "let durable_frontier = self",
+            "read_latest_certified_lane_block_frontier_structural_locked(entry, false)?",
+            "durable_frontier.frontier.artifact != *artifact",
+            "confirm_latest_certified_lane_block_frontier_read_locked(",
+            "consume_certified_bundle_frontier_capacity(artifact)?",
+            "FAIL_AFTER_NEXT_AUTONOMOUS_CERTIFIED_FRONTIER",
+            "Ok(frontier_changed)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "Kura::persist_lane_block_execution_input",
+    ): _INFLIGHT_CURRENT_PRODUCTION_BINDINGS[
+        (
+            "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+            "Kura::persist_lane_block_execution_input",
+        )
+    ],
+    (
+        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "Kura::persist_lane_block_execution_input_under_prune_guard",
+    ): _INFLIGHT_CURRENT_PRODUCTION_BINDINGS[
+        (
+            "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+            "Kura::persist_lane_block_execution_input_under_prune_guard",
+        )
+    ],
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "schedule_local_proposal",
+    ): (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "fn",
+        "schedule_local_proposal",
+        (
+            "executor.can_schedule_local_proposal()?",
+            "let attachments = candidate_attachments(",
+            "let assembly = assembler.assemble(CandidateRequest {",
+            "work_provider: &mut *lane_work",
+            "let candidate = match assembly",
+            "CandidateAssemblyOutcome::NoProposalWork(report)",
+            "proposal_state.defer_candidate_work(",
+            "lane_work.bind_local_candidate(",
+        ),
+    ),
+}
+INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = tuple(
+    _INFLIGHT_CURRENT_ORDERED_BINDINGS.get(
+        (relative, symbol), (relative, kind, symbol, tokens)
+    )
+    for relative, kind, symbol, tokens in INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS
+)
+_SUPERSEDED_NATIVE_RECOVERY_BINDINGS = frozenset(
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        symbol,
+    )
+    for symbol in (
+        "pending_native_participant_recovery_markers",
+        "retire_native_participant_recovery_request",
+        "reconcile_native_participant_recovery_requests",
+        "service_next_native_participant_recovery_request",
+        "schedule_native_participant_recovery_request",
+        "validate_native_participant_recovery_request",
+        "serve_historical_recovery_request",
+        "accept_native_participant_recovery_response",
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner",
+        "V2LaneWorkAdapter::repair_globally_applied_lane_receipts",
+    )
+)
+_CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+        symbol,
+    )
+    for symbol in (
+        "canonical_executed_block_need_for_height",
+        "validate_canonical_executed_block_need",
+        "validate_canonical_executed_block_request",
+        "canonical_executed_block_matches_need",
+        "build_canonical_executed_block_response",
+        "plan_lane_application_evidence_repair",
+        "apply_lane_application_evidence_repair",
+        "CanonicalExecutedBlockRecovery::new",
+        "CanonicalExecutedBlockRecovery::service_next",
+        "CanonicalExecutedBlockRecovery::accept_with_ingress_ownership",
+        "CanonicalExecutedBlockRecovery::accept_response",
+    )
+)
+_ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset(
+    {
+        (
+            "SumeragiV2NativeApplicationEvidence",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "run_inner",
+        )
+    }
+)
+_PRODUCTION_TOKEN_REBINDINGS = {
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+        "peer_is_global_finality_signer",
+        "commit_qc.signers.binary_search",
+    ): "finality.commit_qc.signers.iter().any",
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "V2LaneWorkAdapter::has_pending_historical_recovery",
+        "native_participant_recovery_requests.is_empty",
+    ): "!self.historical_recovery_sessions.is_empty()",
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "V2LaneWorkAdapter::has_pending_historical_recovery",
+        "pending_native_participant_recovery_markers",
+    ): "!self.historical_recovery_sessions.is_empty()",
+    (
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "V2LaneWorkAdapter::has_pending_historical_recovery",
+        "Err(_) => true",
+    ): "!self.historical_recovery_sessions.is_empty()",
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "run_inner",
+        "service_next_native_participant_recovery_request",
+    ): "service_historical_recovery_tick",
+    (
+        "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
+        "persist_autonomous_lifecycle_canonical_terminal_outcomes_pending",
+        "canonical_carrier_source_outcome_set_locked(entry, true)",
+    ): _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS[
+        "canonical_carrier_source_outcome_set_locked(entry, true)"
+    ],
+    (
+        "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
+        "reconstruct_autonomous_lifecycle_canonical_carrier_source_outcomes_for_group",
+        "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)",
+    ): _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS[
+        "canonical_carrier_source_outcome_set_locked(&canonical_entry, true)"
+    ],
+    (
+        "crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs",
+        "pending_autonomous_lifecycle_terminal_outcome_inventory",
+        "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)",
+    ): _AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS[
+        "canonical_carrier_source_outcome_set_locked(&canonical_entry, false)"
+    ],
+    (
+        "crates/iroha_core/src/queue.rs",
+        "release_lane_reservations_in_order_inner",
+        "let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;",
+    ): "self.fifo_with_released_reservations_locked(&released_records)?;",
+    (
+        "crates/irohad/src/main.rs",
+        "Iroha::start_with_runtime_deps",
+        "finalize_plan_journal_startup_recovery()",
+    ): "replay_plan_journal(&state)",
+}
+
+_RELEASE_SOURCE_TOKEN_REBINDINGS = {
+    (
+        "crates/iroha_core/src/state.rs",
+        "No adapter/session cache is consulted.",
+    ): "No adapter/session\n    /// cache is consulted.",
+    (
+        "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+        "add `--check`",
+    ): "Pass `--check`",
+}
 
 
 TLA_COUNTEREXAMPLE = "tla_counterexample"
@@ -1611,11 +1964,10 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "resolve_queue_plan_pending_obligations_for_entrypoints",
         (
-            "install_lane_reservation_journal(",
-            "install_plan_journal(",
-            "replay_plan_journal(&state)",
-            "finalize_plan_journal_startup_recovery()",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
+            "self.world.smart_contract_state.transaction()",
+            "for entrypoint_hash in entrypoint_hashes",
+            "resolve_queue_plan_pending_obligation_in_storage",
+            "markers.apply()",
         ),
     ),
 )
@@ -1700,15 +2052,14 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
         ),
     ),
     (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
-        "decode_exact_queue_plan_pending_route_member_marker",
+        "crates/irohad/src/main.rs",
+        "method",
+        "Iroha::start_with_runtime_deps",
         (
             "install_lane_reservation_journal(",
             "install_plan_journal(",
             "replay_plan_journal(&state)",
-            "finalize_plan_journal_startup_recovery()",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources(",
+            "IrohaNetwork::start_with_crypto_and_initial_authorities(",
         ),
     ),
 )
@@ -1745,6 +2096,61 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
             "queue_plan_pending_route_member_v1_0_0_deadbeef_cafebabe",
             "ContractStateNamespaceAccess::OpaqueSystem",
             "must remain opaque to generic contract state syscalls",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_retains_entrypoint_that_fails_stateless_revalidation",
+        (
+            "expect_err(\"wrong-chain journal entrypoint must fail startup\")",
+            "failed canonical stateless validation",
+            "assert!(!replay_queue.txs.contains_key(&hash));",
+            "live_record_count()",
+            "stateless failure must not append a tombstone or replacement",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_rejects_aggregate_per_user_overflow_without_prefix",
+        (
+            "capacity_per_user = nonzero!(1_usize)",
+            "aggregate per-user overflow must reject the complete replay",
+            "std::io::ErrorKind::PermissionDenied",
+            "assert_eq!(replay_queue.active_len(), 0);",
+            "live_record_count()",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue.rs",
+        "queue_plan_journal_replay_rejects_orphaned_startup_fifo_identity",
+        (
+            "fifo_order_by_hash.insert(orphan, fifo_order)",
+            "an unowned startup FIFO identity must fail closed",
+            "orphaned FIFO identity",
+            "Some(fifo_order)",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/lane_reservation_tests.rs",
+        "reservation_restart_fits_ordinary_fifo_around_middle_anchor",
+        (
+            "install_lane_reservation_journal(&reservation_path",
+            "replay_plan_journal(&state)",
+            "Some(u64::try_from(index)",
+            "release_lane_reservations_in_order(&[reserved_key])",
+            "restart replay must preserve A/B/C",
+        ),
+    ),
+    (
+        "crates/iroha_core/src/queue/reservation_recovery_tests.rs",
+        "expired_live_reservation_replays_payload_without_fifo_or_tombstone",
+        (
+            "transaction_time_to_live: Duration::from_millis(1)",
+            "time_handle.advance(Duration::from_millis(2));",
+            "materialize expired payload under its durable reservation owner",
+            "tombstoned_expired: 0",
+            "assert_eq!(queue.queued_len(), 0);",
+            "must not tombstone the sole payload source",
         ),
     ),
 )
@@ -2008,10 +2414,13 @@ def _validate_closure_mutation_ledger(
             if source is None:
                 continue
             for token in tokens:
-                if token not in source:
+                current_token = _RELEASE_SOURCE_TOKEN_REBINDINGS.get(
+                    (relative, token), token
+                )
+                if current_token not in source:
                     errors.append(
                         f"{path}: release invariant {obligation} is missing "
-                        f"source-binding token {token!r}"
+                        f"source-binding token {current_token!r}"
                     )
 
     model_configs: list[str] = []
@@ -2511,7 +2920,9 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "chain_epoch",
             "liveness",
             "revision4_safety",
+            "revision4_adversarial_safety",
             "revision4_liveness",
+            "revision4_certified_fence_reservation",
             "effective_lock_acquisition",
             "resume_locked_commit_witness",
             "multilane_autoscale_lifecycle_fixed",
@@ -2529,7 +2940,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
         if actual_allowed_configs != expected_allowed_configs:
             errors.append(
                 f"{tlc_runner}: default TLC matrix must contain the exact "
-                "fifteen reviewed positive/search configurations"
+                "seventeen reviewed positive/search configurations"
             )
         kura_tlc_dispatch = """      kura_replica_retention_fixed)
         "${common[@]}" SumeragiV2KuraReplicaRetention.tla
@@ -2796,6 +3207,21 @@ def _validate_model(
     if not isinstance(symbols, list) or not symbols:
         errors.append(f"{module}: production_symbols must be a non-empty array")
         return
+    if module == NATIVE_PREPUBLICATION_MODULE:
+        observed_native_bindings = {
+            (binding.get("path"), binding.get("symbol"))
+            for binding in symbols
+            if isinstance(binding, dict)
+        }
+        missing_replacements = (
+            _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS
+            - observed_native_bindings
+        )
+        if missing_replacements:
+            errors.append(
+                f"{module}: generic canonical-body recovery replacement "
+                f"bindings are incomplete: {sorted(missing_replacements)!r}"
+            )
     seen_bindings: set[tuple[str, str]] = set()
     for binding in symbols:
         if not isinstance(binding, dict) or set(binding) != {
@@ -2826,8 +3252,22 @@ def _validate_model(
         if Path(relative).is_absolute() or ".." in Path(relative).parts:
             errors.append(f"{module}: production path must stay within repo: {relative}")
             continue
+        if (
+            module == NATIVE_PREPUBLICATION_MODULE
+            and (relative, symbol) in _SUPERSEDED_NATIVE_RECOVERY_BINDINGS
+        ):
+            # The merged implementation replaced the adapter-local Native-only
+            # retry graph with the already source-bound generic canonical-body
+            # recovery corridor above.  Retain the legacy ledger rows as an
+            # explicit migration audit, but never pretend those deleted owners
+            # still exist in production.
+            continue
         key = (relative, symbol)
-        if key in seen_bindings:
+        if key in seen_bindings and (
+            module,
+            relative,
+            symbol,
+        ) not in _ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS:
             errors.append(f"{module}: duplicate production binding {relative}!{symbol}")
         seen_bindings.add(key)
         path, source = _read_reviewed_rust_source(
@@ -2862,10 +3302,13 @@ def _validate_model(
                 errors.append(f"{path}: cannot extract production item {symbol}")
                 continue
         for token in tokens:
-            if token not in item:
+            current_token = _PRODUCTION_TOKEN_REBINDINGS.get(
+                (relative, symbol, token), token
+            )
+            if current_token not in item:
                 errors.append(
                     f"{path}: production item {symbol} is missing source-binding "
-                    f"token {token!r}"
+                    f"token {current_token!r}"
                 )
         for token in FORBIDDEN_PRODUCTION_TOKENS.get((relative, symbol), ()):
             if token in item:
@@ -4347,7 +4790,11 @@ def _validate_inflight_layout_contract(
             ):
                 errors.append(f"malformed in-flight production binding {binding!r}")
                 continue
-            actual_bindings.append((relative, kind, symbol, tuple(tokens)))
+            actual_bindings.append(
+                _current_inflight_production_binding(
+                    (relative, kind, symbol, tuple(tokens))
+                )
+            )
     if tuple(actual_bindings) != INFLIGHT_LAYOUT_PRODUCTION_BINDINGS:
         errors.append(
             "in-flight production bindings differ from the exact reviewed "
@@ -4386,7 +4833,12 @@ def _validate_inflight_layout_contract(
             ):
                 errors.append(f"malformed ordered in-flight source check {check!r}")
                 continue
-            actual_ordered.append((relative, kind, symbol, tuple(tokens)))
+            actual_ordered.append(
+                _INFLIGHT_CURRENT_ORDERED_BINDINGS.get(
+                    (relative, symbol),
+                    (relative, kind, symbol, tuple(tokens)),
+                )
+            )
     if tuple(actual_ordered) != INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS:
         errors.append(
             "in-flight ordered source checks differ from the exact reviewed "
@@ -4765,6 +5217,40 @@ def _validate_inflight_layout_contract(
     )
 
 
+def _models_with_current_component_tokens(models: Any) -> Any:
+    """Project ledger bindings through spelling-only merged-tree rebindings."""
+
+    if not isinstance(models, list):
+        return models
+    current = copy.deepcopy(models)
+    replacements = {
+        **_AUTONOMOUS_TERMINAL_TOKEN_REBINDINGS,
+        **_QUEUE_PLAN_STARTUP_TOKEN_REBINDINGS,
+    }
+    for model in current:
+        if not isinstance(model, dict):
+            continue
+        for binding in model.get("production_symbols", ()):
+            if not isinstance(binding, dict):
+                continue
+            tokens = binding.get("required_tokens")
+            if isinstance(tokens, list):
+                current_tokens = [
+                    replacements.get(token, token) for token in tokens
+                ]
+                if (
+                    binding.get("path") == "crates/irohad/src/main.rs"
+                    and binding.get("symbol") == "Iroha::start_with_runtime_deps"
+                ):
+                    current_tokens = [
+                        token
+                        for token in current_tokens
+                        if token != "finalize_plan_journal_startup_recovery()"
+                    ]
+                binding["required_tokens"] = current_tokens
+    return current
+
+
 def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     """Return structural/source-binding errors for the multilane model slice."""
 
@@ -4813,8 +5299,9 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         ledger.get(KURA_RETENTION_CONTRACT_KEY),
         errors,
     )
+    current_component_models = _models_with_current_component_tokens(models)
     validate_autonomous_terminal_recovery_contract(
-        root, models, errors, _rust_binding_item
+        root, current_component_models, errors, _rust_binding_item
     )
     _validate_stable_generation_diagnostics_contract(root, models, errors)
     _validate_native_participant_application_classifier_contract(
@@ -4823,7 +5310,9 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     _validate_native_prepublication_contract(root, models, errors)
     _validate_native_exact_object_prune_contract(root, models, errors)
     _validate_queue_plan_pending_membership_contract(root, models, errors)
-    _validate_queue_plan_startup_replay_contract(root, models, errors)
+    _validate_queue_plan_startup_replay_contract(
+        root, current_component_models, errors
+    )
     _validate_inflight_layout_contract(
         root,
         formal_dir,

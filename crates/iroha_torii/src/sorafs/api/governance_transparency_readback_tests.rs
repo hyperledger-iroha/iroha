@@ -36,7 +36,7 @@ fn governance_dag_raw_ipfs_cid_commits_exact_bytes() {
 
 #[test]
 fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
-    let source = include_str!("api.rs");
+    let source = include_str!("../api.rs");
     for handler_name in [
         "handle_get_sorafs_governance_dag_dashboard",
         "handle_get_sorafs_governance_dag_head",
@@ -92,7 +92,7 @@ fn governance_dag_file_backed_gets_are_admitted_and_offloaded() {
 
 #[test]
 fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
-    let source = include_str!("api.rs");
+    let source = include_str!("../api.rs");
     let start = source
         .find("fn load_governance_dag_mirror_index")
         .expect("governance DAG loader region");
@@ -117,7 +117,7 @@ fn governance_dag_readback_cannot_reintroduce_path_based_file_reads() {
         );
     }
 
-    let producer = include_str!("../../../sorafs_node/src/governance.rs");
+    let producer = include_str!("../../../../sorafs_node/src/governance.rs");
     assert!(producer.contains("const GOVERNANCE_DAG_LOGICAL_ROOT: &str = \".\";"));
     assert!(
         !producer.contains("JsonValue::from(root.display().to_string())"),
@@ -132,7 +132,7 @@ fn sorafs_bounded_file_readbacks_stay_on_heavy_workers() {
     assert_eq!(MAX_CAR_RANGE_PAYLOAD_BYTES, 8 * 1024 * 1024);
     assert_eq!(MAX_CAR_RANGE_RESPONSE_BYTES, 16 * 1024 * 1024);
 
-    let source = include_str!("api.rs");
+    let source = include_str!("../api.rs");
     for (start_marker, end_marker, io_marker) in [
         (
             "pub(crate) async fn handle_get_sorafs_storage_manifest(",

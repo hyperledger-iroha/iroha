@@ -1610,6 +1610,47 @@ async fn pipeline_status_handler_returns_applied_from_state() {
 }
 
 #[tokio::test]
+async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
+    let app = mk_app_state_for_tests();
+    let (block, _) = make_signed_block(1, None);
+    let header = block.header();
+    store_block(&app, block);
+
+    let bogus_hash =
+        HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x76; Hash::LENGTH]));
+    let height = NonZeroUsize::new(
+        usize::try_from(header.height().get()).expect("committed height fits usize"),
+    )
+    .expect("committed height is non-zero");
+    let mut state_block = app.state.block(header);
+    state_block
+        .transactions
+        .insert_block([bogus_hash].into_iter().collect(), height);
+    state_block.commit().expect("commit inconsistent fixture");
+
+    let result = super::handler_pipeline_transaction_status(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        Some(crate::utils::extractors::ExtractAccept(
+            HeaderValue::from_static("application/json"),
+        )),
+        crate::NoritoStringQuery(PipelineStatusQuery {
+            hash: Some(bogus_hash.to_string()),
+            scope: Some("local".to_owned()),
+        }),
+    )
+    .await;
+    let Err(super::Error::Query(ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+    ))) = result
+    else {
+        panic!("inconsistent committed membership must fail closed");
+    };
+    assert!(message.contains("absent from its external body and has no merge reference"));
+}
+
+#[tokio::test]
 async fn pipeline_status_hydrates_reconstructed_trigger_completion_for_entrypoint_hash() {
     let app = mk_app_state_for_tests();
     let sample = make_persisted_data_trigger_completion_block(1, None);

@@ -1,8 +1,4 @@
-    use std::{
-        env, fs,
-        path::PathBuf,
-        sync::{Mutex, OnceLock},
-    };
+    use std::{fs, path::PathBuf};
 
     use super::*;
 
@@ -19,7 +15,9 @@
         let config_path = config_dir.join("local.toml");
         fs::write(&config_path, "[supervisor]\n").expect("write starter config");
 
-        let kagami_stub = install_kagami_stub(temp.path());
+        let kagami_log = temp.path().join("kagami_settings.log");
+        let _log_guard = TestEnvGuard::set("MOCHI_TEST_KAGAMI_LOG", &kagami_log);
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
         let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
         let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
@@ -44,20 +42,13 @@
         app.settings_torii_port_input = "15000".to_owned();
         app.settings_p2p_port_input = "16000".to_owned();
         app.settings_chain_id_input = "custom-chain".to_owned();
-        app.settings_profile_input =
-            "{ peer_count = 7, consensus_mode = \"permissioned\" }".to_owned();
+        app.settings_profile_input = "{ peer_count = 7, consensus_mode = \"npos\" }".to_owned();
         app.settings_nexus_enabled = true;
         app.settings_nexus_lane_count_input = "2".to_owned();
         app.settings_nexus_lane_catalog_input =
-            "[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\"".to_owned();
+            "[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\"\nmetadata = {}".to_owned();
         app.settings_nexus_dataspace_catalog_input =
             "[[dataspace_catalog]]\nalias = \"universal\"\nid = 0".to_owned();
-        let replay_dir = temp.path().join("da-replay");
-        let manifest_dir = temp.path().join("da-manifests");
-        let replay_dir_text = replay_dir.display().to_string();
-        let manifest_dir_text = manifest_dir.display().to_string();
-        app.settings_torii_da_replay_dir_input = replay_dir.display().to_string();
-        app.settings_torii_da_manifest_dir_input = manifest_dir.display().to_string();
         let export_dir = temp.path().join("log-export");
         app.settings_log_export_dir_input = export_dir.display().to_string();
         let state_export_dir = temp.path().join("state-export");
@@ -65,6 +56,8 @@
 
         app.apply_settings_changes_with_restart(false)
             .expect("settings persistence should succeed");
+        assert!(genesis_invocation_count(&kagami_log) >= 2);
+        assert!(kagami_sign_invocation_count(&kagami_log) >= 2);
 
         let bundle = app
             .bundle_config
@@ -90,7 +83,7 @@
         let profile = bundle.config.profile.as_ref().expect("profile config");
         assert_eq!(profile.preset, None);
         assert_eq!(profile.topology.peer_count, 7);
-        assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
+        assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Npos);
         let nexus = bundle.config.nexus.as_ref().expect("nexus config");
         assert_eq!(
             nexus.get("enabled").and_then(TomlValue::as_bool),
@@ -118,23 +111,7 @@
             Some("universal")
         );
         assert!(bundle.config.sumeragi.is_none());
-        let torii = bundle.config.torii.as_ref().expect("torii config");
-        let da_ingest = torii
-            .get("da_ingest")
-            .and_then(TomlValue::as_table)
-            .expect("da_ingest table");
-        assert_eq!(
-            da_ingest
-                .get("replay_cache_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(replay_dir_text.as_str())
-        );
-        assert_eq!(
-            da_ingest
-                .get("manifest_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(manifest_dir_text.as_str())
-        );
+        assert!(bundle.config.torii.is_none());
         assert_eq!(app.log_export_dir.as_deref(), Some(export_dir.as_path()));
         assert_eq!(
             app.state_export_dir.as_deref(),
@@ -158,7 +135,7 @@
         assert_eq!(round_trip_profile.topology.peer_count, 7);
         assert_eq!(
             round_trip_profile.consensus_mode,
-            SumeragiConsensusMode::Permissioned
+            SumeragiConsensusMode::Npos
         );
         let round_trip_nexus = round_trip.config.nexus.expect("nexus config");
         assert_eq!(
@@ -166,23 +143,7 @@
             Some(true)
         );
         assert!(round_trip.config.sumeragi.is_none());
-        let round_trip_torii = round_trip.config.torii.expect("torii config");
-        let round_trip_da = round_trip_torii
-            .get("da_ingest")
-            .and_then(TomlValue::as_table)
-            .expect("da_ingest table");
-        assert_eq!(
-            round_trip_da
-                .get("replay_cache_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(replay_dir_text.as_str())
-        );
-        assert_eq!(
-            round_trip_da
-                .get("manifest_store_dir")
-                .and_then(TomlValue::as_str),
-            Some(manifest_dir_text.as_str())
-        );
+        assert!(round_trip.config.torii.is_none());
         let _ = fs::remove_file(&bundle.path);
         assert!(
             !app.settings_dialog,
@@ -228,7 +189,7 @@
         }
         let _lock = env_lock().lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
-        let kagami_stub = install_kagami_stub(temp.path());
+        let (kagami_stub, _signature_guard) = install_kagami_stub(temp.path());
         let irohad_stub = install_noop_stub(temp.path(), "irohad_stub.sh");
         let _kagami_guard = TestEnvGuard::set("MOCHI_KAGAMI", &kagami_stub);
         let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
@@ -293,98 +254,3 @@
         assert_eq!(app.settings_torii_port_input, "8080");
         assert_eq!(app.settings_p2p_port_input, "1337");
     }
-
-    struct TestEnvGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-
-    impl TestEnvGuard {
-        fn set(key: &'static str, value: &Path) -> Self {
-            let prev = env::var(key).ok();
-            // SAFETY: Tests run single-threaded under an env lock, so mutating env vars is safe.
-            unsafe { env::set_var(key, value) };
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for TestEnvGuard {
-        fn drop(&mut self) {
-            if let Some(prev) = self.prev.as_ref() {
-                unsafe { env::set_var(self.key, prev) };
-            } else {
-                unsafe { env::remove_var(self.key) };
-            }
-        }
-    }
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn genesis_invocation_count(path: &Path) -> usize {
-        if !path.exists() {
-            return 0;
-        }
-        let contents =
-            fs::read_to_string(path).unwrap_or_else(|err| panic!("read kagami log: {err}"));
-        contents.lines().filter(|line| *line == "genesis").count()
-    }
-
-    fn install_kagami_stub(root: &Path) -> PathBuf {
-        install_stub_script(
-            root,
-            "kagami_stub.sh",
-            r#"#!/bin/sh
-set -e
-if [ "$1" = "--version" ]; then
-  echo "kagami-stub iroha3"
-  exit 0
-fi
-if [ "$1" = "verify" ]; then
-  exit 0
-fi
-if [ "$1" = "genesis" ] && [ "$2" = "generate" ]; then
-  LOG_FILE="${MOCHI_TEST_KAGAMI_LOG:-}"
-  if [ -n "$LOG_FILE" ]; then
-    printf '%s\n' "$@" >> "$LOG_FILE"
-  fi
-  cat <<'JSON'
-{"chain":"00000000-0000-0000-0000-000000000000","ivm_dir":".","consensus_mode":"Permissioned","transactions":[{"instructions":[]}]}
-JSON
-else
-  printf 'unexpected invocation: %s\n' "$0 $*" >&2
-  exit 1
-fi
-"#,
-        )
-    }
-
-    fn install_noop_stub(root: &Path, name: &str) -> PathBuf {
-        install_stub_script(
-            root,
-            name,
-            r#"#!/bin/sh
-exit 0
-"#,
-        )
-    }
-
-    fn install_stub_script(root: &Path, name: &str, contents: &str) -> PathBuf {
-        let path = root.join(name);
-        fs::write(&path, contents).expect("write stub");
-        make_executable(&path);
-        path
-    }
-
-    #[cfg(unix)]
-    fn make_executable(path: &Path) {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("set perms");
-    }
-
-    #[cfg(not(unix))]
-    fn make_executable(_path: &Path) {}

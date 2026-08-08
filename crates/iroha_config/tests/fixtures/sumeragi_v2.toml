@@ -1,7 +1,7 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
 [network]
-# The explicit small Sumeragi queues below reserve one exact three-class
+# The explicit small Sumeragi queues below reserve one exact four-class
 # fanout for this authenticated-source geometry.
 max_total_connections = 32
 

@@ -2337,21 +2337,17 @@ PY
           fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
         fi
       done
+      local kagemusha_symbols
+      kagemusha_symbols="$(
+        grep -E '^_?connect_norito_kagemusha_' <<<"$symbols" || true
+      )"
       if ! run_isolated_checker_python - \
-        "$binary" -- "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
-import subprocess
+        "$kagemusha_symbols" -- "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 import sys
 
 separator = sys.argv.index("--")
-binary = sys.argv[1]
+captured = sys.argv[1]
 expected = set(sys.argv[separator + 1:])
-captured = subprocess.run(
-    ["nm", "-gUj", binary],
-    check=True,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-).stdout
 actual = {
     line.strip().removeprefix("_")
     for line in captured.splitlines()

@@ -48,6 +48,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("user/kura_and_snapshot_tests.rs"),
         Path("user/runtime_tail_tests.rs"),
     ),
+    Path("crates/iroha_data_model/src/block/consensus_v2.rs"): (
+        Path("consensus_v2_tests.rs"),
+    ),
     Path("crates/iroha_core/src/kura.rs"): (
         Path("kura/startup_finality_support.rs"),
         Path("kura/bound_progress_and_retained_support.rs"),
@@ -210,7 +213,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_core/src/sumeragi/mod.rs"): (
         Path("tests/mod_authoritative_runtime_gate_01_support.rs"),
         Path("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs"),
-        Path("tests/mod_authoritative_runtime_gate_02_physical_prefix.rs"),
         Path("tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs"),
         Path("tests/mod_authoritative_runtime_gate_04_routes_and_dequeue.rs"),
         Path("tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs"),
@@ -224,8 +226,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2.rs"): (
         Path("tests/v2_adapter_activation_context.rs"),
-        Path("v2/persistence_and_deferred_tests.rs"),
-        Path("tests/v2_adapter_replay_signing.rs"),
         Path("tests/v2_adapter_01_replay_and_registry.rs"),
         Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
         Path("tests/v2_adapter_03_tc_and_terminal_ingress.rs"),
@@ -243,19 +243,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_worker_serve_decision_restart_cases.rs"),
         Path("tests/v2_worker_certified_serve_budget_cases.rs"),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
-        Path("v2_runtime/effect_ownership.rs"),
-        Path("v2_runtime/dormant_producer_ownership.rs"),
-        Path("v2_runtime/adapter_runtime.rs"),
-        Path("tests/v2_runtime_unsealed_00.rs"),
-        Path("tests/v2_runtime_unsealed_01.rs"),
-        Path("tests/v2_runtime_unsealed_02.rs"),
-        Path("tests/v2_runtime_unsealed_03.rs"),
-        Path("tests/v2_runtime_unsealed_04.rs"),
-        Path("tests/v2_runtime_unsealed_05.rs"),
-        Path("tests/v2_runtime_unsealed_06.rs"),
-        Path("tests/v2_runtime_upstream_exact_ownership.rs"),
-    ),
     Path("crates/iroha_core/src/sumeragi/v2_runner.rs"): (
         Path("v2_runner/height_ingress_bindings.rs"),
         Path("v2_runner/lifecycle_terminal_recovery.rs"),
@@ -263,7 +250,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("v2_runner/canonical_recovery_ingress.rs"),
         Path("v2_runner/reply_route_retention.rs"),
         Path("v2_runner/merge_sidecar_recovery.rs"),
-        Path("v2_runner_error.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"): (
         Path("tests/v2_runner_unsealed_00.rs"),
@@ -299,28 +285,19 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2_effects.rs"): (
         Path("tests/v2_effects_kura_tip_replay.rs"),
-        Path("tests/v2_effects_terminal_and_body_pipeline.rs"),
-        Path("tests/v2_effects_serialized_rebind.rs"),
         Path("tests/v2_effects_01_view_churn_and_runtime_steps.rs"),
         Path("tests/v2_effects_02_admission_handoffs.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
-        Path("v2_lane_work/durable_historical_lane_output.rs"),
-        Path("v2_lane_work/certificate_execution_role.rs"),
         Path("v2_lane_work/canonical_executed_block_application_repair.rs"),
         Path("v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs"),
         Path("v2_lane_work/typed_finality_handoff_tests.rs"),
-        Path("v2_lane_work/frozen_context_pop_tests.rs"),
-        Path("v2_lane_work/recovery_and_rollover_budget_cases.rs"),
         Path("tests/v2_lane_work_native_signing_guard.rs"),
         Path("v2_lane_work/native_amx_route_and_receipt_tests.rs"),
         Path("tests/v2_lane_work_observer_role.rs"),
         Path("tests/v2_lane_work_native_body_recovery.rs"),
         Path("tests/v2_lane_work_effect_queue.rs"),
         Path("v2_lane_work/historical_recovery_and_carrier_tests.rs"),
-        Path("v2_lane_work/autonomous_carrier_lifecycle_tests.rs"),
-        Path("v2_lane_work/autonomous_new_view_ingress_tests.rs"),
-        Path("v2_lane_work/merge_signing_persistence_tests.rs"),
     ),
     Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
         Path("sumeragi_v2_runner/restart_timing_test.rs"),
@@ -508,9 +485,76 @@ def test_revision4_model_contract_is_registered() -> None:
     module = load_checker()
 
     assert "SumeragiV2Revision4" in module.REQUIRED_MODEL_MODULES
+    assert (
+        "SumeragiV2Revision4AdversarialSafety"
+        in module.REQUIRED_MODEL_MODULES
+    )
     assert "SumeragiV2Revision4.cfg" in module.REQUIRED_TLC_CONFIGS
+    assert (
+        "SumeragiV2Revision4AdversarialSafety.cfg"
+        in module.REQUIRED_TLC_CONFIGS
+    )
     assert "SumeragiV2Revision4Liveness.cfg" in module.REQUIRED_TLC_CONFIGS
     assert not module._revision4_model_contract_errors(module.FORMAL_DIR)
+    assert not module._revision4_adversarial_safety_contract_errors(
+        module.FORMAL_DIR
+    )
+
+
+def copy_revision4_adversarial_contract(tmp_path: Path, module) -> Path:
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for filename in (
+        "SumeragiV2Revision4AdversarialSafety.tla",
+        "SumeragiV2Revision4AdversarialSafety.cfg",
+    ):
+        shutil.copy2(module.FORMAL_DIR / filename, formal_dir / filename)
+    return formal_dir
+
+
+def test_revision4_adversarial_model_rejects_first_qc_global_stop(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_revision4_adversarial_contract(tmp_path, module)
+    model = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    source = model.read_text(encoding="utf-8")
+    source = source.replace(
+        "    /\\ body \\notin commitQCs\n",
+        "    /\\ body \\notin commitQCs\n"
+        "    /\\ commitQCs = {}\n",
+        1,
+    )
+    model.write_text(source, encoding="utf-8")
+
+    errors = module._revision4_adversarial_safety_contract_errors(formal_dir)
+    assert any(
+        "FormCommitQC must remain enabled after the first QC or decision"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_revision4_adversarial_model_rejects_byzantine_sign_once_guard(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_revision4_adversarial_contract(tmp_path, module)
+    model = formal_dir / "SumeragiV2Revision4AdversarialSafety.tla"
+    source = model.read_text(encoding="utf-8")
+    source = source.replace(
+        "    /\\ <<validator, body>> \\notin commitVotes\n",
+        "    /\\ <<validator, body>> \\notin commitVotes\n"
+        "    /\\ VoteBodies(validator) = {}\n",
+        1,
+    )
+    model.write_text(source, encoding="utf-8")
+
+    errors = module._revision4_adversarial_safety_contract_errors(formal_dir)
+    assert any(
+        "must permit the faulty validator to vote for both bodies" in error
+        for error in errors
+    ), errors
 
 
 def test_revision4_model_contract_rejects_output_repair_as_progress_fairness(
@@ -1629,7 +1673,7 @@ def test_timeout_vote_view_window_regressions_cannot_be_deleted(
     "test_name",
     (
         "capacity_bypass_records_follow_current_lock_and_timeout_view",
-        "adjacent_future_timeout_vote_remains_retryable_until_current_view_advances",
+        "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote",
         "full_normal_deferred_lane_cannot_drop_absolute_timeout",
         "busy_deferred_source_identity_coalesces_across_consumer_view_change",
     ),

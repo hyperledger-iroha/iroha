@@ -28,7 +28,7 @@ use iroha_core::privacy_engines::{
 };
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
 use iroha_data_model::{
-    asset::AssetDefinitionId,
+    asset::{AssetBalanceScope, AssetDefinitionId},
     prelude::AccountId,
     privacy::{
         BootleLanternIssuerPolicyV1, PrivacyAuthorizationKeyDigestV1, PrivacyChallengeV1,
@@ -720,8 +720,14 @@ fn decode_zk_ace_request_v1(
         "zk-ace-destination",
     )?;
     let amount = take_decimal_u128(&mut public, "amount_decimal", "zk-ace-amount", false)?;
-    let transfer = ZkAcePrivacyTransferV1::try_new(policy, source, destination, amount)
-        .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-transfer"))?;
+    let transfer = ZkAcePrivacyTransferV1::try_new(
+        policy,
+        source,
+        destination,
+        AssetBalanceScope::Global,
+        amount,
+    )
+    .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-transfer"))?;
 
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(

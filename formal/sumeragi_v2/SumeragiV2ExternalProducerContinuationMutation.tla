@@ -175,8 +175,11 @@ VolatileFairness ==
   IF FairVolatileService THEN WF_vars(ServiceVolatile) ELSE TRUE
 
 Spec ==
-  Init /\ [][Next]_vars /\ WF_vars(DepartConditional)
-    /\ ConditionalFairness /\ VolatileFairness
+  Init
+    /\ [][Next]_vars
+    /\ WF_vars(DepartConditional)
+    /\ ConditionalFairness
+    /\ VolatileFairness
 
 ExternalContinuationsReachTerminal == <>(phase = "Done")
 

@@ -11248,14 +11248,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?;
                     let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
                     let nft = Nft::new(nft_id.clone(), Metadata::default());
+                    let issuer = self.effect_authority();
                     let mut gas = self.queue_instruction(InstructionBox::from(RegisterBox::from(
                         Register::nft(nft),
                     )));
-                    if owner != self.authority {
+                    if owner != issuer {
                         let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
-                            self.authority.clone(),
-                            nft_id,
-                            owner,
+                            issuer, nft_id, owner,
                         )));
                         gas = gas.saturating_add(self.queue_instruction(transfer));
                     }
@@ -16398,6 +16397,60 @@ seiyaku PrivilegedBinding {
         let isi = Mint::asset_quantity(5u64, asset_id);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
         assert_eq!(gas, expected);
+    }
+
+    #[test]
+    fn nft_mint_uses_contract_effect_authority_as_issuer_and_transfer_source() {
+        let caller = fixture_account("alice");
+        let owner = fixture_account("bob");
+        let contract_address = ContractAddress::derive(
+            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &caller,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_subject = contract_address.subject_id();
+        assert_ne!(caller, contract_subject);
+
+        let mut host = CoreHost::new(caller.clone());
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_address,
+            contract_subject: contract_subject.clone(),
+            contract_alias: None,
+            entrypoint: "mint_for_owner".to_owned(),
+        }));
+        let mut vm = IVM::new(10_000);
+        let nft_id = NftId::of(
+            DomainId::try_new("wonderland", "universal").expect("NFT domain"),
+            "contract_issued".parse().expect("NFT name"),
+        );
+        let nft_ptr = store_tlv(&mut vm, PointerType::NftId, &norito_blob(&nft_id));
+        let owner_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&owner));
+        vm.set_register(10, nft_ptr);
+        vm.set_register(11, owner_ptr);
+
+        host.syscall(ivm::syscalls::SYSCALL_NFT_MINT_ASSET, &mut vm)
+            .expect("queue contract NFT mint");
+
+        assert_eq!(host.queued.len(), 2);
+        let expected_register = InstructionBox::from(RegisterBox::from(Register::nft(Nft::new(
+            nft_id.clone(),
+            Metadata::default(),
+        ))));
+        let expected_transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+            contract_subject.clone(),
+            nft_id,
+            owner,
+        )));
+        assert_eq!(host.queued[0].instruction, expected_register);
+        assert_eq!(host.queued[0].authority, contract_subject);
+        assert_eq!(host.queued[1].instruction, expected_transfer);
+        assert_eq!(host.queued[1].authority, host.queued[0].authority);
+        assert_ne!(
+            host.queued[1].authority, caller,
+            "the transaction caller must not become the contract NFT issuer",
+        );
     }
 
     #[test]

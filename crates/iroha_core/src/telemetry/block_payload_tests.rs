@@ -29,6 +29,70 @@
         assert!(block_counts_as_non_empty(&block));
     }
 
+    #[test]
+    fn block_payload_detects_npos_consensus_effect_blocks() {
+        use iroha_data_model::consensus::{
+            NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
+        };
+
+        let mut block = empty_block(2);
+        block.set_npos_consensus_effects(Some(NposConsensusEffects {
+            vrf_epoch_seals: Vec::new(),
+            v2_evidence_admissions: Vec::new(),
+            penalty_actions: vec![NposPenaltyAction::MarkVrfPenaltiesApplied(
+                NposMarkVrfPenaltiesAppliedAction {
+                    epoch: 0,
+                    height: 2,
+                },
+            )],
+        }));
+
+        assert!(
+            block_counts_as_non_empty(&block),
+            "deterministic NPoS state effects are semantic block work"
+        );
+    }
+
+    #[test]
+    fn block_payload_detects_autonomous_lane_payload_carriers() {
+        use iroha_data_model::block::{
+            AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
+            BlockExecutionContextBundle,
+        };
+
+        let mut block = empty_block(6);
+        let producer = PeerId::new(
+            checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let envelope = AutonomousLanePayloadEnvelopeV1 {
+            version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
+            chain_id_hash: Hash::new(b"telemetry-autonomous-chain"),
+            epoch: 4,
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(10),
+            lane_incarnation: Hash::new(b"telemetry-autonomous-incarnation"),
+            proposal_height: 6,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            proposal_hash: Hash::new(b"telemetry-autonomous-proposal"),
+            descriptor_hash: Hash::new(b"telemetry-autonomous-descriptor"),
+            payload_hash: Hash::new(b"telemetry-autonomous-payload"),
+            producer,
+            canonical_payload: vec![0x44, 0x50, 0x4E],
+        };
+        block.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_autonomous_lane_payloads(vec![envelope]),
+        ));
+
+        assert!(
+            block_counts_as_non_empty(&block),
+            "autonomous lane payload carriers are semantic block work"
+        );
+    }
+
     fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
         use std::num::NonZeroU64;
 

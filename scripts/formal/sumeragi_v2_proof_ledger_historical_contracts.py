@@ -8,6 +8,8 @@ HISTORICAL_BODY_RESPONSE_PHASE_MARKERS = (
 
 REQUIRED_MODEL_MODULES = (
     "SumeragiV2Revision4",
+    "SumeragiV2Revision4AdversarialSafety",
+    "SumeragiV2Revision4CertifiedFenceReservation",
     "SumeragiV2",
     "SumeragiV2Quorums",
     "SumeragiV2QuorumProofs",
@@ -78,7 +80,9 @@ REQUIRED_MODEL_MODULES = (
 
 REQUIRED_TLC_CONFIGS = (
     "SumeragiV2Revision4.cfg",
+    "SumeragiV2Revision4AdversarialSafety.cfg",
     "SumeragiV2Revision4Liveness.cfg",
+    "revision4_certified_fence_reservation_fixed.cfg",
     "quorum_count.cfg",
     "quorum_stake.cfg",
     "safety_count.cfg",
@@ -91,7 +95,9 @@ REQUIRED_TLC_CONFIGS = (
 
 REQUIRED_TLC_CONFIG_HEADERS = {
     "SumeragiV2Revision4.cfg": "SPECIFICATION Spec",
+    "SumeragiV2Revision4AdversarialSafety.cfg": "SPECIFICATION Spec",
     "SumeragiV2Revision4Liveness.cfg": "SPECIFICATION PostGSTSpec",
+    "revision4_certified_fence_reservation_fixed.cfg": "SPECIFICATION Spec",
     "quorum_count.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "quorum_stake.cfg": "INIT Init\nNEXT QuorumCheckNext",
     "safety_count.cfg": "INIT Init\nNEXT Next",

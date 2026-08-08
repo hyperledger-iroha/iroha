@@ -62,13 +62,13 @@ BY SMT
        AsyncCandidateProducerContinuationStatusRank
 
 THEOREM AsyncCandidateProducerContinuationHandoffRetainsExactLifecycle ==
-  \A candidate \in AsyncCandidateSet,
-     successor \in
-       AsyncCandidateProducerContinuationHandoffCandidatesThisStep(
-         candidate):
-    /\ successor \in AsyncCandidateSet
-    /\ successor.node = candidate.node
-    /\ successor.causalOrigin = candidate.causalOrigin
+  \A candidate \in AsyncCandidateSet:
+    \A successor \in
+         AsyncCandidateProducerContinuationHandoffCandidatesThisStep(
+           candidate):
+      /\ successor \in AsyncCandidateSet
+      /\ successor.node = candidate.node
+      /\ successor.causalOrigin = candidate.causalOrigin
 BY CommandSuccessorsRetainCausalOrigin, Isa
    DEF AsyncCandidateProducerContinuationHandoffCandidatesThisStep,
        AsyncCandidateServicesThisStep, SequenceSet
@@ -482,15 +482,15 @@ THEOREM AsyncCandidateProducerContinuationGstExcludesResetReplay ==
 BY DEF PreGstResponsiveRestart, PreGstResponsiveReplay
 
 THEOREM ConditionalTransportContinuationReadyEnablesFairService ==
-  \A initialContext \in ContextRecords,
-     node \in AsyncVotersAt(initialContext):
-    /\ gst
-    /\ AsyncCandidateProducerContinuationResolutionReady(node)
-    /\ AsyncCandidateProducerContinuationSelectedSourceClass(
-         node, "ConditionalTransport")
-      => ENABLED
-           <<PostGstServiceConditionalTransportProducerContinuation(
-               node)>>_AsyncAllVars
+  \A initialContext \in ContextRecords:
+    \A node \in AsyncVotersAt(initialContext):
+      /\ gst
+      /\ AsyncCandidateProducerContinuationResolutionReady(node)
+      /\ AsyncCandidateProducerContinuationSelectedSourceClass(
+           node, "ConditionalTransport")
+        => ENABLED
+             <<PostGstServiceConditionalTransportProducerContinuation(
+                 node)>>_AsyncAllVars
 BY ExpandENABLED, IsaT(300)
    DEF PostGstServiceConditionalTransportProducerContinuation,
        ServiceConditionalTransportProducerContinuation,
@@ -502,15 +502,15 @@ BY ExpandENABLED, IsaT(300)
        AsyncDeferredVars, vars
 
 THEOREM VolatileBodyContinuationReadyEnablesFairService ==
-  \A initialContext \in ContextRecords,
-     node \in AsyncVotersAt(initialContext):
-    /\ gst
-    /\ AsyncCandidateProducerContinuationResolutionReady(node)
-    /\ AsyncCandidateProducerContinuationSelectedSourceClass(
-         node, "VolatileBody")
-      => ENABLED
-           <<PostGstServiceVolatileBodyProducerContinuation(
-               node)>>_AsyncAllVars
+  \A initialContext \in ContextRecords:
+    \A node \in AsyncVotersAt(initialContext):
+      /\ gst
+      /\ AsyncCandidateProducerContinuationResolutionReady(node)
+      /\ AsyncCandidateProducerContinuationSelectedSourceClass(
+           node, "VolatileBody")
+        => ENABLED
+             <<PostGstServiceVolatileBodyProducerContinuation(
+                 node)>>_AsyncAllVars
 BY ExpandENABLED, IsaT(300)
    DEF PostGstServiceVolatileBodyProducerContinuation,
        ServiceVolatileBodyProducerContinuation,
@@ -522,14 +522,14 @@ BY ExpandENABLED, IsaT(300)
        AsyncDeferredVars, vars
 
 THEOREM LocalContinuationReadyEnablesFairResolution ==
-  \A initialContext \in ContextRecords,
-     node \in AsyncVotersAt(initialContext):
-    /\ gst
-    /\ AsyncCandidateProducerContinuationResolutionReady(node)
-    /\ AsyncCandidateProducerContinuationSelectedSourceClass(node, "Local")
-      => ENABLED
-           <<PostGstResolveLocalCandidateProducerContinuation(
-               node)>>_AsyncAllVars
+  \A initialContext \in ContextRecords:
+    \A node \in AsyncVotersAt(initialContext):
+      /\ gst
+      /\ AsyncCandidateProducerContinuationResolutionReady(node)
+      /\ AsyncCandidateProducerContinuationSelectedSourceClass(node, "Local")
+        => ENABLED
+             <<PostGstResolveLocalCandidateProducerContinuation(
+                 node)>>_AsyncAllVars
 BY ExpandENABLED, IsaT(300)
    DEF PostGstResolveLocalCandidateProducerContinuation,
        ResolveLocalCandidateProducerContinuation,
@@ -909,17 +909,17 @@ BY Isa
        AsyncControlServiceStateTypeInvariant
 
 THEOREM CandidateProducerContinuationCausalSuccessorRetainsFrozenPhysicalClass ==
-  \A node \in ValidatorIds,
-     targetOrdinal \in Nat \ {0},
-     candidate \in
-       AsyncCandidateProducerContinuationFrozenCausalCandidates(
-         node, targetOrdinal),
-     successor \in SequenceSet(CommandSuccessors(candidate)):
-    AsyncCandidateLifecycleRecorded(
-      candidate.node, candidate.causalOrigin)
-      => successor.causalOrigin
-           \in AsyncCandidateProducerContinuationFrozenPredecessorOrigins(
-                node, targetOrdinal)
+  \A node \in ValidatorIds:
+    \A targetOrdinal \in Nat \ {0}:
+      \A candidate \in
+           AsyncCandidateProducerContinuationFrozenCausalCandidates(
+             node, targetOrdinal):
+        \A successor \in SequenceSet(CommandSuccessors(candidate)):
+          AsyncCandidateLifecycleRecorded(
+            candidate.node, candidate.causalOrigin)
+            => successor.causalOrigin
+                 \in AsyncCandidateProducerContinuationFrozenPredecessorOrigins(
+                      node, targetOrdinal)
 BY CommandSuccessorsRetainCausalOrigin, Isa
    DEF AsyncCandidateProducerContinuationFrozenCausalCandidates,
        AsyncCandidateProducerContinuationFrozenPredecessorOrigins,
@@ -928,37 +928,39 @@ BY CommandSuccessorsRetainCausalOrigin, Isa
        SequenceSet
 
 THEOREM CandidateProducerContinuationPostCutServeCannotEnterFrozenPrefix ==
-  \A node \in ValidatorIds,
-     targetOrdinal \in Nat \ {0},
-     identity \in AsyncCausalEpisodeServeIngressIdentities(
-                   node, targetOrdinal):
-    AsyncCandidateProducerContinuationTargetPhysicalCut(
-      node, targetOrdinal)
-      <= AsyncServeIngressAdmissionOrdinal(node, identity)
-      => identity
-           \notin
-             AsyncCandidateProducerContinuationFrozenServeIngressIdentities(
-               node, targetOrdinal)
+  \A node \in ValidatorIds:
+    \A targetOrdinal \in Nat \ {0}:
+      \A identity \in AsyncCausalEpisodeServeIngressIdentities(
+                       node, targetOrdinal):
+        AsyncCandidateProducerContinuationTargetPhysicalCut(
+          node, targetOrdinal)
+          <= AsyncServeIngressAdmissionOrdinal(node, identity)
+          => identity
+               \notin
+                 AsyncCandidateProducerContinuationFrozenServeIngressIdentities(
+                   node, targetOrdinal)
 BY Isa
    DEF AsyncCandidateProducerContinuationFrozenServeIngressIdentities
 
 AsyncCandidateProducerContinuationFrozenCandidateTokens(
     node, targetOrdinal) ==
-  {<<"Candidate", candidate, token>>:
-     candidate \in
-       AsyncCandidateProducerContinuationFrozenCandidateOwners(
-         node, targetOrdinal),
-     token \in
-       1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}
+  UNION
+    {{<<"Candidate", candidate, token>>:
+        token \in
+          1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}:
+      candidate \in
+        AsyncCandidateProducerContinuationFrozenCandidateOwners(
+          node, targetOrdinal)}
 
 AsyncCandidateProducerContinuationFrozenStatusTokens(
     node, targetOrdinal) ==
-  {<<"Continuation", record.identity, token>>:
-     record \in
-       AsyncCandidateProducerContinuationFrozenRecords(
-         node, targetOrdinal),
-     token \in
-       1..AsyncCandidateProducerContinuationStatusRank(record.status)}
+  UNION
+    {{<<"Continuation", record.identity, token>>:
+        token \in
+          1..AsyncCandidateProducerContinuationStatusRank(record.status)}:
+      record \in
+        AsyncCandidateProducerContinuationFrozenRecords(
+          node, targetOrdinal)}
 
 AsyncCandidateProducerContinuationFrozenProducerTokens(
     node, targetOrdinal) ==
@@ -1054,21 +1056,23 @@ AsyncCandidateProducerContinuationFrozenSourceCandidateOwners(
 
 AsyncCandidateProducerContinuationFrozenSourceCandidateTokens(
     node, frozenCandidateOrigins, frozenContinuationSources) ==
-  {<<"Candidate", candidate, token>>:
-     candidate \in
-       AsyncCandidateProducerContinuationFrozenSourceCandidateOwners(
-         node, frozenCandidateOrigins, frozenContinuationSources),
-     token \in
-       1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}
+  UNION
+    {{<<"Candidate", candidate, token>>:
+        token \in
+          1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}:
+      candidate \in
+        AsyncCandidateProducerContinuationFrozenSourceCandidateOwners(
+          node, frozenCandidateOrigins, frozenContinuationSources)}
 
 AsyncCandidateProducerContinuationFrozenSourceStatusTokens(
     node, frozenCandidateOrigins, frozenContinuationSources) ==
-  {<<"Continuation", record.identity, token>>:
-     record \in
-       AsyncCandidateProducerContinuationFrozenSourceRecords(
-         node, frozenCandidateOrigins, frozenContinuationSources),
-     token \in
-       1..AsyncCandidateProducerContinuationStatusRank(record.status)}
+  UNION
+    {{<<"Continuation", record.identity, token>>:
+        token \in
+          1..AsyncCandidateProducerContinuationStatusRank(record.status)}:
+      record \in
+        AsyncCandidateProducerContinuationFrozenSourceRecords(
+          node, frozenCandidateOrigins, frozenContinuationSources)}
 
 AsyncCandidateProducerContinuationFrozenSourceProducerTokens(
     node, frozenCandidateOrigins, frozenContinuationSources) ==
@@ -1754,29 +1758,29 @@ THEOREM CandidateProducerContinuationPreCutIngressToRuntimeConsumesBarrierStage 
   \A node \in ValidatorIds,
      targetOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     source \in AsyncIngressSources,
-     laneIndex \in 1..Len(IngressLane(node, source)),
-     record \in asyncLeaderWireLifecycles:
-    LET item == IngressLane(node, source)[laneIndex]
-    IN /\ AsyncStrongTypeInvariant
-       /\ Len(asyncIngressReady[node]) > 0
-       /\ source = asyncIngressReady[node][1]
-       /\ record
-            \in AsyncFrozenLeaderWireBarrierRecords(
-                 node, targetOrdinal - 1, physicalCut, "Logical")
-       /\ AsyncLeaderWireLifecycleIngressProtected(record)
-       /\ AsyncLeaderWireAdmissionMatchesRecord(item, record)
-       /\ AsyncLeaderWireDrainInstallsRuntimeOwner(item)
-       /\ PopSelectedIngress(node, 1, laneIndex)
-       /\ AsyncControlServiceSlotTransition
-       => /\ AsyncLeaderWireRuntimeCandidate(item)
-                \in
-                  AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
-                    node, targetOrdinal, physicalCut)'
-          /\ AsyncFrozenLeaderWireBarrierStageBudget(
-               node, targetOrdinal - 1, physicalCut, "Logical")'
-               < AsyncFrozenLeaderWireBarrierStageBudget(
-                   node, targetOrdinal - 1, physicalCut, "Logical")
+     source \in AsyncIngressSources:
+    \A laneIndex \in 1..Len(IngressLane(node, source)):
+      \A record \in asyncLeaderWireLifecycles:
+        LET item == IngressLane(node, source)[laneIndex]
+        IN /\ AsyncStrongTypeInvariant
+           /\ Len(asyncIngressReady[node]) > 0
+           /\ source = asyncIngressReady[node][1]
+           /\ record
+                \in AsyncFrozenLeaderWireBarrierRecords(
+                     node, targetOrdinal - 1, physicalCut, "Logical")
+           /\ AsyncLeaderWireLifecycleIngressProtected(record)
+           /\ AsyncLeaderWireAdmissionMatchesRecord(item, record)
+           /\ AsyncLeaderWireDrainInstallsRuntimeOwner(item)
+           /\ PopSelectedIngress(node, 1, laneIndex)
+           /\ AsyncControlServiceSlotTransition
+           => /\ AsyncLeaderWireRuntimeCandidate(item)
+                    \in
+                      AsyncCandidateProducerContinuationFrozenLeaderWireCandidates(
+                        node, targetOrdinal, physicalCut)'
+              /\ AsyncFrozenLeaderWireBarrierStageBudget(
+                   node, targetOrdinal - 1, physicalCut, "Logical")'
+                   < AsyncFrozenLeaderWireBarrierStageBudget(
+                       node, targetOrdinal - 1, physicalCut, "Logical")
 BY LeaderWireIngressDrainNeverInventsRuntimeOwner,
    FS_CardinalityType, FS_Subset, IsaT(1800)
    DEF AsyncCandidateProducerContinuationFrozenLeaderWireCandidates,
@@ -1796,30 +1800,30 @@ THEOREM CandidateProducerContinuationPreCutOrdinaryIngressConsumesBarrierStage =
   \A node \in ValidatorIds,
      targetOrdinal \in Nat \ {0},
      physicalCut \in Nat,
-     source \in AsyncIngressSources,
-     laneIndex \in 1..Len(IngressLane(node, source)),
-     carrier \in
-       asyncControlServiceState.ordinaryIngressCarrierEvidence:
-    LET item == IngressLane(node, source)[laneIndex]
-    IN /\ AsyncStrongTypeInvariant
-       /\ Len(asyncIngressReady[node]) > 0
-       /\ source = asyncIngressReady[node][1]
-       /\ carrier
-            \in AsyncFrozenOrdinaryIngressBarrierRecords(
-                 node, targetOrdinal - 1, physicalCut, "Logical")
-       /\ ExactAsyncCandidateIdentity(DeliveryCandidate(item))
-            = carrier.carrierIdentity
-       /\ PopSelectedIngress(node, 1, laneIndex)
-       /\ AsyncControlServiceSlotTransition
-       => /\ carrier
-                \notin
-                  AsyncFrozenOrdinaryIngressBarrierRecords(
-                    node, targetOrdinal - 1,
-                    physicalCut, "Logical")'
-          /\ AsyncFrozenLeaderWireBarrierStageBudget(
-               node, targetOrdinal - 1, physicalCut, "Logical")'
-               < AsyncFrozenLeaderWireBarrierStageBudget(
-                   node, targetOrdinal - 1, physicalCut, "Logical")
+     source \in AsyncIngressSources:
+    \A laneIndex \in 1..Len(IngressLane(node, source)):
+      \A carrier \in
+           asyncControlServiceState.ordinaryIngressCarrierEvidence:
+        LET item == IngressLane(node, source)[laneIndex]
+        IN /\ AsyncStrongTypeInvariant
+           /\ Len(asyncIngressReady[node]) > 0
+           /\ source = asyncIngressReady[node][1]
+           /\ carrier
+                \in AsyncFrozenOrdinaryIngressBarrierRecords(
+                     node, targetOrdinal - 1, physicalCut, "Logical")
+           /\ ExactAsyncCandidateIdentity(DeliveryCandidate(item))
+                = carrier.carrierIdentity
+           /\ PopSelectedIngress(node, 1, laneIndex)
+           /\ AsyncControlServiceSlotTransition
+           => /\ carrier
+                    \notin
+                      AsyncFrozenOrdinaryIngressBarrierRecords(
+                        node, targetOrdinal - 1,
+                        physicalCut, "Logical")'
+              /\ AsyncFrozenLeaderWireBarrierStageBudget(
+                   node, targetOrdinal - 1, physicalCut, "Logical")'
+                   < AsyncFrozenLeaderWireBarrierStageBudget(
+                       node, targetOrdinal - 1, physicalCut, "Logical")
 BY OrdinaryIngressDrainFreezesContinuationPhysicalCut,
    CandidateProducerContinuationPostCutOrdinaryAdmissionCannotEnterFrozenPrefix,
    FS_CardinalityType, FS_Subset, IsaT(2400)
@@ -1853,13 +1857,14 @@ AsyncCertifiedResponseFrozenLeaderWireRecords(
 
 AsyncCertifiedResponseFrozenLeaderWireStageTokens(
     node, physicalCut, frozenLeaderWireIdentities) ==
-  {<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
-     token>>:
-     record \in
-       AsyncCertifiedResponseFrozenLeaderWireRecords(
-         node, physicalCut, frozenLeaderWireIdentities),
-     token \in
-       1..AsyncFrozenLeaderWireBarrierRemainingStage(record, "Physical")}
+  UNION
+    {{<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
+       token>>:
+       token \in
+         1..AsyncFrozenLeaderWireBarrierRemainingStage(record, "Physical")}:
+      record \in
+        AsyncCertifiedResponseFrozenLeaderWireRecords(
+          node, physicalCut, frozenLeaderWireIdentities)}
 
 AsyncCertifiedResponseFrozenLeaderWireStageBudget(
     node, physicalCut, frozenLeaderWireIdentities) ==
@@ -2202,6 +2207,33 @@ BY AsyncCausalEpisodeCandidateCarrierHasConfiguredBound,
        AsyncCandidateProducerContinuationCapacity,
        AsyncCausalEpisodeCandidates,
        AsyncStrongTypeInvariant
+
+THEOREM AsyncCandidateProducerContinuationReclamationPreservesIdentity ==
+  \A state:
+    \A record \in state.producerContinuations:
+    ~AsyncNodeHasDecisionAfter(record.node)
+      => AsyncCandidateProducerContinuationRecordAfterStep(state, record)
+           \in (AsyncCandidateServiceStateAfterReclamation(state))
+                .producerContinuations
+BY Isa DEF AsyncCandidateServiceStateAfterReclamation
+
+THEOREM AsyncCandidateProducerContinuationPreservedOrTerminal ==
+  \A state, identity:
+    AsyncCandidateProducerContinuationActiveForIdentityIn(state, identity)
+      => \/ \E record \in
+                 AsyncCandidateProducerContinuationRecordsForIdentityIn(
+                   state, identity):
+               AsyncNodeHasDecisionAfter(record.node)
+         \/ AsyncCandidateProducerContinuationActiveForIdentityIn(
+              AsyncCandidateServiceStateAfterReclamation(state), identity)
+         \/ AsyncCandidateProducerContinuationTerminalForIdentityIn(
+              AsyncCandidateServiceStateAfterReclamation(state), identity)
+BY AsyncCandidateProducerContinuationReclamationPreservesIdentity,
+   AsyncCandidateProducerContinuationDecisionReclamationClearsNode, Isa
+   DEF AsyncCandidateProducerContinuationActiveForIdentityIn,
+       AsyncCandidateProducerContinuationTerminalForIdentityIn,
+       AsyncCandidateProducerContinuationRecordsForIdentityIn,
+       AsyncCandidateProducerContinuationRecordAfterStep
 
 THEOREM CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge ==
   \A node \in ValidatorIds, targetOrdinal \in Nat:
@@ -2574,7 +2606,8 @@ BY AsyncProtectedCandidateFrozenPrefixStepIsDescentOrFrame,
    SerializedLocalPredecessorDecreasesDrainableIngressTurnReach,
    RuntimeStepDecreasesDrainableIngressTurnReach,
    OlderRuntimeInterleaveDecreasesDrainableIngressTurnReach,
-   ServiceIoWorkerDropsQueueDepth,
+   AsyncStrongTypeProjectsAsyncType,
+   PositiveSequenceIsNonempty, HeadTailProperties, LenProperties,
    FS_CardinalityType, FS_Subset, IsaT(7200)
    DEF AsyncProtectedCandidateIngressEpisodeRank,
        AsyncProtectedCandidateIngressEpisodeRankOrdering,
@@ -2624,6 +2657,10 @@ BY AsyncProtectedCandidateFrozenPrefixStepIsDescentOrFrame,
        AsyncServeIngressAdmissionsWithout,
        AsyncServeReservationsAfterIoService,
        AsyncServeReservationsAfterIngressDrain,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncIoQueueContentTypeInvariant, AsyncIoSequenceTyped,
+       AsyncIoQueueDepth,
        ServiceIoWorkerWork, PopSelectedIngress,
        DrainFairIngressSelected, DrainHistoricalIngressSelected,
        LocalAdmissionStep, IngressDrainStep,
@@ -3092,8 +3129,9 @@ THEOREM CandidateProducerContinuationFrozenSourcePrefixStepCannotReplenish ==
 BY CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
    CandidateProducerContinuationDormantLocalReplayReplacementConsumesFrozenCausalCharge,
    CandidateProducerContinuationExactLocalReplayReplacesFrozenCharge,
-   ClaimedResponseCapacityCreatesPrioritySource,
-   PrioritySourceSelectsClaimedResponse,
+   MatchingClaimedCertifiedResponseIsAuthorized,
+   FirstDrainableIngressIndexIsDrainable,
+   FirstDrainableIngressLaneIndexIsDrainable,
    DrainFairIngressSelectedClaimPopShape,
    AsyncFrozenServeSourceCannotResurrectAtGst,
    AsyncFreshServeIngressCannotReacquirePriorSchedulerOrdinal,
@@ -3132,14 +3170,27 @@ BY CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
        AsyncLeaderWireLifecycleActive,
        AsyncLeaderWirePotentialOwnerIdentity,
        AsyncCandidateLifecycleSource,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
+       AsyncTransportHistoryTypeInvariant,
+       AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       AsyncCertifiedResponseClaimInvariant,
+       CertifiedResponseClaimIngressOwner,
        AsyncCertifiedResponseClaimFrozenSourceInvariant,
        CertifiedResponseClaimRecordsAt,
        CertifiedResponseClaimsAt,
        CertifiedResponseClaimMatches,
        CanEnqueueCertifiedResponse,
        DrainableClaimedResponseReadyIndices,
+       DrainableClaimedResponseLaneIndices,
+       DrainableIngressIndices, DrainableIngressLaneIndices,
+       IngressSourceCanDrain, IngressItemCanDrain,
+       IngressResourceSource, IngressLane, IngressLaneDepth,
        SelectedIngressItemAt,
        FirstDrainableIngressIndex,
+       FirstDrainableIngressLaneIndex,
+       SelectedIngressLaneIndex,
+       SequenceSet, CandidateScheduled,
        DrainFairIngressSelected,
        AsyncTimeoutLifecycleOwned,
        AsyncTimeoutLifecycleOrigin,
@@ -3354,33 +3405,6 @@ BY Isa
        AsyncCandidateProducerContinuationRecordsForIdentity,
        AsyncCandidateProducerContinuationRecordsForIdentityIn
 
-THEOREM AsyncCandidateProducerContinuationReclamationPreservesIdentity ==
-  \A state:
-    \A record \in state.producerContinuations:
-    ~AsyncNodeHasDecisionAfter(record.node)
-      => AsyncCandidateProducerContinuationRecordAfterStep(state, record)
-           \in (AsyncCandidateServiceStateAfterReclamation(state))
-                .producerContinuations
-BY Isa DEF AsyncCandidateServiceStateAfterReclamation
-
-THEOREM AsyncCandidateProducerContinuationPreservedOrTerminal ==
-  \A state, identity:
-    AsyncCandidateProducerContinuationActiveForIdentityIn(state, identity)
-      => \/ \E record \in
-                 AsyncCandidateProducerContinuationRecordsForIdentityIn(
-                   state, identity):
-               AsyncNodeHasDecisionAfter(record.node)
-         \/ AsyncCandidateProducerContinuationActiveForIdentityIn(
-              AsyncCandidateServiceStateAfterReclamation(state), identity)
-         \/ AsyncCandidateProducerContinuationTerminalForIdentityIn(
-              AsyncCandidateServiceStateAfterReclamation(state), identity)
-BY AsyncCandidateProducerContinuationReclamationPreservesIdentity,
-   AsyncCandidateProducerContinuationDecisionReclamationClearsNode, Isa
-   DEF AsyncCandidateProducerContinuationActiveForIdentityIn,
-       AsyncCandidateProducerContinuationTerminalForIdentityIn,
-       AsyncCandidateProducerContinuationRecordsForIdentityIn,
-       AsyncCandidateProducerContinuationRecordAfterStep
-
 THEOREM AsyncCandidateProducerContinuationSameHeightRestartPreserved ==
   \A state, resetNodes:
     LET resetState ==
@@ -3508,24 +3532,24 @@ THEOREM AsyncCandidateProducerContinuationRolloverOnlyStartsEmpty ==
 BY DEF AsyncTransportInit, AsyncCandidateProducerContinuations
 
 THEOREM LocalCandidateProducerContinuationResolutionUsesReviewedFairAction ==
-  \A initialContext \in ContextRecords,
-     node \in AsyncVotersAt(initialContext):
-    PostGstResolveLocalCandidateProducerContinuation(node)
-      => AsyncFairActionAt(initialContext)
+  \A initialContext \in ContextRecords:
+    \A node \in AsyncVotersAt(initialContext):
+      PostGstResolveLocalCandidateProducerContinuation(node)
+        => AsyncFairActionAt(initialContext)
 BY DEF AsyncFairActionAt
 
 THEOREM ConditionalTransportProducerContinuationServiceUsesReviewedFairAction ==
-  \A initialContext \in ContextRecords,
-     node \in AsyncVotersAt(initialContext):
-    PostGstServiceConditionalTransportProducerContinuation(node)
-      => AsyncFairActionAt(initialContext)
+  \A initialContext \in ContextRecords:
+    \A node \in AsyncVotersAt(initialContext):
+      PostGstServiceConditionalTransportProducerContinuation(node)
+        => AsyncFairActionAt(initialContext)
 BY DEF AsyncFairActionAt
 
 THEOREM VolatileBodyProducerContinuationServiceUsesReviewedFairAction ==
-  \A initialContext \in ContextRecords,
-     node \in AsyncVotersAt(initialContext):
-    PostGstServiceVolatileBodyProducerContinuation(node)
-      => AsyncFairActionAt(initialContext)
+  \A initialContext \in ContextRecords:
+    \A node \in AsyncVotersAt(initialContext):
+      PostGstServiceVolatileBodyProducerContinuation(node)
+        => AsyncFairActionAt(initialContext)
 BY DEF AsyncFairActionAt
 
 =============================================================================

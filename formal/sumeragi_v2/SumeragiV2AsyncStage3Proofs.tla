@@ -189,8 +189,8 @@ PROOF
 
 ClassPrefixThrough(sequence, target) ==
   {index \in 1..Len(sequence):
-     /\ sequence[index].class = sequence[target].class
-     /\ index <= target}
+     AsyncCandidateLifecycleOrdinal(sequence[index])
+       <= AsyncCandidateLifecycleOrdinal(sequence[target])}
 
 THEOREM UniqueSchedulerPrefixUsesTargetIndex ==
   \A node, candidate, target:
@@ -211,32 +211,8 @@ PROOF
          PROVE SchedulerClassPrefixIndices(node, candidate)
                  = ClassPrefixThrough(
                      asyncCommandQueues[node], target)
-    <2>1. IsInjective(asyncCommandQueues[node])
-      BY <1>1, UniqueSequenceLengthImpliesInjective
-         DEF AsyncQueueTyped, SequenceHasUniqueValues
-    <2>2. DOMAIN asyncCommandQueues[node] =
-             1..Len(asyncCommandQueues[node])
-      BY <1>1 DEF AsyncQueueTyped
-    <2>3. SchedulerCandidateIndices(node, candidate) = {target}
-      <3>1. target \in SchedulerCandidateIndices(node, candidate)
-        BY <1>1 DEF SchedulerCandidateIndices
-      <3>2. \A matching \in SchedulerCandidateIndices(node, candidate):
-               matching = target
-        <4>1. ASSUME NEW matching \in
-                      SchedulerCandidateIndices(node, candidate)
-               PROVE matching = target
-          BY <1>1, <2>1, <2>2, <4>1
-             DEF SchedulerCandidateIndices, IsInjective
-        <4> QED BY <4>1
-      <3> QED BY <3>1, <3>2, Isa
-    <2>4. \A index:
-             index \in SchedulerClassPrefixIndices(node, candidate)
-               <=> index \in
-                     ClassPrefixThrough(asyncCommandQueues[node], target)
-      BY <1>1, <2>3, SMT
-         DEF SchedulerClassPrefixIndices, ClassPrefixThrough,
-             SchedulerCandidateIndices
-    <2> QED BY <2>4
+    <2> QED BY <1>1
+         DEF SchedulerClassPrefixIndices, ClassPrefixThrough
   <1> QED BY <1>1
 
 THEOREM Stage3CandidateSequenceIndexCharacterization ==
@@ -580,40 +556,42 @@ PROOF
          DEF Result, Shifted, RemovalTargetIndex
   <1> QED BY <1>1
 
-THEOREM SelectedSameClassPrecedesTarget ==
+THEOREM SelectedOldestLifecycleBelongsToTargetPrefix ==
   \A node \in ValidatorIds:
     \A target \in 1..Len(asyncCommandQueues[node]):
-      /\ AsyncRuntimeScalarTypeInvariant
+      /\ AsyncStrongTypeInvariant
       /\ NodeQueueNonempty(node)
-      /\ asyncCommandQueues[node][target].class
-           = SelectedCommandClass(node)
-      => NextNodeCommandIndex(node) <= target
+      => NextNodeCommandIndex(node)
+           \in SchedulerClassPrefixIndices(
+                node, asyncCommandQueues[node][target])
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW target \in 1..Len(asyncCommandQueues[node]),
-                AsyncRuntimeScalarTypeInvariant,
-                NodeQueueNonempty(node),
-                asyncCommandQueues[node][target].class
-                  = SelectedCommandClass(node)
-         PROVE NextNodeCommandIndex(node) <= target
-    <2>1. target \in
-             CommandClassIndices(node, SelectedCommandClass(node))
-      BY <1>1 DEF CommandClassIndices
-    <2> QED BY <1>1, <2>1, NextNodeCommandIndexFacts
+                AsyncStrongTypeInvariant,
+                NodeQueueNonempty(node)
+         PROVE NextNodeCommandIndex(node)
+                 \in SchedulerClassPrefixIndices(
+                      node, asyncCommandQueues[node][target])
+    <2>1. AsyncSchedulerTypeInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2. /\ NextNodeCommandIndex(node)
+                    \in 1..Len(asyncCommandQueues[node])
+           /\ AsyncCandidateLifecycleOrdinal(NextNodeCommand(node))
+                = OldestNodeCommandLifecycleOrdinal(node)
+      BY <1>1, <2>1, NextNodeCommandIndexFacts,
+         AsyncNextNodeCommandOwnsOldestLifecycleOrdinal
+    <2>3. AsyncCandidateLifecycleOrdinal(
+             asyncCommandQueues[node][target])
+             \in NodeCommandLifecycleOrdinals(node)
+      BY <1>1 DEF NodeCommandLifecycleOrdinals
+    <2>4. OldestNodeCommandLifecycleOrdinal(node)
+             <= AsyncCandidateLifecycleOrdinal(
+                  asyncCommandQueues[node][target])
+      BY <1>1, <2>1, <2>3,
+         OldestNodeCommandLifecycleOrdinalFacts
+    <2> QED BY <2>2, <2>4
+         DEF SchedulerClassPrefixIndices, NextNodeCommand
   <1> QED BY <1>1
-
-THEOREM SelectedDifferentClassStrictlyAdvancesCursor ==
-  \A node \in ValidatorIds, targetClass \in AsyncCommandClasses:
-    /\ asyncNextCommandClass[node] \in AsyncCommandClasses
-    /\ CommandClassIndices(node, targetClass) # {}
-    /\ SelectedCommandClass(node) # targetClass
-    => CommandClassDistance(
-         NextCommandClass(SelectedCommandClass(node)), targetClass)
-         < CommandClassDistance(
-             asyncNextCommandClass[node], targetClass)
-BY SMTT(30)
-   DEF SelectedCommandClass, CommandClassDistance,
-       NextCommandClass, AsyncCommandClasses
 
 (***************************************************************************
 Strict Stage-3 FIFO closure.
@@ -649,8 +627,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
    Stage3CandidateSequenceIndexCharacterization,
    PrefixCardinalityAfterNonTargetRemoval,
    NonTargetRemovalPreservesShiftedTarget,
-   SelectedSameClassPrecedesTarget,
-   SelectedDifferentClassStrictlyAdvancesCursor,
+   SelectedOldestLifecycleBelongsToTargetPrefix,
    FifoRuntimeQueueCursorFacts, NextNodeCommandIndexFacts,
    FS_RemoveElement, Isa
    DEF Stage3RankProgressExit, Stage3KernelPending,
@@ -658,7 +635,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
        CandidateServiceRank, ServiceRankLess, SchedulerServiceRank,
        SchedulerClassPrefixIndices, SchedulerCandidateIndices,
-       ClassPrefixThrough, RemovalTargetIndex, FifoRuntimeStep,
+       ClassPrefixThrough, RemovalTargetIndex,
+       CommandClassDistance, NextCommandClass, AsyncCommandClasses,
+       FifoRuntimeStep,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        RemoveNextNodeCommand, NextNodeCommand, SequenceSet,

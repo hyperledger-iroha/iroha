@@ -6903,12 +6903,6 @@ fn matches_box_variant(matcher: &str, base: &str, variant: &str) -> bool {
     matches_label(matcher, base) || matches_label(matcher, variant)
 }
 
-fn matches_zk_instruction_label(matcher: &str, variant: &str) -> bool {
-    matches_label(matcher, "zk")
-        || matches_label(matcher, variant)
-        || matches_label(matcher, &format!("zk::{variant}"))
-}
-
 fn matches_label(matcher: &str, label: &str) -> bool {
     label == matcher || eq_ignoring_underscores(label, matcher)
 }
@@ -7623,7 +7617,6 @@ mod tests {
         peer::PeerId,
         permission::Permission,
         prelude::*,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         sns::{NameControllerV1, NameRecordV1},
         transaction::TransactionBuilder,
     };
@@ -8192,14 +8185,6 @@ mod tests {
             .world
             .account_scope_directory
             .insert(account_id.clone(), scope_entry);
-    }
-
-    fn dummy_zk_proof_attachment() -> ProofAttachment {
-        ProofAttachment::new_ref(
-            "halo2/ipa".into(),
-            ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-            VerifyingKeyId::new("halo2/ipa", "router-zk-route-fixture"),
-        )
     }
 
     fn attach_valid_drain_state(lane: &mut LaneConfig, close_global_height: u64) {

@@ -1475,7 +1475,7 @@ core-jvm (`15`), and mirrored Java (`10`). JavaScript uses the dedicated
 `sumeragiDiagnosticsContract.test.js` entrypoint instead of a monolithic
 name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The suite-source manifest SHA-256 is
-`e20ef6e6d52907defb2b98c1c2b1e33aceb90054437e21ef2facab0c8df0ffca`.
+`5d5f860e46fa97f66d86023aeea6fd25850bb50be6795837ffec98661b490a3c`.
 These source contracts do not close the still-unrun aggregate `G-SDK` gate.
 
 **Differential release invariant and negative control.**
@@ -1546,7 +1546,7 @@ The harness and source-bound release inventory both require that exact count.
 The synchronized fixture SHA-256 is
 `8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`
 and the current suite-source manifest SHA-256 is
-`45044114a73b1d65400a075a7bb65fff22103f18287299e6350b162277f3b882`.
+`c7bc56dbf83927c1dd8537ab1101e8fb37f4f5eb00fca0fff0cd5740a474f033`.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 59, Swift
 4, Kotlin 6, and Java 5 tests. Previously recorded direct grouped results
 predate this refreshed fixture and do not attest it; one complete archived
@@ -1817,7 +1817,7 @@ count, and static release inventory are now synchronized. The grouped corpus
 contains exactly 55 negative controls and hashes to
 `8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`;
 the source-suite manifest hashes to
-`45044114a73b1d65400a075a7bb65fff22103f18287299e6350b162277f3b882`.
+`c7bc56dbf83927c1dd8537ab1101e8fb37f4f5eb00fca0fff0cd5740a474f033`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
 `59`, Swift `4`, Kotlin `6`, and Java `5` tests. The previously recorded direct
 subset results—OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56`—predate
@@ -1826,7 +1826,7 @@ status/diagnostics contract remains `44/44`. The exact no-skip diagnostics
 release inventories are Rust `14`, Python `114`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `15`, and Java `10`; their
 suite-source manifest SHA-256 is
-`e20ef6e6d52907defb2b98c1c2b1e33aceb90054437e21ef2facab0c8df0ffca`.
+`5d5f860e46fa97f66d86023aeea6fd25850bb50be6795837ffec98661b490a3c`.
 No complete source-and-distribution aggregate harness replay was run for this
 evidence refresh. `G-SDK` therefore stays Open despite the resolved generation
 drift and static inventory consistency.

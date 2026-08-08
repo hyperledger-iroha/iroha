@@ -1118,14 +1118,65 @@ fn pipeline_status_response(
     response
 }
 
+fn pipeline_status_projection_error(message: impl std::fmt::Display) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+            "committed transaction status projection is inconsistent: {message}"
+        )),
+    ))
+}
+
+fn certified_merge_pipeline_transactions(
+    carrier_hash: HashOf<BlockHeader>,
+    reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
+    entry: &iroha_data_model::merge::MergeLedgerEntry,
+) -> Result<
+    Vec<(
+        HashOf<SignedTransaction>,
+        iroha_data_model::query::CommittedTransaction,
+    )>,
+    Error,
+> {
+    let transactions = iroha_core::smartcontracts::isi::tx::certified_merge_committed_transactions(
+        carrier_hash,
+        reference,
+        entry,
+    )
+    .map_err(pipeline_status_projection_error)?;
+    let batch = entry.execution_batch.as_ref().ok_or_else(|| {
+        pipeline_status_projection_error(
+            "execution carrier references an entry without an execution batch",
+        )
+    })?;
+    let membership_hashes = iroha_core::state::merge_execution_committed_transaction_hashes(batch);
+    if transactions.len() != membership_hashes.len() {
+        return Err(pipeline_status_projection_error(format!(
+            "authenticated transcript has {} transactions but State membership has {} hashes",
+            transactions.len(),
+            membership_hashes.len()
+        )));
+    }
+    Ok(membership_hashes
+        .into_iter()
+        .rev()
+        .zip(transactions)
+        .collect())
+}
+
 fn pipeline_status_from_state(
     app: &AppState,
     hash: &HashOf<SignedTransaction>,
-) -> Option<PipelineStatusEntry> {
-    let height = app.state.committed_transaction_height(hash)?;
-    let height_u64 = u64::try_from(height.get()).ok()?;
-    let height_nz = NonZeroU64::new(height_u64)?;
-    let block = app.kura.get_block(height)?;
+) -> Result<Option<PipelineStatusEntry>, Error> {
+    let Some(height) = app.state.committed_transaction_height(hash) else {
+        return Ok(None);
+    };
+    let height_u64 = u64::try_from(height.get())
+        .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
+    let height_nz = NonZeroU64::new(height_u64)
+        .ok_or_else(|| pipeline_status_projection_error("committed height is zero"))?;
+    let block = app.kura.get_block(height).ok_or_else(|| {
+        pipeline_status_projection_error(format!("canonical block {} is unavailable", height.get()))
+    })?;
     let block_ref = block.as_ref();
     for (index, entrypoint, result) in block_ref.entrypoint_results() {
         if index >= block_ref.external_entrypoint_count() {
@@ -1140,38 +1191,81 @@ fn pipeline_status_from_state(
             Ok(_) => (PipelineStatusKind::Applied, None),
             Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
         };
-        return Some(PipelineStatusEntry::fresh(kind, Some(height_nz), rejection));
+        return Ok(Some(PipelineStatusEntry::fresh(
+            kind,
+            Some(height_nz),
+            rejection,
+        )));
     }
-    None
+
+    let reference = block_ref
+        .execution_context()
+        .and_then(|context| context.merge_entry.as_ref())
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "transaction {hash} is indexed at block {} but is absent from its external body and has no merge reference",
+                height.get()
+            ))
+        })?;
+    let entry = app
+        .kura
+        .get_merge_entry_by_carrier_height(height)
+        .map_err(pipeline_status_projection_error)?
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "block {} has a merge reference but no canonical sidecar",
+                height.get()
+            ))
+        })?;
+    let transactions = certified_merge_pipeline_transactions(block_ref.hash(), reference, &entry)?;
+    let transaction = transactions
+        .iter()
+        .find(|(membership_hash, _)| membership_hash == hash)
+        .map(|(_, transaction)| transaction)
+        .ok_or_else(|| {
+            pipeline_status_projection_error(format!(
+                "transaction {hash} is indexed at merge carrier {} but its authenticated transcript does not contain it",
+                height.get()
+            ))
+        })?;
+    let (kind, rejection) = match &transaction.result().0 {
+        Ok(_) => (PipelineStatusKind::Applied, None),
+        Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+    };
+    Ok(Some(PipelineStatusEntry::fresh(
+        kind,
+        Some(height_nz),
+        rejection,
+    )))
 }
 
 fn pipeline_status_terminal_or_state_entry(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
-) -> Option<(PipelineStatusEntry, &'static str)> {
+) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
-    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash) {
+    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash)? {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
-        return Some((entry, "state"));
+        return Ok(Some((entry, "state")));
     }
 
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
         if entry.kind.is_terminal() {
-            return Some((entry, "cache"));
+            return Ok(Some((entry, "cache")));
         }
     }
 
-    None
+    Ok(None)
 }
 
-fn pipeline_status_local_entry(
+fn pipeline_status_local_entry_checked(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
-) -> Option<(PipelineStatusEntry, &'static str)> {
-    if let Some(entry) = pipeline_status_terminal_or_state_entry(app, hash) {
-        return Some(entry);
+) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
+    if let Some(entry) = pipeline_status_terminal_or_state_entry(app, hash)? {
+        return Ok(Some(entry));
     }
 
     if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
@@ -1179,19 +1273,36 @@ fn pipeline_status_local_entry(
             && !app.queue.contains_pending_hash(hash.clone(), &app.state)
         {
             app.pipeline_status_cache.remove_entry_by_hash(hash);
-            return None;
+            return Ok(None);
         }
-        return Some((entry, "cache"));
+        return Ok(Some((entry, "cache")));
     }
 
     if app.queue.contains_pending_hash(hash.clone(), &app.state) {
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
-        return Some((entry, "queue"));
+        return Ok(Some((entry, "queue")));
     }
 
-    None
+    Ok(None)
+}
+
+fn pipeline_status_local_entry(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Option<(PipelineStatusEntry, &'static str)> {
+    match pipeline_status_local_entry_checked(app, hash) {
+        Ok(entry) => entry,
+        Err(error) => {
+            iroha_logger::error!(
+                ?error,
+                %hash,
+                "internal pipeline-status consumer rejected canonical transaction evidence"
+            );
+            None
+        }
+    }
 }
 
 fn pipeline_status_response_with_route(
@@ -1217,6 +1328,15 @@ fn pipeline_status_not_found_error() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
+}
+
+fn pipeline_status_error_is_not_found(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound
+        ))
+    )
 }
 
 fn pipeline_status_proxy_query(
@@ -1245,9 +1365,9 @@ fn execute_pipeline_status_local_read(
     let hash = parse_signed_transaction_hash(hash_raw)?;
 
     let local_entry = if matches!(read_scope, PipelineStatusReadScope::Local) {
-        pipeline_status_local_entry(app, &hash)
+        pipeline_status_local_entry_checked(app, &hash)?
     } else {
-        pipeline_status_terminal_or_state_entry(app, &hash)
+        pipeline_status_terminal_or_state_entry(app, &hash)?
     };
 
     if let Some((entry, resolved_from)) = local_entry {
@@ -1334,8 +1454,10 @@ async fn handler_pipeline_transaction_status(
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
 
-    if let Ok(response) = execute_pipeline_status_local_read(&app, &query, format, None) {
-        return Ok(response);
+    match execute_pipeline_status_local_read(&app, &query, format, None) {
+        Ok(response) => return Ok(response),
+        Err(error) if pipeline_status_error_is_not_found(&error) => {}
+        Err(error) => return Err(error),
     }
 
     if matches!(read_scope, PipelineStatusReadScope::Local) {

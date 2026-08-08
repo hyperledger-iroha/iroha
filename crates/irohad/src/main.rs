@@ -3,7 +3,7 @@
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
-/// Deployment-injected supervised private Musubi publication service.
+/// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
@@ -5030,6 +5030,7 @@ impl NetworkRelayShared {
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
+            | QueuePlanAdmissionPublication(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
@@ -8302,8 +8303,8 @@ impl Iroha {
     /// handoffs, and all hedging/billing query, verification, HSM,
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
-    /// closed. A private Musubi publication runner is likewise available only
-    /// through explicit deployment injection and joins this node's supervisor.
+    /// closed. A private Musubi publication runner is likewise assembled only
+    /// by an explicitly injected late-bound factory and joins this node's supervisor.
     /// The reputation queue submitter is a separately injected deployment
     /// boundary. The Torii proxy bridge signer remains a separate native node
     /// role. Any configured signed Governance DAG producer requires a sealed
@@ -14262,12 +14263,13 @@ pub fn run_with_runtime_provider_registry(
 
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
-/// The factory receives the daemon's live finalized state, transaction queue, and SoraFS handles
-/// after trusted startup replay, then assembles the complete private HTTPS runner, including its
-/// durable clock and journal, receipt signer, and admitted SoraFS backends. The launcher never
-/// exposes the private routes through Torii or reads service credentials from argv or node
-/// configuration. An unexpected private-runner exit is fatal to the same supervisor that owns the
-/// node.
+/// The caller supplies a one-shot factory that assembles the private HTTPS runner from the exact
+/// live finalized state, transaction queue, and SoraFS handles established after trusted startup
+/// replay. The factory builds the complete runner, including its durable clock and journal,
+/// receipt signer, and admitted SoraFS backends. The launcher transfers it into the daemon
+/// supervisor without requiring an unrelated runtime-provider registry; it never exposes the
+/// private routes through Torii or reads service credentials from argv or node configuration. An
+/// unexpected private-runner exit is fatal to the same supervisor that owns the node.
 ///
 /// # Errors
 ///
@@ -14286,12 +14288,13 @@ pub fn run_with_musubi_publication(
 /// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
 /// publication factory.
 ///
-/// The factory receives the daemon's live finalized state, transaction queue, and SoraFS handles
-/// after trusted startup replay, then assembles the complete private HTTPS runner, including its
-/// durable clock and journal, receipt signer, and admitted SoraFS backends. The launcher never
-/// exposes the private routes through Torii or reads service credentials from argv or node
-/// configuration. An unexpected private-runner exit is fatal to the same supervisor that owns the
-/// node.
+/// The caller supplies a one-shot factory that assembles the private HTTPS runner from the exact
+/// live finalized state, transaction queue, and SoraFS handles established after trusted startup
+/// replay. The factory builds the complete runner, including its durable clock and journal,
+/// receipt signer, and admitted SoraFS backends. The launcher transfers it into the daemon
+/// supervisor; it never exposes the private routes through Torii or reads service credentials
+/// from argv or node configuration. An unexpected private-runner exit is fatal to the same
+/// supervisor that owns the node.
 ///
 /// # Errors
 ///
@@ -15438,7 +15441,7 @@ fn validate_config_for_check(
 
     if build_kagemusha_qualification_seal && genesis.is_none() {
         return Err(Report::new(MainError::Config).attach(
-            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full offline genesis validation",
+            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full Kagemusha release and genesis validation",
         ));
     }
 
@@ -15724,7 +15727,7 @@ fn validate_genesis_execution_offline(
     let frozen_lane_manifests =
         freeze_lane_manifests_for_startup_replay(&replay_nexus).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
-                "lane manifest registry is not ready for offline genesis validation: {error}"
+                "lane manifest registry is not ready for Kagemusha release and genesis validation: {error}"
             ))
         })?;
     state.install_lane_manifests(&frozen_lane_manifests);
@@ -17250,7 +17253,7 @@ mod tests {
         );
         assert!(
             compact_source.contains("run_main(build_line,Some(registry),Some(factory))"),
-            "the combined custom launcher must inject both deployment-owned dependencies"
+            "the combined custom launcher must inject both deployment-owned dependencies and the late-bound publication factory"
         );
 
         let startup_source = compact_source
@@ -17267,7 +17270,7 @@ mod tests {
             .find(
                 "musubi_publication_service::build_and_start_injected_musubi_publication_private_service_v1(musubi_publication_factory,musubi_publication_context,supervisor.shutdown_signal(),)",
             )
-            .expect("injected publication service startup");
+            .expect("late-bound publication service startup");
         let publication_monitor = startup_source
             .find("ifletSome(child)=publication_child{supervisor.monitor(child);}")
             .expect("publication child supervision");
@@ -20489,7 +20492,7 @@ mod tests {
 
             let error = validate_config_for_check(&config, None, true)
                 .err()
-                .expect("seal publication must wait for full offline genesis validation");
+                .expect("seal publication must wait for full Kagemusha release and genesis validation");
             let rendered = format!("{error:?}");
             assert!(
                 rendered.contains("requires locally available genesis"),

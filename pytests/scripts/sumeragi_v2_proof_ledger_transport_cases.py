@@ -1156,7 +1156,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         "semantic duplicate route attachment precedes authenticated non-validator lane-cap admission",
         "authenticated non-validator lane cap excludes validator and anonymous lanes",
         "empty authenticated non-validator lanes release their bounded churn slot",
-        "exact default 4N+2H+2 outer-ingress message geometry",
+        "exact default 5N+3H+2 outer-ingress message geometry",
         "production H comes from Sumeragi ingress configuration rather than reply-route R",
         "root configuration derives R from the effective explicit or lane-profile network geometry",
         "root configuration rejects H greater than exact-output reply-source R",
@@ -1503,16 +1503,16 @@ def test_transport_geometry_source_fidelity_rejects_startup_cap_bypass(
         ),
         (
             "nonzero!(\n"
-            "        4 * MAX_VALIDATORS_PER_HEIGHT\n"
-            "            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
+            "        5 * MAX_VALIDATORS_PER_HEIGHT\n"
+            "            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
             "            + 2\n"
             "    )",
             "nonzero!(\n"
-            "        3 * MAX_VALIDATORS_PER_HEIGHT\n"
-            "            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
+            "        4 * MAX_VALIDATORS_PER_HEIGHT\n"
+            "            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()\n"
             "            + 2\n"
             "    )",
-            "exact default 4N+2H+2 outer-ingress message geometry",
+            "exact default 5N+3H+2 outer-ingress message geometry",
         ),
     ),
 )

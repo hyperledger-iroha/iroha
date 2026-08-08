@@ -8814,7 +8814,7 @@
           "kind": "method",
           "symbol": "LocalProposalState::defer_candidate_work",
           "required_tokens": [
-            "heartbeat_only",
+            "non_empty_retry",
             "candidate_work_wait",
             "saturating_duration_since",
             "CANDIDATE_WORK_RECHECK"
@@ -8828,8 +8828,8 @@
             "self.reconcile",
             "pending_events",
             "global_selection",
-            "FatalHeartbeat",
-            "RetryHeartbeat"
+            "FatalNonEmpty",
+            "RetryNonEmpty"
           ]
         },
         {
@@ -8839,7 +8839,7 @@
           "required_tokens": [
             "schedule_autonomous_lane_production",
             "defer_candidate_work",
-            "HeartbeatOnlyWorkProvider",
+            "candidate_block_has_proposal_work",
             "selection_lease",
             "PendingGlobalSelection",
             "submit_encoded_body"
@@ -10948,7 +10948,7 @@
             "install_plan_journal(",
             "replay_plan_journal(&state)",
             "finalize_plan_journal_startup_recovery()",
-            "IrohaNetwork::start_with_crypto_and_initial_trusted_sources("
+            "IrohaNetwork::start_with_crypto_and_initial_authorities("
           ]
         },
         {

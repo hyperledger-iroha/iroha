@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn kagemusha_v4_admission_authenticates_exact_release_without_global_backend_flag() {
-        let source = include_str!("offline.rs");
+        let source = include_str!("../offline.rs");
         let topup_start = source
             .find("impl Execute for TopUpKagemushaRecursiveV4")
             .expect("V4 top-up executor");
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn kagemusha_v4_execute_replay_boundary_is_auth_before_committed_state() {
-        let source = include_str!("offline.rs");
+        let source = include_str!("../offline.rs");
         let assert_ordered = |label: &str, body: &str, needles: &[&str]| {
             let mut cursor = 0;
             for needle in needles {
@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn kagemusha_v4_activation_overlap_inventory_is_consensus_derived() {
-        let source = include_str!("offline.rs");
+        let source = include_str!("../offline.rs");
         let start = source
             .find("fn ensure_kagemusha_v4_non_overlapping_issuance")
             .expect("V4 issuance-overlap validator");
@@ -783,7 +783,7 @@ mod tests {
 
     #[test]
     fn every_offline_executor_is_independent_of_local_service_switch() {
-        let source = include_str!("offline.rs");
+        let source = include_str!("../offline.rs");
         let executor_names = [
             "RegisterOfflineDeviceAttestation",
             "SetOfflineDeviceAttestationPolicy",

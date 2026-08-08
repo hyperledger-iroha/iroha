@@ -171,6 +171,15 @@ restarts `ValidateBody`, and a validated body restarts `Apply`. Dropping any
 one volatile owner therefore leaves a deterministic reconstruction path from
 the durable Decision and body-stage record.
 
+Adapter candidate admission has the same exact-owner boundary. A first
+semantic lifecycle moves its owner count from zero to one; an exact retry may
+remain one-to-one only when it carries that immutable incumbent owner. A
+different owner for the same semantic lifecycle fails closed before the
+effect-to-candidate refinement projection is constructed. Monotone certified
+Fetch, Store, and Validate authority upgrades remain separate: their stronger
+phase/commitment identity can retain the one physical stage lineage only after
+the typed authority relation is checked and re-projected.
+
 Application retransmission has the matching terminal rule. While `Apply` is
 in flight, an exact rediscovery coalesces with the incumbent work identifier
 and lifecycle owner. After Kura returns the typed finality receipt and exact
@@ -272,13 +281,26 @@ requires the host to invoke the runtime fairly and every admitted external
 operation to terminate or report failure.
 
 Reducer effects are also structurally bounded. The largest flattened
-persistence macro-step contains five effects, below the fixed limit of eight
+persistence macro-step contains four effects, below the fixed limit of eight
 effects per serialized adapter macro-step. When adapter debt is serviceable,
 each runtime turn services exactly one deferred adapter macro-step before timers
 or newer ingress; this decreases that debt without allowing one turn to
 monopolize the runtime.
 The adapter cannot report terminal readiness while any deferred Completion,
 Progress input, or ordinary input remains.
+
+Certified-body Serve traffic has a separate atomic handoff at the outer runner.
+When the final member of one frozen Serve batch retires, the queue records one
+producer episode as due under the same lock that removes the selected owner.
+Fresh Serve admission remains Busy while that episode is due or active, so a
+new response replenishment cannot reserve the released slot before proposal or
+other ordinary producer work receives one bounded turn. Beginning the episode
+atomically consumes `due` and acquires `active`; dropping its local lease clears
+`active` and reopens Serve admission. Neither a rejected replenishment nor the
+handoff itself allocates a scheduler or semantic-lifecycle ordinal. This finite
+handoff prevents an endless sequence of individually finite Serve batches from
+starving proposal production; it does not treat replenishment as consensus
+progress and does not add a network fairness premise.
 
 Effect admission has two retryable capacity boundaries. General pending-work
 exhaustion is retryable for ordinary effects. Independently, certified-request
@@ -507,13 +529,13 @@ proposal, QC, TC, body response, or payload chunk from the same authenticated
 validator. The source still consumes only one turn, and the retained head is
 selected first as soon as it becomes admissible.
 
-An empty validator lane reserves an ordinary first-message slot, a non-timeout
-Progress slot, a distinct TimeoutVote slot, and one shared
+An empty validator lane reserves an ordinary first-message slot, an ordinary
+Progress slot, a certified-fence-escape slot, a distinct TimeoutVote slot, and one shared
 TransportCompletion slot for either a payload chunk or certified-body
 response. Short non-empty lanes retain the continuation potential needed to
-restore all four reservations after any service step. Each simultaneously
-materialized authenticated non-validator lane has two owners: one generic
-message slot and one TransportCompletion slot for either a current-roster
+restore all five reservations after any service step. Each simultaneously
+materialized authenticated non-validator lane has three owners: one generic
+message slot, one certified-fence-escape slot, and one TransportCompletion slot for either a current-roster
 completion forwarded through that source or a proof-carrying historical lane
 response from an authenticated predecessor signer. The anonymous lane has the
 same two owners when the roster is non-empty, while its no-roster diagnostic
@@ -521,7 +543,7 @@ geometry needs only the generic slot because no anonymous completion can be
 valid. If `H` is the
 configured maximum number of simultaneously materialized authenticated
 non-validator lanes, the exact non-empty-roster count minimum is therefore
-`4 * roster_len + 2 * H + 2`; the no-roster minimum is `2 * H + 1`.
+`5 * roster_len + 3 * H + 2`; the no-roster minimum is `3 * H + 1`.
 `H` is independent of exact-output reply-route capacity `R`, which is derived
 from the effective `network.max_total_connections`. Root validation resolves
 the selected lane profile before deriving `R`, so `lane_profile = "home"` with
@@ -534,10 +556,12 @@ Authenticated non-validator lanes are created on demand and removed when empty.
 A semantic duplicate carrying an alternate authenticated reply route is merged
 into the existing request before a new-lane `H` admission check; only a
 semantically distinct request requiring a new source lane consumes another
-lane. Non-timeout
-Progress includes Commit votes, QCs, TCs, certified-body requests, and both
+lane. Ordinary
+Progress includes Commit votes, PrepareQCs, certified-body requests, and both
 Commit-certificate request/response directions. Proposals, Prepare votes, and
 manifests remain ordinary; TimeoutVote uses its own signer-bounded corridor;
+TC, direct CommitQC, and a Commit-certificate response carrying CommitQC use a
+separate certified-fence-escape corridor;
 `PayloadChunk`, `CertifiedBodyResponse`, and
 `LaneHistoricalRecoveryResponse` share TransportCompletion. The first two
 require a current-roster semantic origin. The historical response may instead
@@ -556,15 +580,18 @@ each of the `H` authenticated non-validator source lanes, and the anonymous
 lane, while `sumeragi.queues.body_bytes` bounds their aggregate ownership at no
 less than `(roster_len + H + 1) * body_source_bytes`. Roster installation fails
 closed if the aggregate cannot provide every source partition. Each
-authenticated validator source also retains an
-isolated timeout-vote byte reserve and an independent full TransportCompletion
+authenticated source retains an isolated certified-fence-escape byte reserve;
+each validator additionally retains an isolated timeout-vote byte reserve, and
+every source retains an independent full TransportCompletion
 envelope reserve, so ordinary traffic cannot consume the capacity required to
 advance a view or finish body recovery. Height activation derives the latter
 with checked arithmetic from the frozen DA layout and the exact bare-Norito
 framing of the largest valid `PayloadChunk`, `CertifiedBodyResponse`, and
 bounded historical lane response; an
 overflow or undersized source partition fails closed before ingress opens.
-These count, byte, Progress, timeout, and completion reservations prevent one
+Height activation also checks the exact maximal TC, direct QC, and CommitQC-response
+wire ceiling against the certified reserve. These count, byte, Progress,
+certified, timeout, and completion reservations prevent one
 authenticated source from consuming another validator's recovery capacity or
 turning the count-bounded queue into multi-gigabyte memory ownership.
 
@@ -1232,8 +1259,11 @@ pre-runtime ownership, and reconstructed-chunk terminality regressions bring
 the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
 high-water regressions bring the inventory to the 831-test checkpoint. Retiring
 five obsolete peer-genesis protocol regressions brings the 826-test checkpoint.
-Nine autonomous-lifecycle terminal-outcome and startup-recovery regressions
-bring the current source-bound inventory to 835 exact tests across
+Replacing one obsolete restart selector with its two raw/coalesced
+crash boundaries and restoring two implemented certified-ingress regressions
+brings the inventory to the 829-test checkpoint. Autonomous-lifecycle
+terminal-outcome and startup-recovery coverage plus final source reconciliation
+bring the current source-bound inventory to 837 exact tests across
 39 modules and 86 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1242,10 +1272,10 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb`.
+`7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf`.
 Nine of those legs execute the separate 524-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 525 TSV lines and has SHA-256
-`de9ab0da201d361e912b935d1349c584ba78fb52f70acd3c91e8d4a7c76fab24`.
+`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
 The 318-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
@@ -1484,8 +1514,8 @@ fail-stop regressions are pinned alongside them in the current inventory.
 Daemon saturation now returns the exact occurrence to its durable remote
 source under an explicit source-release disposition; the former route-era
 "reconstruction" names are retired and no capability is synthesized.
-The current inventory retains the four-per-validator, two-per-materialized
-authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
+The current inventory retains the five-per-validator, three-per-materialized
+authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
@@ -1501,7 +1531,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 835-test inventory is a mechanically checked
+The current 837-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1691,7 +1721,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 835 exact production
+Before those longer scenarios, the PR gate inventories 837 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 524-test
 focus inventory. The
@@ -1703,11 +1733,11 @@ adapter-owned successor activation, runner ingress
 handoff, watchdog predecessor/successor separation, and recovery-derived
 successor identity. The worker leg also pins rejection of an unissued future
 physical acquisition and exact latest-consumer rebind across unavailable-body
-recovery. The authoritative ingress leg pins `4N+2H+2` count potential, the
-TimeoutVote and TransportCompletion byte reserves, frozen-layout wire-size
+recovery. The authoritative ingress leg pins `5N+3H+2` count potential, the
+certified-fence-escape, TimeoutVote, and TransportCompletion byte reserves, frozen-layout wire-size
 activation, cross-validator isolation, and fair service; the
 adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
-runtime Progress admission. They also pin the five-effect maximum flattened
+runtime Progress admission. They also pin the four-effect maximum flattened
 persistence macro-step below the eight-effect bound, exactly one serviceable
 deferred adapter step per runtime turn, and refusal of terminal readiness while
 any deferred Completion, Progress input, or ordinary input remains. The adapter
@@ -1843,9 +1873,11 @@ the 818-test checkpoint. Thirteen exact admission, retry, tombstone, and
 high-water regressions bring the inventory to the 831-test checkpoint, again
 without adding a module or leg. Retiring five obsolete peer-genesis protocol
 regressions brings the inventory to the 826-test checkpoint and removes one
-owning module and one leg overall. Nine autonomous-lifecycle terminal-outcome
-and startup-recovery regressions then bring the current inventory to 835 tests,
-adding one owning module and one leg. The rollover slice covers
+owning module and one leg overall. Replacing one obsolete restart selector with its two distinct
+crash boundaries and restoring two implemented certified-ingress regressions
+then produces the 829-test checkpoint. Autonomous-lifecycle terminal-outcome
+and startup-recovery coverage plus final source reconciliation bring the
+current inventory to 837 tests across 39 modules and 86 legs. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -2129,13 +2161,16 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 86 pre-network corridor legs and
-their exact 835-test production inventory, the separate 524-test G-UNIT
+their exact 837-test production inventory, the separate 524-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,
 proof ledger/evidence/log, multilane Apalache evidence, and the TLAPS resource
-JSONL and summary. The
-receipt also carries all 160 matrix logs; exact G-4P completion, summary, and
+JSONL and summary. The validator requires the exact successful resource-guard
+event grammar, strict scalar types, identical terminal summaries, and
+sample-derived peak accounting rather than accepting those artifacts by digest
+alone. The receipt also carries all 160 matrix logs; exact G-4P completion,
+summary, and
 four run logs; exact deterministic G-12 seed completion, summary, and ten run
 logs; the two-hour G-12 fault-soak completion and log; the closed multilane
 scaling bundle, retained validator, four authenticated digest anchors, retained

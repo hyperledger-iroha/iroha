@@ -1555,7 +1555,7 @@ fn vpn_tool_factories_expose_expected_names_and_routes() {
 #[test]
 fn extract_vpn_session_id_argument_requires_exact_field() {
     let expected = "ab".repeat(32);
-    let args = norito::json!({ "session_id": expected.clone() });
+    let args = norito::json!({ "session_id": (expected.clone()) });
     let session_id = extract_vpn_session_id_argument(args.as_object().expect("object"))
         .expect("exact VPN session id");
     assert_eq!(session_id, expected);
@@ -1566,7 +1566,7 @@ fn extract_vpn_session_id_argument_rejects_aliases() {
     for args in [
         norito::json!({ "id": "top-level-vpn-session" }),
         norito::json!({ "path": { "session_id": "nested-vpn-session" } }),
-        norito::json!({ "session_id": "AB".repeat(32) }),
+        norito::json!({ "session_id": ("AB".repeat(32)) }),
         norito::json!({ "session_id": "ab" }),
     ] {
         assert!(extract_vpn_session_id_argument(args.as_object().expect("object")).is_err());

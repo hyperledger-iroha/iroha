@@ -10488,6 +10488,7 @@ fn validate_governance_dag_indexed_path(
     Ok(())
 }
 
+#[derive(Debug)]
 struct AppealFinanceReportPublishSummary {
     outcomes: Map,
     latest_published_at_unix: Option<u64>,
@@ -34812,12 +34813,14 @@ mod advert_tests {
     use blake3;
     use ed25519_dalek::{Signer, SigningKey};
     use http_body_util::BodyExt;
-    use iroha_config::parameters::actual::SorafsTokenConfig;
+    use iroha_config::parameters::actual::{
+        SorafsGovernanceDagService, SorafsGovernanceDagServiceView, SorafsTokenConfig,
+    };
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,
-        state::{State, World},
+        state::{State as CoreState, World},
     };
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature as IrohaSignature, SignatureOf,
@@ -35320,7 +35323,7 @@ mod advert_tests {
         body: Bytes,
     ) -> Response {
         let Some(boundary) = headers
-            .get(CONTENT_TYPE)
+            .get(header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("multipart/form-data; boundary="))
         else {
@@ -42872,7 +42875,7 @@ mod advert_tests {
     }
 
     fn seed_registry_manifest_for_gateway(
-        state: &State,
+        state: &CoreState,
         manifest: &ManifestV1,
         provider_id: [u8; 32],
     ) {
@@ -42955,10 +42958,10 @@ mod advert_tests {
         block.commit().expect("commit registry seed block");
     }
 
-    fn make_state() -> State {
+    fn make_state() -> CoreState {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        State::new_for_testing(World::new(), kura, query)
+        CoreState::new_for_testing(World::new(), kura, query)
     }
 
     fn default_block_header() -> BlockHeader {

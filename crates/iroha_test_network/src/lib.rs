@@ -15494,6 +15494,16 @@ exit 0
             1,
             "decoded genesis must be a version 1 signed block"
         );
+        assert_eq!(
+            decoded.header(),
+            block.0.header(),
+            "canonical genesis wire must preserve the exact signed header",
+        );
+        assert_eq!(
+            decoded.hash(),
+            block.0.hash(),
+            "canonical genesis wire must preserve the configured trust-anchor hash",
+        );
     }
 
     #[test]

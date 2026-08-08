@@ -400,6 +400,106 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
 }
 
 #[test]
+fn certified_fence_escape_crosses_retained_control_reservation() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let mut vote_message = v2_vote(wire::GlobalPhase::Prepare);
+    let vote_round = match &mut vote_message {
+        BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Vote(vote),
+            ..
+        }) => {
+            vote.round.view = 1;
+            vote.proposal_round.view = 1;
+            vote.round
+        }
+        _ => unreachable!("vote fixture carries a v2 Vote"),
+    };
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote_round, 1);
+
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(
+            vote_message.clone(),
+            Some(validator.clone()),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+
+    let mut commit_response = v2_commit_certificate_response(7, &validator);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::CommitCertificateResponse(response),
+        ..
+    }) = &mut commit_response
+    else {
+        unreachable!("commit-certificate fixture carries a v2 response");
+    };
+    response.certificate.round = vote_round;
+    response.certificate.proposal_round = vote_round;
+    assert!(super::fair_v2_ingress_is_certified_fence_escape(
+        &InboundBlockMessage::new(commit_response.clone(), Some(validator.clone())),
+    ));
+    let vote_token = ingress
+        .state
+        .lock()
+        .leader_wire_lifecycles
+        .values()
+        .next()
+        .expect("the retained Vote owns the control barrier")
+        .token
+        .clone();
+    assert!(
+        super::fair_v2_ingress_certified_fence_escape_advances_owner(
+            &vote_token,
+            &InboundBlockMessage::new(commit_response.clone(), Some(validator.clone())),
+        )
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(
+            commit_response,
+            Some(validator.clone()),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+
+    let escaped = ingress
+        .try_recv_if(super::fair_v2_ingress_is_certified_fence_escape)
+        .expect("CommitQC discovery crosses the retained control reservation");
+    assert!(matches!(
+        escaped.message(),
+        BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::CommitCertificateResponse(_),
+            ..
+        })
+    ));
+    assert_eq!(ingress.state.lock().len, 1);
+
+    let timeout = v2_timeout_certificate(vote_round.view);
+    assert!(super::fair_v2_ingress_is_certified_fence_escape(
+        &InboundBlockMessage::new(timeout, Some(validator.clone())),
+    ));
+    assert!(!super::fair_v2_ingress_is_certified_fence_escape(
+        &InboundBlockMessage::new(v2_timeout_vote(), Some(validator.clone())),
+    ));
+    assert!(!super::fair_v2_ingress_is_certified_fence_escape(
+        &InboundBlockMessage::new(v2_vote(wire::GlobalPhase::Prepare), Some(validator.clone()),),
+    ));
+    let mut wrong_version = v2_timeout_certificate(vote_round.view);
+    let BlockMessage::V2(message) = &mut wrong_version else {
+        unreachable!("timeout fixture carries a v2 envelope");
+    };
+    message.protocol_version = wire::PROTOCOL_VERSION.saturating_add(1);
+    assert!(!super::fair_v2_ingress_is_certified_fence_escape(
+        &InboundBlockMessage::new(wrong_version, Some(validator)),
+    ));
+
+    let retained_vote = ingress
+        .try_recv_if(|_| true)
+        .expect("certified escape does not replace the retained Vote owner");
+    assert_eq!(retained_vote.message().encode(), vote_message.encode());
+    assert_eq!(ingress.state.lock().len, 0);
+}
+
+#[test]
 fn retained_vote_does_not_hide_timeout_vote_needed_to_close_its_view() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());
@@ -629,7 +729,7 @@ fn v2_ingress_is_bounded_and_never_blocks_a_network_caller() {
 
 #[test]
 fn saturated_v2_ingress_returns_the_exact_owned_message_for_retry() {
-    let (handle, receiver, _relay_receiver) = test_sumeragi_handle_with_source_geometry(3, Some(1));
+    let (handle, receiver, _relay_receiver) = test_sumeragi_handle_with_source_geometry(4, Some(1));
     let sender = validator_peers(1).pop().expect("sender fixture");
 
     assert!(matches!(
@@ -765,7 +865,7 @@ fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
 
     let ingress_capacity = super::fair_v2_ingress_required_capacity(1, None)
         .expect("one-validator ingress geometry is representable");
-    assert_eq!(ingress_capacity, 6);
+    assert_eq!(ingress_capacity, 7);
     let (handle, ingress, relay_receiver) = test_sumeragi_handle(ingress_capacity);
     let mut peers = validator_peers(3);
     let roster_requester = peers.remove(0);
@@ -950,10 +1050,10 @@ fn validator_peers(count: u8) -> Vec<PeerId> {
 
 #[test]
 fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_turns() {
-    // The exact N=4, H=2 corridor needs 22 slots. Add one deliberate
+    // The exact N=4, H=2 corridor needs 28 slots. Add one deliberate
     // ordinary-pressure slot so this test can retain two attacker items
     // while still proving that a third cannot consume any protected slot.
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(23, Some(2));
+    let (handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(29, Some(2));
     let validators = validator_peers(4);
     let attacker = validators[0].clone();
     let outsider = validator_peers(5).pop().expect("outsider fixture");
@@ -1003,7 +1103,7 @@ fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_tur
 #[test]
 fn relayed_origin_churn_uses_one_via_lane_and_preserves_protocol_origin() {
     const RELAYED_ORIGINS: usize = 32;
-    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(19);
+    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(23);
     let validators = validator_peers(4);
     let via = validators[0].clone();
     let lane_origin = validators[1].clone();

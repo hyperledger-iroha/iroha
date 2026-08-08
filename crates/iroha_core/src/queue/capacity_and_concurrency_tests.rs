@@ -2,10 +2,12 @@
 async fn committing_popped_transaction_does_not_create_fifo_tombstone() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+    let mut state = State::new(world_with_test_domains(), kura, query_handle);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let transaction = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    let state = Arc::new(state);
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let hash = transaction.as_ref().hash();
 
     queue

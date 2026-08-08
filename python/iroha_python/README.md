@@ -304,17 +304,16 @@ client.register_zk_asset_and_wait(
     fee_payment=register_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
-    vk_transfer="halo2/ipa:vk_transfer",
     vk_unshield="halo2/ipa:vk_unshield",
+    vk_shield="halo2/ipa:vk_shield",
 )
 ```
 
 The first-release SDK exposes no generic confidential transfer or withdrawal
 instruction. Public-to-confidential ingress and public redemption use the
 proof-bound Kagemusha V4 top-up/redemption protocol so escrow provenance and
-drawdown remain inseparable from settlement. `vk_transfer` is retained only for
-the native anonymous-escrow engine, and `vk_unshield` names the Kagemusha
-redemption verifier.
+drawdown remain inseparable from settlement. `vk_shield` names the Kagemusha
+top-up verifier, and `vk_unshield` names its redemption verifier.
 
 ## Dataspace lifecycle helpers
 

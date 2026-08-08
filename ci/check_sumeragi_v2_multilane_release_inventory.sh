@@ -8,7 +8,7 @@ cd "$repo_root"
 
 readonly autoscale_file="integration_tests/tests/nexus/autoscale_localnet.rs"
 readonly native_file="integration_tests/tests/native_amx_routing.rs"
-readonly native_recovery_file="integration_tests/tests/native_amx_routing/recovery_tests.rs"
+readonly native_recovery_file="$native_file"
 readonly launcher="scripts/run_nexus_cross_dataspace_atomic_swap.sh"
 readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
@@ -39,7 +39,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly canonical_production_test_count=835
+readonly canonical_production_test_count=837
 
 require_nonignored_test() {
   local path="$1"
@@ -448,7 +448,7 @@ if (
     )
 expected_changed_module_counts = {
     "kura::tests": 14,
-    "sumeragi::authoritative_runtime_gate_tests": 41,
+    "sumeragi::authoritative_runtime_gate_tests": 43,
     "sumeragi::serviced_candidate_store::tests": 1,
     "sumeragi::v2_effects::tests": 71,
     "sumeragi::v2::tests": 46,
@@ -456,8 +456,8 @@ expected_changed_module_counts = {
     "merge_sidecar::tests": 118,
     "sumeragi::v2_lane_work::tests": 53,
     "sumeragi::v2_lifecycle_recovery::tests": 5,
-    "sumeragi::v2_runner::tests": 37,
-    "sumeragi::v2_worker::tests": 131,
+    "sumeragi::v2_runner::tests": 36,
+    "sumeragi::v2_worker::tests": 132,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
@@ -484,8 +484,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "3ae09bb260bd06b1592d973a5df561fe"
-    "4466467c56e4e6c9f1a50a35aa07f9cb"
+    "7f808256b4793433d3217600ac4f7320"
+    "c209b5d0ecb7630219649274c68bfbaf"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

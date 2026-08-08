@@ -5011,11 +5011,11 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, and 65536 timeout-vote bytes (minimum 33784840, configured 16777216)",
+            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 65536 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 33850376, configured 16777216)",
         ),
         (
             "bad.sumeragi_body_queue_too_small.toml",
-            "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum 10, configured 9)",
+            "sumeragi.queues.bodies must reserve five positions for at least one validator, three per authenticated non-validator source, and two anonymous positions (minimum 13, configured 9)",
         ),
         (
             "bad.sumeragi_body_bytes_too_small.toml",

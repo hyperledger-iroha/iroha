@@ -1733,6 +1733,7 @@ mod tests {
     use crate::trigger::TimeTriggerEntrypoint;
     use crate::{
         ChainId,
+        block::consensus::SumeragiLanePayloadOwnership,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
@@ -1793,6 +1794,25 @@ mod tests {
         )
     }
 
+    fn block_with_execution_context(execution_context: BlockExecutionContextBundle) -> SignedBlock {
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 0);
+        SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: Some(execution_context),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+                npos_consensus_effects: None,
+            },
+            result: None,
+        }
+    }
+
     #[test]
     fn block_payload_ordering_includes_execution_context() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -1845,6 +1865,13 @@ mod tests {
     }
 
     #[test]
+    fn signed_block_with_empty_execution_context_is_empty() {
+        let block = block_with_execution_context(BlockExecutionContextBundle::default());
+
+        assert!(block.is_empty());
+    }
+
+    #[test]
     fn signed_block_with_only_certified_merge_reference_is_not_empty() {
         let validators = Vec::<PeerId>::new();
         let entry = MergeLedgerEntry {
@@ -1892,6 +1919,67 @@ mod tests {
             },
             result: None,
         };
+
+        assert!(!block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_with_only_autonomous_lane_payload_is_not_empty() {
+        let producer = PeerId::new(
+            KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::BlsNormal)
+                .expect("generate checked autonomous payload producer")
+                .public_key()
+                .clone(),
+        );
+        let envelope = AutonomousLanePayloadEnvelopeV1 {
+            version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
+            chain_id_hash: Hash::new(b"autonomous-only-chain"),
+            epoch: 4,
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"autonomous-only-incarnation"),
+            proposal_height: 2,
+            lane_block_height: 5,
+            lane_block_view: 0,
+            proposal_hash: Hash::new(b"autonomous-only-proposal"),
+            descriptor_hash: Hash::new(b"autonomous-only-descriptor"),
+            payload_hash: Hash::new(b"autonomous-only-payload"),
+            producer,
+            canonical_payload: vec![1, 2, 3, 4],
+        };
+        let execution_context = BlockExecutionContextBundle::new(Vec::new())
+            .with_autonomous_lane_payloads(vec![envelope]);
+        let block = block_with_execution_context(execution_context);
+
+        assert!(!block.is_empty());
+    }
+
+    #[test]
+    fn signed_block_with_only_lane_payload_ownership_is_not_empty() {
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 2,
+            proposal_view: 0,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: Hash::new(b"ownership-only-incarnation"),
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"ownership-only-subject"),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::new(b"ownership-only-entrypoint")],
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(Hash::new(b"ownership-only-descriptor")),
+            lane_block_descriptor_validator_set: Vec::new(),
+            lane_block_descriptor_validator_count: 0,
+            lane_block_descriptor_min_quorum: 0,
+            payload_ownership_hash: Hash::new(b"ownership-only-payload"),
+            rbc_instance_hash: Hash::new(b"ownership-only-rbc"),
+        };
+        let execution_context = BlockExecutionContextBundle::new(Vec::new())
+            .with_lane_payload_ownerships(vec![ownership]);
+        let block = block_with_execution_context(execution_context);
 
         assert!(!block.is_empty());
     }

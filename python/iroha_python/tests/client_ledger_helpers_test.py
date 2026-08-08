@@ -2624,8 +2624,8 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
     instructions = [
         Instruction.register_zk_asset(
             asset_definition_id,
-            vk_transfer="halo2/ipa:vk_transfer",
             vk_unshield={"backend": "halo2/ipa", "name": "vk_unshield"},
+            vk_shield="halo2/ipa:vk_shield",
         ),
         Instruction.verify_proof(proof),
     ]
@@ -3026,8 +3026,11 @@ def test_zk_registration_helper_rejects_adversarial_inputs() -> None:
 
     with pytest.raises(ValueError, match="invalid ZK asset mode"):
         Instruction.register_zk_asset(asset_definition_id, mode="../../Hybrid")
+    for retired_mode in ("ZkNative", "zk_native", "zk-native", "native"):
+        with pytest.raises(ValueError, match="invalid ZK asset mode"):
+            Instruction.register_zk_asset(asset_definition_id, mode=retired_mode)
     with pytest.raises(ValueError, match="backend:name"):
-        Instruction.register_zk_asset(asset_definition_id, vk_transfer="halo2/ipa")
+        Instruction.register_zk_asset(asset_definition_id, vk_shield="halo2/ipa")
 
 
 def test_zk_client_helpers_build_transaction_drafts() -> None:
@@ -3049,8 +3052,8 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         asset_definition_id=asset_definition_id,
-        vk_transfer="halo2/ipa:vk_transfer",
         vk_unshield="halo2/ipa:vk_unshield",
+        vk_shield="halo2/ipa:vk_shield",
         transaction_metadata={"purpose": "zk-register"},
         wait=False,
     ) == {"hash": "zk-1"}

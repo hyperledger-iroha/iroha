@@ -660,9 +660,12 @@ fn install_lane_manifest_registry_with_torii_urls_for_test(
     state: &IrohaState,
     lanes: &[(LaneId, Vec<(AccountId, PeerId, Option<&str>)>)],
 ) {
+    static MANIFEST_ROOT_SEQ: AtomicUsize = AtomicUsize::new(0);
+
     let nexus = state.nexus_snapshot();
+    let manifest_root_seq = MANIFEST_ROOT_SEQ.fetch_add(1, Ordering::Relaxed);
     let manifest_root = std::env::temp_dir().join(format!(
-        "iroha-torii-manifests-{}-{}",
+        "iroha-torii-manifests-{}-{}-{manifest_root_seq}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

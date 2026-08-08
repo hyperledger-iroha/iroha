@@ -8833,21 +8833,7 @@ impl Telemetry {
     /// to the last snapshot when the telemetry actor is unavailable.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh(&self) -> &Metrics {
-        let sync_result = async {
-            let (tx, rx) = oneshot::channel();
-            self.sync_requested.store(true, Ordering::Release);
-            self.actor
-                .try_send(Message::Sync { reply: Some(tx) })
-                .map_err(|err| format!("schedule telemetry sync: {err}"))?;
-            tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
-                .await
-                .map_err(|_| "telemetry sync timed out")?
-                .map_err(|_| "telemetry actor closed")?;
-            Ok::<(), String>(())
-        }
-        .await;
-
-        if let Err(err) = sync_result {
+        if let Err(err) = self.synchronize_metrics().await {
             self.sync_requested.store(false, Ordering::Release);
             iroha_logger::warn!(
                 ?err,
@@ -8857,6 +8843,32 @@ impl Telemetry {
         }
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
+    }
+
+    /// Refresh lazy metrics and report synchronization failure to callers that
+    /// must not publish a stale mixed-frontier snapshot.
+    #[cfg(feature = "telemetry")]
+    pub async fn metrics_fresh_checked(&self) -> Result<&Metrics, String> {
+        if let Err(err) = self.synchronize_metrics().await {
+            self.sync_requested.store(false, Ordering::Release);
+            return Err(err);
+        }
+        refresh_ivm_cache_metrics(&self.metrics);
+        Ok(&self.metrics)
+    }
+
+    #[cfg(feature = "telemetry")]
+    async fn synchronize_metrics(&self) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_requested.store(true, Ordering::Release);
+        self.actor
+            .try_send(Message::Sync { reply: Some(tx) })
+            .map_err(|err| format!("schedule telemetry sync: {err}"))?;
+        tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
+            .await
+            .map_err(|_| "telemetry sync timed out".to_owned())?
+            .map_err(|_| "telemetry actor closed".to_owned())?;
+        Ok(())
     }
 
     /// Access the `SoraNet` privacy aggregator.

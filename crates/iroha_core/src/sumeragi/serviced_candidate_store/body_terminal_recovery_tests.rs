@@ -83,7 +83,9 @@ fn leader_wire_gate_reopens_volatile_terminal_and_verifies_durable_body_terminal
     assert_eq!(restore.records()[0].runtime_owner(), Some(runtime_owner));
     let replay = reopened
         .reserve(token.clone())
-        .expect("reactivate replay ingress");
+        .expect("reactivate the exact restart-dormant body owner");
+    assert!(!replay.inserted());
+    assert_eq!(replay.token(), &token);
     reopened
         .mark_ingress(replay.token())
         .expect("replay ingress");

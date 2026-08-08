@@ -252,19 +252,22 @@ use iroha_core::{
         SoracloudRuntimeReplicaPlan,
     },
     state::{
-        BlockProofError, QueuePlanAdmissionRegistryMatch, State as CoreState, StateReadOnly,
-        StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly,
+        BlockProofError, PendingQueuePlanAdmissionDisposition, QueuePlanAdmissionRegistryMatch,
+        State as CoreState, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
+        WorldReadOnly,
     },
     torii_proxy::{
         QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
-        QueuePlanAdmissionAttestationV2, QueuePlanAdmissionBindingV2,
-        QueuePlanAdmissionCertificateStrengthV2, QueuePlanAdmissionCertificateV2,
+        QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionAttestationV2,
+        QueuePlanAdmissionBindingV2, QueuePlanAdmissionCertificateStrengthV2,
+        QueuePlanAdmissionCertificateV2, QueuePlanAdmissionPublicationV1,
         TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
         ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4,
         ToriiProxyRequestV5, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
         ToriiProxyTransactionAdmissionV2, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
         ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
         ToriiRoutingPlanHintV1, queue_plan_admission_attestation_signing_bytes_v2,
+        queue_plan_admission_chain_id_digest,
         validate_queue_plan_admission_certificate_for_chain_digest_v2,
     },
     tx::{
@@ -2870,6 +2873,54 @@ impl PipelineStatusCache {
             let hash =
                 HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(entrypoint.hash()));
             self.record_entry_inner(hash, incoming);
+        }
+        if let Some(reference) = block_ref
+            .execution_context()
+            .and_then(|context| context.merge_entry.as_ref())
+        {
+            let Some(entry) = (match kura.get_merge_entry_by_carrier_height(height_nz) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    iroha_logger::error!(
+                        ?error,
+                        height = height.get(),
+                        "pipeline status cache rejected a certified merge carrier"
+                    );
+                    return BlockRecordOutcome::HashMismatch;
+                }
+            }) else {
+                iroha_logger::error!(
+                    height = height.get(),
+                    "pipeline status cache found a merge reference without its canonical sidecar"
+                );
+                return BlockRecordOutcome::HashMismatch;
+            };
+            if entry.execution_batch.is_some() {
+                let transactions = match certified_merge_pipeline_transactions(
+                    expected_hash,
+                    reference,
+                    &entry,
+                ) {
+                    Ok(transactions) => transactions,
+                    Err(error) => {
+                        iroha_logger::error!(
+                            ?error,
+                            height = height.get(),
+                            "pipeline status cache rejected an invalid certified merge transcript"
+                        );
+                        return BlockRecordOutcome::HashMismatch;
+                    }
+                };
+                for (membership_hash, transaction) in transactions {
+                    let (entry_kind, rejection) = match &transaction.result().0 {
+                        Ok(_) => (kind, None),
+                        Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+                    };
+                    let incoming =
+                        PipelineStatusEntry::at_time(entry_kind, Some(height), rejection, now);
+                    self.record_entry_inner(membership_hash, incoming);
+                }
+            }
         }
         BlockRecordOutcome::Recorded
     }
@@ -25447,13 +25498,9 @@ const QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V2: usize = 512;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_POLL_DIVISOR: u32 = 4;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_CARRIER_WAIT_CADENCES: u32 = 4;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_MAX_POLL_INTERVAL: Duration = Duration::from_millis(250);
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_MIN_CARRIER_WAIT: Duration = Duration::from_secs(2);
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2: norito::DecodeLimits =
     norito::DecodeLimits::new(
@@ -25951,12 +25998,10 @@ fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV4) -> &'static 
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn queue_plan_synced_runtime_timing(block_cadence: Duration) -> (Duration, Duration) {
-    let maximum_carrier_wait = DEFAULT_ROUTE_TIMEOUT.saturating_sub(
-        DEFAULT_ROUTE_TIMEOUT
-            .checked_div(QUEUE_PLAN_SYNCED_POLL_DIVISOR)
-            .unwrap_or(Duration::ZERO),
-    );
+fn queue_plan_synced_runtime_timing(
+    block_cadence: Duration,
+    remaining_route_budget: Duration,
+) -> (Duration, Duration) {
     let poll_interval = block_cadence
         .checked_div(QUEUE_PLAN_SYNCED_POLL_DIVISOR)
         .unwrap_or(QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL)
@@ -25964,10 +26009,16 @@ fn queue_plan_synced_runtime_timing(block_cadence: Duration) -> (Duration, Durat
             QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL,
             QUEUE_PLAN_SYNCED_MAX_POLL_INTERVAL,
         );
-    let carrier_wait = block_cadence
-        .saturating_mul(QUEUE_PLAN_SYNCED_CARRIER_WAIT_CADENCES)
-        .clamp(QUEUE_PLAN_SYNCED_MIN_CARRIER_WAIT, maximum_carrier_wait);
-    (poll_interval, carrier_wait)
+    // A durable certificate can legitimately cross another view before its merge carrier
+    // commits.  A prediction derived from the view in which the certificate was assembled is
+    // therefore not a finality bound and used to produce premature 503 responses.  Reconcile for
+    // the complete request budget that remains, returning immediately on an exact or conflicting
+    // canonical marker.  Reserving one poll interval keeps this wait within the outer route
+    // deadline even when the final observation is absent.
+    (
+        poll_interval,
+        remaining_route_budget.saturating_sub(poll_interval),
+    )
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -26897,10 +26948,205 @@ async fn wait_for_exact_queue_plan_admission_registry(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn queue_plan_admission_publication_targets(
+    local_peer_id: &PeerId,
+    online_peer_ids: &BTreeSet<PeerId>,
+    binding: &QueuePlanAdmissionBindingV2,
+) -> Result<Vec<PeerId>, String> {
+    let coordinator = binding
+        .admission_context
+        .route_incarnations
+        .first()
+        .ok_or_else(|| "QueuePlan admission publication has no coordinator route".to_owned())?;
+    Ok(coordinator
+        .validator_set
+        .iter()
+        .filter(|peer_id| *peer_id != local_peer_id && online_peer_ids.contains(*peer_id))
+        .cloned()
+        .collect())
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn disseminate_queue_plan_admission_publication(
+    app: &SharedAppState,
+    certificate: &[u8],
+    binding: &QueuePlanAdmissionBindingV2,
+) -> Result<usize, String> {
+    let network = app
+        .p2p
+        .as_ref()
+        .ok_or_else(|| "QueuePlan admission publication has no P2P transport".to_owned())?;
+    let local_peer_id = app.local_peer_id.as_ref().ok_or_else(|| {
+        "QueuePlan admission publication has no configured local peer identity".to_owned()
+    })?;
+    let online_peer_ids = app
+        .online_peers
+        .get()
+        .into_iter()
+        .map(|peer| peer.id().clone())
+        .collect::<BTreeSet<_>>();
+    let targets =
+        queue_plan_admission_publication_targets(local_peer_id, &online_peer_ids, binding)?;
+    let publication = Arc::new(QueuePlanAdmissionPublicationV1 {
+        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+        certificate: certificate.to_vec(),
+    });
+    for peer_id in &targets {
+        network.post(iroha_p2p::Post {
+            peer_id: peer_id.clone(),
+            priority: iroha_p2p::Priority::High,
+            data: iroha_core::NetworkMessage::QueuePlanAdmissionPublication(Arc::clone(
+                &publication,
+            )),
+        });
+    }
+    Ok(targets.len())
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn validate_queue_plan_admission_publication(
+    app: &SharedAppState,
+    publication: &QueuePlanAdmissionPublicationV1,
+) -> Result<QueuePlanAdmissionBindingV2, String> {
+    if publication.schema_version != QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1 {
+        return Err(format!(
+            "unsupported QueuePlan admission publication schema_version `{}`",
+            publication.schema_version
+        ));
+    }
+    let certificate = decode_queue_plan_synced_certificate(&publication.certificate)?;
+    let validated = validate_queue_plan_admission_certificate_for_chain_digest_v2(
+        queue_plan_admission_chain_id_digest(app.chain_id.as_ref()),
+        certificate,
+        QueuePlanAdmissionCertificateStrengthV2::Quorum,
+    )?;
+    let binding = validated.certificate.binding;
+    let coordinator = binding
+        .admission_context
+        .route_incarnations
+        .first()
+        .ok_or_else(|| "QueuePlan admission publication has no coordinator route".to_owned())?;
+    let local_peer_id = app.local_peer_id.as_ref().ok_or_else(|| {
+        "QueuePlan admission publication receiver has no configured peer identity".to_owned()
+    })?;
+    if !coordinator.validator_set.contains(local_peer_id) {
+        return Err(
+            "QueuePlan admission publication receiver is not in the certified coordinator roster"
+                .to_owned(),
+        );
+    }
+
+    let carrier_height = u64::try_from(app.state.committed_height())
+        .map_err(|_| "local committed height does not fit QueuePlan classification".to_owned())?
+        .checked_add(1)
+        .ok_or_else(|| "local QueuePlan carrier height overflowed".to_owned())?;
+    let (classified, disposition) = app
+        .state
+        .classify_pending_queue_plan_admission(&publication.certificate, carrier_height)
+        .map_err(|error| {
+            format!("QueuePlan admission publication cannot be classified: {error}")
+        })?;
+    if classified.certificate.binding != binding {
+        return Err(
+            "QueuePlan admission publication changed during canonical classification".to_owned(),
+        );
+    }
+    match disposition {
+        PendingQueuePlanAdmissionDisposition::Exact
+        | PendingQueuePlanAdmissionDisposition::EligibleAbsent
+        | PendingQueuePlanAdmissionDisposition::Future => {}
+        PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
+            return Err(
+                "canonical WSV already binds this entrypoint to another QueuePlan admission"
+                    .to_owned(),
+            );
+        }
+        PendingQueuePlanAdmissionDisposition::Stale => {
+            return Err(
+                "QueuePlan admission publication is stale against canonical history, lifecycle, or authority"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(binding)
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanAdmissionPublicationIngestOutcome {
+    AlreadyCommitted,
+    Durable {
+        certificate_hash: Hash,
+        sumeragi_notified: bool,
+    },
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn ingest_queue_plan_admission_publication(
+    app: &SharedAppState,
+    publication: &QueuePlanAdmissionPublicationV1,
+) -> Result<QueuePlanAdmissionPublicationIngestOutcome, String> {
+    let binding = validate_queue_plan_admission_publication(app, publication)?;
+    match app
+        .state
+        .queue_plan_admission_binding_registry_match(&binding)
+    {
+        Ok(QueuePlanAdmissionRegistryMatch::Exact) => {
+            return Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted);
+        }
+        Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
+            return Err(
+                "canonical WSV raced this publication with another QueuePlan admission".to_owned(),
+            );
+        }
+        Err(error) => {
+            return Err(format!(
+                "canonical QueuePlan admission marker became malformed: {error}"
+            ));
+        }
+        Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
+    }
+    let certificate_hash = app
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&publication.certificate)
+        .map_err(|error| {
+            format!("failed to persist certified QueuePlan admission publication: {error}")
+        })?;
+    let sumeragi_notified = app
+        .sumeragi
+        .as_ref()
+        .is_some_and(iroha_core::sumeragi::SumeragiHandle::notify_pending_queue_plan_admission);
+    Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
+        certificate_hash,
+        sumeragi_notified,
+    })
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DurableQueuePlanWakeDisposition {
+    OwnerMissing,
+    Delivered,
+    Deferred,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn durable_queue_plan_wake_disposition(
+    notification_delivered: Option<bool>,
+) -> DurableQueuePlanWakeDisposition {
+    match notification_delivered {
+        None => DurableQueuePlanWakeDisposition::OwnerMissing,
+        Some(true) => DurableQueuePlanWakeDisposition::Delivered,
+        Some(false) => DurableQueuePlanWakeDisposition::Deferred,
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn persist_and_wait_for_queue_plan_admission(
     app: &SharedAppState,
     response: Response,
     expected_binding: &QueuePlanAdmissionBindingV2,
+    route_deadline: tokio::time::Instant,
 ) -> Response {
     if response.status() != StatusCode::ACCEPTED {
         return response;
@@ -26957,32 +27203,69 @@ async fn persist_and_wait_for_queue_plan_admission(
         Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
     }
 
-    if let Err(error) = app
+    let certificate_hash = match app
         .kura
         .persist_pending_queue_plan_admission_certificate(&snapshot.body)
     {
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            format!(
-                "failed to persist the exact QueuePlan certificate before carrier wake: {error}"
-            ),
-        );
-    }
-    let Some(sumeragi) = app.sumeragi.as_ref() else {
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            "exact QueuePlan certificate is durable but no Sumeragi owner is attached",
-        );
+        Ok(certificate_hash) => certificate_hash,
+        Err(error) => {
+            return queue_plan_outcome_unknown_response(
+                expected_binding.entrypoint_hash.clone(),
+                format!(
+                    "failed to persist the exact QueuePlan certificate before carrier wake: {error}"
+                ),
+            );
+        }
     };
-    if !sumeragi.notify_pending_queue_plan_admission() {
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            "exact QueuePlan certificate is durable but the Sumeragi owner is not ready",
-        );
+    match disseminate_queue_plan_admission_publication(app, &snapshot.body, expected_binding) {
+        Ok(target_count) => {
+            iroha_logger::debug!(
+                %certificate_hash,
+                target_count,
+                "disseminated certified QueuePlan admission to live authoritative validators"
+            );
+        }
+        Err(error) => {
+            iroha_logger::warn!(
+                %certificate_hash,
+                %error,
+                "could not disseminate certified QueuePlan admission; retaining the local durable carrier"
+            );
+        }
+    }
+    let notification_delivered = app
+        .sumeragi
+        .as_ref()
+        .map(iroha_core::sumeragi::SumeragiHandle::notify_pending_queue_plan_admission);
+    match durable_queue_plan_wake_disposition(notification_delivered) {
+        DurableQueuePlanWakeDisposition::OwnerMissing => {
+            return queue_plan_outcome_unknown_response(
+                expected_binding.entrypoint_hash.clone(),
+                "exact QueuePlan certificate is durable but no Sumeragi owner is attached",
+            );
+        }
+        DurableQueuePlanWakeDisposition::Delivered => {}
+        DurableQueuePlanWakeDisposition::Deferred => {
+            // The certificate is already durable at this point. A false wake only
+            // means that Sumeragi is between ingress owners (for example, during a
+            // height rollover); startup/owner replay still consumes the carrier.
+            // Returning immediately would report an indeterminate 503 even when
+            // the exact transaction is about to become canonical. Reconcile the
+            // WSV for the normal bounded wait instead.
+            iroha_logger::warn!(
+                %certificate_hash,
+                entrypoint_hash = %expected_binding.entrypoint_hash,
+                "Sumeragi QueuePlan wake was deferred; waiting for the durable certificate to become canonical"
+            );
+        }
     }
 
-    let (poll_interval, wait_budget) =
-        queue_plan_synced_runtime_timing(app.state.sumeragi_block_cadence());
+    let remaining_route_budget =
+        route_deadline.saturating_duration_since(tokio::time::Instant::now());
+    let (poll_interval, wait_budget) = queue_plan_synced_runtime_timing(
+        app.state.sumeragi_block_cadence(),
+        remaining_route_budget,
+    );
     match wait_for_exact_queue_plan_admission_registry(
         app.state.as_ref(),
         expected_binding,
@@ -27219,6 +27502,7 @@ async fn execute_torii_transaction_via_proxy(
         return error.into_response();
     }
     let expected_admission_binding = binding.clone();
+    let route_deadline = tokio::time::Instant::now() + DEFAULT_ROUTE_TIMEOUT;
     let mut response = execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
@@ -27230,8 +27514,13 @@ async fn execute_torii_transaction_via_proxy(
         },
     )
     .await;
-    response =
-        persist_and_wait_for_queue_plan_admission(app, response, &expected_admission_binding).await;
+    response = persist_and_wait_for_queue_plan_admission(
+        app,
+        response,
+        &expected_admission_binding,
+        route_deadline,
+    )
+    .await;
     normalize_proxied_transaction_submission_response(
         app.as_ref(),
         response,
@@ -31090,6 +31379,49 @@ async fn process_incoming_torii_proxy_response(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn process_incoming_queue_plan_admission_publication(
+    app: &SharedAppState,
+    sender_peer_id: &PeerId,
+    publication: &QueuePlanAdmissionPublicationV1,
+) {
+    match ingest_queue_plan_admission_publication(app, publication) {
+        Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted) => {
+            iroha_logger::debug!(
+                peer_id = %sender_peer_id,
+                "ignored an idempotent QueuePlan admission publication already present in canonical WSV"
+            );
+        }
+        Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
+            certificate_hash,
+            sumeragi_notified: true,
+        }) => {
+            iroha_logger::debug!(
+                peer_id = %sender_peer_id,
+                %certificate_hash,
+                "persisted a certified QueuePlan admission publication and woke Sumeragi"
+            );
+        }
+        Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
+            certificate_hash,
+            sumeragi_notified: false,
+        }) => {
+            iroha_logger::warn!(
+                peer_id = %sender_peer_id,
+                %certificate_hash,
+                "persisted a certified QueuePlan admission publication but Sumeragi is not ready; durable startup replay will retain it"
+            );
+        }
+        Err(error) => {
+            iroha_logger::warn!(
+                peer_id = %sender_peer_id,
+                %error,
+                "rejected an invalid QueuePlan admission publication"
+            );
+        }
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn handle_torii_proxy_network_message(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
@@ -31107,6 +31439,13 @@ async fn handle_torii_proxy_network_message(
         }
         iroha_core::NetworkMessage::ToriiProxyResponse(response) => {
             process_incoming_torii_proxy_response(&app, peer.id().clone(), *response).await;
+        }
+        iroha_core::NetworkMessage::QueuePlanAdmissionPublication(publication) => {
+            process_incoming_queue_plan_admission_publication(
+                &app,
+                peer.id(),
+                publication.as_ref(),
+            );
         }
         #[cfg(feature = "app_api")]
         iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(request) => {

@@ -534,27 +534,23 @@ THEOREM HistoricalCommitCertificateDiscoveryPersistenceFromAsyncSpec ==
     HistoricalCommitCertificateDiscoveryPersistenceProperty(
       AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE HistoricalCommitCertificateDiscoveryPersistenceProperty(
-                 AsyncSpecAt(initialContext))
-    <2>1. CASE AsyncSpecAt(initialContext)
-      <3>1. []HistoricalRecoveryTargetRemoteServerInvariant
-        BY <2>1, AsyncSpecAlwaysHistoricalRecoveryTargetRemoteServer
-      <3>2. [][AsyncNext]_AsyncAllVars
-        BY <2>1 DEF AsyncSpecAt
-      <3>3. \A node \in Responsive:
-               HistoricalCommitCertificateDiscoveryPersistenceUnless(node)
-        BY <3>1, <3>2,
-           HistoricalCommitCertificateDiscoveryPendingUnlessOutcome,
-           PTL
-           DEF HistoricalCommitCertificateDiscoveryPersistenceUnless
-      <3> QED BY <2>1, <3>3
-           DEF HistoricalCommitCertificateDiscoveryPersistenceProperty
-    <2>2. CASE ~AsyncSpecAt(initialContext)
-      BY <2>2
-         DEF HistoricalCommitCertificateDiscoveryPersistenceProperty
-    <2> QED BY <2>1, <2>2
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext)
+         PROVE \A node \in Responsive:
+                 HistoricalCommitCertificateDiscoveryPersistenceUnless(node)
+    <2>1. []HistoricalRecoveryTargetRemoteServerInvariant
+      BY <1>1, AsyncSpecAlwaysHistoricalRecoveryTargetRemoteServer
+    <2>2. [][AsyncNext]_AsyncAllVars
+      BY <1>1 DEF AsyncSpecAt
+    <2>3. \A node \in Responsive:
+             HistoricalCommitCertificateDiscoveryPersistenceUnless(node)
+      BY <2>1, <2>2,
+         HistoricalCommitCertificateDiscoveryPendingUnlessOutcome,
+         PTL
+         DEF HistoricalCommitCertificateDiscoveryPersistenceUnless
+    <2> QED BY <2>3
   <1> QED BY <1>1
+       DEF HistoricalCommitCertificateDiscoveryPersistenceProperty
 
 THEOREM HistoricalCommitCertificateDiscoveryReadinessFromClock ==
   \A initialContext:

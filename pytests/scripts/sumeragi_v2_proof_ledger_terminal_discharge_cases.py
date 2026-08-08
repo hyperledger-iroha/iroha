@@ -463,11 +463,11 @@ def test_liveness_ownership_mutation_source_seal_covers_exact_corpus(
     )
     artifacts = module.LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS
 
-    assert len(artifacts) == 151
-    assert sum(name.endswith(".tla") for name in artifacts) == 30
-    assert sum(name.endswith("_fixed.cfg") for name in artifacts) == 30
-    assert sum(name.endswith("_bug.cfg") for name in artifacts) == 91
-    assert len(module.LIVENESS_OWNERSHIP_MUTATION_SHA256) == 152
+    assert len(artifacts) == 155
+    assert sum(name.endswith(".tla") for name in artifacts) == 31
+    assert sum(name.endswith("_fixed.cfg") for name in artifacts) == 31
+    assert sum(name.endswith("_bug.cfg") for name in artifacts) == 93
+    assert len(module.LIVENESS_OWNERSHIP_MUTATION_SHA256) == 156
     assert len(module.SERVE_RESTART_TERMINAL_DISCHARGE_BITS) == 25
     assert len(module.SERVE_RESTART_TERMINAL_DISCHARGE_MUTATIONS) == 25
     assert set(module.SERVE_RESTART_TERMINAL_DISCHARGE_BITS) == {

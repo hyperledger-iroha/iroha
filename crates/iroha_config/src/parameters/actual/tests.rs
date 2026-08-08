@@ -854,10 +854,11 @@ mod tests {
             &config,
             SumeragiV2ConfigError::BodySourceBytesTooSmall {
                 actual: 16 * 1024 * 1024,
-                minimum: 2 * 16 * 1024 * 1024 + 230_408,
+                minimum: 2 * 16 * 1024 * 1024 + 295_944,
                 max_payload_bytes: 16 * 1024 * 1024,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
+                certified_fence_escape_reserve: 64 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -866,7 +867,7 @@ mod tests {
 
         let mut config = default_v2_sumeragi();
         config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
-        let lane_minimum: usize = 5 * 1024 * 1024 + 64 * 1024;
+        let lane_minimum: usize = 5 * 1024 * 1024 + 2 * 64 * 1024;
         config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
         assert_error(
             &config,
@@ -876,6 +877,7 @@ mod tests {
                 max_payload_bytes: 1,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
+                certified_fence_escape_reserve: 64 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -883,12 +885,12 @@ mod tests {
         );
 
         let mut config = default_v2_sumeragi();
-        config.queues.bodies = NonZeroUsize::new(9).expect("non-zero");
+        config.queues.bodies = NonZeroUsize::new(12).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyQueueTooSmall {
-                actual: 9,
-                minimum: 10,
+                actual: 12,
+                minimum: 13,
                 authenticated_non_validator_sources: 2,
             },
         );

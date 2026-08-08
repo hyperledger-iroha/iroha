@@ -1202,7 +1202,6 @@ async fn appeal_finance_deposit_submit_settlement_endpoint_queues_next_step() {
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
-    let authority_reader = Arc::clone(&app);
 
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 
@@ -1339,6 +1338,7 @@ async fn appeal_finance_deposit_submit_settlement_never_publishes_before_finaliz
     let confirmation =
         appeal_finance_deposit_confirm_request(&request, expected.escrow_id.as_hash().to_string());
     let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+    let authority_reader = Arc::clone(&app);
 
     let response = post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 

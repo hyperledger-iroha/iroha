@@ -24,6 +24,8 @@ pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2: u16 = 2;
 pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2: u16 = 2;
 /// Current first-release QueuePlan admission-certificate layout.
 pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2: u16 = 2;
+/// Schema version for peer-to-peer publication of a certified QueuePlan admission.
+pub const QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1: u16 = 1;
 
 const QUEUE_PLAN_ADMISSION_CHAIN_DOMAIN_V2: &[u8] = b"iroha:torii:queue-plan-admission-chain:v2\0";
 const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2: &[u8] =
@@ -299,12 +301,14 @@ impl QueuePlanAdmissionBindingV2 {
     ///
     /// The compatibility queue hash is derived from the canonical entrypoint rather than trusted
     /// from the reservation key. The exact coordinator and its admitting incarnation are then
-    /// recovered from this binding's immutable routing context, including the proposal height that
-    /// validated that incarnation.
+    /// recovered from this binding's immutable routing context. The binding hash authenticates the
+    /// original admission height, while the reservation key's distinct proposal height identifies
+    /// the later lane slot that actually took queue ownership.
     ///
     /// # Errors
     /// Returns an error for a malformed reservation key or any entrypoint, queue hash, plan,
-    /// proposal height, coordinator, incarnation, or canonical binding-hash mismatch.
+    /// backdated reservation height, coordinator, incarnation, or canonical binding-hash
+    /// mismatch.
     pub(crate) fn validate_for_lane_reservation_commit(
         &self,
         key: &crate::queue::LaneQueueReservationKeyV2,
@@ -313,14 +317,19 @@ impl QueuePlanAdmissionBindingV2 {
         self.validate_structure()?;
         let compatibility_queue_hash =
             HashOf::from_untyped_unchecked(Hash::from(self.entrypoint_hash.clone()));
+        if key.proposal_height < self.admission_context.proposal_height {
+            return Err(
+                "lane reservation proposal height precedes its durable QueuePlan admission"
+                    .to_owned(),
+            );
+        }
         if self.entrypoint_hash != key.entrypoint_hash
             || compatibility_queue_hash != key.signed_transaction_hash
             || self.routing_plan_digest != key.routing_plan_digest
-            || self.admission_context.proposal_height != key.proposal_height
             || self.canonical_hash() != key.queue_plan_admission_binding_hash
         {
             return Err(
-                "QueuePlan binding does not match the lane reservation transaction, plan, proposal height, or binding identity"
+                "QueuePlan binding does not match the lane reservation transaction, plan, or binding identity"
                     .to_owned(),
             );
         }
@@ -439,6 +448,18 @@ pub struct QueuePlanAdmissionCertificateV2 {
     pub binding: QueuePlanAdmissionBindingV2,
     /// Strictly increasing validator-index attestations.
     pub attestations: Vec<QueuePlanAdmissionAttestationV2>,
+}
+
+/// Canonical QueuePlan certificate disseminated from an ingress aggregator to validators.
+///
+/// The certificate stays as exact Norito bytes so every receiving validator can enforce the
+/// same bounded canonical-decoding boundary before publishing those bytes durably in Kura.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanAdmissionPublicationV1 {
+    /// Publication envelope schema version.
+    pub schema_version: u16,
+    /// Exact canonical [`QueuePlanAdmissionCertificateV2`] bytes.
+    pub certificate: Vec<u8>,
 }
 
 /// Strength required while validating a QueuePlan admission certificate.
@@ -1634,8 +1655,8 @@ mod tests {
     }
 
     #[test]
-    fn lane_reservation_commit_binds_proposal_height() {
-        let (_, _, _, binding, _) = single_route_admission_fixture();
+    fn lane_reservation_commit_separates_admission_and_reservation_heights() {
+        let (chain_id, transaction, routing_plan, binding, _) = single_route_admission_fixture();
         let coordinator = binding
             .admission_context
             .route_incarnations
@@ -1662,15 +1683,52 @@ mod tests {
 
         binding
             .validate_for_lane_reservation_commit(&key)
-            .expect("matching proposal height must validate");
+            .expect("matching admission and reservation heights must validate");
 
-        let mut tampered = key;
-        tampered.proposal_height += 1;
+        let mut later_reservation = key;
+        later_reservation.proposal_height += 1;
+        binding
+            .validate_for_lane_reservation_commit(&later_reservation)
+            .expect("a later reservation slot retains the exact earlier admission binding");
+        assert_ne!(
+            key.digest(),
+            later_reservation.digest(),
+            "the distinct reservation height remains covered by the exact reservation identity"
+        );
+
+        let mut conflicting_binding = later_reservation;
+        conflicting_binding.queue_plan_admission_binding_hash =
+            Hash::new(b"different QueuePlan admission binding");
         let error = binding
-            .validate_for_lane_reservation_commit(&tampered)
-            .expect_err("tampered proposal height must be rejected");
+            .validate_for_lane_reservation_commit(&conflicting_binding)
+            .expect_err("a different admission binding must be rejected");
         assert!(
-            error.contains("proposal height"),
+            error.contains("binding identity"),
+            "unexpected rejection: {error}"
+        );
+
+        let mut height_two_context = binding.admission_context.clone();
+        height_two_context.authority_height = 1;
+        height_two_context.proposal_height = 2;
+        height_two_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(
+            Hash::new(b"height-one committed predecessor"),
+        ));
+        let height_two_binding = QueuePlanAdmissionBindingV2::new(
+            &chain_id,
+            &transaction,
+            &routing_plan,
+            height_two_context,
+            74,
+        )
+        .expect("construct a canonical height-two admission binding");
+        let mut backdated_reservation = key;
+        backdated_reservation.queue_plan_admission_binding_hash =
+            height_two_binding.canonical_hash();
+        let error = height_two_binding
+            .validate_for_lane_reservation_commit(&backdated_reservation)
+            .expect_err("a reservation slot before durable admission must be rejected");
+        assert!(
+            error.contains("precedes its durable QueuePlan admission"),
             "unexpected rejection: {error}"
         );
     }

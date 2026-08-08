@@ -14,7 +14,6 @@ mod npos;
 mod pop;
 pub mod profile;
 mod sign;
-pub use sign::bind_staged_sumeragi_v2_context;
 pub(crate) use sign::{
     bind_and_sign_staged_sumeragi_v2_context, staged_signed_sumeragi_v2_context_hashes,
 };

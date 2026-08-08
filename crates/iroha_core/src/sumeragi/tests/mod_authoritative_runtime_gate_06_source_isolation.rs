@@ -1,6 +1,6 @@
 #[test]
 fn fair_v2_ingress_wire_index_keeps_non_validator_relay_origins_distinct() {
-    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(4, Some(1));
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(5, Some(1));
     let authenticated_via = validator_peers(1)
         .pop()
         .expect("authenticated relay fixture");
@@ -27,7 +27,7 @@ fn fair_v2_ingress_wire_index_keeps_non_validator_relay_origins_distinct() {
 
 #[test]
 fn fair_v2_ingress_wire_index_keeps_authenticated_origins_distinct() {
-    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(5, Some(2));
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle_with_source_geometry(7, Some(2));
     let outsiders = validator_peers(2);
     let message = v2_message();
 
@@ -61,7 +61,7 @@ fn fair_v2_ingress_byte_quota_isolates_validator_sources() {
     assert_eq!(encoded_v2_len(&second), encoded_len);
     let source_capacity = encoded_len.checked_add(1).expect("ordinary byte partition");
     let ingress =
-        super::FairV2Ingress::new(10, source_capacity * 3, source_capacity, 0, encoded_len);
+        super::FairV2Ingress::new(12, source_capacity * 3, source_capacity, 0, encoded_len);
     ingress
         .configure_roster(validators.clone())
         .expect("two validator and one anonymous byte partition fit exactly");

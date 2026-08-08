@@ -1191,6 +1191,7 @@ def test_tlc_configs_keep_an_externally_invalid_subject(tmp_path: Path) -> None:
     for cfg_name in module.REQUIRED_TLC_CONFIGS:
         if cfg_name in {
             "SumeragiV2Revision4.cfg",
+            "SumeragiV2Revision4AdversarialSafety.cfg",
             "SumeragiV2Revision4Liveness.cfg",
         }:
             assert "Bodies = {b1, b2}\n" in (

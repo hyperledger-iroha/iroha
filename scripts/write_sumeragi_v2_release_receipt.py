@@ -7,10 +7,12 @@ import argparse
 import base64
 import csv
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -104,6 +106,7 @@ _MAX_PREBUILT_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_RELEASE_TSV_BYTES = 16 * 1024 * 1024
 _MAX_RELEASE_TEXT_BYTES = 256 * 1024 * 1024
 _MAX_RELEASE_JSON_BYTES = 128 * 1024 * 1024
+_MAX_TLAPS_RESOURCE_RECORDS = 1_000_000
 _PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 _PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
@@ -203,6 +206,13 @@ _FORMAL_FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered "
     "adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/"
     "recovery/ownership mutations, bounded TLC, trace replay, and production Verus"
+)
+_TLAPS_RESOURCE_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+_TLAPS_RESOURCE_SAMPLE_INTERVAL_SECONDS = 0.25
+_TLAPS_RESOURCE_PHYSICAL_FOOTPRINT_INTERVAL_SECONDS = 5.0
+_TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE = "max_rss_physical_footprint"
+_TLAPS_RESOURCE_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
 )
 _SCALING_REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
 _SCALING_SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -380,7 +390,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 835
+_PRODUCTION_TEST_COUNT = 837
 _G_UNIT_TEST_COUNT = 524
 _G_UNIT_GROUPS = (
     (
@@ -466,7 +476,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        41,
+        43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -505,8 +515,8 @@ _PRODUCTION_MODULES = (
         "sumeragi::v2_lifecycle_recovery::tests",
         5,
     ),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 36),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -4212,6 +4222,590 @@ for _release_receipt_symbol in (
             "release receipt component lacks required symbol "
             f"{_release_receipt_symbol}"
         )
+def _tlaps_resource_int(value: Any, name: str, *, minimum: int = 0) -> int:
+    if type(value) is not int or value < minimum:
+        raise ReceiptError(f"{name} is not one bounded integer")
+    return value
+
+def _tlaps_resource_float(value: Any, name: str) -> float:
+    if type(value) is not float or not math.isfinite(value) or value < 0.0:
+        raise ReceiptError(f"{name} is not one finite non-negative decimal")
+    return value
+
+def _tlaps_resource_timestamp(value: Any, name: str) -> datetime:
+    if (
+        not isinstance(value, str)
+        or _TLAPS_RESOURCE_TIMESTAMP_RE.fullmatch(value) is None
+    ):
+        raise ReceiptError(f"{name} is not one canonical UTC timestamp")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError as error:
+        raise ReceiptError(f"{name} is not one valid UTC timestamp") from error
+
+def _validate_tlaps_resource_evidence(
+    jsonl_snapshot: EvidenceSnapshot,
+    summary_snapshot: EvidenceSnapshot,
+) -> None:
+    """Validate the exact successful resource-guard stream and its summary."""
+
+    data = jsonl_snapshot.data
+    if not data or not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
+        raise ReceiptError("TLAPS resource samples are not canonical LF-only JSONL")
+    lines = data.splitlines(keepends=True)
+    if len(lines) > _MAX_TLAPS_RESOURCE_RECORDS:
+        raise ReceiptError("TLAPS resource samples exceed the record-count bound")
+    records = [
+        _decode_canonical_json(line, f"TLAPS resource record {index}")
+        for index, line in enumerate(lines)
+    ]
+    if len(records) < 4:
+        raise ReceiptError(
+            "TLAPS resource samples lack start, spawn, sample, and summary records"
+        )
+
+    summary = _decode_canonical_json(
+        summary_snapshot.data, "TLAPS resource summary"
+    )
+    summary_fields = {
+        "child_exit_code",
+        "ended_utc",
+        "event",
+        "exit_reason",
+        "exit_status",
+        "evidence_peak_rss_bytes",
+        "kernel_peak_rss_bytes",
+        "kernel_peak_rss_method",
+        "kernel_peak_rss_scope",
+        "memory_limit_bytes",
+        "memory_enforcement_mode",
+        "physical_footprint_interval_seconds",
+        "peak_memory_bytes",
+        "peak_physical_footprint_bytes",
+        "peak_rss_bytes",
+        "report_context",
+        "sample_count",
+        "sample_interval_seconds",
+        "schema_version",
+        "started_utc",
+        "supervisor_pid",
+    }
+    _require_exact_json_fields(summary, summary_fields, "TLAPS resource summary")
+    if records[-1] != summary:
+        raise ReceiptError(
+            "TLAPS resource samples do not terminate in the exact published summary"
+        )
+
+    start = _require_exact_json_fields(
+        records[0],
+        {
+            "event",
+            "memory_limit_bytes",
+            "memory_enforcement_mode",
+            "physical_footprint_interval_seconds",
+            "report_context",
+            "sample_interval_seconds",
+            "schema_version",
+            "started_utc",
+            "supervisor_pid",
+        },
+        "TLAPS resource start record",
+    )
+    spawn = _require_exact_json_fields(
+        records[1],
+        {
+            "event",
+            "process_group_id",
+            "schema_version",
+            "timestamp_utc",
+            "wrapper_pid",
+        },
+        "TLAPS resource spawn record",
+    )
+    sample_records = records[2:-1]
+    sample_fields = {
+        "accounting_method",
+        "elapsed_seconds",
+        "event",
+        "memory_bytes",
+        "memory_limit_bytes",
+        "physical_footprint_bytes",
+        "process_count",
+        "process_group_id",
+        "rss_bytes",
+        "schema_version",
+        "timestamp_utc",
+    }
+
+    summary_schema = _tlaps_resource_int(
+        summary.get("schema_version"), "TLAPS resource summary.schema_version"
+    )
+    summary_child_status = _tlaps_resource_int(
+        summary.get("child_exit_code"), "TLAPS resource summary.child_exit_code"
+    )
+    summary_exit_status = _tlaps_resource_int(
+        summary.get("exit_status"), "TLAPS resource summary.exit_status"
+    )
+    summary_limit = _tlaps_resource_int(
+        summary.get("memory_limit_bytes"),
+        "TLAPS resource summary.memory_limit_bytes",
+        minimum=1,
+    )
+    summary_samples = _tlaps_resource_int(
+        summary.get("sample_count"),
+        "TLAPS resource summary.sample_count",
+        minimum=1,
+    )
+    summary_supervisor = _tlaps_resource_int(
+        summary.get("supervisor_pid"),
+        "TLAPS resource summary.supervisor_pid",
+        minimum=2,
+    )
+    peak_memory = _tlaps_resource_int(
+        summary.get("peak_memory_bytes"),
+        "TLAPS resource summary.peak_memory_bytes",
+    )
+    peak_rss = _tlaps_resource_int(
+        summary.get("peak_rss_bytes"), "TLAPS resource summary.peak_rss_bytes"
+    )
+    peak_footprint = _tlaps_resource_int(
+        summary.get("peak_physical_footprint_bytes"),
+        "TLAPS resource summary.peak_physical_footprint_bytes",
+    )
+    kernel_peak_rss = _tlaps_resource_int(
+        summary.get("kernel_peak_rss_bytes"),
+        "TLAPS resource summary.kernel_peak_rss_bytes",
+    )
+    evidence_peak_rss = _tlaps_resource_int(
+        summary.get("evidence_peak_rss_bytes"),
+        "TLAPS resource summary.evidence_peak_rss_bytes",
+    )
+    summary_sample_interval = _tlaps_resource_float(
+        summary.get("sample_interval_seconds"),
+        "TLAPS resource summary.sample_interval_seconds",
+    )
+    summary_footprint_interval = _tlaps_resource_float(
+        summary.get("physical_footprint_interval_seconds"),
+        "TLAPS resource summary.physical_footprint_interval_seconds",
+    )
+    started = _tlaps_resource_timestamp(
+        summary.get("started_utc"), "TLAPS resource summary.started_utc"
+    )
+    ended = _tlaps_resource_timestamp(
+        summary.get("ended_utc"), "TLAPS resource summary.ended_utc"
+    )
+    expected_kernel_method = (
+        "wait4_ru_maxrss" if kernel_peak_rss > 0 else "unavailable"
+    )
+    if (
+        summary_schema != 1
+        or summary.get("event") != "summary"
+        or summary.get("exit_reason") != "completed"
+        or summary_child_status != 0
+        or summary_exit_status != 0
+        or summary_limit != _TLAPS_RESOURCE_MEMORY_LIMIT_BYTES
+        or summary.get("memory_enforcement_mode")
+        != _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE
+        or summary_sample_interval
+        != _TLAPS_RESOURCE_SAMPLE_INTERVAL_SECONDS
+        or summary_footprint_interval
+        != _TLAPS_RESOURCE_PHYSICAL_FOOTPRINT_INTERVAL_SECONDS
+        or summary.get("report_context") is not None
+        or summary.get("kernel_peak_rss_method") != expected_kernel_method
+        or summary.get("kernel_peak_rss_scope") != "direct_guarded_body"
+        or summary_samples != len(sample_records)
+        or ended < started
+        or peak_memory > summary_limit
+        or kernel_peak_rss > summary_limit
+        or evidence_peak_rss > summary_limit
+        or evidence_peak_rss != max(peak_rss, kernel_peak_rss)
+    ):
+        raise ReceiptError(
+            "TLAPS resource summary is not a successful bounded release run"
+        )
+
+    start_schema = _tlaps_resource_int(
+        start.get("schema_version"), "TLAPS resource start.schema_version"
+    )
+    start_limit = _tlaps_resource_int(
+        start.get("memory_limit_bytes"),
+        "TLAPS resource start.memory_limit_bytes",
+        minimum=1,
+    )
+    start_supervisor = _tlaps_resource_int(
+        start.get("supervisor_pid"),
+        "TLAPS resource start.supervisor_pid",
+        minimum=2,
+    )
+    start_sample_interval = _tlaps_resource_float(
+        start.get("sample_interval_seconds"),
+        "TLAPS resource start.sample_interval_seconds",
+    )
+    start_footprint_interval = _tlaps_resource_float(
+        start.get("physical_footprint_interval_seconds"),
+        "TLAPS resource start.physical_footprint_interval_seconds",
+    )
+    start_time = _tlaps_resource_timestamp(
+        start.get("started_utc"), "TLAPS resource start.started_utc"
+    )
+    if (
+        start_schema != 1
+        or start.get("event") != "start"
+        or start_limit != summary_limit
+        or start.get("memory_enforcement_mode")
+        != _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE
+        or start_sample_interval != summary_sample_interval
+        or start_footprint_interval != summary_footprint_interval
+        or start.get("report_context") is not None
+        or start_supervisor != summary_supervisor
+        or start.get("started_utc") != summary.get("started_utc")
+        or start_time != started
+    ):
+        raise ReceiptError("TLAPS resource start record is not bound to its summary")
+
+    spawn_schema = _tlaps_resource_int(
+        spawn.get("schema_version"), "TLAPS resource spawn.schema_version"
+    )
+    process_group_id = _tlaps_resource_int(
+        spawn.get("process_group_id"),
+        "TLAPS resource spawn.process_group_id",
+        minimum=2,
+    )
+    wrapper_pid = _tlaps_resource_int(
+        spawn.get("wrapper_pid"), "TLAPS resource spawn.wrapper_pid", minimum=2
+    )
+    spawn_time = _tlaps_resource_timestamp(
+        spawn.get("timestamp_utc"), "TLAPS resource spawn.timestamp_utc"
+    )
+    if (
+        spawn_schema != 1
+        or spawn.get("event") != "spawn"
+        or process_group_id == wrapper_pid
+        or process_group_id == summary_supervisor
+        or wrapper_pid == summary_supervisor
+        or spawn_time < started
+        or spawn_time > ended
+    ):
+        raise ReceiptError("TLAPS resource spawn record is not one guarded body")
+
+    observed_memory: list[int] = []
+    observed_rss: list[int] = []
+    observed_footprint: list[int] = []
+    previous_elapsed = -1.0
+    previous_timestamp = spawn_time
+    for index, raw_sample in enumerate(sample_records):
+        sample = _require_exact_json_fields(
+            raw_sample, sample_fields, f"TLAPS resource sample record {index}"
+        )
+        sample_schema = _tlaps_resource_int(
+            sample.get("schema_version"),
+            f"TLAPS resource sample {index}.schema_version",
+        )
+        sample_limit = _tlaps_resource_int(
+            sample.get("memory_limit_bytes"),
+            f"TLAPS resource sample {index}.memory_limit_bytes",
+            minimum=1,
+        )
+        sample_group = _tlaps_resource_int(
+            sample.get("process_group_id"),
+            f"TLAPS resource sample {index}.process_group_id",
+            minimum=2,
+        )
+        _tlaps_resource_int(
+            sample.get("process_count"),
+            f"TLAPS resource sample {index}.process_count",
+            minimum=1,
+        )
+        memory = _tlaps_resource_int(
+            sample.get("memory_bytes"),
+            f"TLAPS resource sample {index}.memory_bytes",
+        )
+        rss = _tlaps_resource_int(
+            sample.get("rss_bytes"), f"TLAPS resource sample {index}.rss_bytes"
+        )
+        footprint = _tlaps_resource_int(
+            sample.get("physical_footprint_bytes"),
+            f"TLAPS resource sample {index}.physical_footprint_bytes",
+        )
+        elapsed = _tlaps_resource_float(
+            sample.get("elapsed_seconds"),
+            f"TLAPS resource sample {index}.elapsed_seconds",
+        )
+        timestamp = _tlaps_resource_timestamp(
+            sample.get("timestamp_utc"),
+            f"TLAPS resource sample {index}.timestamp_utc",
+        )
+        accounting_method = sample.get("accounting_method")
+        if accounting_method == "rss":
+            accounting_is_exact = footprint == 0 and memory == rss
+        elif accounting_method == _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE:
+            accounting_is_exact = footprint > 0 and memory == max(rss, footprint)
+        else:
+            accounting_is_exact = False
+        if (
+            sample_schema != 1
+            or sample.get("event") != "sample"
+            or sample_limit != summary_limit
+            or sample_group != process_group_id
+            or memory > sample_limit
+            or not accounting_is_exact
+            or elapsed < previous_elapsed
+            or timestamp < previous_timestamp
+            or timestamp > ended
+        ):
+            raise ReceiptError(
+                f"TLAPS resource sample {index} is not exact bounded guard evidence"
+            )
+        previous_elapsed = elapsed
+        previous_timestamp = timestamp
+        observed_memory.append(memory)
+        observed_rss.append(rss)
+        observed_footprint.append(footprint)
+
+    if (
+        peak_memory != max(observed_memory)
+        or peak_rss != max(observed_rss)
+        or peak_footprint != max(observed_footprint)
+    ):
+        raise ReceiptError(
+            "TLAPS resource summary peaks do not match the authenticated sample stream"
+        )
+
+def _formal_artifacts_with_tlaps_resource_validation(
+    completion: EvidenceSnapshot,
+    fields: dict[str, str],
+    sealed: dict[str, Any],
+    checker_environment: dict[str, str],
+    repo_root: Path,
+) -> tuple[
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+]:
+    completion_path = completion.path
+    checker = repo_root / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
+    expected_completion_fields = {
+        "schema_version",
+        "head_commit",
+        "head_tree",
+        "source_manifest_sha256",
+        "cargo_lock_sha256",
+        "formal_gate_log_sha256",
+        "proof_coverage_sha256",
+        "proof_evidence_sha256",
+        "verus_evidence_sha256",
+        "verus_log_sha256",
+        "multilane_apalache_evidence_sha256",
+        "cross_tool_evidence_sha256",
+        "harness_cargo_lock_sha256",
+        "formal_toolchain_sha256",
+        "tlaps_resource_jsonl_sha256",
+        "tlaps_resource_summary_sha256",
+    }
+    _require_fields(
+        fields,
+        expected_completion_fields,
+        "formal completion",
+    )
+    expected = {
+        "schema_version": "1",
+        "head_commit": sealed["head_commit"],
+        "head_tree": sealed["head_tree"],
+        "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
+        "cargo_lock_sha256": sealed["cargo_lock_sha256"],
+    }
+    if any(fields.get(name) != value for name, value in expected.items()):
+        raise ReceiptError("formal completion is not bound to the release identity")
+
+    artifact_specs = (
+        (
+            "gate_log",
+            completion_path.with_name("formal-gate.log"),
+            "formal_gate_log_sha256",
+            "formal gate log",
+            _MAX_RELEASE_TEXT_BYTES,
+        ),
+        (
+            "ledger",
+            completion_path.with_name("proof_coverage.json"),
+            "proof_coverage_sha256",
+            "formal proof ledger",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "evidence",
+            completion_path.with_name("proof_evidence.json"),
+            "proof_evidence_sha256",
+            "formal proof evidence",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "verus_evidence",
+            completion_path.with_name("verus_evidence.json"),
+            "verus_evidence_sha256",
+            "formal Verus evidence",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "verus_log",
+            completion_path.with_name("verus.log"),
+            "verus_log_sha256",
+            "formal Verus log",
+            _MAX_RELEASE_TEXT_BYTES,
+        ),
+        (
+            "multilane_apalache_evidence",
+            completion_path.with_name("multilane_apalache_evidence.tsv"),
+            "multilane_apalache_evidence_sha256",
+            "formal multilane Apalache evidence",
+            _MAX_RELEASE_TSV_BYTES,
+        ),
+        (
+            "cross_tool_evidence",
+            completion_path.with_name("cross_tool_evidence.json"),
+            "cross_tool_evidence_sha256",
+            "formal cross-tool evidence",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "harness_lock",
+            completion_path.with_name("harness-Cargo.lock"),
+            "harness_cargo_lock_sha256",
+            "formal harness lock",
+            _MAX_LOCK_BYTES,
+        ),
+        (
+            "toolchain",
+            completion_path.with_name("formal-toolchain.tsv"),
+            "formal_toolchain_sha256",
+            "formal toolchain",
+            _MAX_RELEASE_TSV_BYTES,
+        ),
+        (
+            "tlaps_resource_jsonl",
+            completion_path.with_name("tlaps_resource.jsonl"),
+            "tlaps_resource_jsonl_sha256",
+            "TLAPS resource samples",
+            _MAX_RELEASE_TEXT_BYTES,
+        ),
+        (
+            "tlaps_resource_summary",
+            completion_path.with_name("tlaps_resource_summary.json"),
+            "tlaps_resource_summary_sha256",
+            "TLAPS resource summary",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+    )
+    snapshots: dict[str, EvidenceSnapshot] = {}
+    for key, path, digest_field, name, maximum_bytes in artifact_specs:
+        snapshot = _bounded_evidence_snapshot(
+            path,
+            name,
+            maximum_bytes=maximum_bytes,
+        )
+        if snapshot.sha256 != fields[digest_field]:
+            raise ReceiptError(f"{name} digest mismatch")
+        snapshots[key] = snapshot
+    gate_log = snapshots["gate_log"]
+    ledger = snapshots["ledger"]
+    evidence = snapshots["evidence"]
+    verus_evidence = snapshots["verus_evidence"]
+    verus_log = snapshots["verus_log"]
+    multilane_apalache_evidence = snapshots["multilane_apalache_evidence"]
+    cross_tool_evidence = snapshots["cross_tool_evidence"]
+    harness_lock = snapshots["harness_lock"]
+    toolchain_snapshot = snapshots["toolchain"]
+    tlaps_resource_jsonl = snapshots["tlaps_resource_jsonl"]
+    tlaps_resource_summary = snapshots["tlaps_resource_summary"]
+    _validate_multilane_apalache_evidence(
+        multilane_apalache_evidence,
+        sealed["workspace_source_manifest_sha256"],
+    )
+    _validate_tlaps_resource_evidence(
+        tlaps_resource_jsonl, tlaps_resource_summary
+    )
+    if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
+        raise ReceiptError("formal harness lock is not the pinned dependency graph")
+    toolchain = _tsv_fields_from_snapshot(
+        toolchain_snapshot, "formal toolchain"
+    )
+    _require_fields(
+        toolchain,
+        {
+            "schema_version",
+            "java_path",
+            "java_sha256",
+            "tlapm_path",
+            "tlapm_sha256",
+            "tla2tools_path",
+            "tla2tools_sha256",
+            "verus_path",
+            "verus_sha256",
+            "cargo_verus_path",
+            "cargo_verus_sha256",
+            "tlc_profile",
+            "tlaps_threads",
+        },
+        "formal toolchain",
+    )
+    if (
+        toolchain["schema_version"] != "1"
+        or toolchain["tlc_profile"] != "ci"
+        or toolchain["tlaps_threads"] != "1"
+    ):
+        raise ReceiptError("formal toolchain does not describe the pinned release profile")
+    for tool in ("java", "tlapm", "tla2tools", "verus", "cargo_verus"):
+        raw_path = Path(toolchain[f"{tool}_path"])
+        if not raw_path.is_absolute():
+            raise ReceiptError(f"formal {tool} path is not absolute")
+        tool_snapshot = _bounded_evidence_snapshot(
+            raw_path,
+            f"formal {tool} tool",
+            maximum_bytes=_MAX_TOOL_BYTES,
+            require_single_link=False,
+        )
+        digest = toolchain[f"{tool}_sha256"]
+        if not _DIGEST_RE.fullmatch(digest) or tool_snapshot.sha256 != digest:
+            raise ReceiptError(f"formal {tool} tool digest mismatch")
+    log_lines = _decode_lf_text(gate_log, "formal gate log").splitlines()
+    if (
+        not log_lines
+        or log_lines[-1] != _FORMAL_FINAL_MARKER
+        or log_lines.count(_FORMAL_FINAL_MARKER) != 1
+    ):
+        raise ReceiptError("formal gate log lacks its one exact final success marker")
+    _validate_formal_snapshot_replays(
+        snapshots=snapshots,
+        checker=checker,
+        checker_environment=checker_environment,
+        repo_root=repo_root,
+    )
+    return (
+        _snapshot_contract(gate_log),
+        _snapshot_contract(ledger),
+        _snapshot_contract(evidence),
+        _snapshot_contract(verus_evidence),
+        _snapshot_contract(verus_log),
+        _snapshot_contract(multilane_apalache_evidence),
+        _snapshot_contract(cross_tool_evidence),
+        _snapshot_contract(harness_lock),
+        _snapshot_contract(toolchain_snapshot),
+        _snapshot_contract(tlaps_resource_jsonl),
+        _snapshot_contract(tlaps_resource_summary),
+    )
+
+
+# The formal-artifact component remains the canonical lexical owner; the
+# incoming resource-stream validator strengthens its runtime implementation.
+_formal_artifacts = _formal_artifacts_with_tlaps_resource_validation
 
 
 def _prebuilt_directory(path: Path, name: str) -> Path:

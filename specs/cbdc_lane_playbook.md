@@ -60,7 +60,7 @@ fault_tolerance = 1
 alias = "cbdc.bank.wholesale"
 id = 11
 manifest_hash = "0b00000000000000000000000000000000000000000000000000000000000000"
-description = "Wholesale bank onboarding lane"
+description = "Wholesale bank onboarding dataspace"
 fault_tolerance = 1
 
 [[nexus.dataspace_catalog]]

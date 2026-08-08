@@ -1,6 +1,6 @@
 #[test]
 fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
-    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
     let validators = validator_peers(2);
     ingress.close();
     ingress
@@ -32,7 +32,7 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
             depth: 3,
-            capacity: 10,
+            capacity: 12,
             oldest_age: Some(Duration::from_secs(7)),
             service_idle_age: Some(Duration::from_secs(5)),
         }
@@ -44,7 +44,7 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
             depth: 2,
-            capacity: 10,
+            capacity: 12,
             oldest_age: Some(Duration::from_secs(7)),
             service_idle_age: Some(Duration::ZERO),
         }
@@ -56,7 +56,7 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
             depth: 1,
-            capacity: 10,
+            capacity: 12,
             oldest_age: Some(Duration::from_secs(7)),
             service_idle_age: Some(Duration::ZERO),
         }
@@ -68,7 +68,7 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
             depth: 0,
-            capacity: 10,
+            capacity: 12,
             oldest_age: None,
             service_idle_age: None,
         }
@@ -77,7 +77,7 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
 
 #[test]
 fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
-    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(7);
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
     let validator = validator_peers(1).pop().expect("validator fixture");
     ingress.close();
     ingress
@@ -107,7 +107,7 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
         ingress.snapshot_at(captured_at + Duration::from_secs(2)),
         super::FairV2IngressSnapshot {
             depth: 2,
-            capacity: 7,
+            capacity: 8,
             oldest_age: Some(Duration::from_secs(7)),
             service_idle_age: Some(Duration::from_secs(2)),
         }
@@ -123,7 +123,7 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
         ingress.snapshot_at(captured_at + Duration::from_secs(3)),
         super::FairV2IngressSnapshot {
             depth: 1,
-            capacity: 7,
+            capacity: 8,
             oldest_age: Some(Duration::from_secs(8)),
             service_idle_age: Some(Duration::from_secs(1)),
         },
@@ -185,9 +185,10 @@ fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
 fn anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes() {
     const SOURCE_BYTES: usize = 1024 * 1024;
     let ingress = super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-        22,
+        28,
         7 * SOURCE_BYTES,
         SOURCE_BYTES,
+        0,
         0,
         0,
         usize::MAX,

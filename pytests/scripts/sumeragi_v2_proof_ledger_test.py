@@ -418,6 +418,105 @@ def copy_serviced_candidate_production_fixture(tmp_path: Path) -> None:
     copy_reviewed_rust_include_components(tmp_path)
 
 
+def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
+    """Copy only the Rust and TLA+ sources bound by the timeout episode."""
+
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("formal/sumeragi_v2/SumeragiV2AsyncNetwork.tla"),
+        Path(
+            "formal/sumeragi_v2/"
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
+        ),
+        Path(
+            "formal/sumeragi_v2/"
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla"
+        ),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(module.ROOT_DIR / relative, destination)
+    return tmp_path / "formal" / "sumeragi_v2"
+
+
+def approve_timeout_vote_episode_fixture_seals(
+    module, repo_root: Path, formal_dir: Path
+) -> None:
+    """Bind test-local seals so mutations must fail their semantic contracts."""
+
+    role_paths = {
+        "ingress": repo_root / "crates/iroha_core/src/sumeragi/mod.rs",
+        "runner": repo_root / "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "runtime": repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+    }
+    for key in module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256:
+        role, qualified_name = key.split("::", 1)
+        item_name = qualified_name.rsplit("::", 1)[-1]
+        source = role_paths[role].read_text(encoding="utf-8")
+        items = module.rust_items(source, item_name)
+        assert len(items) == 1, key
+        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = (
+            module._rust_item_token_sha256(items[0])
+        )
+
+    regression_groups = (
+        (
+            module._TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256,
+            role_paths["runtime"],
+        ),
+        (
+            module._TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256,
+            role_paths["ingress"],
+        ),
+        (
+            module._TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256,
+            repo_root / "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        ),
+    )
+    for seals, path in regression_groups:
+        source = path.read_text(encoding="utf-8")
+        for name in seals:
+            items = module.rust_items(source, name)
+            assert len(items) == 1, name
+            seals[name] = module._rust_item_token_sha256(items[0])
+
+    for filename, formal_seals in (
+        module._TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256.items()
+    ):
+        formal_path = formal_dir / filename
+        formal_source = formal_path.read_text(encoding="utf-8")
+        for symbol in formal_seals:
+            extracted = module._top_level_operator_body(
+                formal_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            assert extracted is not None, symbol
+            body, _ = extracted
+            formal_seals[symbol] = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+    for filename, theorem_seals in (
+        module._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256.items()
+    ):
+        formal_path = formal_dir / filename
+        formal_source = formal_path.read_text(encoding="utf-8")
+        for symbol in theorem_seals:
+            extracted = module._top_level_theorem_body(
+                formal_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            assert extracted is not None, symbol
+            body, _ = extracted
+            theorem_seals[symbol] = hashlib.sha256(
+                " ".join(body.split()).encode("utf-8")
+            ).hexdigest()
+
+
 def copy_async_source_fidelity_fixture(
     tmp_path: Path, module, *formal_names: str
 ) -> Path:
@@ -607,6 +706,64 @@ def mutate_tla_theorem(
     position = source.find(old, declaration.end(), theorem_end)
     assert position >= 0, (symbol, old)
     return source[:position] + new + source[position + len(old) :]
+
+
+def wrap_tla_theorem_proof_step(
+    source: str,
+    symbol: str,
+    anchor: str,
+) -> str:
+    """Wrap one anchored structured proof step in an invalid temporal box."""
+
+    declaration = re.search(
+        rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
+        source,
+    )
+    assert declaration is not None, symbol
+    next_declaration = re.search(
+        r"(?m)^(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|={4,}\s*$)",
+        source[declaration.end() :],
+    )
+    theorem_end = (
+        len(source)
+        if next_declaration is None
+        else declaration.end() + next_declaration.start()
+    )
+    theorem = source[declaration.end() : theorem_end]
+    assert theorem.count(anchor) == 1, (symbol, anchor)
+    anchor_offset = theorem.index(anchor)
+    labels = [
+        match
+        for match in re.finditer(r"(?m)^[ \t]*<\d+>\d+\.[ \t]*", theorem)
+        if match.end() <= anchor_offset
+    ]
+    assert labels, (symbol, anchor)
+    label = labels[-1]
+    proof_marker = re.search(
+        r"(?m)^[ \t]*BY\b",
+        theorem[label.end() :],
+    )
+    assert proof_marker is not None, (symbol, anchor)
+    step_end = label.end() + proof_marker.start()
+    assert anchor_offset < step_end, (symbol, anchor)
+    step = theorem[label.end() : step_end]
+    formula = step.rstrip()
+    trailing = step[len(formula) :]
+    mutated_theorem = (
+        theorem[: label.end()]
+        + "[]("
+        + formula
+        + ")"
+        + trailing
+        + theorem[step_end:]
+    )
+    return (
+        source[: declaration.end()]
+        + mutated_theorem
+        + source[theorem_end:]
+    )
 
 
 def delete_tla_theorem_token(source: str, symbol: str, token: str) -> str:
@@ -9580,8 +9737,8 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
         ),
         (
             "retained_candidate_owners",
-            "Some(existing) if existing != ownership.owner() => {",
-            "Some(existing) if existing == ownership.owner() => {",
+            "Some(existing) if existing != ownership => Err(",
+            "Some(existing) if existing == ownership => Err(",
             "candidate owner inventory must reject semantic owner replacement",
         ),
         (
@@ -9593,12 +9750,10 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             "durable Apply tombstone must retain the same candidate owner",
         ),
         (
-            "retain_effect_batch",
-            """            if candidate_semantic_identity
-                .as_ref()""",
-            """            if false && candidate_semantic_identity
-                .as_ref()""",
-            "candidate owner replacement must fail before refinement evidence",
+            "retain_effect_batch_at_frontier",
+            "                && incumbent != &*evidence\n",
+            "                && incumbent == &*evidence\n",
+            "same semantic candidate lifecycle must reject exact owner replacement before refinement",
         ),
         (
             "begin_apply",
@@ -9718,7 +9873,7 @@ def test_effect_capacity_production_source_fidelity_is_green(tmp_path: Path) -> 
             "retained_dispatch_allows_network_ingress",
             "|| !Self::network_ingress_requires_reducer_order(payload)",
             "&& !Self::network_ingress_requires_reducer_order(payload)",
-            "retained dispatch transport-completion bypass",
+            "retained dispatch transport completion and certified fence-escape policy",
         ),
         (
             "can_admit_network_message_with_ingress_ownership",
@@ -10078,6 +10233,20 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "candidate binding projection must independently commit the typed statement before its semantic hash",
         ),
         (
+            "runtime_effect_candidate_binding_projection_hash",
+            (),
+            "projection.push(parts.effect_position);",
+            "projection.push(parts.effect_count);",
+            "candidate binding projection must independently commit the typed statement before its semantic hash",
+        ),
+        (
+            "projection_parts",
+            _RUNTIME_BINDING_IMPL,
+            "candidate_statement: self.candidate_statement,",
+            "candidate_statement: None,",
+            "candidate binding validation must borrow every immutable projection field exactly once",
+        ),
+        (
             "new",
             _RUNTIME_BINDING_IMPL,
             "|| candidate.statement.is_some())",
@@ -10090,6 +10259,20 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "candidate.statement,",
             "None,",
             "candidate binding construction must retain the validated typed statement",
+        ),
+        (
+            "new",
+            _RUNTIME_BINDING_IMPL,
+            "let binding = Self {",
+            "let mut binding = Self {",
+            "candidate binding construction must not mutate a partially initialized binding",
+        ),
+        (
+            "new",
+            _RUNTIME_BINDING_IMPL,
+            "            projection_hash,\n        };",
+            "            projection_hash: iroha_crypto::Hash::new([]),\n        };",
+            "candidate binding construction must publish one immutable fully hashed binding",
         ),
         (
             "validate_exact",
@@ -10177,6 +10360,41 @@ _RUNTIME_TAGGED_COMMAND_IMPL = (
             "retained.first() != Some(ownership.owner())",
             "retained.first() == Some(ownership.owner())",
             "in-flight body completion coalescence must join and compare its one exact runtime owner",
+        ),
+        (
+            "resolve_body_pipeline_completion_owner",
+            _RUNTIME_SERIALIZED_IMPL,
+            """                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                    if retained_owner != *ownership.owner() {""",
+            """                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                    if false && retained_owner != *ownership.owner() {""",
+            "same or stale terminal retries must reject a foreign owner while an authority upgrade remains separately reviewed",
+        ),
+        (
+            "plan_body_pipeline_candidate_terminal",
+            _RUNTIME_SERIALIZED_IMPL,
+            ".map(|plan| plan.adopt_effect_ownership(effect, ownership))",
+            ".map(|_| Ok(ownership.clone()))",
+            "body-terminal plan must adopt the incumbent owner without committing runtime state",
+        ),
+        (
+            "commit_body_pipeline_candidate_terminals",
+            _RUNTIME_SERIALIZED_IMPL,
+            """            plans.push(plan);
+        }
+        let prepared = self
+            .prepare_body_pipeline_completion_refinements(&plans)
+            .map_err(|error| error.to_string())?;
+        self.commit_prepared_body_pipeline_completion_refinements(prepared)
+            .map_err(|error| error.to_string())""",
+            """            let prepared = self
+                .prepare_body_pipeline_completion_refinements(std::slice::from_ref(&plan))
+                .map_err(|error| error.to_string())?;
+            self.commit_prepared_body_pipeline_completion_refinements(prepared)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())""",
+            "body-terminal batch commit must revalidate every target, prepare atomically, and then commit the checked authorities",
         ),
         (
             "enqueue_body_pipeline_completion_with_owner",
@@ -10455,6 +10673,12 @@ def test_effect_capacity_adapter_tombstone_fidelity_rejects_owner_mutants(
             "candidate_statement: Option<RuntimeCandidateSemanticStatement>,",
             "candidate_statement: Option<iroha_crypto::Hash>,",
             "effect-to-candidate binding must store the typed statement independently of its hashes",
+        ),
+        (
+            "RuntimeEffectCandidateBindingProjectionParts",
+            "candidate_statement: Option<RuntimeCandidateSemanticStatement>,",
+            "candidate_statement: Option<iroha_crypto::Hash>,",
+            "candidate binding projection parts must borrow exactly the complete immutable preimage",
         ),
         (
             "TaggedCommand",
@@ -10787,6 +11011,22 @@ def test_quantitative_fixed_corridor_contract_is_static_and_non_vacuous(
         ),
         (
             "SumeragiV2AsyncCausalWorkBudgetProofs",
+            "AsyncCausalEpisodeExactCandidateOccurrenceTokens",
+            "  UNION {\n"
+            "    {<<candidate, token>>:\n"
+            "       token\n"
+            "         \\in 1..AsyncCausalExactRemainingOccurrenceBudget("
+            "candidate.kind)}:\n"
+            "    candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal)}\n",
+            "  {<<candidate, token>>:\n"
+            "     candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal),\n"
+            "     token \\in 1..AsyncCausalExactRemainingOccurrenceBudget("
+            "candidate.kind)}\n",
+        ),
+        (
+            "SumeragiV2AsyncCausalWorkBudgetProofs",
             "AsyncCausalEpisodeLifecycleCutOwned",
             "    /\\ record.origin = origin\n",
             "",
@@ -10939,6 +11179,22 @@ def test_quantitative_fixed_corridor_contract_is_static_and_non_vacuous(
             "1..AdequateLeaderFixedCandidateRemainingActionCredit(candidate)",
             "1..AdequateLeaderFixedCandidateSuccessorTailActionCredit("
             "candidate.kind)",
+        ),
+        (
+            "SumeragiV2AdequateLeaderFixedCorridorClockProofs",
+            "AdequateLeaderFixedCutCumulativeActionTokens",
+            "  UNION\n"
+            "    {{<<candidate, token>>:\n"
+            "        token\n"
+            "          \\in 1..AdequateLeaderFixedCandidateRemainingActionCredit("
+            "candidate)}:\n"
+            "       candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal)}\n",
+            "  {<<candidate, token>>:\n"
+            "     candidate \\in AsyncCausalEpisodeCandidates("
+            "node, cutoffOrdinal),\n"
+            "     token \\in 1..AdequateLeaderFixedCandidateRemainingActionCredit("
+            "candidate)}\n",
         ),
         (
             "SumeragiV2AdequateLeaderFixedCorridorClockProofs",
@@ -11353,6 +11609,15 @@ def test_quantitative_fixed_corridor_interface_mutations_fail_closed(
         ),
         (
             "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
+            "  \\A origin:\n"
+            "    \\A node \\in ValidatorIds, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "  \\A node \\in ValidatorIds, origin, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "must state only",
+        ),
+        (
+            "AsyncCausalEpisodeOwnedLifecycleCutCannotReplenish",
             "   AsyncSharedSchedulerHighWatermarkIsMonotone,\n",
             "",
             "must retain reviewed proof dependencies",
@@ -11364,10 +11629,28 @@ def test_quantitative_fixed_corridor_interface_mutations_fail_closed(
             "must retain reviewed proof dependencies",
         ),
         (
+            "AsyncCausalEpisodeOwnedLifecycleServeCutCannotReplenish",
+            "  \\A origin:\n"
+            "    \\A node \\in ValidatorIds, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "  \\A node \\in ValidatorIds, origin, "
+            "cutoffOrdinal \\in Nat \\ {0}:\n",
+            "must state only",
+        ),
+        (
             "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
             "   AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget,\n",
             "",
             "must retain reviewed proof dependencies",
+        ),
+        (
+            "AsyncCausalEpisodeOwnedCutServiceConsumesExactOccurrenceBudget",
+            "  \\A origin:\n"
+            "    \\A node \\in ValidatorIds,\n"
+            "       cutoffOrdinal \\in Nat \\ {0},\n",
+            "  \\A node \\in ValidatorIds, origin,\n"
+            "     cutoffOrdinal \\in Nat \\ {0},\n",
+            "must state only",
         ),
     ),
 )
@@ -11762,9 +12045,9 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
     (
         (
             "pop_next_with_ownership",
-            "self.class_readiness_at_lifecycle(oldest_lifecycle_ordinal)",
             "self.class_readiness()",
-            "runtime class arbitration is restricted to the oldest live lifecycle",
+            "(false, false, false)",
+            "runtime class arbitration sees every globally ready bounded service class",
         ),
         (
             "accept_driver_dispatch",
@@ -11773,16 +12056,16 @@ def test_fair_ingress_live_control_predecessor_contract_rejects_weakening(
             "Busy deferral transfers rather than replaces the predecessor owner",
         ),
         (
-            "minimum_active_lifecycle_ordinal",
-            "for owner in self.deferred_lifecycle_ownership.values()",
-            "for owner in [].iter()",
+            "minimum_active_lifecycle_ordinal_excluding",
+            "observe(owner.owner())?;",
+            "let _ = owner;",
             "global runtime predecessor cut includes Busy-deferred ownership",
         ),
         (
             "scheduler_arbitration_inputs",
-            "fifo_minimum.is_some() && fifo_minimum == global_minimum",
-            "fifo_minimum.is_some()",
-            "runtime FIFO is ready only at the global live-lifecycle minimum",
+            "let fifo_ready = fifo_minimum.is_some();",
+            "let fifo_ready = false;",
+            "passive lifecycle capabilities cannot suppress runnable FIFO classes",
         ),
     ),
 )
@@ -13775,7 +14058,7 @@ def test_replenishment_regression_source_seal_covers_registered_corpus(
     assert len(module.REPLENISHMENT_REGRESSION_MUTATION_SHA256) == 25
     assert module.ADEQUATE_LEADER_RETAINED_PRODUCER_RELEASE_SOURCE_SHA256 == {
         "SumeragiV2AdequateLeaderRetainedProducerClosureProofs.tla": (
-            "74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"
+            "00d100b5d15a29984794367d88c0de070207276168cd980c22faa92b91029a8e"
         ),
     }
     assert (
@@ -13899,7 +14182,7 @@ def test_replenishment_regression_source_seal_mutations_fail_closed(
         elif mutation == "runner-proof-sha-weakening":
             old = (
                 'readonly RETAINED_PRODUCER_PROOF_SHA256="'
-                '74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"'
+                '00d100b5d15a29984794367d88c0de070207276168cd980c22faa92b91029a8e"'
             )
             assert source.count(old) == 1
             source = source.replace(
@@ -14599,6 +14882,13 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn drain_v2_ingress(",
+            ".serve_historical_body(kura, request, &sender, local_key)",
+            ".serve_historical_body(kura, context_store, request, &sender, local_key)",
+            "historical ingress routing omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
             "executor.accept_certified_body_response_with_ingress_ownership(\n"
             "                    response,\n"
             "                    &sender,\n"
@@ -14635,8 +14925,8 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn run_inner(",
-            "let (receipt, artifact, exact_output_handoff) = finality;",
-            "let (receipt, artifact) = finality;",
+            "let (receipt, artifact, lane_work, mut finalized_services) = finality;",
+            "let (receipt, artifact, _lane_work, mut finalized_services) = finality;",
             "successor startup must carry interrupted-tip or admitted discovered "
             "CommitQC recovery and clear ordinary live finality",
         ),
@@ -15063,6 +15353,56 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "startup replay-owner handoff",
         ),
         (
+            "runner_non_validator_requests_locked_body",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "run_inner",
+            "if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()",
+            "if lock_outcome == GlobalBodyLockOutcome::Inserted",
+            "locked-body refinement evidence must be requested only by a local validator at exact first admission",
+        ),
+        (
+            "runner_recovery_request_depends_on_leader",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "locked_body_recovery_plan",
+            ".then(|| directive.locked_body())",
+            ".then(|| {\n"
+            "            (directive.leader() == local_validator)\n"
+            "                .then(|| directive.locked_body())\n"
+            "                .flatten()\n"
+            "        })",
+            "locked-body acquisition must project the exact undecided lock independently of reproposal eligibility",
+        ),
+        (
+            "runner_reproposal_drops_owner_and_capacity_gates",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "locked_body_recovery_plan",
+            "may_repropose: request.is_some()\n"
+            "            && directive.leader() == local_validator\n"
+            "            && attempted != Some(owner)\n"
+            "            && can_admit_local_proposal,",
+            "may_repropose: request.is_some(),",
+            "locked-body reproposal eligibility must retain leader, owner, and capacity gates without suppressing acquisition",
+        ),
+        (
+            "runner_lane_duty_depends_on_successor_membership",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "local_consensus_duties",
+            "&& directive.locked_body().is_none())",
+            "&& directive.locked_body().is_none()\n"
+            "            && global_validator.is_some())",
+            "lane-author duty must remain independent of successor-global validator membership",
+        ),
+        (
+            "runner_lane_duty_ignores_lock_or_decision",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "local_consensus_duties",
+            "directive.decided_subject().is_none()\n"
+            "            && directive.locked_body().is_none()",
+            "directive.decided_subject().is_none()\n"
+            "            || directive.locked_body().is_none()",
+            "locks and decisions suppress fresh work",
+        ),
+        (
             "executor_skips_one_shot_producer_reservation",
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "can_schedule_local_proposal",
@@ -15074,9 +15414,79 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "runner_replacement_bypasses_one_shot_producer_reservation",
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "schedule_local_proposal",
-            "executor.can_schedule_local_proposal()?",
-            "executor.can_admit_local_proposal()",
+            "let recovery_plan = locked_body_recovery_plan(\n"
+            "        directive,\n"
+            "        local_validator,\n"
+            "        proposal_state.attempted,\n"
+            "        executor.can_schedule_local_proposal()?,\n"
+            "    );",
+            "let recovery_plan = locked_body_recovery_plan(\n"
+            "        directive,\n"
+            "        local_validator,\n"
+            "        proposal_state.attempted,\n"
+            "        true,\n"
+            "    );",
             "every locked-load and fresh candidate observation must retain the serialized one-shot producer gate",
+        ),
+        (
+            "runner_successor_observer_suppresses_lane_duty",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "schedule_local_proposal",
+            "if let Some(active_view) = duties.autonomous_lane_view {",
+            "if duties.global_validator.is_some()\n"
+            "        && let Some(active_view) = duties.autonomous_lane_view\n"
+            "    {",
+            "lane-author service must precede the successor-global observer return",
+        ),
+        (
+            "runner_recovery_request_depends_on_reproposal_eligibility",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "schedule_local_proposal",
+            "if let Some((tag, locked_round, locked)) = recovery_plan.request {",
+            "if recovery_plan.may_repropose\n"
+            "        && let Some((tag, locked_round, locked)) = recovery_plan.request\n"
+            "    {",
+            "locked-body acquisition must remain independent of reproposal gates",
+        ),
+        (
+            "runner_loaded_body_inverts_reproposal_eligibility",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "schedule_local_proposal",
+            "if !current_recovery_plan.may_repropose {",
+            "if current_recovery_plan.may_repropose {",
+            "loaded locked-body reproposal must recheck the current leader, owner, and capacity gates",
+        ),
+        (
+            "runner_drops_exact_origin_recovery_handoff",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "schedule_local_proposal",
+            "executor.retain_locked_body_for_recovery(",
+            "executor.retain_locked_body_for_recovery_for_test(",
+            "reproposal must retain the exact-origin recovery carrier before submitting the unchanged locked body",
+        ),
+        (
+            "runner_recovery_regression_self_compares_request",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "locked_body_recovery_is_independent_of_reproposal_gates",
+            "assert_eq!(plan.request, expected_request);",
+            "assert_eq!(plan.request, plan.request);",
+            "the locked-body regression must separate unconditional exact acquisition from leader/owner/capacity reproposal gates",
+        ),
+        (
+            "runner_lane_duty_regression_accepts_no_work",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "lane_production_duty_survives_successor_global_roster_removal",
+            "autonomous_lane_view: Some(tag.view()),",
+            "autonomous_lane_view: None,",
+            "the lane-duty regression must retain lane-author work after successor-global roster removal",
+        ),
+        (
+            "runner_replay_regression_accepts_foreign_subject",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+            'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
+            "let foreign_lock = directive(Some(subject), None);",
+            "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles",
         ),
         (
             "wal_high_subject",
@@ -19577,7 +19987,7 @@ def test_async_lifecycle_rejects_independent_service_store_capacity(
             "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
             (
                 "/\\ AsyncFreshServeIngressSchedulerReservationMatchesIn(\n"
-                "               compactedState)"
+                "               leaderWireState)"
             ),
             "/\\ TRUE",
         ),
@@ -19588,6 +19998,30 @@ def test_async_lifecycle_rejects_independent_service_store_capacity(
                 "               serveIngressState)"
             ),
             "AsyncCandidateLifecycleReservationsAvailableIn(compactedState)",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            (
+                "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+                "               ordinaryCarrierState)"
+            ),
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(candidateServiceState)",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            (
+                "/\\ timeoutState.timeoutRecoveryEpisodes =\n"
+                "               resetState.timeoutRecoveryEpisodes"
+            ),
+            "/\\ TRUE",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            (
+                "/\\ asyncControlServiceState'.timeoutRecoveryEpisodes =\n"
+                "               timeoutVoteState.timeoutRecoveryEpisodes"
+            ),
+            "/\\ TRUE",
         ),
         (
             "AsyncIgnoredIngressEpisodeCannotConsumeLifecycleCapacity",
@@ -21186,22 +21620,70 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "recoverable pre-FIFO clock reservation gate declaration",
         ),
         (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.admission_ordinal() <= physical_ordinal",
+            "strict retained-token physical-replay classifier declaration",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.scheduler_ordinal() < physical_ordinal",
+            "strict retained-token physical-replay classifier declaration",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "(Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict)",
+            "(Some(_), None) | (None, Some(_)) => Ok(true)",
+            "strict retained-token physical-replay classifier declaration",
+        ),
+        (
             "enqueue_network_with_ingress_ownership",
-            "match self.clock_owner_reservation_blocks(owner)",
-            "match Ok(false)",
-            "authenticated post-cut replay admission gate declaration",
+            "if blockers.any() && !certified_timeout_escape && !timeout_vote_episode_escape {",
+            "if blockers.any() && !certified_timeout_escape {",
+            "authenticated strict physical-replay and finite TimeoutVote episode admission gate",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "match ingress_ownership.is_physical_leader_wire_replay()",
+            "match Ok(true)",
+            "authenticated strict physical-replay and finite TimeoutVote episode admission gate",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "self.timeout_recovery_episode_allows_clock_blockers(blockers)",
+            "Ok(false)",
+            "authenticated strict physical-replay and finite TimeoutVote episode admission gate",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "wire_payload_is_direct_certificate_recovery_shape(\n            authenticated.payload(),\n        )",
+            "wire_payload_is_certified_fence_escape(\n            authenticated.payload(),\n        )",
+            "authenticated strict physical-replay and finite TimeoutVote episode admission gate",
         ),
         (
             "can_admit_pre_runtime_leader_wire",
             "if self.fail_closed {",
             "if false {",
-            "pre-runtime leader-wire physical-cut and clock-owner gate declaration",
+            "pre-runtime leader-wire physical-cut, direct certificate replay, and finite TimeoutVote episode gate",
         ),
         (
             "can_admit_pre_runtime_leader_wire",
-            "match self.clock_owner_reservation_blocks_occurrence(",
-            "match Ok(false).and(",
-            "pre-runtime leader-wire physical-cut and clock-owner gate declaration",
+            "self.timeout_recovery_episode_allows_clock_blockers(blockers),\n                    Ok(true)",
+            "self.timeout_recovery_episode_allows_clock_blockers(blockers),\n                    Ok(false)",
+            "pre-runtime leader-wire physical-cut, direct certificate replay, and finite TimeoutVote episode gate",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "token.admission_ordinal() < source_physical_ordinal",
+            "token.admission_ordinal() <= source_physical_ordinal",
+            "pre-runtime leader-wire physical-cut, direct certificate replay, and finite TimeoutVote episode gate",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "wire_payload_is_direct_certificate_recovery_shape(\n                        &runtime_message.payload,\n                    )",
+            "wire_payload_is_certified_fence_escape(\n                        &runtime_message.payload,\n                    )",
+            "pre-runtime leader-wire physical-cut, direct certificate replay, and finite TimeoutVote episode gate",
         ),
         (
             "can_admit_network_message_with_ingress_ownership",
@@ -21221,6 +21703,96 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             "same_token_pre_runtime.runtime_physical_cut = Some(0);",
             "pre-runtime exact-retry coalescing regression declaration",
         ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(fresh_token.admission_ordinal(), fresh_physical_ordinal);",
+            "assert_ne!(fresh_token.admission_ordinal(), fresh_physical_ordinal);",
+            "the fresh post-cut carrier must retain equal token and physical ordinals",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            !runtime.can_admit_network_message_with_ingress_ownership(&message, &fresh_runtime,),",
+            "assert!(\n            runtime.can_admit_network_message_with_ingress_ownership(&message, &fresh_runtime,),",
+            "the regression must reject the fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "Err(NetworkIngressError::Backpressure(EnqueueError::Full))",
+            "Ok(runtime.round_tag())",
+            "the mutating seam must backpressure a fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "!runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "fresh certified backpressure must remain recoverable",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "fresh_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "fresh_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "the fresh case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "            Ok(false),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "the fresh negative case must exercise an active clock reservation",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh);",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh + 1);",
+            "fresh backpressure must publish no queue, receipt, or terminal state",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_receipt.token().admission_ordinal() < restored_physical_ordinal",
+            "restored_receipt.token().admission_ordinal() <= restored_physical_ordinal",
+            "the regression must admit only a strictly later retained replay",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "assert!(\n            !runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "the regression must admit the retained replay through fair ingress",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "the retained case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "            Ok(false),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "the positive replay case must exercise the active reservation exception",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_none()),",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_some()),",
+            "the replay must publish exactly one ordinary authenticated Admit owner",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "RuntimeSelectedOwnerKind::Timeout",
+            "RuntimeSelectedOwnerKind::Fifo",
+            "the frozen timeout must retain the first serialized turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 1",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 0",
+            "the restored TC must advance the view after the timeout turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "terminals.len(),\n            1,",
+            "terminals.len(),\n            0,",
+            "the restored TC lifecycle must terminalize exactly once",
+        ),
     )
     for item_name, old, new, expected_error in mutations:
         runtime_path.write_text(
@@ -21235,6 +21807,2777 @@ def test_runtime_clock_reservation_rejects_post_cut_fifo_mutations(
             errors,
         )
         runtime_path.write_text(canonical, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    (
+        "item_name",
+        "old",
+        "new",
+        "digest_map_name",
+        "digest_key",
+        "expected_error",
+    ),
+    (
+        (
+            "enqueue_network_with_ingress_ownership",
+            "episode.admitted_timeout_vote_owners = prospective;",
+            "let _ = prospective;",
+            "_AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256",
+            "enqueue_network_with_ingress_ownership",
+            "the prospective map may publish only after enqueue and durable Runtime-receipt registration",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "token.admission_ordinal() < source_physical_ordinal",
+            "token.admission_ordinal() <= source_physical_ordinal",
+            "_AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256",
+            "can_admit_pre_runtime_leader_wire",
+            "pre-runtime admission must use the same strict direct-certificate replay and finite TimeoutVote exceptions as the mutating gate",
+        ),
+        (
+            "can_admit_network_message_with_ingress_ownership",
+            "Ok(true) => return false,",
+            "Ok(true) => return true,",
+            "_AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256",
+            "can_admit_network_message_with_ingress_ownership",
+            "fair-ingress post-cut replay preflight gate",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "let post_snapshot_source = context.roster[2].validator.clone();",
+            "let post_snapshot_source = context.roster[1].validator.clone();",
+            "_PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256",
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "the TC regression must use distinct restored and real post-snapshot validator sources",
+        ),
+    ),
+)
+def test_runtime_clock_reservation_semantics_survive_pending_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    digest_map_name: str,
+    digest_key: str,
+    expected_error: str,
+) -> None:
+    """Pending replay seals cannot hide a semantic mutation behind a new digest."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    mutate_rust_item_source(module, runtime_path, item_name, old, new)
+    mutated_items = module.rust_items(
+        runtime_path.read_text(encoding="utf-8"), item_name
+    )
+    assert len(mutated_items) == 1, item_name
+    digest = module._rust_item_token_sha256(mutated_items[0])
+    getattr(module, digest_map_name)[digest_key] = digest
+    if item_name == "enqueue_network_with_ingress_ownership":
+        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
+            "runtime::enqueue_network_with_ingress_ownership"
+        ] = digest
+    elif (
+        item_name
+        == "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner"
+    ):
+        module._TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256[item_name] = digest
+
+    errors = module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("item_name", "old", "new", "expected_error"),
+    (
+        (
+            "enqueue_network_with_ingress_ownership",
+            "self.output_guard.activate_restart_required();",
+            "let _ = self.output_guard.restart_required();",
+            "public ownership-aware network admission and fail-stop latch",
+        ),
+        (
+            "can_admit_network_message_with_ingress_ownership",
+            "(retained_dispatch_allows || timeout_vote_recovery_episode)",
+            "retained_dispatch_allows",
+            "public ownership-aware retained-debt capacity preflight",
+        ),
+    ),
+)
+def test_effect_capacity_semantics_survive_pending_digest_refresh(
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Executor wrappers remain semantic contracts after refreshing their seals."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    mutate_rust_item_source(module, effects_path, item_name, old, new)
+    mutated_items = module.rust_items(
+        effects_path.read_text(encoding="utf-8"), item_name
+    )
+    assert len(mutated_items) == 1, item_name
+    module._EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256[
+        item_name
+    ] = module._rust_item_token_sha256(mutated_items[0])
+
+    errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "let redispatch = if runtime_terminal_incumbent {\n"
+            "                        false",
+            "let redispatch = if runtime_terminal_incumbent {\n"
+            "                        true",
+            "runtime-owned terminals stutter",
+        ),
+        (
+            ".adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
+            ".adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)",
+            "Fetch authority upgrades must adopt, re-prove, and publish",
+        ),
+        (
+            ".adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)",
+            ".adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
+            "Store and Validate authority upgrades must adopt and re-prove",
+        ),
+    ),
+)
+def test_retained_candidate_retry_semantics_survive_item_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Refreshing the FIFO item seal cannot hide retry-owner drift."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    item_name = "retain_effect_batch_at_frontier"
+    mutate_rust_item_source(module, effects_path, item_name, old, new)
+    items = module.rust_items(effects_path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_exact_owner_replacement_gate_precedes_refinement_after_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """Refreshing both item seals cannot move owner rejection after refinement."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    item_name = "retain_effect_batch_at_frontier"
+    owner_gate = """            if let Some(incumbent) = exact_incumbent.as_ref()
+                && incumbent != &*evidence
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one semantic candidate lifecycle attempted exact owner replacement"
+                        .to_owned(),
+                ));
+            }
+"""
+    refinement = (
+        "            let _authorized_effect_candidate = checked.into_projection();\n"
+    )
+    mutate_rust_item_source(module, effects_path, item_name, owner_gate, "")
+    mutate_rust_item_source(
+        module,
+        effects_path,
+        item_name,
+        refinement,
+        refinement + owner_gate,
+    )
+    items = module.rust_items(effects_path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1
+    digest = module._rust_item_token_sha256(items[0])
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = digest
+    module._TOTAL_GATE_CALL_ITEM_SHA256["effect_candidate_retain"] = digest
+
+    errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
+
+    assert any("reviewed pre-refinement order" in error for error in errors), errors
+
+
+def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """A valid first terminal cannot commit before a malformed later effect."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    item_name = "retain_effect_batch_at_frontier"
+    terminal_schedule = """            if runtime_terminal_incumbent {
+                runtime_terminal_commits.push(index);
+            }
+"""
+    early_terminal_commit = """            if runtime_terminal_incumbent {
+                self.runtime
+                    .commit_body_pipeline_candidate_terminals(&[(effect, &*evidence)])
+                    .map_err(EffectExecutorError::Runtime)?;
+            }
+"""
+    mutate_rust_item_source(
+        module,
+        effects_path,
+        item_name,
+        terminal_schedule,
+        terminal_schedule + early_terminal_commit,
+    )
+    items = module.rust_items(effects_path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1
+    digest = module._rust_item_token_sha256(items[0])
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = digest
+    module._TOTAL_GATE_CALL_ITEM_SHA256["effect_candidate_retain"] = digest
+
+    errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
+
+    assert any(
+        "deferred terminal scheduling, and atomic batch commit must retain the reviewed pre-refinement order"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("mutation", "checker_name", "expected_error"),
+    (
+        (
+            "reply_route_geometry",
+            "exact_output",
+            "runner construction must pass the exact P2P source geometry into lane work",
+        ),
+        (
+            "watchdog_poll",
+            "local_runner",
+            "every serialized height-loop iteration must poll the liveness watchdog",
+        ),
+        (
+            "ordinary_ingress_cut",
+            "local_runner",
+            "the ordinary height path must invoke the bounded serialized runtime against the live ingress high-watermark",
+        ),
+        (
+            "retained_response_pacemaker",
+            "local_runner",
+            "the retained response episode must receive exactly one direct typed pacemaker turn",
+        ),
+        (
+            "selected_serve_pacemaker",
+            "local_runner",
+            "selected Serve must keep certificate escape inside",
+        ),
+        (
+            "pending_recovery_wake_bound",
+            "local_runner",
+            "pending-tip recovery must wait only for the lesser of its remaining deadline",
+        ),
+        (
+            "exact_admission_timed_continue",
+            "local_runner",
+            "all four explicit serialized height-loop continue edges must be finitely timed",
+        ),
+        (
+            "serve_ingress_binding",
+            "exact_output",
+            "the runner must bind Serve and leader-wire ingress to one joint per-height queue owner",
+        ),
+        (
+            "locked_body_first_admission",
+            "locked_body",
+            "locked-body refinement evidence must be requested only by a local validator at exact first admission",
+        ),
+        (
+            "retained_response_timeout_turn",
+            "retained_response",
+            "fresh certificate credit must remain conditional while the independent TimeoutVote drain",
+        ),
+    ),
+)
+def test_run_inner_semantics_survive_all_pending_alias_digest_refreshes(
+    tmp_path: Path,
+    mutation: str,
+    checker_name: str,
+    expected_error: str,
+) -> None:
+    """Every pending run-loop alias retains an independent semantic mutation."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    if mutation == "reply_route_geometry":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "network.reply_route_source_capacity(),",
+            "network.reply_route_source_capacity().saturating_sub(1),",
+        )
+    elif mutation == "watchdog_poll":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "liveness_watchdog.poll(Instant::now());",
+            "let _watchdog_now = Instant::now();",
+        )
+    elif mutation == "ordinary_ingress_cut":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "advance_executor(\n"
+            "                    &block_rx,\n"
+            "                    &mut executor,\n"
+            "                    &mut services,\n"
+            "                    control_queue_capacity,\n"
+            "                )?;",
+            "advance_executor(\n"
+            "                    &mut executor,\n"
+            "                    &mut services,\n"
+            "                    control_queue_capacity,\n"
+            "                )?;",
+        )
+    elif mutation == "retained_response_pacemaker":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;",
+            "let _ = (&block_rx, &mut executor, &mut services);",
+        )
+    elif mutation == "selected_serve_pacemaker":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "service_certified_serve_barrier_liveness_turn(",
+            "service_certified_serve_barrier_liveness_turn_for_test(",
+        )
+    elif mutation == "pending_recovery_wake_bound":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
+            "wake_rx.recv_timeout(remaining)",
+        )
+    elif mutation == "exact_admission_timed_continue":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "let Some(_certified_serve_producer_episode) = services\n"
+            "                .try_begin_certified_serve_producer_episode()\n"
+            "                .map_err(V2RunnerError::Service)?\n"
+            "            else {\n"
+            "                // Exact admission won the queue-locked race after the\n"
+            "                // observation above. Restart at the dedicated target turn.\n"
+            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "                continue;\n"
+            "            };",
+            "let Some(_certified_serve_producer_episode) = services\n"
+            "                .try_begin_certified_serve_producer_episode()\n"
+            "                .map_err(V2RunnerError::Service)?\n"
+            "            else {\n"
+            "                continue;\n"
+            "            };",
+        )
+    elif mutation == "serve_ingress_binding":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "HeightIngressBindings::new(",
+            "HeightIngressBindings::new_for_test(",
+        )
+    elif mutation == "locked_body_first_admission":
+        mutate_rust_item_source(
+            module,
+            runner_path,
+            "run_inner",
+            "if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()",
+            "if lock_outcome == GlobalBodyLockOutcome::Inserted",
+        )
+    else:
+        source = runner_path.read_text(encoding="utf-8")
+        region_start = source.index("                if response_backpressured {")
+        region_end = source.index(
+            "                    executor.reconcile_retained_response_certified_fence_escape_phase();",
+            region_start,
+        )
+        region = source[region_start:region_end]
+        old = "V2IngressDrainMode::TimeoutVoteEpisode"
+        assert region.count(old) == 1
+        mutated_region = region.replace(old, "V2IngressDrainMode::Ordinary", 1)
+        runner_path.write_text(
+            source[:region_start] + mutated_region + source[region_end:],
+            encoding="utf-8",
+        )
+
+    mutated_items = module.rust_items(
+        runner_path.read_text(encoding="utf-8"), "run_inner"
+    )
+    assert len(mutated_items) == 1
+    digest = module._rust_item_token_sha256(mutated_items[0])
+    module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256["run_inner"] = digest
+    module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256["run_inner"] = digest
+    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256["run_inner"] = digest
+    module._PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
+        "runner::run_inner"
+    ] = digest
+    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256["runner::run_inner"] = digest
+    module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256["run_inner"] = digest
+    module._SERVICED_CANDIDATE_RUNNER_ITEM_SHA256["run_inner"] = digest
+    module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
+
+    if checker_name == "local_runner":
+        errors = module._local_runner_service_contract_source_fidelity_errors(
+            module.load_ledger(),
+            repo_root=tmp_path,
+            formal_dir=formal_dir,
+        )
+    elif checker_name == "retained_response":
+        errors = module._retained_response_escape_latch_source_fidelity_errors(
+            tmp_path
+        )
+    elif checker_name == "locked_body":
+        errors = module._locked_body_reproposal_source_fidelity_errors(
+            module.FORMAL_DIR, tmp_path
+        )
+    else:
+        errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "checker_name", "expected_error"),
+    (
+        (
+            "active_leader_wire_carriers.into_iter().next()",
+            "active_leader_wire_carriers.into_iter().last()",
+            "leader_wire",
+            "the active leader-wire turn must be the minimum physical carrier",
+        ),
+        (
+            "if durable_ordinals != active_ordinals",
+            "if false",
+            "leader_wire",
+            "complete durable and in-memory logical Ingress owner sets",
+        ),
+        (
+            "if !leader_wire_carrier_ordinals.is_empty()",
+            "if false",
+            "leader_wire",
+            "carrier correspondence must be total before ordering by physical ordinal",
+        ),
+        (
+            "let dependency_bypass = !ingress_barrier_allows",
+            "let dependency_bypass = ingress_barrier_allows",
+            "fair_ingress",
+            "certified escape and the closed timeout-vote episode must remain distinct",
+        ),
+    ),
+)
+def test_classified_ingress_semantics_survive_all_pending_alias_digest_refreshes(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    checker_name: str,
+    expected_error: str,
+) -> None:
+    """The shared selector cannot hide physical-order or barrier drift in an alias."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    ingress_path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    mutate_rust_item_source(
+        module,
+        ingress_path,
+        "try_recv_if_at_checked_classified",
+        old,
+        new,
+    )
+    mutated_items = module.rust_items(
+        ingress_path.read_text(encoding="utf-8"),
+        "try_recv_if_at_checked_classified",
+    )
+    assert len(mutated_items) == 1
+    digest = module._rust_item_token_sha256(mutated_items[0])
+    module._LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+        "try_recv_if_at_checked_classified"
+    ] = digest
+    module._PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256[
+        "try_recv_if_at_checked_classified"
+    ] = digest
+    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
+        "ingress::try_recv_if_at_checked_classified"
+    ] = digest
+
+    if checker_name == "leader_wire":
+        errors = (
+            module._leader_wire_physical_ingress_production_source_fidelity_errors(
+                tmp_path
+            )
+        )
+    else:
+        errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
+            tmp_path
+        )
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_drain_v2_ingress_semantics_survive_all_pending_alias_digest_refreshes(
+    tmp_path: Path,
+) -> None:
+    """A refreshed drain seal still proves exact-Serve runtime suppression."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_rust_item_source(
+        module,
+        runner_path,
+        "drain_v2_ingress",
+        "if turn == OuterIngressTurn::Runtime {",
+        "if false {",
+    )
+    mutated_items = module.rust_items(
+        runner_path.read_text(encoding="utf-8"), "drain_v2_ingress"
+    )
+    assert len(mutated_items) == 1
+    digest = module._rust_item_token_sha256(mutated_items[0])
+    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256[
+        "drain_v2_ingress"
+    ] = digest
+    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
+        "runner::drain_v2_ingress"
+    ] = digest
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(
+        "an admitted or provisional exact Serve must suppress every later runtime-producer turn"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            ".try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound|",
+            ".try_recv_if_checked_retiring_obsolete(|inbound|",
+            "ingress drain must use the checked retiring selector",
+        ),
+        (
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode",
+            "FairV2IngressBarrierBypass::None",
+            "only TimeoutVoteEpisode mode may carry the timeout-vote barrier bypass",
+        ),
+        (
+            "executor.can_admit_timeout_vote_recovery_episode(message, ownership)",
+            "false",
+            "only TimeoutVoteEpisode mode may admit the runtime-checked timeout-vote episode",
+        ),
+        (
+            "if !selected_mode_matches {",
+            "if false {",
+            "non-Ordinary drain must reject every item outside its selected reviewed predicate",
+        ),
+    ),
+)
+def test_async_drain_three_mode_policy_mutations_fail_closed(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The async source seam binds the checked three-mode ingress policy."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    baseline = module._async_source_fidelity_errors(formal_dir)
+    assert not any(expected_error in error for error in baseline), baseline
+
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_rust_item_source(
+        module,
+        runner_path,
+        "drain_v2_ingress",
+        old,
+        new,
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_rollover_finalized_outputs_semantics_survive_pending_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The extracted rollover helper remains semantic after resealing itself."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_rust_item_source(
+        module,
+        runner_path,
+        "rollover_finalized_height_outputs",
+        "if retired == 0 {",
+        "if retired > 0 {",
+    )
+    items = module.rust_items(
+        runner_path.read_text(encoding="utf-8"),
+        "rollover_finalized_height_outputs",
+    )
+    assert len(items) == 1
+    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256[
+        "rollover_finalized_height_outputs"
+    ] = module._rust_item_token_sha256(items[0])
+    module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256[
+        "rollover_finalized_height_outputs"
+    ] = module._rust_item_token_sha256(items[0])
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(
+        "finalized output rollover must durably reconstruct every predecessor owner"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("operation", "key"),
+    (
+        ("remove", "rollover_finalized_height_outputs"),
+        ("add", "unexpected_rollover_finalized_height_outputs"),
+    ),
+)
+def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
+    tmp_path: Path,
+    operation: str,
+    key: str,
+) -> None:
+    """The runner ACK inventory cannot omit or invent a rollover helper."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    if operation == "remove":
+        module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256.pop(key)
+    else:
+        module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256[key] = "0" * 64
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(
+        "runner exact-output ownership/ACK production seam token-seal inventory mismatch"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    (
+        "digest_key",
+        "relative_path",
+        "item_name",
+        "brace_context",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "runner::LeaderWireIngressBinding::bind",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "bind",
+            (("impl", "LeaderWireIngressBinding"),),
+            ".bind_leader_wire_lifecycle_gate(",
+            ".bind_leader_wire_lifecycle_gate_for_test(",
+            "leader-wire binding must publish the exact durable gate",
+        ),
+        (
+            "runner::LeaderWireIngressBinding::retire",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "retire",
+            (("impl", "LeaderWireIngressBinding"),),
+            ".unbind_leader_wire_lifecycle_gate(gate)",
+            ".unbind_leader_wire_lifecycle_gate_for_test(gate)",
+            "standalone leader-wire retirement must close admission",
+        ),
+        (
+            "runner::LeaderWireIngressBinding::drop",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "drop",
+            (("impl", "Drop", "for", "LeaderWireIngressBinding"),),
+            "if let Err(error) = self.retire() {",
+            "if let Err(error) = Ok::<(), V2RunnerError>(()) {",
+            "abnormal leader-wire binding drop must attempt",
+        ),
+        (
+            "runner::HeightIngressBindings::new",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "new",
+            (("impl", "HeightIngressBindings"),),
+            "Self {\n            certified_serve,\n            leader_wire,\n        }",
+            "Self {\n"
+            "            certified_serve,\n"
+            "            leader_wire: LeaderWireIngressBinding {\n"
+            "                ingress_ready: Arc::clone(&leader_wire.ingress_ready),\n"
+            "                block_ingress: Arc::clone(&leader_wire.block_ingress),\n"
+            "                gate: leader_wire.gate.clone(),\n"
+            "            },\n"
+            "        }",
+            "joint height-ingress construction must take move-only ownership",
+        ),
+        (
+            "runner::HeightIngressBindings::retire",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "retire",
+            (("impl", "HeightIngressBindings"),),
+            "self.certified_serve.gate = None;",
+            "let _ = &self.certified_serve.gate;",
+            "joint height-ingress retirement must validate paired ownership",
+        ),
+        (
+            "runner::HeightIngressBindings::drop",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "drop",
+            (("impl", "Drop", "for", "HeightIngressBindings"),),
+            "self.leader_wire.gate = None;",
+            "let _ = &self.leader_wire.gate;",
+            "failed joint drop must keep ingress closed",
+        ),
+        (
+            "runner::close_ingress_for_rollover",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "close_ingress_for_rollover",
+            (),
+            "ingress_ready.store(false, Ordering::Release);\n    block_ingress.close();",
+            "block_ingress.close();\n    ingress_ready.store(false, Ordering::Release);",
+            "rollover close must publish not-ready before closing",
+        ),
+        (
+            "ingress::unbind_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "unbind_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "state.leader_wire_lifecycle_gate = None;",
+            "let _ = state.leader_wire_lifecycle_gate.as_ref();",
+            "standalone leader-wire unbind must require closed empty ingress",
+        ),
+        (
+            "ingress::unbind_height_ingress_gates",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "unbind_height_ingress_gates",
+            (("impl", "FairV2Ingress"),),
+            "let _service_guard = self.service_lock.lock();",
+            "let _service_guard = ();",
+            "atomic height-ingress unbind must lock service and queue state",
+        ),
+        (
+            "ingress::close",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "close",
+            (("impl", "FairV2Ingress"),),
+            "self.state.lock().open = false;",
+            "self.state.lock().open = true;",
+            "fair ingress close must make admission unavailable",
+        ),
+    ),
+)
+def test_joint_height_ingress_semantics_survive_pending_digest_refresh(
+    tmp_path: Path,
+    digest_key: str,
+    relative_path: str,
+    item_name: str,
+    brace_context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each joint owner is reviewed independently of its token digest."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    path = tmp_path / relative_path
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        item_name,
+        brace_context,
+        old,
+        new,
+    )
+    items = [
+        item
+        for item in module.rust_items(path.read_text(encoding="utf-8"), item_name)
+        if item.brace_context == brace_context
+    ]
+    assert len(items) == 1, digest_key
+    module._PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256[digest_key] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    (
+        "qualified_name",
+        "relative_path",
+        "test_name",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "height_ingress_bindings_retire_both_gates_in_one_closed_cut",
+            ".expect(\"retire both per-height ingress gates atomically\");",
+            ".expect(\"retire both per-height ingress gates atomically\");\n"
+            "        ingress.open().expect(\"reopen retired ingress\");",
+            "joint binding regression must close and detach both gates",
+        ),
+        (
+            "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership",
+            "bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));",
+            "bindings.leader_wire.ingress_ready = Arc::clone(&ingress_ready);",
+            "mismatched joint ownership must reject before mutation",
+        ),
+        (
+            "worker::closed_height_atomically_retires_serve_and_leader_ingress",
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "closed_height_atomically_retires_serve_and_leader_ingress",
+            "ingress.close();",
+            "let _ = &ingress;",
+            "joint retirement regression must close first",
+        ),
+    ),
+)
+def test_joint_height_ingress_regression_survives_pending_digest_refresh(
+    tmp_path: Path,
+    qualified_name: str,
+    relative_path: str,
+    test_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The real carrier-retirement regression remains semantic after resealing."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    test_path = tmp_path / relative_path
+    mutate_rust_item_source(
+        module,
+        test_path,
+        test_name,
+        old,
+        new,
+    )
+    items = module.rust_items(test_path.read_text(encoding="utf-8"), test_name)
+    assert len(items) == 1
+    module._PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256[qualified_name] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("map_name", "operation", "key", "expected_error"),
+    (
+        (
+            "_PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256",
+            "remove",
+            "runner::HeightIngressBindings::retire",
+            "joint height-ingress token-seal inventory mismatch",
+        ),
+        (
+            "_PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256",
+            "add",
+            "runner::UnexpectedHeightIngressOwner::retire",
+            "joint height-ingress token-seal inventory mismatch",
+        ),
+        (
+            "_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256",
+            "remove",
+            "worker::closed_height_atomically_retires_serve_and_leader_ingress",
+            "joint height-ingress regression seal inventory mismatch",
+        ),
+        (
+            "_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256",
+            "add",
+            "unexpected_joint_height_ingress_regression",
+            "joint height-ingress regression seal inventory mismatch",
+        ),
+    ),
+)
+def test_joint_height_ingress_inventory_is_exact_and_non_crashing(
+    tmp_path: Path,
+    map_name: str,
+    operation: str,
+    key: str,
+    expected_error: str,
+) -> None:
+    """Missing and surplus joint-owner seals fail closed without lookup crashes."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    inventory = getattr(module, map_name)
+    if operation == "remove":
+        inventory.pop(key)
+    else:
+        inventory[key] = "0" * 64
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_physical_leader_wire_replay_mutation_survives_item_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """A retained token must be strictly older than its physical replay."""
+
+    module = load_checker()
+    runtime_relative = Path("crates/iroha_core/src/sumeragi/v2_runtime.rs")
+    runtime_path = tmp_path / runtime_relative
+    runtime_path.parent.mkdir(parents=True)
+    shutil.copy2(module.ROOT_DIR / runtime_relative, runtime_path)
+
+    source = runtime_path.read_text(encoding="utf-8")
+    items = [
+        item
+        for item in module.rust_items(source, "is_physical_leader_wire_replay")
+        if item.brace_context
+        == (("impl", "RuntimeIngressOwnershipEvidence"),)
+    ]
+    assert len(items) == 1
+    item = items[0]
+    old = "token.admission_ordinal() < physical_ordinal"
+    new = "token.admission_ordinal() <= physical_ordinal"
+    assert item.source.count(old) == 1
+    mutated_item_source = item.source.replace(old, new, 1)
+    runtime_path.write_text(
+        source.replace(item.source, mutated_item_source, 1),
+        encoding="utf-8",
+    )
+
+    mutated_item = next(
+        candidate
+        for candidate in module.rust_items(
+            runtime_path.read_text(encoding="utf-8"),
+            "is_physical_leader_wire_replay",
+        )
+        if candidate.brace_context
+        == (("impl", "RuntimeIngressOwnershipEvidence"),)
+    )
+    module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256[
+        "runtime_ingress_is_physical_leader_wire_replay"
+    ] = module._rust_item_token_sha256(mutated_item)
+
+    errors = module._runtime_clock_reservation_source_fidelity_errors(tmp_path)
+    assert any(
+        "physical replay classification must require a strictly older durable "
+        "admission token and reject partial ownership"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_timeout_vote_episode_source_fidelity_baseline_and_aggregate_wiring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The focused contract is source-sealed and owned by the causal gate."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    assert (
+        module._timeout_vote_episode_source_fidelity_errors(
+            tmp_path, formal_dir
+        )
+        == []
+    )
+    assert (
+        "_timeout_vote_episode_source_fidelity_errors"
+        in module._production_causal_fifo_source_fidelity_errors.__code__.co_names
+    )
+
+    class PropagatedTimeoutEpisodeError(RuntimeError):
+        pass
+
+    class ErrorProbe:
+        def __iter__(self):
+            raise PropagatedTimeoutEpisodeError
+
+    monkeypatch.setattr(
+        module,
+        "_runtime_clock_reservation_source_fidelity_errors",
+        lambda _repo_root: [],
+    )
+    monkeypatch.setattr(
+        module,
+        "_timeout_vote_episode_source_fidelity_errors",
+        lambda _repo_root, _formal_dir: ErrorProbe(),
+    )
+    with pytest.raises(PropagatedTimeoutEpisodeError):
+        module._production_causal_fifo_source_fidelity_errors(formal_dir)
+
+
+@pytest.mark.parametrize(
+    ("relative", "item_name", "old", "new", "expected_error"),
+    (
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_checked_retiring_obsolete",
+            "FairV2IngressBarrierBypass::None,",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
+            "test-only ordinary retirement baseline must pass",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_checked",
+            "self.try_recv_if_at_checked(Instant::now(), predicate)",
+            "self.try_recv_if_at_checked(Instant::now(), |_| true)",
+            "ordinary checked ingress must reach only the wrapper which hard-codes no bypass",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
+            "self.try_recv_if_at_checked_classified(Instant::now(), true, barrier_bypass, predicate)",
+            "self.try_recv_if_at_checked_classified(\n"
+            "            Instant::now(),\n"
+            "            true,\n"
+            "            FairV2IngressBarrierBypass::None,\n"
+            "            predicate,\n"
+            "        )",
+            "only the explicitly named internal wrapper may forward a bypass policy",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked",
+            "FairV2IngressBarrierBypass::None,",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
+            "ordinary timestamped ingress must pass FairV2IngressBarrierBypass::None",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "let FairV2IngressSource::Validator(authenticated_source) = source else {\n"
+            "        return false;\n"
+            "    };",
+            "let authenticated_source = match source {\n"
+            "        FairV2IngressSource::Validator(source)\n"
+            "        | FairV2IngressSource::Authenticated(source) => source,\n"
+            "        FairV2IngressSource::Anonymous => return false,\n"
+            "    };",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "entry.inbound.sender() == Some(authenticated_source)",
+            "entry.inbound.sender().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "entry.inbound.via() == Some(authenticated_source)",
+            "entry.inbound.via().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "token.identity.semantic_origin == *authenticated_source",
+            "token.identity.semantic_origin == token.slot.semantic_origin",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "token.slot.semantic_origin == *authenticated_source",
+            "token.slot.semantic_origin == token.identity.semantic_origin",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "ownership.leader_wire_runtime_receipt().is_none()",
+            "ownership.leader_wire_runtime_receipt().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "ownership.runtime_physical_cut().is_none()",
+            "ownership.runtime_physical_cut().is_some()",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)",
+            "ownership.physical_admission_ordinal() != Some(entry.admission_ordinal)",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
+            "&& ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)",
+            "&& ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)\n"
+            "        || true",
+            "barrier bypass must require a direct validator",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked_classified",
+            "owner.token.identity.phase\n"
+            "                                                    == FairV2IngressLeaderWirePhase::CertifiedResponse",
+            "owner.token.identity.phase\n"
+            "                                                    == FairV2IngressLeaderWirePhase::TimeoutVote",
+            "limited to a CertifiedResponse leader owner",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked_classified",
+            "== FairV2IngressLeaderWirePhase::CertifiedResponse\n",
+            "== FairV2IngressLeaderWirePhase::CertifiedResponse\n"
+            "                                                    && CertifiedResponseClaimMatches\n",
+            "may not require a response claim",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "try_recv_if_at_checked_classified",
+            "let dependency_bypass = !ingress_barrier_allows",
+            "let dependency_bypass = ingress_barrier_allows",
+            "subordinate to a blocked ordinary barrier",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            "drain_v2_ingress",
+            "V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                FairV2IngressBarrierBypass::None\n"
+            "            }",
+            "V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                FairV2IngressBarrierBypass::TimeoutVoteEpisode\n"
+            "            }",
+            "only TimeoutVoteEpisode mode may use",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            "drain_v2_ingress",
+            "V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                            network_ingress_is_certified_fence_escape(&message.payload)\n"
+            "                        }\n"
+            "                        V2IngressDrainMode::TimeoutVoteEpisode => {\n"
+            "                            inbound.ingress_ownership().is_some_and(|ownership| {\n"
+            "                                executor.can_admit_timeout_vote_recovery_episode(message, ownership)\n"
+            "                            })\n"
+            "                        }",
+            "V2IngressDrainMode::CertifiedFenceEscape => {\n"
+            "                            inbound.ingress_ownership().is_some_and(|ownership| {\n"
+            "                                executor.can_admit_timeout_vote_recovery_episode(message, ownership)\n"
+            "                            })\n"
+            "                        }\n"
+            "                        V2IngressDrainMode::TimeoutVoteEpisode => {\n"
+            "                            network_ingress_is_certified_fence_escape(&message.payload)\n"
+            "                        }",
+            "pure disjoint drains",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "emitted_timeout_recovery_owner",
+            "|| episode.timeout_vote_owner_universe != self.driver.timeout_vote_owner_universe()",
+            "|| false",
+            "only the exact emitted current-view episode and frozen owner universe may authorize recovery",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_recovery_episode_allows_clock_blockers",
+            "|| blockers.timeout",
+            "|| false",
+            "the episode may cross neither the absolute timeout nor a pre-frozen retransmit",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_recovery_candidate_from_fair",
+            "ingress_ownership.physical_admission_ordinal()",
+            "ingress_ownership\n"
+            "            .runtime_physical_cut()\n"
+            "            .and_then(|cut| u64::try_from(cut).ok())",
+            "pre-runtime candidate projection must retain the exact token and physical carrier",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_recovery_candidate_from_runtime",
+            "(Some(_), None) | (None, Some(_)) => Err(EnqueueError::FailClosed)",
+            "(Some(_), None) | (None, Some(_)) => Ok(None)",
+            "runtime candidate projection must reject partial leader-wire ownership",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "validate_against",
+            "RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent => {\n"
+            "                    self.token.scheduler_ordinal() < timeout_ordinal\n"
+            "                        && self.token.admission_ordinal() == self.carrier_physical_ordinal\n"
+            "                }",
+            "RuntimeTimeoutVoteEpisodeDisposition::PreCutDescent => {\n"
+            "                    self.token.scheduler_ordinal() < timeout_ordinal\n"
+            "                        && self.token.admission_ordinal() == self.carrier_physical_ordinal\n"
+            "                        && self.carrier_physical_ordinal < physical_cut\n"
+            "                }",
+            "including P at or above the physical cut",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "validate_against",
+            "self.token.scheduler_ordinal() > timeout_ordinal",
+            "self.token.scheduler_ordinal() >= timeout_ordinal",
+            "fresh replenishment must be strictly above",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "same_lifecycle_owner_as",
+            "self.token == other.token",
+            "self.token.slot == other.token.slot",
+            "immutable retained token",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "count_transition",
+            "Self::NonCandidate => (0, 0)",
+            "Self::NonCandidate => (1, 1)",
+            "exactly 0→0, 0→1, and 1→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "count_transition",
+            "(0, 1)",
+            "(1, 1)",
+            "exactly 0→0, 0→1, and 1→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "count_transition",
+            "(1, 1)\n            }",
+            "(0, 1)\n            }",
+            "exactly 0→0, 0→1, and 1→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_recovery_candidate",
+            ".get(signer_index)",
+            ".first()",
+            "bounded frozen-roster lookup",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "timeout_vote_episode_admission_plan",
+            "Some(incumbent) if !incumbent.same_lifecycle_owner_as(&candidate.owner) =>",
+            "Some(_) =>",
+            "different owner must fail closed",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "can_admit_timeout_vote_recovery_episode",
+            "Ok(plan) if plan.count_transition() != (0, 0)",
+            "Ok(plan) if plan.count_transition() == (0, 0)",
+            "reviewed count-changing or coalesced episode plan",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "enqueue_network_with_ingress_ownership",
+            "episode.admitted_timeout_vote_owners = prospective;",
+            "let _ = prospective;",
+            "prospective map may publish only after enqueue",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "let post_snapshot_source = context.roster[2].validator.clone();",
+            "let post_snapshot_source = context.roster[1].validator.clone();",
+            "distinct real post-snapshot source",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut",
+            "assert_eq!(non_candidate.count_transition(), (0, 0));",
+            "assert_eq!(non_candidate.count_transition(), (1, 1));",
+            "unrelated ingress must project 0→0",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view",
+            "assert_eq!(first_plan.count_transition(), (0, 1));",
+            "assert_eq!(first_plan.count_transition(), (1, 1));",
+            "first fresh source admission must project 0→1",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission",
+            "assert!(token.admission_ordinal() < replay_physical_ordinal);",
+            "assert!(token.admission_ordinal() <= replay_physical_ordinal);",
+            "restored TimeoutVote must bind a fresh physical carrier",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
+            "pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot",
+            "assert!(u128::from(physical_ordinal) >= timeout_physical_cut);",
+            "assert!(u128::from(physical_ordinal) < timeout_physical_cut);",
+            "P at or above the physical cut",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,\n"
+            "                    |_| false,",
+            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,\n"
+            "                    |_| true,",
+            "must still reject when its downstream predicate rejects",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier",
+            "earliest.token.identity.phase,\n"
+            "                super::FairV2IngressLeaderWirePhase::CertifiedResponse",
+            "earliest.token.identity.phase,\n"
+            "                super::FairV2IngressLeaderWirePhase::TimeoutVote",
+            "freeze an exact CertifiedResponse-phase owner",
+        ),
+    ),
+)
+def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    relative: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each Rust weakening fails semantically even with its seal refreshed."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    assert (
+        module._timeout_vote_episode_source_fidelity_errors(
+            tmp_path, formal_dir
+        )
+        == []
+    )
+
+    mutate_rust_item_source(
+        module,
+        tmp_path / relative,
+        item_name,
+        old,
+        new,
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_timeout_vote_episode_runner_mode_inventory_mutation(
+    tmp_path: Path,
+) -> None:
+    """The runner cannot collapse the reviewed three-mode ingress policy."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_source_once(
+        runner,
+        "    CertifiedFenceEscape,\n",
+        "",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any("exactly Ordinary, CertifiedFenceEscape" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    (
+        (
+            "remove_retained_response_timeout_turn",
+            "retained-response backpressure must give a conditional one-shot",
+        ),
+        (
+            "remove_selected_serve_timeout_turn",
+            "selected Serve must keep certificate escape inside",
+        ),
+        (
+            "move_selected_serve_timeout_turn_under_claim",
+            "selected Serve must keep certificate escape inside",
+        ),
+    ),
+)
+def test_timeout_vote_episode_runner_schedule_mutations(
+    tmp_path: Path,
+    mutation: str,
+    expected_error: str,
+) -> None:
+    """Both TimeoutVote turns are unconditional and Serve does not spend its claim."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    source = runner.read_text(encoding="utf-8")
+
+    if mutation == "remove_retained_response_timeout_turn":
+        region_start = source.index("                if response_backpressured {")
+        region_end = source.index(
+            "                    executor.reconcile_retained_response_certified_fence_escape_phase();",
+            region_start,
+        )
+        region = source[region_start:region_end]
+        call_start = region.rfind("                    drain_v2_ingress(")
+        assert call_start >= 0
+        call_end = region.index("                    )?;\n", call_start) + len(
+            "                    )?;\n"
+        )
+        mutated_region = region[:call_start] + region[call_end:]
+        source = source[:region_start] + mutated_region + source[region_end:]
+    elif mutation == "remove_selected_serve_timeout_turn":
+        region_start = source.index(
+            "                service_certified_serve_barrier_liveness_turn("
+        )
+        region_end = source.index(
+            "                if !older_predecessor_remains {",
+            region_start,
+        )
+        region = source[region_start:region_end]
+        old = "V2IngressDrainMode::TimeoutVoteEpisode"
+        assert region.count(old) == 1
+        mutated_region = region.replace(
+            old, "V2IngressDrainMode::Ordinary", 1
+        )
+        source = source[:region_start] + mutated_region + source[region_end:]
+    else:
+        before = (
+            "                service_certified_serve_barrier_liveness_turn(\n"
+            "                    recovering_interrupted_tip,\n"
+            "                    claimed_older_runtime_episode,\n"
+        )
+        under_claim = (
+            "                service_certified_serve_barrier_liveness_turn(\n"
+            "                    recovering_interrupted_tip\n"
+            "                        || !claimed_older_runtime_episode,\n"
+            "                    claimed_older_runtime_episode,\n"
+        )
+        assert source.count(before) == 1
+        source = source.replace(before, under_claim, 1)
+
+    runner.write_text(source, encoding="utf-8")
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncLeaderWireCanonicalLifecyclePayload",
+            "ELSE AsyncLeaderWireServiceIdentity(item)",
+            "ELSE DeliverySubject(item)",
+            "full concrete leader-wire lifecycle payload identity",
+        ),
+        (
+            "AsyncLeaderWireLifecycleSubject",
+            'IF item.kind = "TimeoutVote" THEN NoSubject ELSE DeliverySubject(item)',
+            'IF item.kind = "TimeoutVote"\n'
+            "THEN item.envelope.vote.highSubject\n"
+            "ELSE DeliverySubject(item)",
+            "TimeoutVote-only semantic lifecycle-subject normalization",
+        ),
+        (
+            "AsyncLeaderWireLifecycleIdentityAt",
+            "subject |-> AsyncLeaderWireLifecycleSubject(item)",
+            "subject |-> DeliverySubject(item)",
+            "normalized semantic leader-wire identity",
+        ),
+        (
+            "AsyncLeaderWireLifecycleIdentityAt",
+            "payload |-> AsyncLeaderWireCanonicalLifecyclePayload(item)",
+            "payload |-> AsyncLeaderWireServiceIdentity(item)",
+            "full concrete payload",
+        ),
+        (
+            "AsyncLeaderWireLifecycleRecord",
+            "subject |-> AsyncLeaderWireLifecycleSubject(item)",
+            "subject |-> DeliverySubject(item)",
+            "normalized leader-wire lifecycle record",
+        ),
+        (
+            "AsyncLeaderWireLifecycleTyped",
+            "record.subject = AsyncLeaderWireLifecycleSubject(record.item)",
+            "record.subject = DeliverySubject(record.item)",
+            "typed leader-wire lifecycle must retain normalized binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerDispositions",
+            '{"PreCutDescent", "RestoredDescent", "FreshReplenishment"}',
+            '{"PreCutDescent", "FreshReplenishment"}',
+            "closed timeout-vote owner disposition inventory",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionDispositions",
+            '{"NonCandidate", "FirstAdmission", "CoalescedRetry"}',
+            '{"FirstAdmission", "CoalescedRetry"}',
+            "closed timeout-vote admission disposition inventory",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerSlot",
+            "[episode |-> key, source |-> source]",
+            "[episode |-> key, source |-> key.leader]",
+            "frozen episode-and-source timeout-vote slot",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeKey",
+            "subject |-> NoSubject",
+            "subject |-> origin.subject",
+            "frozen target/context/leader/view/NoSubject/phase timeout episode key",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeKeySet",
+            "subject: {NoSubject}",
+            "subject: SubjectOrNone",
+            "key set with only the normalized NoSubject",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerValidForEpisode",
+            "AsyncLeaderWireLifecycleSubject(owner.identity) = episode.key.subject",
+            "AsyncControlItemSubject(owner.identity) = episode.key.subject",
+            "timeout-vote owner episode validity must retain dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeValidIn",
+            "episode.key.subject = NoSubject",
+            "episode.timeoutOwnerOrigin.subject = episode.key.subject",
+            "semantic key must use NoSubject independently",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "AsyncLeaderWireLifecycleSubject(item) = episode.key.subject",
+            "AsyncControlItemSubject(item) = episode.key.subject",
+            "direct authenticated current-view TimeoutVote binding must retain dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "/\\ ExactPrepareQcMatchesRef(\n"
+            "       item.envelope.vote.highestPrepareQc,\n"
+            "       item.envelope.vote.highRank,\n"
+            "       item.envelope.vote.highSubject)",
+            "/\\ TRUE",
+            "direct authenticated current-view TimeoutVote binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "item.envelope.vote.highRank <= item.envelope.vote.view",
+            "TRUE",
+            "direct authenticated current-episode TimeoutVote binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerUniverse",
+            "source \\in VotingRoster(origin.context.epoch)",
+            "source \\in ValidatorIds",
+            "roster-derived frozen timeout-vote owner universe",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBasicBinding",
+            "item.source = item.envelope.vote.signer",
+            "TRUE",
+            "direct TimeoutVote binding",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteIngressRecordsFor",
+            'record.status = "Ingress"',
+            'record.status = "Runtime"',
+            "exact TimeoutVote Ingress-record candidate set",
+        ),
+        (
+            "AsyncTimeoutRecoveryVotePreCutDescent",
+            "/\\ record.admissionOrdinal = record.physicalAdmissionOrdinal",
+            "/\\ record.admissionOrdinal = record.physicalAdmissionOrdinal\n"
+            "  /\\ record.physicalAdmissionOrdinal < episode.physicalCut",
+            "formal A=P,S<timeout descent classification",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteRestoredDescent",
+            "/\\ record.admissionOrdinal < record.physicalAdmissionOrdinal",
+            "/\\ record.admissionOrdinal = record.physicalAdmissionOrdinal",
+            "formal restored descent classification",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteFreshReplenishment",
+            "record.schedulerOrdinal > episode.timeoutOwnerOrdinal",
+            "record.schedulerOrdinal >= episode.timeoutOwnerOrdinal",
+            "strict fresh replenishment classification",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteDispositionMatches",
+            "AsyncTimeoutRecoveryVotePreCutDescent(record, episode)",
+            "TRUE",
+            "closed descent/restored/replenishment dispatcher",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateOwners",
+            "AsyncLeaderWireServiceIdentity(item),",
+            "AsyncLeaderWireLifecycleSubject(item),",
+            "exact episode/record/disposition TimeoutVote candidate projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateDefined",
+            "IsFiniteSet(candidates)",
+            "TRUE",
+            "finite singleton timeout-vote candidate predicate",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateDefined",
+            "Cardinality(candidates) = 1",
+            "Cardinality(candidates) >= 1",
+            "finite singleton timeout-vote candidate predicate",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCandidateOwner",
+            "CHOOSE owner \\in\n"
+            "    AsyncTimeoutRecoveryVoteCandidateOwners(node, item): TRUE",
+            "CHOOSE owner \\in AsyncTimeoutRecoveryVoteOwnerSet: TRUE",
+            "unique timeout-vote candidate selector",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteIncumbents",
+            "owner.slot = candidate.slot",
+            "TRUE",
+            "same-slot timeout-vote incumbent set",
+        ),
+        (
+            "AsyncTimeoutRecoverySameVoteLifecycleOwner",
+            "/\\ left.identity = right.identity",
+            "/\\ TRUE",
+            "current formal timeout-vote lifecycle-owner equality",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionPlan",
+            'THEN {"FirstAdmission"}\n'
+            "          ELSE IF \\A incumbent \\in incumbents:\n"
+            "                    AsyncTimeoutRecoverySameVoteLifecycleOwner(\n"
+            "                      incumbent, candidate)\n"
+            '               THEN {"CoalescedRetry"}',
+            'THEN {"CoalescedRetry"}\n'
+            "          ELSE IF \\A incumbent \\in incumbents:\n"
+            "                    AsyncTimeoutRecoverySameVoteLifecycleOwner(\n"
+            "                      incumbent, candidate)\n"
+            '               THEN {"FirstAdmission"}',
+            "exact NonCandidate/FirstAdmission/CoalescedRetry/conflict plan",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRequired",
+            "AsyncTimeoutRecoveryVoteBasicBinding(node, item, episode)",
+            "TRUE",
+            "exact timeout-vote admission-required predicate",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionAllowed",
+            "\\/ ~AsyncTimeoutRecoveryVoteAdmissionRequired(node, item)",
+            "\\/ TRUE\n  \\/ ~AsyncTimeoutRecoveryVoteAdmissionRequired(node, item)",
+            "fail-closed exact timeout-vote admission gate",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeValidIn",
+            "IsFiniteSet(episode.timeoutVoteOwnerUniverse)",
+            "TRUE",
+            "finite timeout-recovery episode",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.key.context = context",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.timeoutOwnerOrigin.height = context.height",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.key.view = nodeView[episode.node]",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "episode.generation = generation[episode.node]",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "~NodeHasDecision(episode.node)",
+            "TRUE",
+            "current timeout-recovery episode boundary",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteBarrierException",
+            "source = item.source",
+            "TRUE",
+            "direct-validator finite TimeoutVote barrier exception",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
+            'owner.phase = "CertifiedResponse"',
+            'owner.phase = "TimeoutVote"',
+            "exact Ingress CertifiedResponse phase",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
+            "/\\ owner.status = \"Ingress\"",
+            "/\\ owner.status = \"Ingress\"\n"
+            "  /\\ CertifiedResponseClaimMatches(owner)",
+            "cannot require a response claim",
+        ),
+        (
+            "AsyncServeIngressIndexMayPrecedeAdmittedTarget",
+            "IN \\/ index <=",
+            "IN \\/ TRUE\n          \\/ index <=",
+            "exact selected-Serve timeout-vote exception placement",
+        ),
+        (
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
+            "IN \\/ index <= owner.ingressPredecessors[source]",
+            "IN \\/ TRUE\n          \\/ index <= owner.ingressPredecessors[source]",
+            "exact CertifiedResponse-only leader-wire timeout-vote exception placement",
+        ),
+        (
+            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
+            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier(",
+            "AsyncTimeoutRecoveryVoteBarrierException(",
+            "general TimeoutVote barrier exception directly",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep",
+            '\\cap {"FirstAdmission", "CoalescedRetry"} # {}',
+            '\\cap {"CoalescedRetry"} # {}',
+            "exact TimeoutVote Ingress-to-Runtime admission occurrence",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteRuntimeRecordsAfter",
+            'record.status = "Runtime"',
+            'record.status = "Ingress"',
+            "exact post-admission TimeoutVote Runtime-record set",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionNodesThisStep",
+            "{node \\in ValidatorIds:",
+            "{node \\in {}:",
+            "exact timeout-vote admission-node set",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            '"FirstAdmission"\n'
+            "                  \\in AsyncTimeoutRecoveryVoteAdmissionPlan(node, item)",
+            '"CoalescedRetry"\n'
+            "                  \\in AsyncTimeoutRecoveryVoteAdmissionPlan(node, item)",
+            "only FirstAdmission may increase",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission",
+            "{AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(state, episode):\n"
+            "          episode \\in state.timeoutRecoveryEpisodes}",
+            "{episode: episode \\in state.timeoutRecoveryEpisodes}",
+            "exact timeout-vote episode-state transformer",
+        ),
+        (
+            "AsyncTimeoutRecoveryAdmittedVoteSlots",
+            "{owner.slot: owner \\in episode.admittedTimeoutVoteOwners}",
+            "{}",
+            "exact admitted timeout-vote slot projection",
+        ),
+        (
+            "AsyncTimeoutRecoveryRemainingProducerSlots",
+            "episode.timeoutVoteOwnerUniverse\n"
+            "    \\ AsyncTimeoutRecoveryAdmittedVoteSlots(episode)",
+            "episode.timeoutVoteOwnerUniverse \\ {}",
+            "finite timeout-vote producer remainder",
+        ),
+        (
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure",
+            "Cardinality(AsyncTimeoutRecoveryRemainingProducerSlots(episode))",
+            "Cardinality(episode.timeoutVoteOwnerUniverse)",
+            "finite timeout-vote producer-episode measure",
+        ),
+        (
+            "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "          ordinaryCarrierState)",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "          candidateServiceState)",
+            "actual serialized slot pipeline including the ordinary carrier",
+        ),
+        (
+            "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition",
+            "IN AsyncTimeoutRecoveryEpisodeStateAfterTransition(\n"
+            "       leaderWireState, serveIngressState, timeoutState)",
+            "IN timeoutState",
+            "actual serialized slot pipeline including the ordinary carrier",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep",
+            "IN /\\ IngressDrainStep(node)\n"
+            "     /\\ DrainFairIngressSelected(node)",
+            "IN /\\ DrainFairIngressSelected(node)",
+            "exact TimeoutVote Ingress-to-Runtime transition",
+        ),
+    ),
+)
+def test_timeout_vote_episode_formal_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The formal episode contract rejects widening after digest refresh."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "LET item == AsyncSelectedFairIngressItem(node)",
+            "LET item == CHOOSE candidate \\in AsyncNetworkItems: TRUE",
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            '{"NonCandidate"}',
+            '{"FirstAdmission"}',
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "=> /\\ ~AsyncTimeoutRecoveryVoteCandidateDefined(node, item)",
+            "=> /\\ AsyncTimeoutRecoveryVoteCandidateDefined(node, item)",
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "/\\ ~AsyncTimeoutRecoveryVoteAdmissionOccursThisStep(node)",
+            "/\\ AsyncTimeoutRecoveryVoteAdmissionOccursThisStep(node)",
+            "NonCandidate exact zero-admission theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
+            "BY Isa DEF AsyncTimeoutRecoveryVoteAdmissionPlan,\n"
+            "           AsyncTimeoutRecoveryVoteAdmissionOccursThisStep",
+            "BY Isa DEF AsyncTimeoutRecoveryVoteAdmissionPlan",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Nat",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Int",
+            "finite timeout-vote producer-episode theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "BY <2>1, <2>2, FS_Difference, Isa",
+            "BY <2>1, <2>2, Isa",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "candidate.slot \\in\n"
+            "         AsyncTimeoutRecoveryRemainingProducerSlots(episode)",
+            "TRUE",
+            "fresh owner exact remaining-slot removal theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "fresh owner exact remaining-slot removal theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "BY <1>1, AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "BY <1>1",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "FirstAdmission exact one-slot consumption theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot",
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"FirstAdmission"}',
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"CoalescedRetry"}',
+            "FirstAdmission exact one-slot consumption theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot",
+            "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "=> /\\ after = episode",
+            "=> /\\ TRUE",
+            "CoalescedRetry exact producer-episode stutter theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "=> /\\ after = episode",
+            '=> /\\ candidate.disposition = "FreshReplenishment"\n'
+            "              /\\ after = episode",
+            "must not open a fresh non-descent residual",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after)\n"
+            "                     = AsyncTimeoutRecoveryProducerEpisodeMeasure(episode)",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1\n"
+            "                     = AsyncTimeoutRecoveryProducerEpisodeMeasure(episode)",
+            "CoalescedRetry exact producer-episode stutter theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "candidate.slot \\notin\n"
+            "                     AsyncTimeoutRecoveryRemainingProducerSlots(episode)",
+            "TRUE",
+            "CoalescedRetry exact producer-episode stutter theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode",
+            "DEF After, Node, Item, Candidate, MatchingNodes,\n"
+            "                 AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            "DEF After, Node, Item, Candidate, MatchingNodes",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "=> /\\ AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Nat",
+            "=> /\\ CandidateServiceRank' < CandidateServiceRank\n"
+            "                /\\ AsyncTimeoutRecoveryProducerEpisodeMeasure(episode) \\in Nat",
+            "must not conclude protocol progress or main ingress/service-rank descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            'candidate.disposition = "FreshReplenishment"',
+            'candidate.disposition = "PreCutDescent"',
+            "FirstAdmission-only fresh replenishment finite producer-slot descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"FirstAdmission"}',
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(node, item) =\n"
+            '                  {"FirstAdmission", "CoalescedRetry"}',
+            "FirstAdmission-only fresh replenishment finite producer-slot descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "FirstAdmission-only fresh replenishment finite producer-slot descent",
+        ),
+        (
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "BY <3>1, AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite",
+            "BY <3>1",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryUpdatedEpisodeIsRetainedByAdmissionState",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(state, episode)",
+            "episode",
+            "updated timeout episode retention theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(right, episode)",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(left, episode)",
+            "timeout-vote episode transformer state-independence theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent",
+            "BY DEF AsyncTimeoutRecoveryEpisodeAfterVoteAdmission",
+            "BY Isa",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "               ordinaryCarrierState)",
+            "AsyncCandidateLifecycleStateAfterCarrierUpdate(\n"
+            "               candidateServiceState)",
+            "thread the ordinary carrier before compaction",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "/\\ timeoutVoteState.timeoutRecoveryEpisodes =\n"
+            "               {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(",
+            "/\\ TRUE \\/ timeoutVoteState.timeoutRecoveryEpisodes =\n"
+            "               {AsyncTimeoutRecoveryEpisodeAfterVoteAdmission(",
+            "frame the timeout episode through reset, admission, and the prime state",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "/\\ timeoutState.timeoutRecoveryEpisodes =\n"
+            "               resetState.timeoutRecoveryEpisodes",
+            "/\\ TRUE",
+            "frame the timeout episode through reset, admission, and the prime state",
+        ),
+        (
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "/\\ asyncControlServiceState'.timeoutRecoveryEpisodes =\n"
+            "               timeoutVoteState.timeoutRecoveryEpisodes",
+            "/\\ TRUE",
+            "frame the timeout episode through reset, admission, and the prime state",
+        ),
+        (
+            "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode",
+            "=> episode \\in\n"
+            "         AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(",
+            "=> TRUE \\/ episode \\in\n"
+            "         AsyncTimeoutRecoveryRetainedEpisodesAfterTransition(",
+            "framed timeout-recovery episode retention theorem",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainLeavesCoreState",
+            "=> UNCHANGED vars",
+            "=> TRUE",
+            "selected TimeoutVote fair-ingress core-state frame",
+        ),
+        (
+            "AsyncPostGstHasNoControlServiceReset",
+            "gst => AsyncControlServiceResetNodesThisStep = {}",
+            "gst => TRUE",
+            "post-GST control-service reset exclusion theorem",
+        ),
+        (
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryForNode",
+            "/\\ context = episode.key.context",
+            "/\\ TRUE",
+            "current timeout-recovery episode boundary projection",
+        ),
+        (
+            "AsyncUnchangedCoreStatePreservesTimeoutBoundary",
+            "/\\ context' = episode.key.context",
+            "/\\ TRUE",
+            "unchanged-core timeout boundary preservation theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainRetainsCurrentEpisodeBoundary",
+            "/\\ ~AsyncNodeHasDecisionIn(\n"
+            "                 episode.node, context', decisions')",
+            "/\\ TRUE",
+            "selected TimeoutVote current-episode boundary retention theorem",
+        ),
+        (
+            "AsyncUnchangedCoreStateExcludesPersistInstall",
+            "UNCHANGED vars => AsyncPersistInstallCommandsThisStep = {}",
+            "UNCHANGED vars => TRUE",
+            "unchanged-core persist-install exclusion theorem",
+        ),
+        (
+            "AsyncFairIngressDrainPreservesRetransmitTimerState",
+            "asyncRetransmitDeadlines' = asyncRetransmitDeadlines",
+            "TRUE",
+            "fair-ingress retransmit timer-state frame",
+        ),
+        (
+            "AsyncFairIngressDrainExcludesDirectRetransmit",
+            "=> ~DirectRetransmitStep(node)",
+            "=> TRUE",
+            "fair-ingress direct-retransmit exclusion theorem",
+        ),
+        (
+            "AsyncTypedOutstandingTagRemovalChangesFunction",
+            "=> [tags EXCEPT\n"
+            "              ![node] = @ \\ {\"RetransmitElapsed\"}] # tags",
+            "=> TRUE",
+            "typed outstanding-tag removal strict-change theorem",
+        ),
+        (
+            "AsyncDeferredRetransmitRemovesOutstandingTag",
+            "/\\ asyncOutstandingTags' =\n"
+            "              [asyncOutstandingTags EXCEPT\n"
+            "                 ![node] = @ \\ {\"RetransmitElapsed\"}]",
+            "/\\ TRUE",
+            "deferred retransmit exact outstanding-tag removal theorem",
+        ),
+        (
+            "AsyncFairIngressDrainExcludesDeferredRetransmit",
+            "PROVE FALSE",
+            "PROVE TRUE",
+            "fair-ingress deferred-retransmit exclusion theorem",
+        ),
+        (
+            "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle",
+            "=> ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)",
+            "=> TRUE",
+            "ingress-drain retransmit-lifecycle noncompletion theorem",
+        ),
+        (
+            "AsyncIngressDrainFramesDeferredAndCausalQueues",
+            "/\\ asyncCausalQueues' = asyncCausalQueues",
+            "/\\ TRUE",
+            "ingress-drain deferred and causal queue frame theorem",
+        ),
+        (
+            "AsyncIngressDrainFramesDeferredAndCausalQueues",
+            "LeaveCausalQueues",
+            "EnqueueCandidate",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork",
+            "![candidate.node] = Append(@, candidate)",
+            "![node] = Append(@, candidate)",
+            "TimeoutVote fair-ingress command and work frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork",
+            "CandidateAdmissionCoalesced",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "/\\ asyncCausalQueues' = asyncCausalQueues",
+            "/\\ TRUE",
+            "TimeoutVote ingress scheduler-carrier frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "![candidate.node] = Append(@, candidate)",
+            "![node] = Append(@, candidate)",
+            "TimeoutVote ingress scheduler-carrier frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "AsyncIngressDrainFramesDeferredAndCausalQueues,",
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers",
+            "AsyncTimeoutVoteFairIngressFramesCommandAndWork, Isa",
+            "Isa",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "SequenceSet(Append(sequence, value))",
+            "SequenceSet(sequence)",
+            "sequence-set append adds only the appended value theorem",
+        ),
+        (
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "AppendProperties",
+            "LenProperties",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "\\cup {value}",
+            "\\cup {}",
+            "mapped sequence-set append adds only the appended value theorem",
+        ),
+        (
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "/\\ (\\A owner \\in keys:\n"
+            "          mapping[owner] \\in Seq(Range(mapping[owner])))",
+            "/\\ \\A owner \\in keys:\n"
+            "         mapping[owner] \\in Seq(Range(mapping[owner]))",
+            "mapped sequence-set append adds only the appended value theorem",
+        ),
+        (
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "=> AsyncScheduledCandidateOriginsForNodeAfter(node)",
+            "=> TRUE \\/ AsyncScheduledCandidateOriginsForNodeAfter(node)",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ \\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner])",
+            "TimeoutVote ingress exact scheduled-origin extension theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin",
+            "AsyncSequenceSetAfterAppendAddsOnlyValue",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase",
+            'AsyncProposedTimeoutCausalOrigin(node).phase = "BeginTimeout"',
+            'AsyncProposedTimeoutCausalOrigin(node).phase = "DeliverTimeout"',
+            "proposed timeout causal-origin phase theorem",
+        ),
+        (
+            "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase",
+            "AsyncProposedTimeoutCausalCommand,",
+            "TimeoutCausalCommand,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+            'AsyncTimeoutLifecycleOrigin(node).phase = "BeginTimeout"',
+            'AsyncTimeoutLifecycleOrigin(node).phase = "DeliverTimeout"',
+            "owned timeout lifecycle-origin phase theorem",
+        ),
+        (
+            "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+            "AsyncTimeoutRecoveryEpisodeForNodeIn(",
+            "AsyncTimeoutRecoveryEpisodesForNodeIn(",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin",
+            "AsyncEffectiveTimeoutLifecycleOrigin(node)",
+            "AsyncProposedTimeoutCausalOrigin(node)",
+            "current timeout causal-origin selection theorem",
+        ),
+        (
+            "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin",
+            "DEF AsyncCurrentTimeoutCausalOrigin",
+            "DEF AsyncEffectiveTimeoutLifecycleOrigin",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase",
+            'AsyncCurrentTimeoutCausalOrigin(node).phase = "BeginTimeout"',
+            'AsyncCurrentTimeoutCausalOrigin(node).phase = "DeliverTimeout"',
+            "owned timeout-recovery current-origin phase theorem",
+        ),
+        (
+            "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase",
+            "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+            "DeliveryKind(item)",
+            '"DeliverTimeout"',
+            "delivery candidate causal-origin phase theorem",
+        ),
+        (
+            "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+            "AsyncDeliveryCandidateCausalOriginAt,",
+            "AsyncCandidateCausalOrigin,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase",
+            'DeliveryCandidate(item).causalOrigin.phase = "DeliverTimeout"',
+            'DeliveryCandidate(item).causalOrigin.phase = "BeginTimeout"',
+            "TimeoutVote delivery-origin phase theorem",
+        ),
+        (
+            "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase",
+            "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind",
+            "TRUE",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle",
+            "=> ~AsyncTimeoutLifecycleTransfersThisStep(node)",
+            "=> TRUE",
+            "TimeoutVote ingress timeout-lifecycle nontransfer theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "TimeoutVote ingress timeout-lifecycle nontransfer theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "TimeoutVote ingress timeout-lifecycle nontransfer theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "/\\ AsyncControlServiceResetNodesThisStep = {}",
+            "/\\ TRUE",
+            "TimeoutVote ingress complete timeout-recovery frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "TimeoutVote ingress complete timeout-recovery frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "               AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "TimeoutVote ingress complete timeout-recovery frame theorem",
+        ),
+        (
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ gst",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "/\\ IngressDrainStep(node)",
+            "/\\ TRUE",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            '/\\ item.kind = "TimeoutVote"',
+            '/\\ item.kind = "CertifiedResponse"',
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "=> episode \\in timeoutRecoveryState.timeoutRecoveryEpisodes",
+            "=> episode \\in asyncControlServiceState.timeoutRecoveryEpisodes",
+            "selected TimeoutVote fair-ingress pre-admission episode frame",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "RecoveryState,\n"
+            "             AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition",
+            "RecoveryState,\n"
+            "             AsyncControlServiceStateTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
+            "asyncControlServiceState'.timeoutRecoveryEpisodes",
+            "asyncControlServiceState.timeoutRecoveryEpisodes",
+            "atomic timeout-vote admission prime-state projection",
+        ),
+        (
+            "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation,",
+            "AsyncStrongTypeInvariant,",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ gst",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ DOMAIN asyncCommandQueues = ValidatorIds",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ (\\A owner \\in ValidatorIds:\n"
+            "             AsyncQueueTyped(asyncCommandQueues[owner]))",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "/\\ IngressDrainStep(node)",
+            "/\\ TRUE",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "\\in asyncControlServiceState'.timeoutRecoveryEpisodes",
+            "\\in asyncControlServiceState.timeoutRecoveryEpisodes",
+            "selected TimeoutVote admission prime-state episode retention",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent",
+            "AsyncStrongTypeInvariant",
+            "must retain exact proof dependencies",
+        ),
+        (
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState",
+            "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation",
+            "must retain exact proof dependencies",
+        ),
+    ),
+)
+def test_timeout_vote_episode_theorem_mutations_survive_digest_refresh(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each finite-episode theorem weakening fails after digest refresh."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("filename", "symbol", "old", "new", "expected_error"),
+    (
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "episode.key.subject = NoSubject",
+            "episode.key.subject = subject",
+            "timeout episode key subject must be NoSubject",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "episode \\in AsyncTimeoutRecoveryEpisodesForNodeIn(\n"
+            "            asyncControlServiceState, target)",
+            "episode \\in AsyncTimeoutRecoveryEpisodes'",
+            "normalized episode key",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "DeliverySubject(item) = subject",
+            "TRUE",
+            "external DeliverySubject",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "candidate.slot.episode = episode.key",
+            "TRUE",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "introducedOwner \\in\n"
+            "            AdequateLeaderTargetRankIntroducedOwnerIdentitySet(",
+            "TRUE \\/ introducedOwner \\in\n"
+            "            AdequateLeaderTargetRankIntroducedOwnerIdentitySet(",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "introducedOwner \\in\n"
+            "               AdequateLeaderFrozenOwnerUniverse(",
+            "TRUE \\/ introducedOwner \\in\n"
+            "               AdequateLeaderFrozenOwnerUniverse(",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "candidate.slot \\in episode.timeoutVoteOwnerUniverse",
+            "TRUE",
+            "exact frozen candidate slot",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            'candidate.disposition = "FreshReplenishment"',
+            'candidate.disposition = "PreCutDescent"',
+            "FirstAdmission-only fresh replenishment",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(target, item) =\n"
+            '            {"FirstAdmission"}',
+            "AsyncTimeoutRecoveryVoteAdmissionPlan(target, item) =\n"
+            '            {"CoalescedRetry"}',
+            "FirstAdmission-only fresh replenishment",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 1",
+            "AsyncTimeoutRecoveryProducerEpisodeMeasure(after) + 0",
+            "FirstAdmission-only fresh replenishment",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "after \\in AsyncTimeoutRecoveryEpisodes'",
+            "after \\in AsyncTimeoutRecoveryEpisodes",
+            "finite retained producer episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot",
+            "TRUE",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition",
+            "TRUE",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "DEF AsyncStrongTypeInvariant,",
+            "DEF AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncSchedulerTypeInvariant,",
+            "AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncRuntimeTypeInvariant,",
+            "AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncRuntimeScalarTypeInvariant,",
+            "AsyncTypeInvariant,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep,",
+            "AsyncTimeoutRecoveryVoteAdmissionRequired,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AdequateLeaderTargetCountIncreasingReplenishmentAction,",
+            "AdequateLeaderTargetEqualCountOwnerReplacementAction,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "AdequateLeaderFrozenTargetCorridor,",
+            "AdequateLeaderFreshTargetLeaderServiceWindow,",
+            "derive its separate non-descent episode",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepFollowsProviders",
+            "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode",
+            "TRUE",
+            "must cite the exact finite timeout replenishment bridge",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AdequateLeaderFixedSelectedActionsCarryPipelineRank",
+            "BY AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,",
+            "BY AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode,\n"
+            "   AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,",
+            "must rely transitively and may not cite",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs.tla",
+            "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStep",
+            "AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepFollowsProviders",
+            "TRUE",
+            "must consume the exact origin-episode provider transitively",
+        ),
+    ),
+)
+def test_timeout_vote_episode_adequate_leader_bridge_mutations(
+    tmp_path: Path,
+    filename: str,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Fresh timeout replenishment is retained and consumed by every provider."""
+
+    module = load_checker()
+    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
+    formal_path = formal_dir / filename
+    source = formal_path.read_text(encoding="utf-8")
+    formal_path.write_text(
+        mutate_tla_theorem(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    approve_timeout_vote_episode_fixture_seals(module, tmp_path, formal_dir)
+
+    errors = module._timeout_vote_episode_source_fidelity_errors(
+        tmp_path, formal_dir
+    )
+    assert any(expected_error in error for error in errors), errors
 
 
 def test_producer_continuation_physical_cut_mutation_contract_rejects_skips(
@@ -22996,6 +26339,87 @@ def test_adequate_leader_selected_owner_continuation_rejects_weakening(
             operator in error and expected in error for error in errors
         ), errors
 
+    nested_dependent_binder = (
+        "    => \\A target \\in ValidatorIds:\n"
+        "         \\A leaderContext \\in ContextRecords:\n"
+        "           \\A leader \\in ValidatorIds:\n"
+        "             \\A leaderView \\in Views:\n"
+        "               \\A subject \\in Subjects:\n"
+        "                 \\A sourceOccurrenceRank \\in\n"
+        "                      AdequateLeaderTargetOccurrenceRankCarrier:\n"
+        "                   \\A known \\in\n"
+        "                        SUBSET AdequateLeaderFrozenOwnerUniverse(\n"
+        "                          target, leaderContext, leader, leaderView, "
+        "subject):\n"
+        "                     \\A owner \\in\n"
+        "                          AdequateLeaderFrozenCandidateOwnerUniverse(\n"
+        "                            target, leaderContext, leader, leaderView, "
+        "subject):\n"
+        "                       \\A sourceCandidates \\in SUBSET "
+        "AsyncCandidateSet:\n"
+    )
+    simultaneous_dependent_binder = (
+        "    => \\A target \\in ValidatorIds,\n"
+        "          leaderContext \\in ContextRecords,\n"
+        "          leader \\in ValidatorIds,\n"
+        "          leaderView \\in Views,\n"
+        "          subject \\in Subjects,\n"
+        "          sourceOccurrenceRank \\in\n"
+        "            AdequateLeaderTargetOccurrenceRankCarrier,\n"
+        "          known \\in\n"
+        "            SUBSET AdequateLeaderFrozenOwnerUniverse(\n"
+        "              target, leaderContext, leader, leaderView, subject),\n"
+        "          owner \\in\n"
+        "            AdequateLeaderFrozenCandidateOwnerUniverse(\n"
+        "              target, leaderContext, leader, leaderView, subject),\n"
+        "          sourceCandidates \\in SUBSET AsyncCandidateSet:\n"
+    )
+    for operator in (
+        "AdequateLeaderTargetSelectedOwnerContinuationOriginExposureProperty",
+        "AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty",
+        "AdequateLeaderTargetSelectedOwnerMaterializedContinuationClosureProperty",
+        "AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty",
+        "AdequateLeaderTargetSelectedOwnerTerminalContinuationProjectionProperty",
+        "AdequateLeaderTargetSelectedOwnerActiveContinuationClosureProperty",
+    ):
+        target_path.write_text(
+            mutate_tla_operator(
+                source,
+                operator,
+                nested_dependent_binder,
+                simultaneous_dependent_binder,
+            ),
+            encoding="utf-8",
+        )
+        errors = check(tmp_path)
+        assert any(
+            operator in error
+            and "exact nested dependent selected-owner binder" in error
+            for error in errors
+        ), errors
+
+    for theorem in (
+        "AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix",
+        "AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix",
+    ):
+        target_path.write_text(
+            mutate_tla_theorem(
+                source,
+                theorem,
+                "      => \\E candidate \\in sourceCandidates:\n"
+                "           \\E record \\in\n",
+                "      => \\E candidate \\in sourceCandidates,\n"
+                "            record \\in\n",
+            ),
+            encoding="utf-8",
+        )
+        errors = check(tmp_path)
+        assert any(
+            theorem in error
+            and "frozen-context selected-owner voter entry" in error
+            for error in errors
+        ), errors
+
     target_path.write_text(
         mutate_tla_theorem(
             source,
@@ -23625,6 +27049,12 @@ def test_adequate_leader_static_carrier_rejects_branch_loss_or_dynamic_state(
             "must compare current physical carrier ordinals",
         ),
         (
+            "try_recv_if_at_checked",
+            "fair_v2_ingress_is_certified_fence_escape(&entry.inbound)",
+            "false",
+            "a version-valid TC or CommitQC must remain visible across either retained Serve or leader-wire reservation",
+        ),
+        (
             "configure_roster_with_byte_requirements",
             "        state.pending_wire_owners.clear();",
             "        state.pending_wire_owners.clear();\n"
@@ -23661,6 +27091,46 @@ def test_serve_ingress_ordinal_contract_rejects_ordering_mutations(
     )
 
     assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ("message.validate_version().is_ok()", "true"),
+        (
+            "v2_effects::network_ingress_is_certified_fence_escape(&message.payload)",
+            "true",
+        ),
+    ),
+)
+def test_serve_ingress_certified_escape_classifier_remains_closed(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    shutil.copy2(module.ROOT_DIR / relative, target)
+    mutate_rust_item_source_in_context(
+        module,
+        target,
+        "fair_v2_ingress_is_certified_fence_escape",
+        (),
+        old,
+        new,
+    )
+
+    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        "fair ingress must use the closed, version-validated TC/CommitQC classifier"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_serve_ingress_ordinal_carrier_must_remain_private(
@@ -24464,9 +27934,9 @@ def test_serviced_candidate_production_contract_rejects_mutations(
             "            {",
             "if false {",
             "_SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256",
-            "step",
-            "step",
-            "runtime must retain successors and verify parent identity",
+            "finish_dispatched_step",
+            "finish_dispatched_step",
+            "live dispatch completion must retain successors, acknowledge the exact producer",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
@@ -24560,9 +28030,11 @@ def test_serviced_candidate_v4_semantics_survive_item_digest_refresh(
         item_name,
     )
     assert len(items) == 1
-    getattr(module, digest_name)[digest_key] = module._rust_item_token_sha256(
-        items[0]
-    )
+    digest = module._rust_item_token_sha256(items[0])
+    getattr(module, digest_name)[digest_key] = digest
+    if relative == Path("crates/iroha_core/src/sumeragi/v2_runner.rs"):
+        module._SERVICED_CANDIDATE_RUNNER_ITEM_SHA256["run_inner"] = digest
+        module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
     errors = module._serviced_candidate_production_source_fidelity_errors(
         tmp_path
@@ -25420,14 +28892,13 @@ def test_receipt_agreement_proof_cannot_use_chain_history_as_oracle() -> None:
             "TRUE",
         ),
         (
-            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "SumeragiV2AdequateLeaderProducerTransportClosureProofs",
             "AdequateLeaderTargetRanksReachIndexedDecision",
             (
-                "         /\\ AdequateLeaderTargetProtocolSubjectSource(\n"
-                "              target, leaderContext, leader,\n"
-                "              leaderView, subject)"
+                "               /\\ AdequateLeaderTargetProtocolSubjectSource(\n"
+                "                    target, leaderContext, leader, leaderView, subject)"
             ),
-            "         /\\ TRUE",
+            "               /\\ TRUE",
         ),
         (
             "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -25748,6 +29219,43 @@ def test_receipt_agreement_proof_cannot_use_chain_history_as_oracle() -> None:
             "  => IndexedHistoricalDecisionTargetOwnerRankProgressProperty",
             "  => TRUE",
         ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+            "AdequateLeaderAsyncNextBehaviorProperty(\n"
+            "      AsyncLiveSpecAt(initialContext))",
+            "TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedGlobalBlockerProvidersSupplyProducerEpisodeStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedGlobalBlockerProvidersSupplyRankStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
     ),
 )
 def test_new_obligation_supporting_theorem_statements_fail_closed(
@@ -25779,8 +29287,454 @@ def test_new_obligation_supporting_theorem_statements_fail_closed(
 
 
 @pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AdequateLeaderAsyncNextBehaviorProperty",
+            "[][AsyncNext]_AsyncAllVars",
+            "[]TRUE",
+        ),
+        (
+            "AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle",
+            "/\\ AdequateLeaderAsyncNextBehaviorProperty(specification)",
+            "/\\ TRUE",
+        ),
+    ),
+)
+def test_adequate_leader_async_next_behavior_mutations_fail_closed(
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    sources = {
+        target_module: mutate_tla_operator(source, symbol, old, new),
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(f"{symbol} must equal only" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty",
+            (
+                "[][AdequateLeaderAuthorityDeadline"
+                "NoPrematureExitStepProvider]_AsyncAllVars"
+            ),
+            "[]AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider",
+        ),
+        (
+            "AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty",
+            (
+                "[][AdequateLeaderAuthorityDeadline"
+                "DecisionRetentionStepProvider]_AsyncAllVars"
+            ),
+            "[]AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider",
+        ),
+        (
+            (
+                "AdequateLeaderFixedPipelineOriginHistoryAnd"
+                "NoResurrectionProviderProperty"
+            ),
+            (
+                "[][AdequateLeaderFixedPipelineOriginHistoryAnd"
+                "NoResurrectionProvider]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedPipelineOriginHistoryAnd"
+                "NoResurrectionProvider"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedCutPerActionProviderProperty",
+            "[][AdequateLeaderFixedCutPerActionProvider]_AsyncAllVars",
+            "[]AdequateLeaderFixedCutPerActionProvider",
+        ),
+        (
+            (
+                "AdequateLeaderFixedPipelineOriginEpisode"
+                "SelectedOwnerStepProviderProperty"
+            ),
+            (
+                "[][AdequateLeaderFixedPipelineOriginEpisode"
+                "SelectedOwnerStepProvider]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedPipelineOriginEpisode"
+                "SelectedOwnerStepProvider"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty",
+            (
+                "[][AdequateLeaderFixedPreCandidate"
+                "SelectedOwnerStepProvider]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedPreCandidate"
+                "SelectedOwnerStepProvider"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedSelectedActionClockCarryProviderProperty",
+            (
+                "[][AdequateLeaderFixedSelectedCandidateActionCarries"
+                "AbsoluteCeiling]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedSelectedCandidateActionCarries"
+                "AbsoluteCeiling"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedSelectedActionClockCarryProviderProperty",
+            (
+                "[][AdequateLeaderFixedSelectedEntryActionCarries"
+                "AbsoluteCeiling]_AsyncAllVars"
+            ),
+            (
+                "[]AdequateLeaderFixedSelectedEntryActionCarries"
+                "AbsoluteCeiling"
+            ),
+        ),
+        (
+            "AdequateLeaderFixedGlobalBlockerProviderProperty",
+            "[][(/\\ AdequateLeaderFixedGlobalBlockerEntryProvider",
+            "[](/\\ AdequateLeaderFixedGlobalBlockerEntryProvider",
+        ),
+        (
+            "AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty",
+            (
+                "[][AdequateLeaderFixedSubjectReplacement"
+                "CutCarryProvider]_AsyncAllVars"
+            ),
+            "[]AdequateLeaderFixedSubjectReplacementCutCarryProvider",
+        ),
+        (
+            "AdequateLeaderRetainedProducerPacketActionProviderProperty",
+            (
+                "[][(/\\ "
+                "AdequateLeaderRetainedProducerPacketPrefixEntryProvider("
+            ),
+            (
+                "[](/\\ "
+                "AdequateLeaderRetainedProducerPacketPrefixEntryProvider("
+            ),
+        ),
+    ),
+)
+def test_authority_provider_temporal_shapes_fail_closed(
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_operator(source, symbol, old, new)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain the reviewed temporal action shape" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol", "anchor", "description"),
+    (
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            (
+                "            => "
+                "AdequateLeaderFixedPreCandidateEntryStrictRankGoal(\n"
+            ),
+            "selected-owner action implication",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            (
+                "             /\\ [AsyncNext]_AsyncAllVars\n"
+                "            => \\/ "
+                "AdequateLeaderFixedPreCandidateEntryStrictRankGoal("
+            ),
+            "AsyncNext frame implication",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedChainSpecKeepsServiceActivationRestrictionIrreversible",
+            (
+                "            /\\ [IndexedChainNext]_IndexedChainVars\n"
+                "            => (IndexedAsync(initialContext)!"
+            ),
+            "service-activation irreversible implication",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedPostGstTickFairnessTransfersLocally",
+            (
+                "             /\\ IndexedTickStep(initialContext)\n"
+                "             => <<IndexedPostGstTick(initialContext)>>_("
+            ),
+            "post-GST tick projection implication",
+        ),
+    ),
+)
+def test_direct_action_proof_steps_reject_temporal_boxing(
+    target_module: str,
+    symbol: str,
+    anchor: str,
+    description: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = wrap_tla_theorem_proof_step(source, symbol, anchor)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and f"direct action proof step {description}" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "IndexedChainSpecKeepsServiceActivationRestrictionIrreversible",
+            (
+                "  IndexedChainSpec\n"
+                "    => \\A initialContext \\in AdmissibleContextRecords:"
+            ),
+            (
+                "  TRUE\n"
+                "    => \\A initialContext \\in AdmissibleContextRecords:"
+            ),
+        ),
+        (
+            "IndexedPostGstTickFairnessTransfersLocally",
+            "    IndexedChainSpec\n      => WF_",
+            "    TRUE\n      => WF_",
+        ),
+        (
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+            "UNCHANGED IndexedScheduler(initialContext, 44)",
+            "UNCHANGED IndexedScheduler(initialContext, 46)",
+        ),
+    ),
+)
+def test_action_temporal_chain_theorem_statements_fail_closed(
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2ChainEpochRefinement"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(source, symbol, old, new)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain the exact reviewed action-temporal statement" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
     ("target_module", "symbol", "proof_dependency"),
     (
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+            "IndexedAsync!AsyncServiceActivationFrameVars",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+            "IndexedAsync!AsyncSchedulerExceptServiceActivation",
+        ),
+        (
+            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+            "IndexedNonOpenProductStepCannotCreateHistoricalTarget",
+            "IndexedSuccessorActivationStepPreservesHistoricalRecoveryTargets",
+        ),
+        (
+            "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+            "IndexedHistoricalLowerAuthorityProgressGivesStrictAncestorAdvance",
+            "IndexedAdmissibleTargetHasAdmissibleAncestors",
+        ),
+    ),
+)
+def test_historical_target_successor_frame_dependencies_fail_closed(
+    target_module: str,
+    symbol: str,
+    proof_dependency: str,
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = delete_tla_theorem_token(source, symbol, proof_dependency)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain reviewed proof dependencies" in error
+        and proof_dependency in error
+        for error in errors
+    ), errors
+
+
+def test_historical_strict_ancestor_context_binder_fails_closed() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedHistoricalLowerAuthorityProgressGivesStrictAncestorAdvance"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "\\A targetContext \\in AdmissibleContextRecords:",
+        "\\A targetContext \\in ContextRecords:",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain the exact reviewed action-temporal statement" in error
+        for error in errors
+    ), errors
+
+
+def test_historical_certificate_request_projection_dependency_fails_closed() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedHistoricalDiscoveryOwnedOutcomeDropsCertificateRankFour"
+    proof_dependency = "IndexedScheduler"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = delete_tla_theorem_token(source, symbol, proof_dependency)
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "must retain reviewed proof dependencies" in error
+        and proof_dependency in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("target_module", "symbol", "proof_dependency"),
+    (
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep",
+            "AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService",
+            "AdequateLeaderFixedSelectedPreCandidateEntryFrontier",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderFixedGlobalBlockerProvidersSupplyProducerEpisodeStep",
+            "AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep",
+            "AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+            "AsyncLiveSpecProjectsAsyncSpec",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderRetainedProducerNonDescentEpisodeStep",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            "AsyncLiveProvidesAdequateLeaderFixedPipelineOriginNonDescentEpisodeStep",
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+        ),
+        (
+            "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
+            (
+                "AsyncLiveSpecSuppliesAdequateLeaderAuthorityDeadline"
+                "FreshSelfQuantitativeProviderBundle"
+            ),
+            "AsyncLiveProvidesAdequateLeaderAsyncNextBehavior",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedChainSpecKeepsServiceActivationRestrictionIrreversible",
+            "IndexedStepKeepsServiceActivationRestrictionIrreversible",
+        ),
+        (
+            "SumeragiV2ChainEpochRefinement",
+            "IndexedPostGstTickFairnessTransfersLocally",
+            "IndexedPostGstTickProductStepProjectsExactOccurrence",
+        ),
         (
             "SumeragiV2ChainReceiptAgreementProofs",
             "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
@@ -27635,6 +31589,119 @@ def test_historical_local_gst_requires_exact_responsive_active_roster(
     ), errors
 
 
+def test_historical_certificate_rank_rejects_selected_gst_stage_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedChainSpecClosesHistoricalCertificateDiscoveryRank"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "                => /\\ IndexedCore(initialContext, 7)\n",
+        "                => /\\ "
+        "IndexedHistoricalTransport(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "certificate-stage GST core projection" in error
+        for error in errors
+    ), errors
+
+
+def test_historical_certificate_rank_rejects_selected_gst_corridor_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedChainSpecClosesHistoricalCertificateDiscoveryRank"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "      <3>2. (IndexedCore(initialContext, 7)\n",
+        "      <3>2. (IndexedHistoricalTransport(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "owned-discovery GST core projection" in error
+        for error in errors
+    ), errors
+
+
+def test_adequate_leader_tick_fairness_rejects_selected_gst_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedAdequateLeaderLocalFairBehaviorAt"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_operator(
+        source,
+        symbol,
+        "       IndexedCore(initialContext, 7)\n",
+        "       IndexedAdequateLeaderWitness(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "adequate-leader Tick GST core projection" in error
+        for error in errors
+    ), errors
+
+
+def test_adequate_leader_local_source_rejects_selected_gst_projection(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
+    symbol = "IndexedAdequateLeaderLocalSourceJoinsResponsiveRoster"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "    <2>1. IndexedCore(initialContext, 7)\n",
+        "    <2>1. IndexedAsync(initialContext)!gst\n",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "local-source GST core projection" in error
+        for error in errors
+    ), errors
+
+
 def test_historical_local_gst_rejects_weakened_async_set_gst_guard(
 ) -> None:
     module = load_checker()
@@ -29194,6 +33261,7 @@ def test_authority_deadline_retired_seams_cannot_be_resurrected(
 @pytest.mark.parametrize(
     "dependency",
     (
+        "AdequateLeaderAsyncNextBehaviorProperty",
         "AdequateLeaderFixedSelectedOwnerFairnessProperty",
         "AdequateLeaderFixedSubjectReplacementProviderProperties",
         (
@@ -31258,6 +35326,27 @@ Safe == "OMITTED"
     assert module.tla_shortcut_errors(path, source) == []
 
 
+def test_tla_shortcut_scan_rejects_obsolete_unsound_tlaps_rules(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    path = tmp_path / "ObsoleteRules.tla"
+    source = r"""---- MODULE ObsoleteRules ----
+THEOREM BareFairness == TRUE BY WF1
+THEOREM UndefinedFairness == TRUE BY RuleWF1
+THEOREM UndefinedInvariant == TRUE BY RuleINV1
+\* WF1 RuleWF1 RuleINV1 in comments must not trigger the scanner.
+IgnoredStrings == "WF1 RuleWF1 RuleINV1"
+=============================================================================
+"""
+
+    errors = module.tla_shortcut_errors(path, source)
+    assert len(errors) == 3
+    assert all("obsolete or undefined TLAPS rule" in error for error in errors)
+    for token in ("WF1", "RuleWF1", "RuleINV1"):
+        assert any(f"rule {token} is prohibited" in error for error in errors)
+
+
 def test_retired_favourable_network_liveness_corridor_is_rejected(
     tmp_path: Path,
 ) -> None:
@@ -31550,6 +35639,7 @@ Init == InitAt(ContextRecord(0, <<>>))
         "FiniteSetTheorems",
         "NaturalsInduction",
         "WellFoundedInduction",
+        "SequenceTheorems",
         "SumeragiV2QuorumProofs",
     ),
 )
@@ -31566,12 +35656,16 @@ def test_async_source_fidelity_requires_tlaps_aware_module_header(
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     source = path.read_text(encoding="utf-8")
     checker = module._async_source_fidelity_errors
-    assert checker(formal_dir) == []
+    baseline_errors = checker(formal_dir)
+    assert not any(
+        "exact TLAPS-aware module header" in error
+        for error in baseline_errors
+    ), baseline_errors
 
     exact_header = (
         "EXTENDS SumeragiV2Inductive, Sequences, FiniteSets, Naturals, "
         "Functions, TLAPS, FiniteSetTheorems, NaturalsInduction, "
-        "WellFoundedInduction, SumeragiV2QuorumProofs"
+        "WellFoundedInduction, SequenceTheorems, SumeragiV2QuorumProofs"
     )
     assert source.count(exact_header) == 1
     dependency_token = f", {proof_dependency}"
@@ -32518,37 +36612,31 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     effects_path.write_text(
         mutate_effect_item(
             "consume_effects",
-            "        let ownership = self\n"
-            "            .runtime\n"
-            "            .take_effect_ownership(&effects)\n"
-            "            .map_err(EffectExecutorError::Runtime)?;\n"
-            "        if let Err(error) = self.retain_effect_batch(effects, ownership) {\n"
+            "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
             "            return Err(self.close(error, services));\n"
             "        }\n"
-            "        self.drain_retained_effect_batch(services)\n"
-            "            .map_err(|error| self.close(error, services))",
-            "        let ownership = self\n"
-            "            .runtime\n"
-            "            .take_effect_ownership(&effects)\n"
-            "            .map_err(EffectExecutorError::Runtime)?;\n"
-            "        let count = self.drain_retained_effect_batch(services)?;\n"
-            "        if let Err(error) = self.retain_effect_batch(effects, ownership) {\n"
-            "            return Err(self.close(error, services));\n"
+            "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n"
+            "            return Err(self.close_after_transferring_runtime_terminals(error, services));\n"
+            "        }",
+            "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n"
+            "            return Err(self.close_after_transferring_runtime_terminals(error, services));\n"
             "        }\n"
-            "        Ok(count)",
+            "        if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {\n"
+            "            return Err(self.close(error, services));\n"
+            "        }",
         ),
         encoding="utf-8",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "consume_effects must bind the complete ownership vector and retained reducer batch before draining it"
+        "consume_effects must snapshot, retain, and commit the reducer frontier before transferring terminals and draining"
         in error
         for error in errors
     ), errors
 
     effects_path.write_text(
         mutate_effect_item(
-            "retain_effect_batch",
+            "retain_effect_batch_at_frontier",
             "                .zip(ownership)\n",
             "                .zip(ownership.into_iter().rev())\n",
         ),
@@ -32556,7 +36644,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "retained effect construction must zip each effect with its immutable owner"
+        "retained effect construction must zip each retained effect with its immutable owner"
         in error
         for error in errors
     ), errors
@@ -32616,14 +36704,14 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     effects_path.write_text(
         mutate_effect_item(
             "step",
-            "        if self.retained_effect_batch.is_some() {\n",
-            "        if false && self.retained_effect_batch.is_some() {\n",
+            "        if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {\n",
+            "        if false {\n",
         ),
         encoding="utf-8",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
-        "step must drain retained causal debt and return before runtime stepping"
+        "step must drain retained or parked debt and give blocked ordinary debt one typed pacemaker turn"
         in error
         for error in errors
     ), errors
@@ -32664,6 +36752,82 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
 
     effects_path.write_text(
         mutate_effect_item(
+            "consume_pacemaker_effects",
+            "evidence.owner().causal_origin().root_class != SERVICE_CLASS_PROGRESS",
+            "evidence.owner().causal_origin().root_class == SERVICE_CLASS_PROGRESS",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "typed pacemaker effect consumption must reject every non-Progress causal owner"
+        in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "consume_pacemaker_effects",
+            "        if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n",
+            "        if false && let Err(error) = self.commit_reconciliation_frontier(frontier, services) {\n",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "typed pacemaker effect consumption must commit even an empty reducer frontier"
+        in error
+        for error in errors
+    ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
+            "step_pacemaker_once",
+            "self.runtime.step_pacemaker_effects(now)",
+            "self.runtime.step_effects(now)",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "typed pacemaker executor turn must invoke only the runtime pacemaker scheduler"
+        in error
+        or "retained effect FIFO step_pacemaker_once declaration and complete control flow must match"
+        in error
+        for error in errors
+    ), errors
+
+    for old, new in (
+        (
+            "wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => true",
+            "wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => false",
+        ),
+        (
+            "matches!(certificate.phase, wire::GlobalPhase::Commit)",
+            "matches!(certificate.phase, wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit)",
+        ),
+        (
+            "matches!(certificate.phase, wire::GlobalPhase::Commit)",
+            "false",
+        ),
+    ):
+        effects_path.write_text(
+            mutate_effect_item(
+                "network_ingress_is_certified_fence_escape",
+                old,
+                new,
+            ),
+            encoding="utf-8",
+        )
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(
+            "only TC, direct CommitQC, and discovery CommitQC may escape a hung signer"
+            in error
+            for error in errors
+        ), errors
+
+    effects_path.write_text(
+        mutate_effect_item(
             "take_scheduler_ownership",
             "SerializedV2Runtime::take_last_scheduler_ownership(self)",
             "None",
@@ -32677,6 +36841,44 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
         for error in errors
     ), errors
     effects_path.write_text(canonical_effects, encoding="utf-8")
+
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    canonical_runner = runner_path.read_text(encoding="utf-8")
+
+    def mutate_runner_item(name: str, old: str, new: str) -> str:
+        item = module.rust_items(canonical_runner, name)[0]
+        assert item.source.count(old) == 1, (name, old)
+        return canonical_runner.replace(item.source, item.source.replace(old, new, 1), 1)
+
+    runner_path.write_text(
+        mutate_runner_item(
+            "drain_v2_ingress",
+            "mode == V2IngressDrainMode::CertifiedFenceEscape && turn != OuterIngressTurn::Ingress",
+            "false && turn != OuterIngressTurn::Ingress",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "escape mode must skip Completion and Runtime turns" in error
+        for error in errors
+    ), errors
+
+    runner_path.write_text(
+        mutate_runner_item(
+            "drain_v2_ingress",
+            "message.validate_version().is_err()\n"
+            "                        || !network_ingress_is_certified_fence_escape(&message.payload)",
+            "false || !network_ingress_is_certified_fence_escape(&message.payload)",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "escape mode must reject wrong-version and ordinary ingress" in error
+        for error in errors
+    ), errors
+    runner_path.write_text(canonical_runner, encoding="utf-8")
 
 
 def test_rust_item_scanner_masks_noncode_and_records_fail_closed_context() -> None:
@@ -33389,6 +37591,24 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "post-cut replay must receive recoverable backpressure before FIFO publication",
         ),
         (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.admission_ordinal() <= physical_ordinal",
+            "strict retained-token physical-replay classifier declaration and complete control flow must match",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "token.admission_ordinal() < physical_ordinal",
+            "token.scheduler_ordinal() < physical_ordinal",
+            "physical replay classification must require a strictly older durable admission token and reject partial ownership",
+        ),
+        (
+            "is_physical_leader_wire_replay",
+            "(Some(_), None) | (None, Some(_)) => Err(RuntimeIngressMergeError::Conflict)",
+            "(Some(_), None) | (None, Some(_)) => Ok(true)",
+            "physical replay classification must require a strictly older durable admission token and reject partial ownership",
+        ),
+        (
             "enqueue_network_with_ingress_ownership",
             "if authenticated_deferred_owner != deferred_owner",
             "if false",
@@ -33404,9 +37624,39 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "enqueue_network_with_ingress_ownership",
-            "match self.clock_owner_reservation_blocks(owner)",
-            "match Ok(false)",
+            "if blockers.any() && !certified_timeout_escape && !timeout_vote_episode_escape {",
+            "if blockers.any() && !certified_timeout_escape {",
             "authenticated ingress ownership admission and deferred merge declaration and complete control flow must match",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "match ingress_ownership.is_physical_leader_wire_replay()",
+            "match Ok(true)",
+            "only a strict current-round direct-certificate replay or finite TimeoutVote episode owner may cross a clock reservation before FIFO admission",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "self.timeout_recovery_episode_allows_clock_blockers(blockers)",
+            "Ok(false)",
+            "only a strict current-round direct-certificate replay or finite TimeoutVote episode owner may cross a clock reservation before FIFO admission",
+        ),
+        (
+            "enqueue_network_with_ingress_ownership",
+            "wire_payload_is_direct_certificate_recovery_shape(\n            authenticated.payload(),\n        )",
+            "wire_payload_is_certified_fence_escape(\n            authenticated.payload(),\n        )",
+            "only a strict current-round direct-certificate replay or finite TimeoutVote episode owner may cross a clock reservation before FIFO admission",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "token.admission_ordinal() < source_physical_ordinal",
+            "token.admission_ordinal() <= source_physical_ordinal",
+            "pre-runtime admission must use the same strict direct-certificate replay and finite TimeoutVote exceptions as the mutating gate",
+        ),
+        (
+            "can_admit_pre_runtime_leader_wire",
+            "wire_payload_is_direct_certificate_recovery_shape(\n                        &runtime_message.payload,\n                    )",
+            "wire_payload_is_certified_fence_escape(\n                        &runtime_message.payload,\n                    )",
+            "pre-runtime admission must use the same strict direct-certificate replay and finite TimeoutVote exceptions as the mutating gate",
         ),
         (
             "can_admit_network_message_with_ingress_ownership",
@@ -33433,6 +37683,96 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "Err(EnqueueError::Full),",
             "Ok(()),",
             "production causal-FIFO regression deferred_physical_cut_blocks_only_pre_cut_leader_wire_occurrences declaration, contract, and complete control flow must match",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(fresh_token.admission_ordinal(), fresh_physical_ordinal);",
+            "assert_ne!(fresh_token.admission_ordinal(), fresh_physical_ordinal);",
+            "the fresh post-cut carrier must retain equal token and physical ordinals",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            !runtime.can_admit_network_message_with_ingress_ownership(&message, &fresh_runtime,),",
+            "assert!(\n            runtime.can_admit_network_message_with_ingress_ownership(&message, &fresh_runtime,),",
+            "the regression must reject the fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "Err(NetworkIngressError::Backpressure(EnqueueError::Full))",
+            "Ok(runtime.round_tag())",
+            "the mutating seam must backpressure a fresh certified carrier",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "!runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "runtime.fail_closed,\n            \"rejecting the fresh carrier is retryable backpressure\"",
+            "fresh certified backpressure must remain recoverable",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "fresh_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "fresh_runtime_projection.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "the fresh case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "            Ok(false),\n            \"the fresh carrier must exercise the active timeout reservation\"",
+            "the fresh negative case must exercise an active clock reservation",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh);",
+            "assert_eq!(runtime.queued_commands(), queued_before_fresh + 1);",
+            "fresh backpressure must publish no queue, receipt, or terminal state",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_receipt.token().admission_ordinal() < restored_physical_ordinal",
+            "restored_receipt.token().admission_ordinal() <= restored_physical_ordinal",
+            "the regression must admit only a strictly later retained replay",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "assert!(\n            runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "assert!(\n            !runtime\n                .can_admit_network_message_with_ingress_ownership(&message, &restored_pre_runtime,),",
+            "the regression must admit the retained replay through fair ingress",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(true),",
+            "restored_runtime.is_physical_leader_wire_replay(),\n            Ok(false),",
+            "the retained case must exercise the strict physical-replay helper",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "            Ok(true),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "            Ok(false),\n            \"the restored carrier must exercise the narrow replay exception\"",
+            "the positive replay case must exercise the active reservation exception",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_none()),",
+            ".is_some_and(|queued| queued.restored_producer_stage.is_some()),",
+            "the replay must publish exactly one ordinary authenticated Admit owner",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "RuntimeSelectedOwnerKind::Timeout",
+            "RuntimeSelectedOwnerKind::Fifo",
+            "the frozen timeout must retain the first serialized turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 1",
+            "[AdapterEffect::EnterView { tag, .. }] if tag.view() == 0",
+            "the restored TC must advance the view after the timeout turn",
+        ),
+        (
+            "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
+            "terminals.len(),\n            1,",
+            "terminals.len(),\n            0,",
+            "the restored TC lifecycle must terminalize exactly once",
         ),
         (
             "take_last_scheduler_ownership",
@@ -33511,11 +37851,11 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "restart must install dormant Local FIFO reservations before retaining any startup successor",
         ),
         (
-            "step",
+            "finish_dispatched_step",
             "if token.identity().admission_ordinal() != "
             "effect_parent.lifecycle_ordinal()",
             "if false",
-            "live dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
+            "live dispatch completion must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
         ),
         (
             "step_recovery",
@@ -33529,6 +37869,24 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "lifecycle_owner.lifecycle_ordinal()",
             "if false",
             "deferred dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
+        ),
+        (
+            "try_step_pacemaker_escape",
+            "if timeout_due {",
+            "if false {",
+            "typed pacemaker escape must prefer the absolute timeout and otherwise admit only Progress-root work",
+        ),
+        (
+            "dispatch_one_pacemaker_progress",
+            "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
+            "owner.causal_origin().root_class != SERVICE_CLASS_PROGRESS",
+            "pacemaker FIFO escape must retain exact selection evidence and Progress-root ownership through shared completion",
+        ),
+        (
+            "dispatch_one_pacemaker_progress",
+            "driver.certified_progress_bypasses_signature_fence(command)",
+            "false",
+            "pacemaker FIFO escape must retain exact selection evidence and Progress-root ownership through shared completion",
         ),
         (
             "later_same_semantic_fair_retry_retains_runtime_lifecycle_root",
@@ -33579,7 +37937,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "unminted fair ownership must fail closed without a physical queue position",
         ),
         (
-            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+            "certified_tc_crosses_full_fence_blocked_prepare_prefix",
             "            Some(0),",
             "            None,",
             "Busy-deferred authenticated response coalescing regression declaration and complete control flow must match",
@@ -33609,11 +37967,15 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
 
     mutated_path = write_runtime_item_mutation(
         "step",
-        "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
+        "        if !timeout_preempts\n"
+        "            && let Some(step) = self.dispatch_one_adapter_deferred(now, None)?\n"
+        "        {\n",
         "        if false {\n"
         "            return Ok(RuntimeStep::Idle);\n"
         "        }\n"
-        "        if let Some(step) = self.dispatch_one_adapter_deferred(now)? {\n",
+        "        if !timeout_preempts\n"
+        "            && let Some(step) = self.dispatch_one_adapter_deferred(now, None)?\n"
+        "        {\n",
     )
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any(
@@ -34134,3 +38496,4614 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
 for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:
     _execute_test_component(_proof_ledger_test_component)
 del _proof_ledger_test_component
+
+
+# Preserve incoming tests changed after the lexical component split.
+@pytest.mark.parametrize(
+    ("relative_path", "region_marker", "old", "new", "error_fragment"),
+    (
+        (
+            "crates/iroha_core/src/lib.rs",
+            "pub enum NetworkMessage",
+            "CertifiedMergeSidecar(Arc<CertifiedMergeSidecarMessage>),",
+            "CertifiedMergeSidecar(Box<CertifiedMergeSidecarMessage>),",
+            "every exact-output network payload class must use an immutable shared carrier",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct OutboundTransfer",
+            "chunks: Vec<Arc<CertifiedMergeSidecarMessage>>",
+            "chunks: Vec<CertifiedMergeSidecarMessage>",
+            "sidecar responses must cache each immutable fixed-boundary payload once for every source cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn drain_outbound_chunks_inner(",
+            "let message = Arc::clone(\n"
+            "                            transfer\n"
+            "                                .chunks\n"
+            "                                .get(index)\n"
+            "                                .expect(\"bounded sidecar cursor names a cached chunk\"),\n"
+            "                        );",
+            "let message = Arc::new(\n"
+            "                            transfer\n"
+            "                                .chunks\n"
+            "                                .get(index)\n"
+            "                                .expect(\"bounded sidecar cursor names a cached chunk\")\n"
+            "                                .as_ref()\n"
+            "                                .clone(),\n"
+            "                        );",
+            "sidecar drainage must clone only the cached Arc",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "let projection = admission.projection();",
+            "let _rebuilt_payload = Vec::<u8>::new().to_vec();\n"
+            "        let projection = admission.projection();",
+            "per-source sidecar drainage and acknowledgement must never reconstruct cached payload bytes",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) enum V2LaneWorkEffect",
+            "message: Arc<CertifiedMergeSidecarMessage>,",
+            "message: CertifiedMergeSidecarMessage,",
+            "the lane effect must preserve the exact immutable sidecar carrier",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
+            "let data = NetworkMessage::CertifiedMergeSidecar(message);",
+            "let data = NetworkMessage::CertifiedMergeSidecar(Arc::new((*message).clone()));",
+            "worker sidecar dispatch must install the existing Arc without reconstruction",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn dispatch_lane_work_effect(",
+            "Arc::clone(&message),",
+            "Arc::new((*message).clone()),",
+            "runner sidecar dispatch must preserve the exact peer, complete route set, and immutable message pointer",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE",
+            "nonzero!(2_usize)",
+            "nonzero!(3_usize)",
+            "certified sidecar per-source sessions must remain exactly two",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE",
+            "nonzero!(16_usize * 1024 * 1024)",
+            "nonzero!(17_usize * 1024 * 1024)",
+            "certified sidecar per-source bytes must remain exactly 16 MiB",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE",
+            "nonzero!(4_usize)",
+            "nonzero!(5_usize)",
+            "certified sidecar per-source request gates must remain exactly four",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn from_admitted_reply(",
+            "semantic_target: flush_identity.semantic_target().clone(),",
+            "semantic_target: chunk.responder.clone(),",
+            "sidecar writer-flush admission must bind the opaque source, exact route, actor ticket and clone-shared claim with immutable payload and cursors",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            "check_production_reliable_flush_worker_transition(flush_trace)\n"
+            "                            .ok_or_else",
+            "Some(flush_trace)\n"
+            "                            .ok_or_else",
+            "writer-flush ownership must consume the checked transition token before removing its target-local witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            ".bind_confirmed_worker_trace(flush_trace)",
+            ".bind_confirmed_worker_trace(ProductionReliableFlushTraceProjection::default())",
+            "a successful writer occurrence must bind its exact confirmed worker trace before lane admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            "if let Some(admission) = pending_flush.sidecar_admission.take() {\n"
+            "                        self.admitted_sidecar_chunks.push_back(admission);\n"
+            "                    }",
+            "let _ = pending_flush.sidecar_admission.take();",
+            "only a successful peer-writer flush may create a sidecar cursor receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            "let route_state = self\n"
+            "                        .fanouts",
+            "if let Some(admission) = pending_flush.sidecar_admission.take() {\n"
+            "                        self.admitted_sidecar_chunks.push_back(admission);\n"
+            "                    }\n"
+            "                    let route_state = self\n"
+            "                        .fanouts",
+            "closed writer ownership must not manufacture a sidecar cursor receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn project_sidecar_receipt_completions(",
+            "admission.matches_materialized_chunk(message) && admission.is_bound_to_source(route)",
+            "admission.matches_materialized_chunk(message)",
+            "retained sidecar flush completion must match the immutable chunk and exact authenticated source before advancing only that route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "CertifiedMergeSidecarMessage::Request(_)\n"
+            "                    | CertifiedMergeSidecarMessage::Close(_)\n"
+            "                    | CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                    | CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "CertifiedMergeSidecarMessage::Request(_) => Some((\n"
+            "                        post.clone(),\n"
+            "                        reply_route.clone(),\n"
+            "                        message_cursor_before,\n"
+            "                        message_cursor_after,\n"
+            "                    )),\n"
+            "                    CertifiedMergeSidecarMessage::Close(_)\n"
+            "                    | CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                    | CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "self.sidecar_control_units() >= self.sidecar_admission_capacity",
+            "self.sidecar_control_units() > self.sidecar_admission_capacity",
+            "sidecar receipt capacity must reject at the exact full boundary",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn admit_network_exact_output(",
+            ".post_reply_recoverable_with_flush_ack_at_attempt(\n"
+            "                        post,\n"
+            "                        reply_route,\n"
+            "                        ticket,\n"
+            "                        reply_writer_timeout_attempt,\n"
+            "                    )?",
+            ".post_reply_recoverable(post, reply_route, ticket)\n"
+            "                .map(|()| None)?",
+            "production reply output must retain every exact writer-flush witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn admit_network_exact_output(",
+            "Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack))",
+            "{ drop(flush_ack); Ok(ExactOutputAttemptOutcome::Admitted) }",
+            "production reply output must retain every exact writer-flush witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn drain_certified_merge_sidecar_chunk_admissions(",
+            "limit.min(pending.admitted_sidecar_chunks.len())",
+            "limit.min(pending.flushing_sidecar_chunks.len())",
+            "receipt drainage may consume only successfully flushed sidecar admissions",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "check_production_reliable_flush_link_transition(worker_trace, occurrence).ok_or(",
+            "check_production_reliable_flush_link_transition(worker_trace, worker_trace).ok_or(",
+            "lane application must consume checked worker/link tokens for the exact accepted occurrence before inspecting mutable transport state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "if !admission.projection_matches_identity(&admission.flush_identity) {",
+            "if false {",
+            "lane application must consume checked worker/link tokens for the exact accepted occurrence before inspecting mutable transport state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "|| projection.chunk_cursor_before != chunk_index",
+            "|| false",
+            "lane application must validate the immutable message and chunk cursors before transport preflight",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "preflight_reliable_flush_outbound(self, admission, &gate, chunk_index, count)?",
+            "preflight_reliable_flush_outbound(self, admission, &gate, 0, count)?",
+            "the exact gate, source route, shared bytes and cursors must preflight into one immutable application plan before claiming completion",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerRequestGateAttempt {",
+            "cursor: ServerResponseCursor,",
+            "cursor: usize,",
+            "sidecar request gates must retain exact materialization authority, retry state, and a source-local pending-or-terminal cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "enum ServerResponseCursor {",
+            "Complete,",
+            "PendingZero,",
+            "sidecar gate history must preserve terminal completion across exact, later-delivery, and reconnected observations",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn prune_server_gates(",
+            "let reclaimed = self.reclaim_inactive_outbound_attempts(now)?;",
+            "let reclaimed = 0;",
+            "sidecar gate pruning must preserve semantic ownership until an authenticated close floor retires it",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn route_update(",
+            ".source_update_from(prior)",
+            ".source_update_from(candidate)",
+            "same-source sidecar route update must use the canonical monotonic update kernel",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "if prior.cursor == ServerResponseCursor::Complete {",
+            "if false && prior.cursor == ServerResponseCursor::Complete {",
+            "an exact, later-delivery, or reconnected completed source must remain terminal while only its observed route may update",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn enqueue_response(",
+            "let ServerResponseCursor::Pending(resume_chunk) = attempt.cursor else {\n"
+            "                continue;\n"
+            "            };",
+            "let resume_chunk = match attempt.cursor {\n"
+            "                ServerResponseCursor::Pending(chunk) => chunk,\n"
+            "                ServerResponseCursor::Complete => 0,\n"
+            "            };",
+            "completed sidecar sources must never regain materialized output",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn drain_outbound_chunks_inner(",
+            "cursor = ServerResponseCursor::Complete;",
+            "cursor = ServerResponseCursor::Pending(0);",
+            "sidecar drainage must persist terminal completion rather than a replayable chunk-zero cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "if !admission.flush_identity.claim_writer_flush_once() {",
+            "if false {",
+            "the clone-shared writer claim must be the sole linearization point before the exact checked application is compared and durably published",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "check_production_reliable_flush_application_transition(prospective_application)",
+            "check_production_reliable_flush_worker_transition(worker_trace)",
+            "the clone-shared writer claim must remain behind the checked application/link gates and opaque-token consumption",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "check_production_reliable_flush_link_transition(worker_trace, prospective_application)",
+            "check_production_reliable_flush_link_transition(worker_trace, occurrence)",
+            "the clone-shared writer claim must remain behind the checked application/link gates and opaque-token consumption",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_outbound_chunk(",
+            "let prospective_application = checked_application.into_projection();",
+            "let prospective_application = prospective_application;",
+            "the clone-shared writer claim must remain behind the checked application/link gates and opaque-token consumption",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "attempt.materialization_retryable = false;\n"
+            "                    return Ok(ServerRequestAdmission::Existing);",
+            "attempt.materialization_retryable = true;\n"
+            "                    return Ok(ServerRequestAdmission::Existing);",
+            "an exact, later-delivery, or reconnected completed source must remain terminal while only its observed route may update",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "let retry_chunk = attempt.in_flight_chunk.unwrap_or(attempt.next_chunk);",
+            "let retry_chunk = 0;",
+            "a replacement writer tenure must retry the source's current chunk",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "if attempt.in_flight_chunk.is_none() && !attempt.queued {",
+            "if !attempt.queued {",
+            "a later delivery with an in-flight chunk must refresh only its source route without queueing a concurrent copy",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "attempt.cursor = ServerResponseCursor::Pending(retry_chunk);",
+            "attempt.cursor = ServerResponseCursor::Pending(0);",
+            "an observed source update must never reset a retained sidecar cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn enqueue_response(",
+            "candidate.same_delivery(admitted)",
+            "candidate.same_tenure(admitted)",
+            "materialization must consume the exact admitted delivery capability",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn enqueue_response(",
+            "let mut remaining_global_sessions = self\n"
+            "            .outbound_session_capacity\n"
+            "            .saturating_sub(self.outbound_attempt_count());",
+            "let mut remaining_global_sessions = usize::MAX;",
+            "sidecar materialization must preflight global and per-source session and byte bounds",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn enqueue_response(",
+            "self.source_outbound_count(source) >= self.limits.outbound_sessions_per_source",
+            "self.source_outbound_count(source) > self.limits.outbound_sessions_per_source",
+            "sidecar materialization must preflight global and per-source session and byte bounds",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn enqueue_response(",
+            ".saturating_add(response_len)\n"
+            "                    > self.limits.outbound_bytes_per_source",
+            ".saturating_add(response_len)\n                    > usize::MAX",
+            "sidecar materialization must preflight global and per-source session and byte bounds",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if admitted_attempts.is_empty()",
+            "> self.outbound_byte_capacity",
+            "> usize::MAX",
+            "sidecar materialization must preflight global and per-source session and byte bounds",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if remaining_global_sessions == 0",
+            "capacity_rejected_attempts.push(source.clone());",
+            "return Err(MergeSidecarError::Capacity(\"outbound response budget\"));",
+            "one saturated sidecar source must not erase independently admissible same-request sources",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if !Self::alternate_source_is_authorized",
+            "next_chunk: 0,",
+            "next_chunk: prior.resume_chunk,",
+            "a newly observed alternate sidecar source must begin at chunk zero",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn drain_outbound_chunks_inner(",
+            "attempt.in_flight_chunk = Some(index);",
+            "attempt.next_chunk = index.saturating_add(1);",
+            "preserve the exact source route, and mark only an in-flight cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "!existing.request.same_occurrence_except_close_floor(request)",
+            "false && !existing.request.same_occurrence_except_close_floor(request)",
+            "duplicate sidecar admission must preserve canonical occurrence identity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn alternate_source_is_authorized(",
+            "match candidate {",
+            "return true; match candidate {",
+            "alternate sidecar sources must retain live route authority without treating recovered peer ownership as a process-local capability",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "if &request.requester != sender || &request.responder != local_peer {",
+            "if false && (&request.requester != sender || &request.responder != local_peer) {",
+            "sidecar request admission must bind authenticated sender, responder, semantic target, and active route",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn cancel_unmaterialized_server_request(",
+            "Self::release_authorized_server_request_attempts(gate);",
+            "let _ = gate;",
+            "failed sidecar materialization must preserve route/cursor history",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "if !prior.materialization_retryable {",
+            "if false && !prior.materialization_retryable {",
+            "an exact failed-materialization retry must preserve only its source-local retryability and re-enter durable fair selection",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn release_unsent_request(",
+            "let attempt = assembly\n"
+            "            .current\n"
+            "            .take()",
+            "return; let attempt = assembly\n            .current\n            .take()",
+            "an unsent sidecar request must restore the exact holder cursor, close its durable sequence, and persist before retry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn acknowledge_certified_merge_sidecar_chunk_admission(",
+            "if acknowledged {",
+            "if true {",
+            "lane work may schedule the next chunk only after the exact receipt and next pending writer identity are durable",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn acknowledge_certified_merge_sidecar_chunk_admission(",
+            "operation.complete();",
+            "drop(operation);",
+            "lane sidecar ACK application may complete only after every successor post is retained",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn effect_count(",
+            "self.effects\n"
+            "            .len()\n"
+            "            .saturating_add(self.sidecar_effects.len())",
+            "0",
+            "lane scan rank must count both ordinary and source-owned sidecar effects",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn requeue_effect(",
+            "match effect {",
+            "drop(effect); return true; match effect {",
+            "lane requeue must return the exact unserviceable occurrence to its bounded owner lane",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_post(",
+            "let MergeSidecarPost {\n"
+            "            peer,\n"
+            "            reply_route,\n"
+            "            message,\n"
+            "        } = post;",
+            "let MergeSidecarPost {\n"
+            "            peer: _,\n"
+            "            reply_route,\n"
+            "            message,\n"
+            "        } = post;\n"
+            "        let peer = self.local_peer.clone();",
+            "lane sidecar post conversion must preserve the exact peer and message while stripping only GenerationHint reply-route ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn prune_finalized_merge_sidecars(",
+            ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;",
+            ".ok();",
+            "finalized sidecar pruning must remain fail-stop and Kura-bound",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(",
+            "let (retained, receipt) = routes.retain_active_with_receipt();",
+            "let retained = routes.retain_active();\n"
+            "    let receipt = NetworkReplyRouteHistoryReceipt::default();",
+            "runner pruning must retain every live source attempt and its tombstones",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn is_pending(",
+            "fanout.has_dispatchable_target()",
+            "false",
+            "pending exact output must include dispatchable fanouts, writer flushes, and undrained receipts without spinning on parked ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn handoff_applied_height_to_durable_reconstruction(",
+            "self.admitted_sidecar_chunks.clear();",
+            "let _ = &self.admitted_sidecar_chunks;",
+            "applied-height handoff must retire every volatile sidecar completion state",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retain_returned(",
+            "if HashOf::new(&post.data) != *expected_hash {",
+            "if false && HashOf::new(&post.data) != *expected_hash {",
+            "returned actor post must retain the exact pinned payload identity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn handoff_applied_height_to_durable_reconstruction(",
+            ".any(|(message, expected_hash)| HashOf::new(message) != *expected_hash)",
+            ".any(|(message, expected_hash)| false && HashOf::new(message) != *expected_hash)",
+            "applied-height handoff must preflight every pinned payload before classification",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "blocked_sources.insert(attempted_source);",
+            "let _ = attempted_source;",
+            "exact-output drive_with_budget_ack declaration and complete control flow",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn apply_reply_route_update(",
+            "self.current = None;",
+            "self.message_index = 0; self.current = None;",
+            "a same-source reconnect must not reset its retained exact-output cursor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn coalesce_reservation_additions_for_plan(",
+            "ReplyTargetMerge::Update { .. } => 0,",
+            "ReplyTargetMerge::Update { .. } => full_mask,",
+            "ordinary same-source updates retain reservation ownership while only a new source charges the candidate cursor suffix",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn preview_coalesce_plan(",
+            "target.2 = false;",
+            "target.1 = 0; target.2 = false;",
+            "the coalesce preview must preserve the retained message cursor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn outstanding_sources_excluding(",
+            "for (target_index, target) in self.targets.iter().enumerate() {",
+            "for (target_index, target) in self.targets.iter().enumerate().filter(|(_, target)| !target.parked) {",
+            "parked attempts must retain every outstanding source/FIFO class",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn outstanding_reservation_counts(",
+            "for (target_index, target) in self.targets.iter().enumerate() {",
+            "for (target_index, target) in self.targets.iter().enumerate().filter(|(_, target)| !target.parked) {",
+            "parked attempts must retain their reservation ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan(&self, candidate: &Self)",
+            "self.reply_target_merge_plan_with_hooks(candidate, |_| {}, || {})",
+            "self.reply_target_merge_plan_after_candidate_prune(candidate, |_| {})",
+            "the no-hook production coalescing wrapper must delegate to the receipt-bound route-history kernel",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".project_retained_reply_routes(prune_receipt)",
+            ".project_retained_reply_routes(prune_receipt.clone())",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".merge_with_receipt(&candidate_routes)",
+            ".merge(&candidate_routes)",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".any(|route| route.same_delivery(candidate_route))",
+            ".any(|route| route.same_source(candidate_route))",
+            "the authoritative merged route snapshot must reuse the immutable joint tenure/delivery freshness kernel",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "                    update,\n                });",
+            "                    update: NetworkReplyRouteSourceUpdate::Exact,\n"
+            "                });",
+            "same-source coalescing must preserve the retained source cursor while updating only its authenticated route capability",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn commit_coalesce_plan(",
+            "message_index: candidate_target.message_index,\n"
+            "                        reply_writer_timeout_attempt: candidate_target.reply_writer_timeout_attempt,\n"
+            "                        current: None,",
+            "message_index: 0,\n"
+            "                        reply_writer_timeout_attempt: candidate_target.reply_writer_timeout_attempt,\n"
+            "                        current: None,",
+            "an appended source must preserve its candidate cursor and parked state while starting without actor-post, admission-ticket, or writer-flush ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn capacity_available_for(",
+            "pending.coalesce_reservation_additions_for_plan(fanout, &plan.targets)?",
+            "fanout.admission_reservation_counts()?",
+            "capacity preflight must enforce route-source geometry before charging only newly appended source ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn coalesced_target_geometry_available(",
+            "&& target_count <= plan.reply_routes.source_capacity()",
+            "&& true",
+            "coalesced reply attempts must fit both the configured fanout bound and the actor-derived source-capacity geometry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".source_update_from_snapshot(prior_route)",
+            ".source_update_from(prior_route)",
+            "the authoritative merged route snapshot must reuse the immutable joint tenure/delivery freshness kernel",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn classified_with_reply_routes(",
+            "Self::classified_with_route_history(messages, peers, routes, Some(reply_routes))",
+            "Self::classified_with_route_history(messages, peers, routes, None)",
+            "reply fanout construction must preserve the complete bounded route history",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn classified_with_route_history(",
+            "            reply_routes,\n"
+            "            ingress_ownership: None,\n"
+            "            current_source_targets: BTreeMap::new(),",
+            "            reply_routes: None,\n"
+            "            ingress_ownership: None,\n"
+            "            current_source_targets: BTreeMap::new(),",
+            "fanout construction must store the complete authoritative live-and-tombstone reply history",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "let retained_routes = self.reply_routes.clone().ok_or_else",
+            "let retained_routes = candidate.reply_routes.clone().ok_or_else",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "plan.push(ReplyTargetMerge::Update {",
+            "plan.push(ReplyTargetMerge::Reactivate {",
+            "no coalescing path may reset a retained terminal reply cursor from a newly materialized candidate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "if plan.targets.is_empty()",
+            ".commit_coalesce_plan(&fanout, &plan, preview.current_source_targets);",
+            ".coalesce_retry(&fanout)?;",
+            "a route-history-only update must atomically commit its previewed cursor and FIFO ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "if plan.targets.is_empty()",
+            "self.source_fifo_owners = next_source_fifo_owners;",
+            "let _ = next_source_fifo_owners;",
+            "a route-history-only update must atomically commit its previewed cursor and FIFO ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn commit_coalesce_plan(",
+            "self.reply_routes = Some(plan.reply_routes.clone());",
+            "self.reply_routes = None;",
+            "atomic coalesce commit must install the complete route and fair-ingress histories",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn exact_target_geometry(",
+            "Some(reply_routes.clone()),",
+            "None,",
+            "lane preflight expands every authenticated source into an independent exact target",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn advance_after_attempt(",
+            "self.unregister_source_fifo_owner(fifo_id, source)?;",
+            "let _ = (fifo_id, source);",
+            "admission advances only the completed class/source ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn start(",
+            ".map(|entry| entry.validator.clone())",
+            ".filter(|_| false).map(|entry| entry.validator.clone())",
+            "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn enqueue_owned_exact_reply_routes_while_guarded(",
+            "PendingExactFanout::claimed_with_reply_routes_and_ingress_ownership(",
+            "PendingExactFanout::claimed_with_routes(",
+            "exact replies expand all authenticated sources without changing semantic identity and preserve bounded route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn applied_height_reconstruction_covers(",
+            "rollover_claim.validate_fanout(messages, peers)?;",
+            "let _ = (messages, peers);",
+            "durable rollover requires a validated typed claim in the exact creation scope",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn applied_height_reconstruction_covers(",
+            "if !scope.covers(artifact) {",
+            "if false && !scope.covers(artifact) {",
+            "durable rollover requires a validated typed claim in the exact creation scope",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn enqueue_exact_fanout_while_guarded(",
+            "PendingExactFanout::claimed(messages, peers, rollover_claim)?",
+            "PendingExactFanout::claimed(messages, peers, ExactOutputRolloverClaim::Exact)?",
+            "every production exact fanout must enter the corridor with its typed claim",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn applied_height_reconstruction_covers(",
+            "durable_history.ok_or_else(|| {",
+            "Some(durable_history.unwrap()).ok_or_else(|| {",
+            "applied-height handoff must independently reread every durable Kura response source",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn durable_history_source_covers(",
+            "|| response.certificate != source.commit_qc",
+            "|| false",
+            "durable CommitQC response must match its exact Kura finality source",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn durable_history_source_covers(",
+            "|| canonical_wire != response.body",
+            "|| false",
+            "durable body response must match its exact canonical Kura block",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn durable_history_source_covers(",
+            "|| certificate.commit_qc != source.commit_qc",
+            "|| false",
+            "durable lane certificate must match its exact certified Kura source",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn post_durable_history_response_with_routes(",
+            "durable_history_source_covers(",
+            "durable_history_source_covers_unchecked(",
+            "global historical response must validate Kura before exact-output admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn post_durable_lane_certificate_with_routes(",
+            "durable_history_source_covers(",
+            "durable_history_source_covers_unchecked(",
+            "historical lane response must validate Kura before exact-output admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn handoff_applied_height_output_to_durable_reconstruction(",
+            "Some(self.kura.as_ref()),",
+            "None,",
+            "production handoff must pass exact lane and Kura authorities into retirement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn applied_height_reconstruction_covers(",
+            "round.context_id == context_id && round.height == height",
+            "round.context_id == context_id",
+            "durable rollover classification must bind the exact artifact context and height",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn applied_height_reconstruction_covers(",
+            "ProgressReconstruction::Retransmit",
+            "ProgressReconstruction::Exact",
+            "exact-output applied_height_reconstruction_covers declaration",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn validate_applied_height_output_handoff_authority(",
+            "|| receipt.artifact_hash() != HashOf::new(artifact)",
+            "|| false",
+            "applied-height handoff requires the exact Kura receipt and finality artifact",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn covered_source_hash(",
+            "self.finality_artifact_hash != HashOf::new(finality_artifact)",
+            "false && self.finality_artifact_hash != HashOf::new(finality_artifact)",
+            "lane rollover authority must bind the exact finality artifact and height",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn covered_source_hash(",
+            "self.durable_sessions.get(&proposal_hash)",
+            "self.durable_sessions.values().next()",
+            "winning lane output must use its proposal-keyed durable session witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn covered_source_hash(",
+            "validate_superseded_lane_output(message)?;",
+            "let _ = message;",
+            "non-winning lane output must be validated before artifact-bound supersession",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn persistent(",
+            "application_receipt_hash.as_ref(),",
+            "durable_artifact_hash.as_ref(),",
+            "lane durable source must commit finality, certificate, and application receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn durable_lane_rollover_authority(",
+            "block.header().height().get() != finality_artifact.height\n"
+            "            || block.hash() != finality_artifact.block_hash",
+            "false",
+            "lane authority builder must derive its bounded ordinary and autonomous "
+            "winner set from the exact canonical block",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn durable_lane_rollover_authority(",
+            "|| receipt.application_block_hash != finality_artifact.block_hash",
+            "|| false",
+            "lane authority builder must bind every winner to the exact applied artifact",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn reconstruct_durable_lane_certificate(",
+            "self.kura.read_certified_lane_block_artifact(",
+            "self.kura.read_certified_lane_block_artifact_unchecked(",
+            "lane recovery reconstruction must begin from the exact certified Kura artifact",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn serve_durable_lane_certificate(",
+            "reply_routes: Some(reply_routes),",
+            "reply_routes: None,",
+            "lane recovery emitter retains every authenticated source route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn merge_optional_reply_routes(",
+            "let mut merged = retained.clone();",
+            "let mut merged = candidate.clone();",
+            "lane effect coalescence atomically commits canonical history maintenance and reports success only for a retained live candidate delivery",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn merge_optional_reply_routes(",
+            "merged.merge_observed_with_receipt(candidate)",
+            "merged.merge(candidate)",
+            "lane effect coalescence atomically commits canonical history maintenance and reports success only for a retained live candidate delivery",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn merge_lane_work_effect_reply_routes_after_route_merge<AfterRouteMerge>(",
+            "if !lane_work_effect_reply_routes_have_valid_shape(candidate) {",
+            "if !lane_work_effect_reply_routes_are_valid(candidate) {",
+            "inactive duplicates still reach maintenance",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn lane_work_effect_key(",
+            "encoded.push(4);",
+            "encoded.push(0);",
+            "durable lane response effect identity must include its distinct tag, peer, and certificate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "services.post_durable_history_response_on_reply_routes_with_permit(",
+            "services.post_durable_history_response_with_permit(",
+            "historical global responses preserve the complete prevalidated route set",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn dispatch_lane_work_effect(",
+            ".post_durable_lane_certificate_on_reply_routes(\n"
+            "                    peer,\n"
+            "                    reply_routes,\n"
+            "                    ingress_ownership,\n"
+            "                    certificate,\n"
+            "                )",
+            ".post_lane_block(peer, BlockMessage::LaneBlockCertificate(Box::new(certificate)))",
+            "historical lane dispatch preserves every authenticated source route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn dispatch_lane_work_effects(",
+            "let scan_limit = lane_work.effect_count();",
+            "let scan_limit = limit.max(1);",
+            "lane scheduler must scan past unserviceable heads without losing ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn dispatch_lane_work_effects(",
+            "continue;",
+            "break;",
+            "lane scheduler must scan past unserviceable heads without losing ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn dispatch_lane_work_effects(",
+            "apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;",
+            "let _ = (lane_work, services, limit);",
+            "runner lane dispatch must apply writer receipts before selecting owned work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "match dispatch_lane_work_effect(services, next_effect)? {",
+            "apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;",
+            "let _ = (lane_work, services, limit);",
+            "runner lane dispatch must apply writer receipts after complete and source-retained exact handoffs",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn rollover_finalized_height_outputs(",
+            "let _ = retry_exact_output_and_apply_sidecar_admissions(\n"
+            "        &mut lane_work,\n"
+            "        services,\n"
+            "        control_queue_capacity,\n"
+            "    )?;",
+            "let _ = services.retry_pending_exact_output();",
+            "durable finalization must retry and apply sidecar receipts before reconstructing rollover authority",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn persist_anchored_sessions(",
+            "self.hydrate_canonical_lane_artifacts()?;",
+            "let _ = &self.lane_sessions;",
+            "late canonical lane hydration must precede committed-session collection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn new_with_output_guard_and_transport(",
+            "adapter.ensure_globally_applied_lane_receipts_durable()?;\n"
+            "        construction.complete();",
+            "adapter.ensure_globally_applied_lane_receipts_durable()?;\n"
+            "        adapter.hydrate_canonical_lane_artifacts()?;\n"
+            "        construction.complete();",
+            "production constructor must remain carrier-silent before exact Queue installation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn activate_after_lane_drain_queue_install(",
+            "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;",
+            "let _ = installed_queue;",
+            "one-shot startup activation must authenticate the installed Queue",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn claim_runner_lifecycle_process_generation(",
+            "kura.claim_autonomous_lifecycle_process_generation(",
+            "kura.read_autonomous_lifecycle_process_generation(",
+            "the configured-role process generation helper must durably claim validator ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn claim_runner_lifecycle_process_generation(",
+            "match role {",
+            "if local_validator_index(context, local_peer, role)?.is_none() {\n"
+            "        return Ok(None);\n"
+            "    }\n"
+            "    match role {",
+            "the configured-role process generation helper must not consult height-local roster membership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
+            "let _ = &queue;",
+            "runner startup must install the exact Queue before the one-shot carrier activation seam",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn hydrate_canonical_lane_artifacts(",
+            "let _ = self\n"
+            "                .lane_sessions\n"
+            "                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);",
+            "let _ = proposal;",
+            "late canonical lane hydration must retain the exact proposal as bounded recovery work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn rollover_finalized_height_outputs(",
+            "lane_work.persist_anchored_sessions()?;",
+            "let _ = &lane_work;",
+            "finalized output rollover must durably reconstruct every predecessor owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn rollover_finalized_height_outputs(",
+            ".durable_lane_rollover_authority(artifact)?",
+            "None",
+            "finalized output rollover must durably reconstruct every predecessor owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn rollover_finalized_height_outputs(",
+            "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;",
+            "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority.clone())?;",
+            "finalized output rollover must durably reconstruct every predecessor owner",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn with_limits_and_server_stream_capacity(",
+            "reply_source_capacity,\n"
+            "            server_roster_digest,\n"
+            "            server_stream_capacity,\n"
+            "            outbound_session_capacity,",
+            "reply_source_capacity,\n"
+            "            server_roster_digest,\n"
+            "            server_stream_capacity,\n"
+            "            outbound_session_capacity: 0,",
+            "sidecar source geometry must reject zero and install every checked corridor bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn with_limits_and_server_stream_capacity(",
+            "tick_close_next: false,",
+            "tick_close_next: true,",
+            "sidecar request/close fairness must service an initial progress-bearing request before alternating closes",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn tick_bounded(",
+            "if self.timeout_retry_close_deferred {",
+            "if false {",
+            "a newly timed-out sidecar fetch may preempt administrative closure only once before retained Close debt wins the bounded service slot",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn begin_request_or_close(",
+            "self.timeout_retry_close_deferred = false;",
+            "let _ = &self.timeout_retry_close_deferred;",
+            "servicing a sidecar Close must discharge retained timeout-preemption debt",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn release_authorized_server_request_attempts(",
+            "matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
+            "false;",
+            "transiently rejected response work must release materialization authority",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn park_authorized_server_request_attempts(",
+            "for attempt in gate\n            .attempts",
+            "return; for attempt in gate\n            .attempts",
+            "parking a materialized response must consume retryability while retaining each source route and resume cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if admitted_attempts.is_empty() && capacity_rejected_attempts.is_empty()",
+            "Self::park_authorized_server_request_attempts(gate, now);",
+            "let _ = (gate, now);",
+            "completed-race and admitted materialized response work must pass through terminal parking",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn enqueue_response(",
+            "attempt.materialization_retryable =\n"
+            "                matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
+            "attempt.materialization_retryable = false;",
+            "partial materialization must keep capacity-partitioned pending sources retryable after shared bytes retire",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn reclaim_inactive_outbound_attempts(",
+            "gate_attempt.cursor = ServerResponseCursor::Pending(resume_chunk);",
+            "let _ = resume_chunk;",
+            "inactive sidecar parking must remain pending at the exact unacknowledged source cursor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn reclaim_inactive_outbound_attempts(",
+            "self.persist_lifecycle_projection(projected)?;",
+            "drop(projected);",
+            "inactive sidecar reclamation must publish every projected durable cursor before removing ephemeral writers or shared bytes",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn with_limits_and_server_stream_capacity(",
+            ".checked_mul(limits.outbound_sessions_per_source)",
+            ".saturating_mul(limits.outbound_sessions_per_source)",
+            "sidecar global capacity must be checked from the configured authenticated-source geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn derive_server_request_capacities(",
+            ".checked_mul(reply_source_capacity)",
+            ".saturating_mul(reply_source_capacity)",
+            "sidecar responder gates and per-source attempts must use checked products of the immutable roster and authenticated-source geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn next_server_request_materialization(",
+            "self.persist_lifecycle_projection(projected)?;",
+            "drop(projected);",
+            "fair sidecar materialization must persist the selected requester cursor before granting any live terminating lookup authority",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "next_chunk: resume_chunk,",
+            "next_chunk: 0,",
+            "merge-sidecar source-isolated production seam",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn apply_reliable_flush_application(",
+            "attempt.queued = true;\n            transport\n"
+            "                .outbound_order\n"
+            "                .push_back((plan.gate.key.clone(), plan.gate.source.clone()));",
+            "let _ = &attempt.queued;",
+            "merge-sidecar source-isolated production seam",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn drain_outbound_chunks_durable(",
+            "self.persist_lifecycle_state()?;",
+            "let _ = &lifecycle_changed;",
+            "production sidecar drainage must durably publish every changed pending identity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "#[cfg(test)]\n    fn drain_outbound_chunks(",
+            "#[cfg(test)]",
+            "#[cfg(any())]",
+            "raw non-durable sidecar drainage must remain exactly #[cfg(test)]",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize",
+            "MAX_VALIDATORS_PER_HEIGHT;",
+            "1;",
+            "certified merge semantic request history must have exactly one top-level protocol-roster bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct MergeSidecarRuntimeGeometryV3",
+            "semantic_peer_capacity: u64,",
+            "semantic_peer_capacity: u32,",
+            "durable sidecar geometry must advertise its validator-scoped semantic-peer bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn lifecycle_runtime_geometry_v3(",
+            "semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,",
+            "semantic_peer_capacity: as_u64(self.reply_source_capacity)?,",
+            "lifecycle geometry must fingerprint the validator-scoped semantic-peer bound independently of concurrent reply sources",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn lifecycle_max_snapshot_bytes_for_attempt_capacity(",
+            ".checked_mul(2)",
+            ".checked_mul(1)",
+            "lifecycle byte geometry must reserve requester and responder stream records for every semantic validator",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn advance_piggybacked_close_floor(",
+            "!retained_request.same_occurrence_except_close_floor(request)",
+            "retained_request.same_occurrence_except_close_floor(request)",
+            "accept only the same immutable occurrence and reject regression",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn advance_piggybacked_close_floor(",
+            "self.persist_lifecycle_projection(projected)?;",
+            "drop(projected);",
+            "publish the sole V2 projection before updating live cancellation, gate, or transfer state without rematerializing",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "snapshot.request_streams.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS",
+            "snapshot.request_streams.len() > self.reply_source_capacity",
+            "lifecycle restoration must bound both semantic stream maps independently from concurrent authenticated-source gates",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn allocate_request_sequence(",
+            "&& reclaim.is_none()",
+            "&& reclaim.is_some()",
+            "requester-side holder rotation must reclaim only quiescent roster-bounded streams",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn ensure_server_stream_slot(",
+            "self.server_streams.len() < self.server_stream_capacity",
+            "self.server_streams.len() < self.server_request_gate_capacity",
+            "stream-slot helper must reject immutable-capacity exhaustion without independently rolling the generation",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn server_generation_is_terminal(",
+            "&& self.server_request_gates.is_empty()",
+            "|| self.server_request_gates.is_empty()",
+            "every stream terminal and every gate, transfer, flush-order, and pending-closure owner empty",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn server_generation_is_terminal(",
+            "&& self.pending_server_closures.is_empty()",
+            "|| self.pending_server_closures.is_empty()",
+            "every stream terminal and every gate, transfer, flush-order, and pending-closure owner empty",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn transition_server_service_generation(",
+            "if !self.server_generation_is_terminal() {",
+            "if false && !self.server_generation_is_terminal() {",
+            "ordinary responder generation rollover must occur only for a full terminal table",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "self.ensure_server_stream_slot(sender)?;",
+            "let _ = sender;",
+            "full current-generation responder table rejects before pruning or mutating lifecycle state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_close(",
+            "if !self.server_streams.contains_key(sender) {\n"
+            "            return Ok(close_ack());\n"
+            "        }",
+            "if !self.server_streams.contains_key(sender) {\n"
+            "            let _ = close_ack();\n"
+            "        }",
+            "unknown current-generation Close must be acknowledged without allocating responder stream geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn new(payload: MergeSidecarLifecyclePayloadV3)",
+            "let payload_hash = HashOf::new(&payload);",
+            "let payload_hash = HashOf::new(&());",
+            "merge-sidecar crash-safe lifecycle production seam",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn integrity_is_valid(&self)",
+            "self.payload_hash == HashOf::new(&self.payload)",
+            "self.payload_hash != HashOf::new(&self.payload)",
+            "the durable sidecar snapshot integrity check must bind the complete canonical payload",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn decode_snapshot(",
+            "if !snapshot.integrity_is_valid() {",
+            "if false && !snapshot.integrity_is_valid() {",
+            "lifecycle recovery must accept only canonical integrity-bound V3 state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn decode_snapshot(",
+            "decode_from_bytes::<MergeSidecarLifecycleSnapshotV3>",
+            "decode_from_bytes::<UnsupportedMergeSidecarLifecycleSnapshotV1>",
+            "production lifecycle recovery must never decode the legacy V1 negative-test fixture",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn legacy_lifecycle_v1_snapshot_is_rejected_without_migration(",
+            'error.contains("migration is not supported")',
+            'error.contains("payload digest mismatch") '
+            '/* error.contains("migration is not supported") */',
+            "the retired-layout regression must require an explicit no-migration recovery failure",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn source_gate_count(",
+            "retained.shares_budget_with(source)",
+            "!retained.shares_budget_with(source)",
+            "per-source sidecar gate accounting must share one stable authenticated-peer budget across every semantic origin",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn source_gate_count_after_close(",
+            "&key.0 != sender",
+            "&key.0 == sender",
+            "close-aware per-source gate accounting must retain every gate from another semantic origin",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "BTreeMap::<ServerRequestBudgetSource, usize>::new()",
+            "BTreeMap::<(PeerId, ServerRequestBudgetSource), usize>::new()",
+            "durable recovery must aggregate gate ownership by stable authenticated source rather than by semantic requester/source pairs",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "self.source_gate_count(&source)",
+            "self.server_request_gates.len()",
+            "alternate-source sidecar admission must retain route-set, global-gate, and per-source-gate bounds",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn fifth_gate_from_one_hub_is_rejected_while_another_hub_progresses(",
+            "for index in 0..MAX_SERVER_REQUEST_GATES_PER_SOURCE {",
+            "for index in 0..1 {",
+            "the exact source-cap regression must fill all four gates through one authenticated hub while varying semantic origins",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "if !snapshot.integrity_is_valid() {",
+            "if false && !snapshot.integrity_is_valid() {",
+            "lifecycle restoration must independently reject a stale typed payload digest before interpreting any semantic floor",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn persist_next(",
+            "snapshot.payload_hash = HashOf::new(&snapshot.payload);",
+            "snapshot.payload_hash = HashOf::new(&());",
+            "V3 lifecycle publication must recompute the typed payload digest before each state-slot publication",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn persist_next(",
+            "Self::sync_directory(&self.directory)?;",
+            "let _ = &self.directory;",
+            "V3 lifecycle publication must sync the replaced state slot before publishing its root",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub enum CertifiedMergeSidecarMessage",
+            "GenerationHint(CertifiedMergeSidecarGenerationHintV1),",
+            "GenerationHint(CertifiedMergeSidecarCloseAckV1),",
+            "the certified sidecar wire enum must expose request, close, close acknowledgement, generation fence, and chunk as distinct exhaustive variants",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) enum ServerRequestAdmission",
+            "GenerationHint(MergeSidecarPost),",
+            "GenerationHint,",
+            "server request admission must explicitly distinguish materialization, existing ownership, and a stateless generation hint",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn canonical_hint_id(&self)",
+            "self.observed_message_hash.as_ref(),",
+            "&version,",
+            "the generation hint identity must bind both generations, the exact observed message, and both authenticated peers",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub struct CertifiedMergeSidecarSemanticSequenceV1",
+            "pub struct CertifiedMergeSidecarSemanticSequenceV1(pub NonZeroU64);",
+            "pub struct CertifiedMergeSidecarSemanticSequenceV1(pub u64);",
+            "every exact semantic occurrence coordinate must use a nonzero typed wire value",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub struct CertifiedMergeSidecarRequestV1",
+            "pub semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "pub semantic_sequence: u64,",
+            "Request wire occurrence must carry typed nonzero generation, epoch, and semantic sequence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub struct CertifiedMergeSidecarChunkV1",
+            "pub semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "pub semantic_sequence: u64,",
+            "Chunk wire occurrence must copy the typed nonzero generation, epoch, and semantic sequence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerPendingChunkIdentity",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "process-local pending flush identity must retain the typed nonzero request occurrence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerPendingChunkLifecycleV3",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "the durable pending marker must bind the complete generation-scoped request, response, payload, and chunk identity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerRequestGate",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "live responder gate must retain the full canonical request and every generation-scoped occurrence coordinate",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct ServerRequestGateLifecycleV3",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "each durable responder gate must retain the full canonical request and every generation, epoch, sequence, source, and pending-marker coordinate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "struct CertifiedSidecarTransferIdentity",
+            "semantic_sequence: CertifiedMergeSidecarSemanticSequenceV1,",
+            "semantic_sequence: u64,",
+            "worker exact-transfer identity must retain the typed nonzero sidecar occurrence",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "struct MergeSidecarLifecyclePayloadV3",
+            "server_service_generation: CertifiedMergeSidecarServiceGenerationV1,",
+            "server_service_generation: u64,",
+            "the sole V3 durable sidecar snapshot must bind canonical runtime, root generation, and roster geometry",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn open(",
+            "for legacy in LEGACY_LIFECYCLE_JOURNAL_DIRS {",
+            "for legacy in [] {",
+            "lifecycle startup must fail closed on every legacy directory before opening or creating sole V3 state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn open(",
+            "journal.publish_bootstrap_marker()?;",
+            "let _ = &journal;",
+            "lifecycle startup must durably publish the generation-zero root before creating the V3 state directory",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn open(",
+            "let marker = journal.decode_root_high_water(&journal.root_high_water_path())?;",
+            "let marker = MergeSidecarLifecycleRootHighWaterV3::bootstrap();",
+            "existing V3 lifecycle state must be selected by the exact durable root high-water",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn decode_snapshot(",
+            "snapshot.payload.version != LIFECYCLE_JOURNAL_VERSION_V3",
+            "snapshot.payload.version == LIFECYCLE_JOURNAL_VERSION_V3",
+            "lifecycle recovery must accept only canonical integrity-bound V3 state",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "gate.request.request_id != gate.request.canonical_request_id()",
+            "false",
+            "responder recovery must recompute the full canonical request and bind its generation, epoch, and semantic sequence to the durable gate",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "gate.attempts.len() > source_capacity.unwrap_or(1)",
+            "false",
+            "responder recovery must reject a gate whose durable attempts exceed its authenticated route-set capacity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "if source_capacity.is_none() && peer == gate.requester",
+            "if source_capacity.is_some() && peer == gate.requester",
+            "responder recovery must reject synthetic/authenticated source-kind drift and synthetic requester impersonation",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn restore_lifecycle_snapshot(",
+            "usize::try_from(pending.chunk_count).ok() != Some(expected_chunk_count)",
+            "usize::try_from(pending.chunk_count).ok() != Some(index)",
+            "responder recovery must reject any pending marker whose generation-scoped request metadata or exact chunk geometry differs from its gate",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_generation_hint(",
+            "self.persist_lifecycle_projection(snapshot)?;",
+            "drop(snapshot);",
+            "requester generation replacement must persist the new generation and unique epoch before retiring any process-local old-generation attempt",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn commit_server_service_generation_transition(",
+            "self.persist_lifecycle_projection(snapshot)?;",
+            "drop(snapshot);",
+            "publish the incremented generation and empty responder tables in the root-anchored V3 snapshot before mutating memory",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "request.service_generation > self.server_service_generation",
+            "request.service_generation < self.server_service_generation",
+            "a canonical future-generation request must reject atomically, while stale input or terminal full-table compaction returns an exact route-free hint before ordinary request-state mutation",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_request(",
+            "request.service_generation < self.server_service_generation",
+            "request.service_generation > self.server_service_generation",
+            "a canonical future-generation request must reject atomically, while stale input or terminal full-table compaction returns an exact route-free hint before ordinary request-state mutation",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_close(",
+            "close.service_generation > self.server_service_generation",
+            "close.service_generation < self.server_service_generation",
+            "a canonical future-generation Close must be rejected while a stale-generation Close returns a stateless exact hint before allocating or mutating a responder stream",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn admit_server_close(",
+            "close.service_generation < self.server_service_generation",
+            "close.service_generation > self.server_service_generation",
+            "a canonical future-generation Close must be rejected while a stale-generation Close returns a stateless exact hint before allocating or mutating a responder stream",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn sidecar_effect_slots(",
+            ".filter(|effect| retryable_sidecar_server_control_peer(effect).is_none())",
+            ".filter(|effect| retryable_sidecar_server_control_peer(effect).is_some())",
+            "reproducible responder controls must not consume progress reservations while all physical sidecar effects remain relay bounded",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn next_sidecar_effect_selection(",
+            ".position(|effect| retryable_sidecar_server_control_peer(effect).is_none())",
+            ".position(|effect| retryable_sidecar_server_control_peer(effect).is_some())",
+            "sidecar scheduling must prioritize progress while granting retryable responder control a bounded weighted turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;",
+            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 3;",
+            "const SIDECAR_PROGRESS_DRAIN_WEIGHT: u8 = 0;",
+            "the sidecar scheduler must give retryable responder control one bounded turn after exactly three progress-bearing drains",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn new_with_output_guard_and_transport(",
+            "MergeSidecarTransport::open_durable_with_server_stream_capacity(",
+            "MergeSidecarTransport::open_durable(",
+            "lane construction must derive the canonical responder roster and restore or open only its exact durable source and stream geometry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn rehydrate_for_successor(",
+            "self.successor_context_id != successor.id()",
+            "self.successor_context_id == successor.id()",
+            "retained sidecar ownership must bind the exact successor context and consume its durable output handoff before roster-aware rehydration",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn new_with_output_guard_and_transport(",
+            "sidecar_progress_drain_credit: SIDECAR_PROGRESS_DRAIN_WEIGHT,",
+            "sidecar_progress_drain_credit: 0,",
+            "lane construction must initialize the bounded sidecar progress/control drain credit",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn next_sidecar_effect_selection(",
+            "if self.sidecar_progress_drain_credit == 0 {",
+            "if self.sidecar_progress_drain_credit > 0 {",
+            "sidecar scheduling must prioritize progress while granting retryable responder control a bounded weighted turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn retryable_sidecar_server_control_peer(",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_some()",
+            "CertifiedMergeSidecarMessage::GenerationHint(_) if reply_routes.is_none()",
+            "lane retryable responder controls must retain exact reply ownership for CloseAck and GenerationHint during per-peer coalescing",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn retryable_sidecar_server_control_peer(",
+            "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_some()",
+            "CertifiedMergeSidecarMessage::CloseAck(_) if reply_routes.is_none()",
+            "lane retryable responder controls must retain exact reply ownership for CloseAck and GenerationHint during per-peer coalescing",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_post_or_restart(",
+            "if retryable_server_control {",
+            "if false && retryable_server_control {",
+            "reserved sidecar handoff may nonfatally drop only reproducible responder control or an inactive response, and must roll back an unsent request before fail-stop",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            ".any(|queued| retryable_sidecar_server_control_peer(queued) == Some(peer))",
+            ".any(|queued| retryable_sidecar_server_control_peer(queued).is_some())",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            "if self.sidecar_effects.len() >= self.limits.relay_capacity.get() {",
+            "if self.sidecar_effects.len() > self.limits.relay_capacity.get() {",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            "if self.sidecar_effect_slots() == 0 {",
+            "if false && self.sidecar_effect_slots() == 0 {",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            ".rposition(|queued| retryable_sidecar_server_control_peer(queued).is_some())",
+            ".rposition(|queued| retryable_sidecar_server_control_peer(queued).is_none())",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_merge_sidecar_effect(",
+            "self.sidecar_effect_keys\n"
+            "                    .remove(&lane_work_effect_key(&evicted));",
+            "let _ = evicted;",
+            "sidecar effect admission must preserve full identity and routes, coalesce retryable controls per peer inside the physical relay bound, and evict a retryable control before rejecting progress",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn next_effect(",
+            "self.next_sidecar_effect_selection()\n"
+            "                .and_then(|(index, _)| self.sidecar_effects.get(index))\n"
+            "                .cloned()",
+            "self.sidecar_effects.front().cloned()",
+            "lane effect peek must clone the exact weighted progress/control sidecar selection without consuming its credit",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_effects(",
+            "let (index, retryable_control) = self\n"
+            "                    .next_sidecar_effect_selection()\n"
+            "                    .expect(\"sidecar effect selected only when present\");",
+            "let (index, retryable_control) = (0, false);",
+            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_effects(",
+            "self.sidecar_progress_drain_credit = SIDECAR_PROGRESS_DRAIN_WEIGHT;",
+            "self.sidecar_progress_drain_credit = 0;",
+            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_effects(",
+            "self.sidecar_progress_drain_credit.saturating_sub(1);",
+            "self.sidecar_progress_drain_credit.saturating_add(1);",
+            "lane effect drain must transfer the same weighted selection as peek, retire its key, and update progress/control credit only after ownership transfer",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_request(",
+            "return Ok(if self.push_merge_sidecar_post(post) {",
+            "self.push_merge_sidecar_post_or_restart(post)?;\n"
+            "            return Ok(if true {",
+            "lane ingress must treat a stale-generation hint as bounded retryable output while persisting every materialize/existing gate before fair service",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_close(",
+            "let _ = self.service_next_certified_merge_sidecar_materialization(now)?;",
+            "let _ = now;",
+            "an authenticated Close must expose its durable prefix, give fair pending materialization one turn, and preserve both progress and bounded retryable control outcomes",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn from_admitted_reply(",
+            "reply_writer_timeout_attempt: flush_identity.reply_writer_timeout_attempt(),",
+            "reply_writer_timeout_attempt: 0,",
+            "sidecar writer-flush admission must bind the opaque source, exact route, actor ticket and clone-shared claim with immutable payload and cursors",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "match attempt(post, ticket, &route, reply_writer_timeout_attempt) {",
+            "match attempt(post, ticket, &route, 0) {",
+            "worker dispatch must pass the target-local adaptive timeout attempt into actor admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "|| flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                            != reply_writer_timeout_attempt",
+            "|| flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                            != 0",
+            "ordinary reply cursor must remain unchanged while retaining its exact admission and writer-flush witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "if flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                        != reply_writer_timeout_attempt",
+            "if flush_ack.identity().reply_writer_timeout_attempt()\n"
+            "                        != 0",
+            "sidecar cursor may advance only after retaining its exact admission and writer-flush witness",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            "pending_flush.reply_writer_timeout_attempt != current_timeout_attempt",
+            "pending_flush.reply_writer_timeout_attempt != 0",
+            "terminal reply-flush polling must bind the mutable target, retained writer occurrence, and actor acknowledgement to one adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn poll_reply_flushes(",
+            "!= pending_flush.reply_writer_timeout_attempt",
+            "!= current_timeout_attempt",
+            "terminal reply-flush polling must bind the mutable target, retained writer occurrence, and actor acknowledgement to one adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn handoff_applied_height_to_durable_reconstruction(",
+            "!= target.reply_writer_timeout_attempt",
+            "!= 0",
+            "finality handoff must revalidate target, retained writer occurrence, and actor acknowledgement against the same adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn handoff_applied_height_to_durable_reconstruction(",
+            "!= pending_flush.reply_writer_timeout_attempt",
+            "!= target.reply_writer_timeout_attempt",
+            "finality handoff must revalidate target, retained writer occurrence, and actor acknowledgement against the same adaptive timeout attempt",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn covers(&self, other: &Self)",
+            "self.requester == other.requester",
+            "self.requester != other.requester",
+            "sidecar close-prefix dominance must bind the requester",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_close(",
+            "return Ok(false);",
+            "return Err(MergeSidecarError::UnsolicitedResponse);",
+            "a canonical duplicate CloseAck may be a bounded no-op",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn acknowledge_close(",
+            "if ack.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {",
+            "if ack.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1 {",
+            "merge-sidecar crash-safe lifecycle production seam MergeSidecarTransport::acknowledge_close declaration and complete control flow must match the exact reviewed token digest",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn drain_closed_server_prefixes(",
+            "std::mem::take(&mut self.pending_server_closures)",
+            "self.pending_server_closures.clone()",
+            "merge transport must move every coalesced authenticated close prefix exactly once",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_request(",
+            "let _ = self.apply_closed_server_prefixes();",
+            "let _ = false;",
+            "lane ingress must treat a stale-generation hint as bounded retryable output while persisting every materialize/existing gate before fair service",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar_close(",
+            "let close_progress = self.apply_closed_server_prefixes();",
+            "let close_progress = false;",
+            "an authenticated Close must expose its durable prefix",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn drain_closed_sidecar_prefixes(",
+            "std::mem::take(&mut self.closed_sidecar_prefixes)",
+            "self.closed_sidecar_prefixes.clone()",
+            "lane work must move each dominant close prefix exactly once",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn close_certified_sidecar_prefix(",
+            "&transfer.requester,",
+            "&prefix.requester,",
+            "worker close-prefix projection must bind the exact requester",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn close_certified_merge_sidecar_prefix(",
+            "pending.close_certified_sidecar_prefix(prefix)",
+            "Ok(0)",
+            "production close-prefix bridge must serialize",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn apply_certified_merge_sidecar_closed_prefixes(",
+            ".close_certified_merge_sidecar_prefix(prefix)",
+            ".retry_pending_exact_output()",
+            "runner must move every lane close prefix into the worker exact-output owner before later dispatch",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn service_next_certified_merge_sidecar_materialization(",
+            ".next_server_request_materialization(now)",
+            ".authorized_server_request_materialization()",
+            "only the transport's durable fair materialization selection may cross into the terminating Kura lookup",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retryable_certified_sidecar_responder_control_target(",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "                | CertifiedMergeSidecarMessage::GenerationHint(_) => self",
+            "CertifiedMergeSidecarMessage::CloseAck(_) => self",
+            "worker retryable responder control must use exact reply ownership for CloseAck and GenerationHint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retryable_certified_sidecar_responder_control_target(",
+            ".all(|route| matches!(&route.route, ExactTargetRoute::Reply(_))),",
+            ".all(|route| matches!(&route.route, ExactTargetRoute::Topology)),",
+            "worker retryable responder control must use exact reply ownership for CloseAck and GenerationHint",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retains_retryable_sidecar_responder_control_for(",
+            "retained.retryable_certified_sidecar_responder_control_target()\n"
+            "                        == Some(candidate_target)",
+            "retained.retryable_certified_sidecar_responder_control_target()\n"
+            "                        .is_some()",
+            "worker responder-control suppression must require an already-retained retryable control for the same semantic target",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn retains_retryable_sidecar_responder_control_for(",
+            "== Some(candidate_target)",
+            "!= Some(candidate_target)",
+            "worker responder-control suppression must require an already-retained retryable control for the same semantic target",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn can_enqueue(&self, fanout: &PendingExactFanout)",
+            "if self.retains_retryable_sidecar_responder_control_for(fanout) {",
+            "if false && self.retains_retryable_sidecar_responder_control_for(fanout) {",
+            "lane-effect preflight must validate geometry, consume only a same-target duplicate responder control, and otherwise charge reservation capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn can_enqueue_owned_reply_transfer(",
+            "if self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "if false && self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "owned reply capacity preflight must consume only a same-target duplicate responder control without charging capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn enqueue_validated(",
+            "if self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "if false && self.retains_retryable_sidecar_responder_control_for(&fanout) {",
+            "worker exact output may retain at most one retryable responder control per semantic target while preserving independent controls and ordinary progress for other targets",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_certified_merge_sidecar(",
+            "self.accept_certified_merge_sidecar_generation_hint(sender, reply_route, &hint)",
+            "Ok(V2LaneIngressOutcome::Rejected)",
+            "lane sidecar ingress must exhaustively route the authenticated generation hint alongside every request, close, acknowledgement, and chunk variant",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn drive_with_budget_ack<Attempt>(",
+            "| CertifiedMergeSidecarMessage::GenerationHint(_) => None,",
+            "=> None,",
+            "only an immutable certified response chunk may create a writer-flush receipt from its exact route",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn post_certified_merge_sidecar_with_reply_routes(",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
+            "CertifiedMergeSidecarMessage::CloseAck(_)\n"
+            "            | CertifiedMergeSidecarMessage::GenerationHint(_)\n"
+            "            | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
+            "worker sidecar dispatch must keep Request and Close on topology while CloseAck, GenerationHint, and Chunk retain exact reply routes",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn dispatch_lane_work_effect(",
+            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),",
+            "| CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_none(),",
+            "runner sidecar dispatch must reject missing or extraneous route ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn next_effect(",
+            "if take_sidecar {",
+            "if !take_sidecar {",
+            "lane effect peek must clone the exact fairly selected queue head",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn push_effect(",
+            "if !lane_work_effect_reply_routes_have_valid_shape(&effect) {",
+            "if !lane_work_effect_reply_routes_are_valid(&effect) {",
+            "maintenance-only duplicate lane effects must reach canonical reconciliation before live-delivery admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn apply_bounded_sidecar_admissions<T, Error>(",
+            "let mut applied = 0usize;",
+            "return Ok(0); let mut applied = 0usize;",
+            "runner exact-output ownership/ACK production seam",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn has_pending_exact_output(",
+            "self.lock_pending_exact_output()",
+            "return Ok(false); self.lock_pending_exact_output()",
+            "worker exact-output ownership/ACK production seam",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "after_candidate_prune(merge_attempt);",
+            "let _ = merge_attempt;",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "if candidate_routes.len() >= live_before_merge {",
+            "if false && candidate_routes.len() >= live_before_merge {",
+            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
+            "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
+            "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 2;",
+            "exact-output defaults must retain the reviewed completion divisor, reducer batch, and three-class geometry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "pub const MAX_EFFECTS_PER_STEP: usize = 8;",
+            "pub const MAX_EFFECTS_PER_STEP: usize = 8;",
+            "pub const MAX_EFFECTS_PER_STEP: usize = 7;",
+            "the dependency-free reducer refinement must retain the reviewed maximum effect batch",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_core.rs",
+            "const _: [(); refinement::MAX_EFFECTS_PER_STEP]",
+            "[(); iroha_config::parameters::defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP]",
+            "[(); iroha_config::parameters::defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT]",
+            "the production embedded reducer must bind its dependency-free batch to configured exact-output geometry",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "pub fn sumeragi_v2_exact_output_shared_ownership_capacity(",
+            ".checked_add(certified_request_capacity)",
+            ".saturating_add(certified_request_capacity)",
+            "the shared exact-output owner must reserve both bounded producers and one complete reducer batch with checked arithmetic",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "pub fn validate_sumeragi_v2_exact_output_geometry(",
+            ".checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)",
+            ".saturating_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)",
+            "the geometry kernel must reject zero, multiplication overflow, and any corridor smaller than source-count times exact classes",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "pub fn parse(self) -> Result<actual::Root, ParseError> {",
+            ".max_total_connections\n",
+            ".max_connections_per_peer\n",
+            "root configuration must derive the authenticated-source bound from network geometry and fail parsing",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn start(",
+            "validate_shared_ownership_geometry(\n"
+            "            shared_pending_ownership_unit_capacity,\n"
+            "            reply_route_source_capacity,\n"
+            "        )?;",
+            "validate_shared_ownership_geometry(\n"
+            "            shared_pending_ownership_unit_capacity,\n"
+            "            max_peers_per_fanout,\n"
+            "        )?;",
+            "production bounds protocol fanout by roster and source geometry while charging the shared pool only for the independently reserved authenticated reply sources",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "pub(crate) fn matches_semantic_origin(",
+            "self.validate_exact() && self.first.semantic_origin.as_ref() == origin",
+            "self.validate_exact()",
+            "semantic-origin validation must compare the independently retained canonical request origin",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "pub(crate) fn advance_reply_cursors(",
+            "if message_cursor < attempt.message_cursor || chunk_cursor < attempt.chunk_cursor {",
+            "if false && (message_cursor < attempt.message_cursor || chunk_cursor < attempt.chunk_cursor) {",
+            "a source attempt may advance but never reset either exact-output cursor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(crate) fn accept_payload_chunk_with_ingress_ownership",
+            "|| !ingress_ownership.matches_semantic_origin(Some(authenticated_sender))",
+            "|| false",
+            "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(crate) fn accept_certified_body_response_with_ingress_ownership",
+            "|| !ingress_ownership.matches_semantic_origin(Some(authenticated_responder))",
+            "|| false",
+            "certified body response effect consumption must reject a changed envelope or semantic origin before mutation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn claimed_with_reply_routes_and_ingress_ownership(",
+            "if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {",
+            "if false {",
+            "exact reply construction must attach only a validated fair-ingress carrier matching the complete per-source route set",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn serve_certified_request_on_routes(",
+            "|| !ingress_ownership.matches_semantic_origin(Some(&admission.request.requester))",
+            "|| false",
+            "certified request service must bind canonical request, immutable requester origin, and every requester-targeted return source before queued local work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn serve_certified_request_on_routes(",
+            "|| reply_routes.semantic_target() != &admission.request.requester",
+            "|| false",
+            "certified request service must bind canonical request, immutable requester origin, and every requester-targeted return source before queued local work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn commit_serve(",
+            ".merge_downstream_with_observed_receipt(ingress_ownership, receipt)",
+            ".merge_downstream(ingress_ownership)\n"
+            "                .then_some(route_candidate)",
+            "exact Serve retries must consume one observed-route receipt into cloned ingress ownership and atomically install the resulting route/ownership pair",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn commit_serve(",
+            "tracked.ingress_ownership = Some(ownership_candidate);",
+            "drop(ownership_candidate);",
+            "exact Serve retries must consume one observed-route receipt into cloned ingress ownership and atomically install the resulting route/ownership pair",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn commit_serve(\n"
+            "        &self,\n"
+            "        admission: &CertifiedServeAdmission,\n"
+            "        reply_routes: NetworkReplyRoutes,\n"
+            "        ingress_ownership: FairV2IngressOwnershipEvidence,\n"
+            "    ) -> Result<CertifiedServeCommit, String> {\n"
+            "        self.queue",
+            "self.queue\n"
+            "            .commit_serve(admission, reply_routes, ingress_ownership)",
+            "let _ = reply_routes.clone().merge_observed_with_receipt(&reply_routes);\n"
+            "        self.queue\n"
+            "            .commit_serve(admission, reply_routes, ingress_ownership)",
+            "the exact Serve retry must be the sole worker-side observed-history reconciliation seam",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn post_to_peer_on_reply_routes(",
+            "if reply_routes.semantic_target() != &peer",
+            "if false",
+            "certified response emission must validate the semantic target and exact route history under one fail-stop output operation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn post_to_peer_on_reply_routes(",
+            "|| !ingress_ownership.matches_reply_routes(Some(&reply_routes))",
+            "|| false",
+            "certified response emission must validate the semantic target and exact route history under one fail-stop output operation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn post_to_peer_on_reply_routes(",
+            "operation.complete();\n"
+            "        Ok(())",
+            "drop(operation);\n"
+            "        Ok(())",
+            "certified response emission preserves the complete authenticated route set until the guarded enqueue has completed",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn route_payload_chunk<R: EffectRuntime>(",
+            "|| !ingress_ownership.matches_semantic_origin(Some(&sender))",
+            "|| false",
+            "payload chunk routing must bind canonical bytes and semantic sender before buffering or effect mutation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn buffer_orphan_payload_chunk_inner(",
+            "if !retained.merge_downstream(candidate) {",
+            "drop(candidate); if false {",
+            "orphan chunk duplicates must merge alternate source ownership without replacing canonical semantic identity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn replay_buffered_chunks<R: EffectRuntime>(",
+            "buffered.ingress_ownership.ok_or_else(|| {",
+            "None.ok_or_else(|| {",
+            "orphan replay must preserve the exact ownership carrier into live chunk delivery",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn accept_lane_message_owned(",
+            "|| !ownership.matches_semantic_origin(sender.as_ref())",
+            "|| false",
+            "lane ingress must bind semantic origin, canonical message, and the complete source route set before service",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "|| !ingress_ownership.matches_semantic_origin(inbound.sender())",
+            "|| false",
+            "runner ingress must retain canonical message, semantic origin, and source-isolated routes in one exact ownership carrier",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "if turn == OuterIngressTurn::Runtime {",
+            "if false && turn == OuterIngressTurn::Runtime {",
+            "an admitted or provisional exact Serve must suppress every later runtime-producer turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            ".try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound| {",
+            ".try_recv_if_at_checked_classified(|inbound| {",
+            "ingress drain must use the gate-bound checked selector",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "|| !ingress_ownership.matches_semantic_origin(Some(sender))",
+            "|| false",
+            "exact Serve ingress must validate complete transport ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "Err(CertifiedServePrepareError::Backpressure) => {\n"
+            "                        // `prepare_certified_request` installs the off-queue debt",
+            "Err(CertifiedServePrepareError::Backpressure) => {\n"
+            "                        return true;\n"
+            "                        // `prepare_certified_request` installs the off-queue debt",
+            "exact Serve ingress must validate complete transport ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));",
+            "drop(admission);",
+            "exact Serve ingress must validate complete transport ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "None => {\n"
+            "                            return Err(V2RunnerError::Service(",
+            "None => {\n"
+            "                            continue;\n"
+            "                            return Err(V2RunnerError::Service(",
+            "a current-height exact request may cross ingress removal only with its already-prepared lifecycle admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn bind(\n"
+            "        ingress_ready: Arc<AtomicBool>,\n"
+            "        block_ingress: Arc<FairV2Ingress>,\n"
+            "        gate: CertifiedServeIngressGate,\n"
+            "    ) -> Result<Self, V2RunnerError> {",
+            ".bind_certified_serve_gate(gate.clone())",
+            ".bind_certified_serve_gate_for_test(gate.clone())",
+            "the per-height ingress owner must bind the exact Serve reservation gate before becoming live",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn certified_serve_ingress_gate(&self) -> CertifiedServeIngressGate {",
+            "queue: Arc::clone(&self.command_tx.queue),",
+            "queue: Arc::new(V2IoCommandQueue::default()),",
+            "the I/O handle must expose a gate over its exact command queue rather than a detached reservation owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn certified_serve_ingress_gate(&self) -> Result<CertifiedServeIngressGate, String> {",
+            ".map(V2IoHandle::certified_serve_ingress_gate)",
+            ".map(|_| panic!(\"detached gate\"))",
+            "production services must bind ingress to the live I/O handle's exact Serve queue",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn retire(&mut self) -> Result<(), V2RunnerError>",
+            "close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);",
+            "let _ = (&self.ingress_ready, &self.block_ingress);",
+            "ingress rollover must close selection before unbinding the exact Serve reservation gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "impl Drop for CertifiedServeIngressBinding {\n"
+            "    fn drop(&mut self) {",
+            "if let Err(error) = self.retire() {",
+            "if let Err(error) = Ok::<(), V2RunnerError>(()) {",
+            "every abnormal binding drop must attempt the same ordered ingress retirement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "HeightIngressBindings::new(",
+            "HeightIngressBindings::new_for_test(",
+            "the runner must bind Serve and leader-wire ingress to one joint per-height queue owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "height_ingress_bindings.retire()?;",
+            "let _ = height_ingress_bindings.retire();",
+            "every clean shutdown and finality path must atomically retire both per-height ingress bindings",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn v2_ingress_head_can_drain(",
+            "executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
+            "executor.can_admit_network_message(message)",
+            "runner preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)",
+            "retained.merge_downstream(candidate)",
+            "retained fair-ingress ownership must consume the strict receipt and yield the sole authoritative route snapshot",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn target_reservation(",
+            "ExactTargetReservationKind::SidecarTopologyProgress",
+            "ExactTargetReservationKind::Reliable",
+            "reservation identity must isolate requester-owned topology progress from reliable reply-source ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn seal(&self) -> Result<(), String>",
+            ".compare_exchange(false, true, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)",
+            ".compare_exchange(false, false, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)",
+            "durable exact-output handoff must seal its unique service owner exactly once",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "pub(crate) fn seal_applied_height_output_handoff(",
+            "if pending.is_pending() {",
+            "if false && pending.is_pending() {",
+            "final exact-output handoff must validate durable authority, atomically empty the corridor, and one-shot seal every later enqueue",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn into_retained_merge_sidecars(",
+            ".is_bound_to_transport_owner(&self.exact_output_handoff_owner)",
+            ".matches_predecessor_context(&self.context)",
+            "lane rollover must consume only its paired service receipt for the exact predecessor artifact and immediate successor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn require_peeked_lane_work_effect(",
+            "drained.ok_or(V2RunnerError::RestartRequired)",
+            "drained.ok_or(V2RunnerError::Service(\"lost peek\".to_owned()))",
+            "runner lane dispatch must fail stop if its guarded peek loses the exact queued owner before drain",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn rehydrate_with_exact_geometry_after_durable_handoff(",
+            "self.requeue_retained_outbound_after_height_rollover();",
+            "let _ = &self;",
+            "durable sidecar rehydration must preserve and requeue retained exact outbound ownership after validating the rollover authority",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn transition_server_service_generation(",
+            "if !self.server_generation_is_terminal() {",
+            "if false && !self.server_generation_is_terminal() {",
+            "ordinary responder generation transition must prepare without mutation, reject nonterminal state, and only then commit the prepared fence",
+        ),
+    ),
+)
+def test_exact_output_production_source_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    region_marker: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    for source_name in (
+        "crates/iroha_core/src/lib.rs",
+        "crates/iroha_core/src/merge_sidecar.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker/"
+            "exact_output_rollover_claim.rs"
+        ),
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "crates/iroha_config/src/parameters/defaults.rs",
+        "crates/iroha_config/src/parameters/actual.rs",
+        "crates/iroha_config/src/parameters/user.rs",
+    ):
+        destination = tmp_path / source_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / source_name, destination)
+
+    path = tmp_path / relative_path
+    source = path.read_text(encoding="utf-8")
+    region_start = source.find(region_marker)
+    assert region_start >= 0
+    mutation = source.find(old, region_start)
+    assert mutation >= 0
+    next_item = re.search(
+        r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?fn[ \t]+",
+        source[region_start + len(region_marker) :],
+    )
+    if next_item is not None:
+        next_item_start = region_start + len(region_marker) + next_item.start()
+        assert mutation < next_item_start, (
+            "mutation escaped the production Rust item selected by its region marker",
+            relative_path,
+            region_marker,
+            old,
+        )
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+    assert any(error_fragment in error for error in errors), errors
+
+def test_async_source_fidelity_pins_validator_progress_capacity(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    (formal_dir / "proof_coverage.json").write_text("{}\n", encoding="utf-8")
+    source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text(
+        encoding="utf-8"
+    )
+    (formal_dir / "SumeragiV2AsyncNetwork.tla").write_text(
+        source.replace(
+            "AsyncIngressCapacity >= 5 * N + 2",
+            "AsyncIngressCapacity >= N + 2",
+            1,
+        ).replace(
+            "           /\\ Len(lanes[recipient][source]) =\n"
+            "                Cardinality(\n"
+            "                  IngressProtectedClassesPresentIn(\n"
+            "                    lanes, recipient, source))\n",
+            "           /\\ Len(lanes[recipient][source]) = 4\n",
+            1,
+        ).replace(
+            "       /\\ \\A source \\in AsyncIngressSources:\n"
+            "            IngressLaneDepth(recipient, source) <=\n"
+            "              AsyncIngressCapacity\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "AsyncConfiguration omits required production behavior" in error
+        for error in errors
+    )
+    assert any(
+        "IngressContinuationProtectedSourcesFor must equal only" in error
+        for error in errors
+    )
+    assert any(
+        "AsyncIngressCapacityTypeInvariant must equal only" in error
+        for error in errors
+    )
+
+def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    path = formal_dir / "ownership_n1.cfg"
+    source = (module.FORMAL_DIR / path.name).read_text(encoding="utf-8")
+    path.write_text(source, encoding="utf-8")
+    shutil.copyfile(
+        module.FORMAL_DIR / "SumeragiV2OwnershipInvariantCheck.tla",
+        formal_dir / "SumeragiV2OwnershipInvariantCheck.tla",
+    )
+    assert module._ownership_n1_configuration_errors(formal_dir) == []
+    assert len(module._OWNERSHIP_N1_DEFINITION_OVERRIDES) == 15
+    assert all(
+        helper in module._OWNERSHIP_N1_STRUCTURAL_OPERATOR_SHA256
+        for _, helper in module._OWNERSHIP_N1_DEFINITION_OVERRIDES
+    )
+
+    path.write_text(
+        source.replace("  AsyncIngressCapacity = 7\n", "  AsyncIngressCapacity = 6\n", 1),
+        encoding="utf-8",
+    )
+    errors = module._ownership_n1_configuration_errors(formal_dir)
+    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
+
+    path.write_text(
+        source.replace(
+            "  AsyncDeferredProgressCapacity = 5\n",
+            "  AsyncDeferredProgressCapacity = 4\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._ownership_n1_configuration_errors(formal_dir)
+    assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
+
+    path.write_text(
+        source.replace("  N = 1\n", "  N = 2\n", 1),
+        encoding="utf-8",
+    )
+    errors = module._ownership_n1_configuration_errors(formal_dir)
+    assert any("must remain the N=1 boundary" in error for error in errors)
+    assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
+    assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
+
+    path.write_text(
+        source.replace(
+            "  ProductionSchedulerTraceRefinesProtectedOwnership = TRUE\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._ownership_n1_configuration_errors(formal_dir)
+    assert any(
+        "must assign ProductionSchedulerTraceRefinesProtectedOwnership = TRUE "
+        "exactly once" in error
+        for error in errors
+    )
+
+    for refinement_constant in (
+        "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership",
+        "ProductionTwoStageRelayRetryTraceRefinesSourceFairness",
+        "ProductionReliableFlushTraceRefinesOutboundOwnership",
+    ):
+        path.write_text(
+            source.replace(
+                f"  {refinement_constant} = TRUE\n",
+                "",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        errors = module._ownership_n1_configuration_errors(formal_dir)
+        assert any(
+            f"must assign {refinement_constant} = TRUE exactly once" in error
+            for error in errors
+        )
+
+    for old, new in (
+        ('  ValidSubjects = {"A"}\n', '  ValidSubjects = {"B"}\n'),
+        (
+            "  AcquisitionSubjects = {AcquisitionSubjectA}\n",
+            "  AcquisitionSubjects = {}\n",
+        ),
+        (
+            "  InitialAcquisitionSubject = AcquisitionSubjectA\n",
+            "  InitialAcquisitionSubject = AcquisitionSubjectB\n",
+        ),
+        ("  MaxAcquisitionId = 4\n", "  MaxAcquisitionId = 5\n"),
+    ):
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._ownership_n1_configuration_errors(formal_dir)
+        assert any(
+            "ownership search must retain exact closed assignment" in error
+            for error in errors
+        ), errors
+
+    for old, new in (
+        (
+            "  InstallTcFromEvidence <- OwnershipInstallTcFromEvidence\n",
+            "",
+        ),
+        (
+            "  InstallTcFromEvidence <- OwnershipInstallTcFromEvidence\n",
+            "  InstallTcFromEvidence <- OwnershipInstallTcEvidenceMatches\n",
+        ),
+    ):
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._ownership_n1_configuration_errors(formal_dir)
+        assert any(
+            "ordered fifteen-entry structural definition inventory" in error
+            for error in errors
+        ), errors
+
+    for invariant in (
+        "AsyncTypeInvariant",
+        "AsyncProgressOwnershipInvariant",
+    ):
+        path.write_text(
+            source.replace(f"INVARIANT {invariant}\n", "", 1),
+            encoding="utf-8",
+        )
+        errors = module._ownership_n1_configuration_errors(formal_dir)
+        assert any(
+            f"exact closed assignment 'INVARIANT {invariant}' once" in error
+            for error in errors
+        ), errors
+
+def exact_output_production_fixture(tmp_path: Path) -> None:
+    """Copy every production source consumed by the exact-output checker."""
+
+    for relative in (
+        Path("crates/iroha_core/src/lib.rs"),
+        Path("crates/iroha_core/src/merge_sidecar.rs"),
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_config/src/parameters/actual.rs"),
+        Path("crates/iroha_config/src/parameters/defaults.rs"),
+        Path("crates/iroha_config/src/parameters/user.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "                incumbent.ingress_predecessors = ingress_predecessors;\n",
+            "                incumbent.ingress_predecessors.clear();\n",
+            "freshly frozen physical prefix",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            ".map(|(source, lane)| (source.clone(), lane.entries.len()))\n",
+            ".map(|(source, _lane)| (source.clone(), 0))\n",
+            "complete current physical source prefix",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "token.admission_ordinal > restore.last_admission_ordinal()",
+            "token.admission_ordinal < restore.last_admission_ordinal()",
+            "every restored durable token must remain at or below the restored physical admission high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            ".max(restore.last_admission_ordinal());",
+            ".max(0);",
+            "restart binding must preserve the durable physical admission high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "let admission_ordinal = state\n"
+            "        .last_admission_ordinal\n"
+            "        .checked_add(1)\n"
+            "        .ok_or(FairV2IngressLeaderWireAdmissionError::Exhausted)?;",
+            "let admission_ordinal = state\n"
+            "        .last_admission_ordinal\n"
+            "        .wrapping_add(1);",
+            "fresh leader-wire lifecycle admission must use the next physical high-watermark ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "                if durable_ordinals != active_ordinals {\n",
+            "                if false {\n",
+            "complete durable and in-memory logical Ingress owner sets",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "            active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);\n",
+            "            active_leader_wire_carriers\n"
+            "                .sort_by_key(|(owner, _)| owner.token.scheduler_ordinal);\n",
+            "ordering by physical ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "                    .remove(&owner.token)\n",
+            "                    .get(&owner.token)\n"
+            "                    .copied()\n",
+            "consume its one exact physical carrier",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "            if !leader_wire_carrier_ordinals.is_empty() {\n",
+            "            if false {\n",
+            "correspondence must be total before ordering",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "match active_leader_wire_carriers.into_iter().next() {\n",
+            "match active_leader_wire_carriers.into_iter().last() {\n",
+            "minimum physical carrier",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            ".filter(|record| record.status == LeaderWireLifecycleStatus::Ingress)\n",
+            ".filter(|record| record.status != LeaderWireLifecycleStatus::Terminal)\n",
+            "every active logical scheduler owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            ".map(|record| record.token.scheduler_ordinal)\n"
+            "            .collect())\n",
+            ".map(|record| record.token.scheduler_ordinal)\n"
+            "            .take(1)\n"
+            "            .collect())\n",
+            "every active logical scheduler owner",
+        ),
+    ),
+)
+def test_leader_wire_physical_ingress_rejects_semantic_mutations(
+    tmp_path: Path,
+    relative: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Every replay-ordering boundary fails the aggregate checker closed."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = (
+        module._leader_wire_physical_ingress_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+def test_restart_physical_high_water_mutation_survives_item_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """Restart must publish the restored physical high-water before admission."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    ingress_path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    source = ingress_path.read_text(encoding="utf-8")
+    items = [
+        item
+        for item in module.rust_items(source, "bind_leader_wire_lifecycle_gate")
+        if item.brace_context == (("impl", "FairV2Ingress"),)
+    ]
+    assert len(items) == 1
+    item = items[0]
+    old = ".max(restore.last_admission_ordinal());"
+    new = ".max(0);"
+    assert item.source.count(old) == 1
+    mutated_item_source = item.source.replace(old, new, 1)
+    ingress_path.write_text(
+        source.replace(item.source, mutated_item_source, 1),
+        encoding="utf-8",
+    )
+
+    mutated_item = next(
+        candidate
+        for candidate in module.rust_items(
+            ingress_path.read_text(encoding="utf-8"),
+            "bind_leader_wire_lifecycle_gate",
+        )
+        if candidate.brace_context == (("impl", "FairV2Ingress"),)
+    )
+    module._LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+        "bind_leader_wire_lifecycle_gate"
+    ] = module._rust_item_token_sha256(mutated_item)
+
+    errors = (
+        module._leader_wire_physical_ingress_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+    assert any(
+        "restart binding must preserve the durable physical admission "
+        "high-watermark before any fresh carrier allocation"
+        in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            ".map(|(source, lane)| (source.clone(), lane.entries.len()))",
+            ".map(|(source, _lane)| (source.clone(), 0))",
+            "complete current physical source prefix",
+        ),
+        (
+            "incumbent.ingress_predecessors = ingress_predecessors;",
+            "incumbent.ingress_predecessors.clear();",
+            "freshly frozen physical prefix",
+        ),
+    ),
+)
+def test_dormant_leader_wire_reactivation_mutations_survive_item_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """A refreshed admission seal still freezes and installs the live prefix."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    ingress_path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    mutate_rust_item_source(
+        module,
+        ingress_path,
+        "fair_v2_ingress_admit_leader_wire",
+        old,
+        new,
+    )
+    mutated_items = module.rust_items(
+        ingress_path.read_text(encoding="utf-8"),
+        "fair_v2_ingress_admit_leader_wire",
+    )
+    assert len(mutated_items) == 1
+    module._LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+        "fair_v2_ingress_admit_leader_wire"
+    ] = module._rust_item_token_sha256(mutated_items[0])
+
+    errors = (
+        module._leader_wire_physical_ingress_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "assert!(earlier_ordinal < retry_ordinal);",
+            "assert!(earlier_ordinal > retry_ordinal);",
+            "ordinary physical predecessor before the restored lifecycle's fresh carrier",
+        ),
+        (
+            "                })\n                .is_none(),\n",
+            "                })\n                .is_some(),\n",
+            "reject target-only selection while its frozen physical predecessor remains",
+        ),
+        (
+            "payload: wire::ConsensusMessageV2Payload::CommitCertificateRequest(_),",
+            "payload: wire::ConsensusMessageV2Payload::CommitCertificateResponse(_),",
+            "drain and identify the frozen ordinary predecessor before the replay",
+        ),
+        (
+            "ownership.leader_wire_token() == Some(&fixture.token)",
+            "ownership.leader_wire_token().is_some()",
+            "drain the exact restored owner only after its frozen physical prefix",
+        ),
+    ),
+)
+def test_restored_productive_retry_mutations_survive_regression_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The refreshed regression seal cannot hide loss of physical-prefix order."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    ingress_path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    name = "restored_productive_retry_freezes_the_current_physical_source_prefix"
+    mutate_rust_item_source(module, ingress_path, name, old, new)
+    mutated_items = module.rust_items(
+        ingress_path.read_text(encoding="utf-8"), name
+    )
+    assert len(mutated_items) == 1
+    module._LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256[
+        name
+    ] = module._rust_item_token_sha256(mutated_items[0])
+
+    errors = (
+        module._leader_wire_physical_ingress_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "enum CertifiedServeRuntimeEpisodeState {\n"
+            "    Ready,\n"
+            "    Claimed {\n",
+            "enum CertifiedServeRuntimeEpisodeState {\n"
+            "    Claimed {\n",
+            "distinct ready, one-owner claimed, and irreversible complete states",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "self.projection.request_hash == barrier.request_hash",
+            "true",
+            "episode claims must retain the exact Serve request hash",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "self.carrier_ordinal == Some(barrier.carrier_ordinal)",
+            "self.carrier_ordinal.is_some()",
+            "episode claims must retain the selected physical carrier occurrence",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "&& self.handed_off.is_some()",
+            "&& true",
+            "episode claims must retain the live fair-ingress handoff",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "                    if command_ordinal >= reservation.id.0 {\n",
+            "                    if command_ordinal > reservation.id.0 {\n",
+            "equal or later causal work must not enter",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "                        } if existing == command_ordinal => Some(command_ordinal),\n",
+            "                        } if existing <= command_ordinal => Some(command_ordinal),\n",
+            "already-selected owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "        if exact_target_active && exact_predecessor_ordinal.is_none() {\n",
+            "        if false {\n",
+            "later causal, Control, Completion, and priority work must be blocked",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                let claimed_older_runtime_episode = services\n"
+            "                    .claim_certified_serve_runtime_episode(serve_barrier)\n",
+            "                let claimed_older_runtime_episode = services\n"
+            "                    .claim_certified_serve_runtime_episode_unchecked(serve_barrier)\n",
+            "an exact target turn must claim before selecting one completed predecessor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                    services.drain_exact_serve_runtime_predecessor(\n"
+            "                        &mut executor,\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                    )?;\n",
+            "                    services.drain_exact_serve_runtime_predecessor(\n"
+            "                        &mut executor,\n"
+            "                        serve_barrier.lifecycle_ordinal(),\n"
+            "                    )?;\n",
+            "an exact target turn must claim before selecting one completed predecessor",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                    if executor.older_runtime_lifecycle_predates_exact_serve(\n"
+            "                        Instant::now(),\n"
+            "                        serve_barrier.scheduler_ordinal(),\n"
+            "                    )? && services\n",
+            "                    if executor.older_runtime_lifecycle_predates_exact_serve(\n"
+            "                        Instant::now(),\n"
+            "                        serve_barrier.lifecycle_ordinal(),\n"
+            "                    )? && services\n",
+            "serialized predecessor step must require both an older owner and physical capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                    older_predecessor_remains = executor\n"
+            "                        .older_runtime_lifecycle_predates_exact_serve(\n"
+            "                            Instant::now(),\n"
+            "                            serve_barrier.scheduler_ordinal(),\n"
+            "                        )?;\n",
+            "                    older_predecessor_remains = executor\n"
+            "                        .older_runtime_lifecycle_predates_exact_serve(\n"
+            "                            Instant::now(),\n"
+            "                            serve_barrier.lifecycle_ordinal(),\n"
+            "                        )?;\n",
+            "every claimed turn must re-publish/recheck the full owner set before settlement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "            else {\n"
+            "                // Exact admission won the queue-locked race after the\n"
+            "                // observation above. Restart at the dedicated target turn.\n"
+            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "                continue;\n"
+            "            };\n",
+            "            else {\n"
+            "                continue;\n"
+            "            };\n",
+            "queue-locked handoff to an exact target which won the admission race must retain the finite wake bound",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                        .certified_serve_runtime_predecessor_capacity_available(serve_barrier)\n",
+            "                        .certified_serve_runtime_predecessor_capacity_unchecked(serve_barrier)\n",
+            "serialized predecessor step must require both an older owner and physical capacity",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                        .finish_certified_serve_runtime_episode_turn(\n",
+            "                        .finish_certified_serve_runtime_episode_turn_unchecked(\n",
+            "re-publish/recheck the full owner set before settlement",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "self.ingress.oldest_active_lifecycle_ordinal()?",
+            "self.ingress.oldest_lifecycle_ordinal()?",
+            "complete runtime minimum must include latent Local FIFO reservations",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "self.dormant_local_fifo_reservations.iter().try_fold(\n"
+            "            command_minimum,",
+            "self.commands.iter().try_fold(\n"
+            "            command_minimum,",
+            "latent Local FIFO reservations must participate in the oldest active owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "if self\n"
+            "            .dormant_local_fifo_reservations\n"
+            "            .iter()\n"
+            "            .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)",
+            "if self\n"
+            "            .commands\n"
+            "            .iter()\n"
+            "            .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)",
+            "latent Local FIFO reservations must collide with reused exact-Serve ordinals",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "Ok(minimum) => Ok(minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal)),\n",
+            "Ok(minimum) => Ok(minimum.is_some_and(|ordinal| ordinal <= serve_lifecycle_ordinal)),\n",
+            "complete owner minimum must be strictly older than the ticket",
+        ),
+    ),
+)
+def test_exact_serve_runtime_episode_rejects_semantic_mutations(
+    tmp_path: Path,
+    relative: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Every lasso-closing ownership boundary fails closed under mutation."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    assert source.count(old) == 1, old
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+@pytest.mark.parametrize(
+    (
+        "seal_group",
+        "seal_key",
+        "item_kind",
+        "owner",
+        "item_name",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256",
+            "V2IoCertifiedServeIngressReservation",
+            "struct",
+            "",
+            "V2IoCertifiedServeIngressReservation",
+            "    lifecycle_id: CertifiedServeLifecycleId,\n",
+            "    lifecycle_id: CertifiedServeIngressReservationId,\n",
+            "physical scheduler ticket, logical lifecycle, payload, carrier, "
+            "and bounded runtime episode",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256",
+            "V2IoCommandQueueState",
+            "struct",
+            "",
+            "V2IoCommandQueueState",
+            "    producer_episode_active: bool,\n",
+            "    producer_episode_active: u8,\n",
+            "distinct one-shot due and finite active producer-episode fields",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256",
+            "barrier",
+            "method",
+            "V2IoCertifiedServeIngressReservation",
+            "barrier",
+            "            scheduler_ordinal: self.id.0,\n"
+            "            lifecycle_id: self.lifecycle_id,\n",
+            "            scheduler_ordinal: self.lifecycle_id.admission_ordinal,\n"
+            "            lifecycle_id: self.lifecycle_id,\n",
+            "physical scheduler ticket, logical lifecycle, and carrier",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256",
+            "barrier",
+            "method",
+            "V2IoCertifiedServeIngressReservation",
+            "barrier",
+            "            lifecycle_id: self.lifecycle_id,\n",
+            "            lifecycle_id: CertifiedServeLifecycleId {\n"
+            "                admission_ordinal: self.id.0,\n"
+            "                request_hash: self.projection.request_hash,\n"
+            "            },\n",
+            "physical scheduler ticket, logical lifecycle, and carrier",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256",
+            "matches_barrier",
+            "method",
+            "V2IoCertifiedServeIngressReservation",
+            "matches_barrier",
+            "self.id.0 == barrier.scheduler_ordinal",
+            "self.lifecycle_id.admission_ordinal == barrier.scheduler_ordinal",
+            "exact physical Serve scheduler ticket",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256",
+            "matches_barrier",
+            "method",
+            "V2IoCertifiedServeIngressReservation",
+            "matches_barrier",
+            "&& self.lifecycle_id == barrier.lifecycle_id",
+            "&& self.lifecycle_id.request_hash == barrier.lifecycle_id.request_hash",
+            "exact logical Serve lifecycle",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::suspend_materialized_serve_barrier_for_runtime_predecessor",
+            "method",
+            "V2IoCommandQueue",
+            "suspend_materialized_serve_barrier_for_runtime_predecessor",
+            "            index + 1,\n            state.commands.len(),\n",
+            "            index,\n            state.commands.len(),\n",
+            "only the physical FIFO-tail target unit may transfer to an older owner",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::claim_serve_runtime_episode",
+            "method",
+            "V2IoCommandQueue",
+            "claim_serve_runtime_episode",
+            "            | CertifiedServeRuntimeEpisodeState::Complete => Ok(false),\n",
+            "            | CertifiedServeRuntimeEpisodeState::Complete => Ok(true),\n",
+            "one exact occurrence may claim only one unsettled predecessor turn",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::serve_runtime_predecessor_capacity_available",
+            "method",
+            "V2IoCommandQueue",
+            "serve_runtime_predecessor_capacity_available",
+            "        Ok(transferable_target_slot\n"
+            "            || (state.commands.len() < self.capacity\n"
+            "                && self.admission.has_capacity(V2IoAdmissionClass::Consensus)))\n",
+            "        Ok(transferable_target_slot\n"
+            "            && (state.commands.len() < self.capacity\n"
+            "                && self.admission.has_capacity(V2IoAdmissionClass::Consensus)))\n",
+            "atomically transferable target unit",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::finish_serve_runtime_episode_turn",
+            "method",
+            "V2IoCommandQueue",
+            "finish_serve_runtime_episode_turn",
+            "        reservation.runtime_episode = if older_predecessor_remains {\n"
+            "            CertifiedServeRuntimeEpisodeState::Ready\n"
+            "        } else {\n"
+            "            CertifiedServeRuntimeEpisodeState::Complete\n"
+            "        };\n",
+            "        reservation.runtime_episode = if older_predecessor_remains {\n"
+            "            CertifiedServeRuntimeEpisodeState::Complete\n"
+            "        } else {\n"
+            "            CertifiedServeRuntimeEpisodeState::Ready\n"
+            "        };\n",
+            "mandatory full recheck must either reopen one bounded turn or irreversibly complete",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::serve_barrier",
+            "method",
+            "V2IoCommandQueue",
+            "serve_barrier",
+            "        if barrier.request_hash != lifecycle_id.request_hash || barrier.lifecycle_id != lifecycle_id\n",
+            "        if barrier.request_hash != lifecycle_id.request_hash\n",
+            "validate both request and logical lifecycle",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::serve_barrier",
+            "method",
+            "V2IoCommandQueue",
+            "serve_barrier",
+            "                || !state.serves.contains_key(&reservation.lifecycle_id))\n",
+            "                || false)\n",
+            "raw exact-Serve barrier must remain indexed by its immutable logical lifecycle",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "V2IoCommandQueue::try_send_as",
+            "method",
+            "V2IoCommandQueue",
+            "try_send_as",
+            "        let exact_target_active = state.serve_ingress_reservation.is_some()\n"
+            "            || !state.serve_ingress_waiters.is_empty()\n"
+            "            || state.serve_barrier.is_some();\n",
+            "        let exact_target_active = state.serve_ingress_reservation.is_some()\n"
+            "            || state.serve_barrier.is_some();\n",
+            "selected target, any admitted waiter, or its materialized barrier",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_barrier",
+            "method",
+            "ProductionV2Services",
+            "certified_serve_barrier",
+            "        self.io.as_ref().map_or(Ok(None), V2IoHandle::serve_barrier)\n",
+            "        Ok(None)\n",
+            "production exact-Serve barrier wrapper must project only through the attached I/O owner",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::claim_certified_serve_runtime_episode",
+            "method",
+            "ProductionV2Services",
+            "claim_certified_serve_runtime_episode",
+            "            .claim_serve_runtime_episode(barrier)\n",
+            "            .serve_runtime_predecessor_capacity_available(barrier)\n",
+            "production exact-Serve claim wrapper must fail closed and forward the exact barrier",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::certified_serve_runtime_predecessor_capacity_available",
+            "method",
+            "ProductionV2Services",
+            "certified_serve_runtime_predecessor_capacity_available",
+            "            .serve_runtime_predecessor_capacity_available(barrier)\n",
+            "            .claim_serve_runtime_episode(barrier)\n",
+            "production exact-Serve capacity wrapper must fail closed and forward the exact barrier",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::finish_certified_serve_runtime_episode_turn",
+            "method",
+            "ProductionV2Services",
+            "finish_certified_serve_runtime_episode_turn",
+            "            .finish_serve_runtime_episode_turn(barrier, older_predecessor_remains)\n",
+            "            .finish_serve_runtime_episode_turn(barrier, false)\n",
+            "production exact-Serve settlement wrapper must fail closed and forward the barrier and recheck result",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::try_begin_certified_serve_producer_episode",
+            "method",
+            "ProductionV2Services",
+            "try_begin_certified_serve_producer_episode",
+            "            .try_begin_producer_episode()\n",
+            "            .try_begin_producer_episode().map(|_| None)\n",
+            "production producer-episode wrapper must fail closed and delegate to the queue-atomic gate",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::take_exact_serve_predecessor_completion",
+            "method",
+            "ProductionV2Services",
+            "take_exact_serve_predecessor_completion",
+            "            serve_lifecycle_ordinal,\n            false,\n",
+            "            serve_lifecycle_ordinal,\n            true,\n",
+            "shared helper with a strict lifecycle cut",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::take_lifecycle_prefix_completion",
+            "method",
+            "ProductionV2Services",
+            "take_lifecycle_prefix_completion",
+            "                ordinal < lifecycle_cut\n",
+            "                ordinal <= lifecycle_cut\n",
+            "distinguish inclusive timeout ownership from strict exact-Serve predecessors",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::take_lifecycle_prefix_completion",
+            "method",
+            "ProductionV2Services",
+            "take_lifecycle_prefix_completion",
+            "                    within_cut(ordinal)\n"
+            "                        && (runtime_capacity_available || !owned.requires_runtime_capacity)\n",
+            "                    within_cut(ordinal)\n",
+            "reviewed lifecycle cut and runtime-capacity gate",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::take_lifecycle_prefix_completion",
+            "method",
+            "ProductionV2Services",
+            "take_lifecycle_prefix_completion",
+            "                .min_by_key(|completion| completion.runtime_lifecycle_ordinal())\n",
+            "                .max_by_key(|completion| completion.runtime_lifecycle_ordinal())\n",
+            "choose the least immutable ordinal",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::take_lifecycle_prefix_completion",
+            "method",
+            "ProductionV2Services",
+            "take_lifecycle_prefix_completion",
+            "            (Some(io), Some(local)) if io < local => Some(CompletionSource::Io),\n",
+            "            (Some(io), Some(local)) if io > local => Some(CompletionSource::Io),\n",
+            "choose the least owner and retain finite fair tie-breaking",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_exact_serve_runtime_predecessor",
+            "method",
+            "ProductionV2Services",
+            "drain_exact_serve_runtime_predecessor",
+            "            CompletionDrainPolicy::ExactServePredecessor {\n"
+            "                serve_lifecycle_ordinal,\n"
+            "            },\n",
+            "            CompletionDrainPolicy::TimeoutRecoveryPrefix {\n"
+            "                inclusive_lifecycle_cut: serve_lifecycle_ordinal,\n"
+            "            },\n",
+            "at most one completed owner",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            "        while attempts < limit {\n",
+            "        while attempts <= limit {\n",
+            "caller-supplied finite bound",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            "                } => self.take_exact_serve_predecessor_completion(\n",
+            "                } => self.take_timeout_recovery_prefix_completion(\n",
+            "exact policy must use only the strict ticket-indexed selector",
+        ),
+        (
+            "_EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256",
+            "ProductionV2Services::drain_completions_inner",
+            "method",
+            "ProductionV2Services",
+            "drain_completions_inner",
+            "                } => self.take_timeout_recovery_prefix_completion(\n",
+            "                } => self.take_exact_serve_predecessor_completion(\n",
+            "separately inclusive timeout-recovery selector",
+        ),
+    ),
+)
+def test_exact_serve_checker_boundaries_survive_item_digest_refresh(
+    tmp_path: Path,
+    seal_group: str,
+    seal_key: str,
+    item_kind: str,
+    owner: str,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each exact-Serve item keeps a semantic check after resealing itself."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = path.read_text(encoding="utf-8")
+    if item_kind == "struct":
+        items = module.rust_struct_items(source, item_name)
+    else:
+        context = (("impl", owner),)
+        items = tuple(
+            item
+            for item in module.rust_items(source, item_name)
+            if item.brace_context == context
+        )
+    assert len(items) == 1, (item_name, [item.brace_context for item in items])
+    item = items[0]
+    assert item.source.count(old) == 1, (seal_key, old)
+    mutated_source = item.source.replace(old, new, 1)
+    assert source.count(item.source) == 1, seal_key
+    path.write_text(
+        source.replace(item.source, mutated_source, 1),
+        encoding="utf-8",
+    )
+
+    mutated_file = path.read_text(encoding="utf-8")
+    if item_kind == "struct":
+        mutated_items = module.rust_struct_items(mutated_file, item_name)
+    else:
+        mutated_items = tuple(
+            candidate
+            for candidate in module.rust_items(mutated_file, item_name)
+            if candidate.brace_context == (("impl", owner),)
+        )
+    assert len(mutated_items) == 1
+    getattr(module, seal_group)[seal_key] = module._rust_item_token_sha256(
+        mutated_items[0]
+    )
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+def test_exact_serve_producer_episode_must_use_survives_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The producer lease cannot lose its must-use boundary behind resealing."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = path.read_text(encoding="utf-8")
+    old = "#[must_use]\npub(crate) struct CertifiedServeProducerEpisode {\n"
+    new = "pub(crate) struct CertifiedServeProducerEpisode {\n"
+    assert source.count(old) == 1
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+    items = module.rust_struct_items(
+        path.read_text(encoding="utf-8"),
+        "CertifiedServeProducerEpisode",
+    )
+    assert len(items) == 1
+    module._EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256[
+        "CertifiedServeProducerEpisode"
+    ] = module._rust_item_token_sha256(items[0])
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        "exact-Serve state carrier CertifiedServeProducerEpisode must have "
+        "exact reviewed attributes"
+        in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+def test_exact_serve_producer_episode_drop_survives_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """A refreshed producer lease still clears active under the queue lock."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = path.read_text(encoding="utf-8")
+    context = (("impl", "Drop", "for", "CertifiedServeProducerEpisode"),)
+    items = tuple(
+        item
+        for item in module.rust_items(source, "drop")
+        if item.brace_context == context
+    )
+    assert len(items) == 1
+    item = items[0]
+    old = "        if !state.producer_episode_active {\n"
+    new = "        if state.producer_episode_active {\n"
+    assert item.source.count(old) == 1
+    path.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    mutated_items = tuple(
+        candidate
+        for candidate in module.rust_items(
+            path.read_text(encoding="utf-8"), "drop"
+        )
+        if candidate.brace_context == context
+    )
+    assert len(mutated_items) == 1
+    module._EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256[
+        "CertifiedServeProducerEpisode::drop"
+    ] = module._rust_item_token_sha256(mutated_items[0])
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        "ordinary producer episodes must retire under the same queue lock"
+        in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    (
+        "relative",
+        "seal_group",
+        "seal_key",
+        "item_name",
+        "context",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256",
+            "advance_executor_once_before_exact_serve",
+            "advance_executor_once_before_exact_serve",
+            (),
+            "    let _ = executor.step(Instant::now(), services)?;\n",
+            "    let _ = executor.step_pacemaker_once(Instant::now(), services)?;\n",
+            "one exact-Serve turn must execute at most one serialized transition",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256",
+            "publish_external_lifecycle_owners",
+            "publish_external_lifecycle_owners",
+            (("impl", "<", "R", ":", "EffectRuntime", ">", "V2EffectExecutor", "<", "R", ">"),),
+            "            .set_external_lifecycle_owners(owners)\n",
+            "            .set_external_lifecycle_owners({ drop(owners); Vec::new() })\n",
+            "exact-Serve owner publication must snapshot every executor-retained owner and preserve the runtime error boundary",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_EFFECT_ITEM_SHA256",
+            "older_runtime_lifecycle_predates_exact_serve",
+            "older_runtime_lifecycle_predates_exact_serve",
+            (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),),
+            "        self.publish_external_lifecycle_owners()?;\n",
+            "        let _ = self.external_lifecycle_owners()?;\n",
+            "executor-retained owners must publish before the runtime freezes and deeply validates the complete owner set",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "minimum_active_lifecycle_ordinal",
+            "minimum_active_lifecycle_ordinal",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        self.minimum_active_lifecycle_ordinal_excluding(&[])\n",
+            "        self.minimum_active_lifecycle_ordinal_excluding(&self.external_lifecycle_owners)\n",
+            "exact-Serve runtime minimum must exclude no active owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "minimum_active_lifecycle_ordinal_excluding",
+            "minimum_active_lifecycle_ordinal_excluding",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        let _ = self.ingress.oldest_active_lifecycle_ordinal()?;\n",
+            "        let _ = self.ingress.oldest_lifecycle_ordinal()?;\n",
+            "exact-Serve runtime minimum must deeply validate every FIFO and latent Local FIFO owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "minimum_runnable_lifecycle_ordinal",
+            "minimum_runnable_lifecycle_ordinal",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        let _ = self.minimum_active_lifecycle_ordinal()?;\n"
+            "        let mut minimum = self.ingress.oldest_lifecycle_ordinal()?;\n",
+            "        let mut minimum = self.minimum_active_lifecycle_ordinal()?;\n",
+            "exact-Serve predecessor selection must deeply validate all owners before projecting runnable FIFO work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "active_lifecycle_uses_ordinal",
+            "active_lifecycle_uses_ordinal",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "        if self.ingress.uses_lifecycle_ordinal(lifecycle_ordinal)? {\n"
+            "            return Ok(true);\n"
+            "        }\n",
+            "        if self.ingress.uses_lifecycle_ordinal(lifecycle_ordinal)? && false {\n"
+            "            return Ok(true);\n"
+            "        }\n",
+            "exact-Serve collision checks must include bounded-ingress and dormant owners",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256",
+            "older_lifecycle_predates_exact_serve",
+            "older_lifecycle_predates_exact_serve",
+            (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+            "                let older = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);\n",
+            "                let older = minimum.is_some_and(|ordinal| ordinal <= serve_lifecycle_ordinal);\n",
+            "runnable owner minimum must be strictly older than the ticket",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256",
+            "oldest_active_lifecycle_ordinal",
+            "oldest_active_lifecycle_ordinal",
+            (("impl", "<", "C", ":", "ExactRuntimeCommandIdentity", ">", "BoundedIngress", "<", "C", ">"),),
+            "                return Err(EnqueueError::FailClosed);\n",
+            "                continue;\n",
+            "latent Local FIFO reservations must retain exact minted identity but remain passive until a runnable occurrence materializes",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256",
+            "uses_lifecycle_ordinal",
+            "uses_lifecycle_ordinal",
+            (("impl", "<", "C", ":", "ExactRuntimeCommandIdentity", ">", "BoundedIngress", "<", "C", ">"),),
+            "        if self\n"
+            "            .dormant_local_fifo_reservations\n"
+            "            .iter()\n"
+            "            .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)\n"
+            "        {\n"
+            "            return Ok(true);\n"
+            "        }\n",
+            "        if self\n"
+            "            .dormant_local_fifo_reservations\n"
+            "            .iter()\n"
+            "            .any(|reservation| reservation.admission_ordinal == lifecycle_ordinal)\n"
+            "        {\n"
+            "            return Ok(false);\n"
+            "        }\n",
+            "latent Local FIFO reservations must collide with reused exact-Serve ordinals",
+        ),
+    ),
+)
+def test_exact_serve_cross_file_boundaries_survive_item_digest_refresh(
+    tmp_path: Path,
+    relative: str,
+    seal_group: str,
+    seal_key: str,
+    item_name: str,
+    context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Every cross-file exact-Serve seam remains semantic after resealing."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == context
+    )
+    assert len(items) == 1, (item_name, [item.brace_context for item in items])
+    item = items[0]
+    assert item.source.count(old) == 1, (seal_key, old)
+    path.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    mutated_items = tuple(
+        candidate
+        for candidate in module.rust_items(
+            path.read_text(encoding="utf-8"), item_name
+        )
+        if candidate.brace_context == context
+    )
+    assert len(mutated_items) == 1
+    getattr(module, seal_group)[seal_key] = module._rust_item_token_sha256(
+        mutated_items[0]
+    )
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    (
+        "relative",
+        "seal_group",
+        "item_name",
+        "context",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        for fresh_ticket_ordinal in first_ticket_ordinal..=later_ordinal {\n",
+            "        for fresh_ticket_ordinal in first_ticket_ordinal..later_ordinal {\n",
+            "strict exact-Serve regression must exclude an equal-or-later completion through every non-newer ticket",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "repeated_exact_serve_claims_close_all_older_sources_before_later_io",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "            .finish_certified_serve_runtime_episode_turn(barrier, false)\n",
+            "            .finish_certified_serve_runtime_episode_turn(barrier, true)\n",
+            "repeated exact-Serve claims must become irreversible after the complete older-owner set is exhausted",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        assert!(\n"
+            "            !command_tx\n"
+            "                .serve_runtime_predecessor_capacity_available(barrier)\n"
+            "                .expect(\"inspect the full frozen prefix\"),\n",
+            "        assert!(\n"
+            "            command_tx\n"
+            "                .serve_runtime_predecessor_capacity_available(barrier)\n"
+            "                .expect(\"inspect the full frozen prefix\"),\n",
+            "full Control prefix must deny predecessor capacity until its sole physical slot drains",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "worker_completion_is_retained_behind_a_full_runtime_fifo",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "                io.record_completion_service_attempt(0),\n",
+            "                !io.record_completion_service_attempt(0),\n",
+            "full runtime FIFO must retain the oldest worker completion and accrue bounded service debt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "production_drain_publishes_worker_completion_behind_full_runtime_fifo",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        service.retire_held_io_completion();\n",
+            "        let _ = service.held_io_completion.take();\n",
+            "production completion drain must explicitly acknowledge the exact held worker result",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "drained_exact_retransmission_gets_fresh_scheduler_ordinal",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "        assert!(retry_barrier.scheduler_ordinal() > first_barrier.scheduler_ordinal());\n",
+            "        assert!(retry_barrier.scheduler_ordinal() >= first_barrier.scheduler_ordinal());\n",
+            "drained exact retransmission must receive a fresh scheduler ordinal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256",
+            "certified_serve_future_slot_blocks_control_and_consensus_replenishment",
+            (("#", "[", "cfg", "(", "test", ")", "]", "pub", "(", "super", ")", "mod", "tests"),),
+            "            for class in [V2IoAdmissionClass::Consensus, V2IoAdmissionClass::Control] {\n",
+            "            for class in [V2IoAdmissionClass::Control] {\n",
+            "reserved future Serve slot must block both later Consensus and Control replenishment",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "_EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256",
+            "restart_dormant_local_fifo_reservation_survives_full_class_churn",
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "            Err(EnqueueError::FailClosed),\n"
+            "            \"ReuseDormant after latent-slot removal cannot recreate the drained stage\"\n",
+            "            Ok(()),\n"
+            "            \"ReuseDormant after latent-slot removal cannot recreate the drained stage\"\n",
+            "drained restart-dormant lifecycle must not resurrect after its latent slot is consumed",
+        ),
+    ),
+)
+def test_exact_serve_runtime_episode_regressions_survive_item_digest_refresh(
+    tmp_path: Path,
+    relative: str,
+    seal_group: str,
+    item_name: str,
+    context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Every exact-Serve regression retains behavior after its own reseal."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == context
+    )
+    assert len(items) == 1, (item_name, [item.brace_context for item in items])
+    item = items[0]
+    assert item.source.count(old) == 1, (item_name, old)
+    path.write_text(
+        source.replace(item.source, item.source.replace(old, new, 1), 1),
+        encoding="utf-8",
+    )
+    mutated_items = tuple(
+        candidate
+        for candidate in module.rust_items(
+            path.read_text(encoding="utf-8"), item_name
+        )
+        if candidate.brace_context == context
+    )
+    assert len(mutated_items) == 1
+    getattr(module, seal_group)[item_name] = module._rust_item_token_sha256(
+        mutated_items[0]
+    )
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    ("seal_key", "item_name", "old", "new", "expected_error"),
+    (
+        (
+            "V2IoCommandQueue::retire_selected_serve_ingress_occurrence",
+            "retire_selected_serve_ingress_occurrence",
+            "            state.producer_episode_due = true;\n",
+            "            state.producer_episode_due = false;\n",
+            "final frozen Serve retirement must atomically arm exactly one producer episode",
+        ),
+        (
+            "V2IoCommandQueue::reserve_serve_ingress",
+            "reserve_serve_ingress",
+            "        if state.producer_episode_due || state.producer_episode_active {\n",
+            "        if state.producer_episode_active {\n",
+            "fresh Serve admission must not cross a due or active producer episode",
+        ),
+        (
+            "V2IoCommandQueue::try_begin_producer_episode",
+            "try_begin_producer_episode",
+            "        state.producer_episode_due = false;\n"
+            "        state.producer_episode_active = true;\n",
+            "        state.producer_episode_active = true;\n",
+            "ordinary producers must consume the one-shot handoff",
+        ),
+    ),
+)
+def test_post_serve_producer_handoff_mutations_survive_item_digest_refresh(
+    tmp_path: Path,
+    seal_key: str,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """The due-to-active handoff remains semantic after refreshing its seal."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = path.read_text(encoding="utf-8")
+    items = [
+        item
+        for item in module.rust_items(source, item_name)
+        if item.brace_context == (("impl", "V2IoCommandQueue"),)
+    ]
+    assert len(items) == 1
+    item = items[0]
+    assert item.source.count(old) == 1, (seal_key, old)
+    mutated_source = item.source.replace(old, new, 1)
+    path.write_text(
+        source.replace(item.source, mutated_source, 1),
+        encoding="utf-8",
+    )
+    mutated_items = [
+        candidate
+        for candidate in module.rust_items(
+            path.read_text(encoding="utf-8"), item_name
+        )
+        if candidate.brace_context == (("impl", "V2IoCommandQueue"),)
+    ]
+    assert len(mutated_items) == 1
+    module._EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256[seal_key] = (
+        module._rust_item_token_sha256(mutated_items[0])
+    )
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+def test_post_serve_producer_handoff_regression_survives_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The regression must exercise both the due and active Busy boundaries."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = path.read_text(encoding="utf-8")
+    name = (
+        "final_serve_retirement_yields_one_producer_episode_before_replenishment"
+    )
+    context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "pub",
+            "(",
+            "super",
+            ")",
+            "mod",
+            "tests",
+        ),
+    )
+    items = [
+        item
+        for item in module.rust_items(source, name)
+        if item.brace_context == context
+    ]
+    assert len(items) == 1
+    item = items[0]
+    old = "            Err(CertifiedServeIngressReserveError::Busy)\n"
+    new = "            Err(CertifiedServeIngressReserveError::Rejected)\n"
+    assert item.source.count(old) == 2
+    mutated_source = item.source.replace(old, new, 1)
+    path.write_text(
+        source.replace(item.source, mutated_source, 1),
+        encoding="utf-8",
+    )
+    mutated_item = next(
+        candidate
+        for candidate in module.rust_items(
+            path.read_text(encoding="utf-8"), name
+        )
+        if candidate.brace_context == context
+    )
+    module._EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256[name] = (
+        module._rust_item_token_sha256(mutated_item)
+    )
+
+    errors = (
+        module._exact_serve_runtime_episode_production_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(
+        "reject replenishment both before and during the producer episode"
+        in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new", "expected_error"),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "            liveness_watchdog.poll(Instant::now());\n",
+            "",
+            "every serialized height-loop iteration must poll",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "                continue;\n",
+            "                continue;\n",
+            "all four explicit serialized height-loop continue edges",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "                advance_executor(\n"
+            "                    &block_rx,\n"
+            "                    &mut executor,\n"
+            "                    &mut services,\n"
+            "                    control_queue_capacity,\n"
+            "                )?;",
+            "                advance_executor(\n"
+            "                    &mut executor,\n"
+            "                    &mut services,\n"
+            "                    control_queue_capacity,\n"
+            "                )?;",
+            "ordinary height path must invoke the bounded serialized runtime against the live ingress high-watermark",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;",
+            "let _ = (&block_rx, &mut executor, &mut services);",
+            "retained response episode must receive exactly one direct typed pacemaker turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "service_certified_serve_barrier_liveness_turn(\n",
+            "service_certified_serve_barrier_liveness_turn_for_test(\n",
+            "selected Serve must keep certificate escape inside",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;\n",
+            "        let _ = CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode;\n",
+            "selected-Serve liveness service must admit TimeoutVote, drain its retained prefix, and run the pacemaker in reviewed order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "            recovery.assert_complete();\n",
+            "            assert!(recovery.entered_view_one());\n",
+            "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "    service()\n"
+            "}\n\n"
+            "/// Execute at most one typed timeout/Progress-root transition",
+            "    if _older_runtime_episode_claimed {\n"
+            "        service()\n"
+            "    } else {\n"
+            "        Ok(())\n"
+            "    }\n"
+            "}\n\n"
+            "/// Execute at most one typed timeout/Progress-root transition",
+            "selected-Serve pacemaker service must remain independent of the "
+            "one-shot predecessor-episode claim",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
+            "wake_rx.recv_timeout(remaining)",
+            "pending-tip recovery must wait only for the lesser of its remaining deadline",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "    for _ in 0..limit.max(1) {\n"
+            "        match executor.step(Instant::now(), services)? {",
+            "    loop {\n"
+            "        match executor.step(Instant::now(), services)? {",
+            "ordinary serialized runtime service must be a finite configured turn",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "        while attempts < limit {\n",
+            "        loop {\n",
+            "every completion policy must retain its caller-supplied finite bound",
+        ),
+    ),
+)
+def test_local_runner_service_contract_rejects_production_loop_mutations(
+    tmp_path: Path,
+    relative: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    assert old in source, old
+    path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            "    if !recovering_interrupted_tip {\n",
+            "    if !recovering_interrupted_tip && older_runtime_episode_claimed {\n",
+        ),
+        (
+            "    if !recovering_interrupted_tip {\n"
+            "        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;\n"
+            "    }\n",
+            "    service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;\n",
+        ),
+        (
+            "    service(CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix)?;\n",
+            "    let _ = CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix;\n",
+        ),
+        (
+            "        || service(CertifiedServeBarrierLivenessAction::Pacemaker),\n",
+            "        || service(CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix),\n",
+        ),
+    ),
+)
+def test_selected_serve_liveness_helper_survives_own_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    """The sealed helper retains every action after its own digest refresh."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    source = runner_path.read_text(encoding="utf-8")
+    items = module.rust_items(
+        source,
+        "service_certified_serve_barrier_liveness_turn",
+    )
+    assert len(items) == 1
+    item = items[0]
+    assert item.source.count(old) == 1, old
+    mutated_item_source = item.source.replace(old, new, 1)
+    assert source.count(item.source) == 1
+    runner_path.write_text(
+        source.replace(item.source, mutated_item_source, 1),
+        encoding="utf-8",
+    )
+    mutated_items = module.rust_items(
+        runner_path.read_text(encoding="utf-8"),
+        "service_certified_serve_barrier_liveness_turn",
+    )
+    assert len(mutated_items) == 1
+    module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256[
+        "service_certified_serve_barrier_liveness_turn"
+    ] = module._rust_item_token_sha256(mutated_items[0])
+
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+
+    assert any(
+        "selected-Serve liveness service must admit TimeoutVote, drain its "
+        "retained prefix, and run the pacemaker in reviewed order"
+        in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    (
+        "seal_key",
+        "source_kind",
+        "item_kind",
+        "item_name",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "runner::CertifiedServeBarrierLivenessAction",
+            "runner",
+            "enum",
+            "CertifiedServeBarrierLivenessAction",
+            "    Pacemaker,\n",
+            "    PacemakerBypass,\n",
+            "selected-Serve liveness action vocabulary must remain closed",
+        ),
+        (
+            "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
+            "runner",
+            "item",
+            "complete_certified_serve_episode_cannot_veto_pacemaker",
+            "                        recovery.service_timeout_vote_episode()\n",
+            "                        recovery.service_pacemaker()\n",
+            "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
+        ),
+        (
+            "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
+            "runner",
+            "item",
+            "complete_certified_serve_episode_cannot_veto_pacemaker",
+            "                let older_runtime_episode_claimed = recovery\n"
+            "                    .service_exact_serve_runtime_prefix()\n"
+            "                    .expect(\"service the exact selected-Serve runtime prefix\");\n",
+            "                let older_runtime_episode_claimed = false;\n",
+            "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
+        ),
+        (
+            "runner::complete_certified_serve_episode_cannot_veto_pacemaker",
+            "runner",
+            "item",
+            "complete_certified_serve_episode_cannot_veto_pacemaker",
+            "                    older_runtime_episode_claimed,\n"
+            "                    |action| match action {\n",
+            "                    false,\n"
+            "                    |action| match action {\n",
+            "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture",
+            "worker",
+            "struct",
+            "SelectedServeTimeoutRecoveryFixture",
+            "        missing_proposal_request_hash: HashOf<wire::CertifiedBodyRequest>,\n",
+            "        missing_proposal_request: HashOf<wire::CertifiedBodyRequest>,\n",
+            "selected-Serve regression must retain every real ingress, runtime, worker, and observation owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new",
+            "worker",
+            "method",
+            "new",
+            "                .take(2)\n",
+            "                .take(1)\n",
+            "selected-Serve fixture must enqueue exactly two distinct remote timeout signers",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::new",
+            "worker",
+            "method",
+            "new",
+            "                timeout_owner.lifecycle_ordinal(),\n"
+            "                1,\n"
+            "                \"the height-start timeout owns the first actor-global scheduler position\"\n",
+            "                timeout_owner.lifecycle_ordinal(),\n"
+            "                2,\n"
+            "                \"the height-start timeout owns the first actor-global scheduler position\"\n",
+            "selected-Serve fixture must freeze the height-start timeout at actor-global ordinal one",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "            let claimed = self\n"
+            "                .services\n"
+            "                .claim_certified_serve_runtime_episode(barrier)?;\n",
+            "            let claimed = true;\n",
+            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "            let _ = self\n"
+            "                .services\n"
+            "                .drain_exact_serve_runtime_predecessor(\n"
+            "                    &mut self.executor,\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )\n"
+            "                .map_err(|error| error.to_string())?;\n",
+            "            let _ = Ok::<(), String>(());\n",
+            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "                .map_err(|error| error.to_string())?\n"
+            "                && self\n"
+            "                    .services\n"
+            "                    .certified_serve_runtime_predecessor_capacity_available(barrier)?\n",
+            "                .map_err(|error| error.to_string())?\n"
+            "                || self\n"
+            "                    .services\n"
+            "                    .certified_serve_runtime_predecessor_capacity_available(barrier)?\n",
+            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            ".step(Instant::now(), &mut self.services)",
+            ".step_pacemaker_once(Instant::now(), &mut self.services)",
+            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "            let older_predecessor_remains = self\n"
+            "                .executor\n"
+            "                .older_runtime_lifecycle_predates_exact_serve(\n"
+            "                    Instant::now(),\n"
+            "                    barrier.scheduler_ordinal(),\n"
+            "                )\n",
+            "            let older_predecessor_remains = self\n"
+            "                .executor\n"
+            "                .older_runtime_lifecycle_predates_exact_serve(\n"
+            "                    Instant::now(),\n"
+            "                    u128::MAX,\n"
+            "                )\n",
+            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix",
+            "worker",
+            "method",
+            "service_exact_serve_runtime_prefix",
+            "                    older_predecessor_remains,\n"
+            "                )?;\n",
+            "                    false,\n"
+            "                )?;\n",
+            "selected-Serve exact runtime prefix must claim, drain the strict completion, service at most one capacity-gated predecessor, then recheck and finish",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode",
+            "worker",
+            "method",
+            "service_timeout_vote_episode",
+            "                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,\n",
+            "                    FairV2IngressBarrierBypass::None,\n",
+            "selected-Serve fixture must use only the reviewed direct TimeoutVote bypass predicate",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_recovery_prefix",
+            "worker",
+            "method",
+            "service_timeout_recovery_prefix",
+            "                        Some(lifecycle_ordinal),\n",
+            "                        None,\n",
+            "selected-Serve fixture local timeout signature must retain its tracked lifecycle ordinal",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::service_pacemaker",
+            "worker",
+            "method",
+            "service_pacemaker",
+            ".step_pacemaker_once(Instant::now(), &mut self.services)",
+            ".step(Instant::now(), &mut self.services)",
+            "selected-Serve fixture must run exactly one typed pacemaker transition at the live ingress cut",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::entered_view_one",
+            "worker",
+            "method",
+            "entered_view_one",
+            "self.executor.current_tag().view() == 1 && self.services.active_tag.view() == 1",
+            "self.executor.current_tag().view() == 1",
+            "selected-Serve fixture EnterView terminal must agree between reducer and production service",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_complete",
+            "worker",
+            "method",
+            "assert_complete",
+            "            assert_eq!(self.remote_timeout_votes_admitted, 2);\n",
+            "            assert_eq!(self.remote_timeout_votes_admitted, 1);\n",
+            "selected-Serve fixture must retain the Serve and reach exact local plus dual-remote recovery counts",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_complete",
+            "worker",
+            "method",
+            "assert_complete",
+            "                            .sum::<usize>()\n"
+            "                            == 3\n",
+            "                            .sum::<usize>()\n"
+            "                            == 2\n",
+            "selected-Serve fixture must observe an exact three-signer timeout certificate",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::assert_missing_proposal_serve_selected",
+            "worker",
+            "method",
+            "assert_missing_proposal_serve_selected",
+            "            assert_eq!(barrier.request_hash(), self.missing_proposal_request_hash);\n",
+            "            assert_ne!(barrier.request_hash(), self.missing_proposal_request_hash);\n",
+            "selected-Serve fixture must retain the exact missing-proposal request owner",
+        ),
+        (
+            "worker::SelectedServeTimeoutRecoveryFixture::drop",
+            "worker",
+            "drop",
+            "drop",
+            "            drop(self.services.io.take());\n",
+            "            let _ = self.services.io.as_ref();\n",
+            "selected-Serve synchronous fixture teardown must detach its worker endpoints without a synthetic shutdown",
+        ),
+    ),
+)
+def test_selected_serve_liveness_items_survive_individual_digest_refresh(
+    tmp_path: Path,
+    seal_key: str,
+    source_kind: str,
+    item_kind: str,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each sealed selected-Serve item retains a semantic negative mutation."""
+
+    module = load_checker()
+    assert len(
+        module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256
+    ) == 12
+    assert (
+        seal_key
+        in module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256
+    )
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    source_path = (
+        tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+        if source_kind == "runner"
+        else tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    )
+    worker_test_context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "pub",
+            "(",
+            "super",
+            ")",
+            "mod",
+            "tests",
+        ),
+    )
+    worker_method_context = worker_test_context + (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "feature",
+            "=",
+            ")",
+            "]",
+            "impl",
+            "SelectedServeTimeoutRecoveryFixture",
+        ),
+    )
+    worker_drop_context = worker_test_context + (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "feature",
+            "=",
+            ")",
+            "]",
+            "impl",
+            "Drop",
+            "for",
+            "SelectedServeTimeoutRecoveryFixture",
+        ),
+    )
+
+    def selected_items(source: str):
+        if item_kind == "enum":
+            return module.rust_enum_items(source, item_name)
+        if item_kind == "struct":
+            return tuple(
+                item
+                for item in module.rust_struct_items(source, item_name)
+                if item.brace_context == worker_test_context
+            )
+        context = (
+            worker_drop_context if item_kind == "drop" else worker_method_context
+        )
+        candidates = module.rust_items(source, item_name)
+        return (
+            candidates
+            if source_kind == "runner"
+            else tuple(item for item in candidates if item.brace_context == context)
+        )
+
+    source = source_path.read_text(encoding="utf-8")
+    items = selected_items(source)
+    assert len(items) == 1
+    item = items[0]
+    assert item.source.count(old) == 1, (seal_key, old)
+    mutated_item = item.source.replace(old, new, 1)
+    assert source.count(item.source) == 1, seal_key
+    source_path.write_text(
+        source.replace(item.source, mutated_item, 1),
+        encoding="utf-8",
+    )
+    mutated_items = selected_items(source_path.read_text(encoding="utf-8"))
+    assert len(mutated_items) == 1
+    module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
+        seal_key
+    ] = module._rust_item_token_sha256(mutated_items[0])
+
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+def test_selected_serve_timeout_owner_freeze_must_precede_serve_ingress_after_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """A refreshed fixture seal cannot move height-start timeout ownership after Serve."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    worker_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    source = worker_path.read_text(encoding="utf-8")
+    worker_method_context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "pub",
+            "(",
+            "super",
+            ")",
+            "mod",
+            "tests",
+        ),
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "feature",
+            "=",
+            ")",
+            "]",
+            "impl",
+            "SelectedServeTimeoutRecoveryFixture",
+        ),
+    )
+    methods = tuple(
+        item
+        for item in module.rust_items(source, "new")
+        if item.brace_context == worker_method_context
+    )
+    assert len(methods) == 1
+    method = methods[0]
+    freeze = (
+        "            let timeout_owner = executor\n"
+        "                .freeze_due_timeout_owner_for_test(Instant::now())\n"
+        "                .expect(\"freeze the height-start timeout before later Serve ingress\");\n"
+        "            assert_eq!(\n"
+        "                timeout_owner.lifecycle_ordinal(),\n"
+        "                1,\n"
+        "                \"the height-start timeout owns the first actor-global scheduler position\"\n"
+        "            );\n"
+        "            let consensus_observations = install_consensus_route_observer(&mut services);\n"
+    )
+    serve_ingress = (
+        "            assert!(matches!(\n"
+        "                ingress.try_push(certified_serve_inbound(\n"
+        "                    missing_request.request(),\n"
+        "                    authenticated_via,\n"
+        "                )),\n"
+        "                Ok(FairV2IngressPushDisposition::Enqueued)\n"
+        "            ));\n"
+    )
+    assert method.source.count(freeze) == 1
+    assert method.source.count(serve_ingress) == 1
+    mutated_method = method.source.replace(freeze, "", 1)
+    mutated_method = mutated_method.replace(
+        serve_ingress,
+        serve_ingress + "\n" + freeze,
+        1,
+    )
+    assert source.count(method.source) == 1
+    worker_path.write_text(
+        source.replace(method.source, mutated_method, 1),
+        encoding="utf-8",
+    )
+    mutated_source = worker_path.read_text(encoding="utf-8")
+    mutated_methods = tuple(
+        item
+        for item in module.rust_items(mutated_source, "new")
+        if item.brace_context == worker_method_context
+    )
+    assert len(mutated_methods) == 1
+    module._PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256[
+        "worker::SelectedServeTimeoutRecoveryFixture::new"
+    ] = module._rust_item_token_sha256(mutated_methods[0])
+
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+
+    assert any(
+        "height-start timeout owner must freeze before Serve ingress" in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+@pytest.mark.parametrize(
+    "symbol",
+    (
+        "AsyncCandidateServiceStageOrdinalIsBounded",
+        "AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum",
+        "AsyncRetransmitFreshEpisodeConsumesSharedLifecycleOrdinal",
+        "AsyncOlderRetransmitLifecycleCannotAloneBlockDueTimeout",
+        "AsyncTimeoutLifecycleFreezeBoundaryMintsAfterPriorAdmissions",
+    ),
+)
+def test_async_source_fidelity_rejects_reviewed_theorem_omission(
+    tmp_path: Path,
+    symbol: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    span = module._top_level_declaration_span(source, symbol, kind="theorem")
+    assert span is not None
+    start, end = span
+    path.write_text(source[:start] + source[end:], encoding="utf-8")
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "must declare exactly the reviewed local theorem inventory" in error
+        and symbol in error
+        for error in errors
+    ), errors

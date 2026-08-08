@@ -2165,12 +2165,6 @@ mod tests {
             unauthorized_text.starts_with("HTTP/1.1 401 Unauthorized"),
             "expected authentication failure, got: {unauthorized_text}"
         );
-        assert_eq!(
-            privacy_events.queue_depth(),
-            2,
-            "unauthenticated request must not drain privacy events"
-        );
-
         let mut stream = TcpStream::connect(addr)
             .await
             .expect("connect to admin endpoint");

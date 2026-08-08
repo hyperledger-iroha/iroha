@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 835
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 837
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb"
+        "7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "8f8f4c71940ec62d50f84fe5b90de7c628f4cc6e1bb3a9b651f259c64ec23981"
+        "5d4c73d75025cf103a6b138df1ffa08bb3c16df61b121dfda0baa496cd688e25"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
@@ -22,7 +22,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 524
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 525
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "de9ab0da201d361e912b935d1349c584ba78fb52f70acd3c91e8d4a7c76fab24"
+        "bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -182,9 +182,17 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 835
+    assert receipt_module._PRODUCTION_TEST_COUNT == 837
     assert receipt_module._G_UNIT_TEST_COUNT == 524
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 835
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 837
+    receipt_module_counts = {
+        module_name: count
+        for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
+    }
+    assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 43
+    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 71
+    assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 68
+    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 132
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
         == 524
@@ -846,6 +854,43 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             canonical_lane_geometry, encoding="utf-8"
         )
 
+    mutate_kura_item(
+        "native_amx_participant_evidence_file_bytes",
+        "u64::try_from(self.pending_control_sidecar_limits.aggregate_bytes)",
+        "u64::try_from(STRICT_INIT_MAX_BLOCK_BYTES)",
+    )
+    native_amx_source_errors = (
+        module._kura_native_amx_standalone_evidence_production_source_fidelity_errors(
+            fidelity_root
+        )
+    )
+    assert any(
+        "standalone Native AMX configured aggregate byte source must be the "
+        "pending-control sidecar geometry"
+        in error
+        for error in native_amx_source_errors
+    ), native_amx_source_errors
+    kura_fidelity_path.write_text(canonical_kura, encoding="utf-8")
+
+    mutate_kura_item(
+        "native_amx_participant_evidence_file_bytes",
+        '.expect("configured pending-control sidecar bytes fit u64")',
+        '.expect("configured pending-control sidecar bytes fit u64")\n'
+        "            .max(STRICT_INIT_MAX_BLOCK_BYTES)",
+    )
+    native_amx_source_errors = (
+        module._kura_native_amx_standalone_evidence_production_source_fidelity_errors(
+            fidelity_root
+        )
+    )
+    assert any(
+        "standalone Native AMX configured aggregate byte source must be the "
+        "pending-control sidecar geometry"
+        in error
+        for error in native_amx_source_errors
+    ), native_amx_source_errors
+    kura_fidelity_path.write_text(canonical_kura, encoding="utf-8")
+
     new_production_inventory_additions = (
         (
             "kura::lane_geometry::tests::",
@@ -906,7 +951,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     macro_step_production_inventory_additions = (
         (
             "sumeragi::v2::tests::",
-            "persistence_macro_step_budgets_have_exact_five_effect_maximum",
+            "persistence_macro_step_budgets_have_exact_four_effect_maximum",
             adapter_source,
         ),
         (
@@ -946,7 +991,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "sumeragi::v2_core::tests::",
-            "commit_qc_cannot_overtake_timeout_frontier",
+            "commit_qc_preempts_hung_timeout_signature_but_not_pending_wal",
             core_source,
         ),
         (
@@ -981,7 +1026,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "sumeragi::v2_runtime::tests::",
-            "serviceable_adapter_debt_drains_one_macro_step_before_new_work",
+            "absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains",
             runtime_source,
         ),
         (
@@ -1019,7 +1064,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "sumeragi::v2_runtime::tests::",
-            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+            "certified_tc_crosses_full_fence_blocked_prepare_prefix",
             runtime_source,
         ),
         (
@@ -1734,8 +1779,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 835
-    assert len(set(production_inventory)) == 835
+    assert len(production_inventory) == 837
+    assert len(set(production_inventory)) == 837
     leader_wire_slot_product_regression = (
         "sumeragi::serviced_candidate_store::tests::"
         "leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots"
@@ -1763,7 +1808,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack",
         "sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection",
         "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
-        "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+        "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
+        "sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry",
         "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
         "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
         "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
@@ -1782,7 +1828,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
         "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
     }
-    assert len(exact_certified_serve_regressions) == 35
+    assert len(exact_certified_serve_regressions) == 36
     assert exact_certified_serve_regressions <= set(production_inventory)
     assert exact_certified_serve_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
@@ -1811,8 +1857,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert deterministic_ownership_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 416
-    assert "readonly expected_production_liveness_test_count=835" in release_source
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 420
+    assert "readonly expected_production_liveness_test_count=837" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -1822,7 +1868,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 835" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 837" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -1832,7 +1878,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 835
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 837
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -2272,7 +2318,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ):
         assert expected_flag in release_source
     assert (
-        '--g12-seed-completion "$nexus_cross_completion_path" \\\n'
+        '--g4p-completion "$multilane_four_peer_completion_path" \\\n'
+        '  --g12-seed-completion "$nexus_cross_completion_path" \\\n'
         '  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
         '  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"'
         in release_source
@@ -2284,6 +2331,370 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "--expected-scaling-iroha-cli-sha256",
     ):
         assert expected_flag in release_source
+
+    g4p_fidelity_root = tmp_path / "g4p-validator-argument-source-fidelity"
+    for relative in (
+        Path("scripts/run_sumeragi_v2_release_gates.sh"),
+        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
+        Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
+        Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
+        Path("integration_tests/tests/sumeragi_v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+    ):
+        destination = g4p_fidelity_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    g4p_runner_path = (
+        g4p_fidelity_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
+    )
+    canonical_g4p_runner = g4p_runner_path.read_text(encoding="utf-8")
+    g4p_argument = (
+        '  --g4p-completion "$multilane_four_peer_completion_path" \\\n'
+    )
+    assert canonical_g4p_runner.count(g4p_argument) == 1
+    baseline_errors = module._production_liveness_release_inventory_errors(
+        g4p_fidelity_root
+    )
+    assert not any(
+        "source-bound G-4P/G-12P/G-SCALE receipt corridor" in error
+        for error in baseline_errors
+    ), baseline_errors
+    assert not any(
+        "canonical G-UNIT leg/crate/test inventory SHA-256" in error
+        or "canonical module/test inventory SHA-256" in error
+        for error in baseline_errors
+    ), baseline_errors
+    g4p_runner_path.write_text(
+        canonical_g4p_runner.replace(
+            g4p_argument,
+            '  --g4p-completion "$nexus_cross_completion_path" \\\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    mutated_errors = module._production_liveness_release_inventory_errors(
+        g4p_fidelity_root
+    )
+    assert any(
+        "source-bound G-4P/G-12P/G-SCALE receipt corridor" in error
+        for error in mutated_errors
+    ), mutated_errors
+    g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
+
+    for reviewed_focus_test in (
+        "sumeragi::v2_lane_work::tests::"
+        "repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible",
+        "sumeragi::v2_runner::tests::"
+        "deferred_autonomous_work_timeout_arms_only_a_non_empty_retry",
+    ):
+        assert canonical_g4p_runner.count(reviewed_focus_test) == 1
+        g4p_runner_path.write_text(
+            canonical_g4p_runner.replace(
+                reviewed_focus_test,
+                f"{reviewed_focus_test}_mutant",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        focus_mutation_errors = (
+            module._production_liveness_release_inventory_errors(
+                g4p_fidelity_root
+            )
+        )
+        assert any(
+            "canonical G-UNIT leg/crate/test inventory SHA-256" in error
+            for error in focus_mutation_errors
+        ), (reviewed_focus_test, focus_mutation_errors)
+        g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
+
+    reviewed_persistence_budget_test = (
+        "sumeragi::v2::tests::"
+        "persistence_macro_step_budgets_have_exact_four_effect_maximum"
+    )
+    assert canonical_g4p_runner.count(reviewed_persistence_budget_test) == 1
+    g4p_runner_path.write_text(
+        canonical_g4p_runner.replace(
+            reviewed_persistence_budget_test,
+            reviewed_persistence_budget_test.replace("four", "five"),
+            1,
+        ),
+        encoding="utf-8",
+    )
+    persistence_inventory_errors = (
+        module._production_liveness_release_inventory_errors(
+            g4p_fidelity_root
+        )
+    )
+    assert any(
+        "canonical module/test inventory SHA-256" in error
+        for error in persistence_inventory_errors
+    ), persistence_inventory_errors
+    g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
+
+    reviewed_timeout_preemption_test = (
+        "sumeragi::v2_core::tests::"
+        "commit_qc_preempts_hung_timeout_signature_but_not_pending_wal"
+    )
+    assert canonical_g4p_runner.count(reviewed_timeout_preemption_test) == 1
+    g4p_runner_path.write_text(
+        canonical_g4p_runner.replace(
+            reviewed_timeout_preemption_test,
+            "sumeragi::v2_core::tests::"
+            "commit_qc_cannot_overtake_timeout_frontier",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    timeout_preemption_inventory_errors = (
+        module._production_liveness_release_inventory_errors(
+            g4p_fidelity_root
+        )
+    )
+    assert any(
+        "canonical module/test inventory SHA-256" in error
+        for error in timeout_preemption_inventory_errors
+    ), timeout_preemption_inventory_errors
+    g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
+
+    reviewed_inventory_name_mutations = (
+        (
+            "sumeragi::authoritative_runtime_gate_tests::"
+            "sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner",
+            "sumeragi::authoritative_runtime_gate_tests::"
+            "sidecar_allocations_require_roster_requester_before_lane_queue_admission",
+        ),
+        (
+            "sumeragi::v2::tests::"
+            "unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subject",
+            "sumeragi::v2::tests::"
+            "unowned_busy_certificates_roll_back_staged_registry_and_active_subject",
+        ),
+        (
+            "sumeragi::v2_block_sync::tests::"
+            "historical_body_uses_self_contained_kura_finality_without_context_store",
+            "sumeragi::v2_block_sync::tests::"
+            "historical_body_comes_from_kura_and_a_non_signer_archive_can_serve",
+        ),
+        (
+            "sumeragi::v2_effects::tests::"
+            "exact_candidate_retry_coalesces_under_the_incumbent_owner",
+            "sumeragi::v2_effects::tests::"
+            "exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+        ),
+        (
+            "sumeragi::v2_lane_work::tests::"
+            "lane_work_stays_quiescent_until_the_exact_global_decision",
+            "sumeragi::v2_lane_work::tests::"
+            "lane_work_stays_quiescent_until_the_exact_global_prepare_lock",
+        ),
+        (
+            "sumeragi::v2_runtime::tests::"
+            "exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer",
+            "sumeragi::v2_runtime::tests::"
+            "exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot",
+        ),
+        (
+            "sumeragi::v2_runtime::tests::"
+            "certified_tc_crosses_full_fence_blocked_prepare_prefix",
+            "sumeragi::v2_runtime::tests::"
+            "commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+        ),
+        (
+            "sumeragi::v2_runtime::tests::"
+            "absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains",
+            "sumeragi::v2_runtime::tests::"
+            "serviceable_adapter_debt_drains_one_macro_step_before_new_work",
+        ),
+        (
+            "sumeragi::v2_runner::tests::"
+            "dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester",
+            "sumeragi::v2_runner::tests::"
+            "deferred_startup_producer_turn_is_retained_until_one_exclusive_claim",
+        ),
+        (
+            "sumeragi::v2_worker::tests::"
+            "durable_raw_admission_restart_locally_seals_before_later_producers",
+            "sumeragi::v2_worker::tests::"
+            "durable_raw_admission_restart_reuses_lifecycle_and_excludes_family_replacement",
+        ),
+        (
+            "sumeragi::v2_worker::tests::"
+            "durable_serve_state_v5_rejects_v4_header_and_payload_layouts",
+            "sumeragi::v2_worker::tests::"
+            "durable_serve_state_v4_rejects_v3_header_and_payload_layouts",
+        ),
+        (
+            "network::inbound_source_memory_bound_tests::"
+            "reliable_actor_waiter_geometry_rejects_source_overflow",
+            "network::inbound_source_memory_bound_tests::"
+            "reliable_actor_waiter_geometry_rejects_zero_and_combined_overflow",
+        ),
+        (
+            "sumeragi::v2_worker::tests::"
+            "durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
+            "sumeragi::v2_worker::tests::"
+            "durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+        ),
+        (
+            "sumeragi::v2_worker::tests::"
+            "durable_coalesced_retransmission_restart_locally_completes_without_retry",
+            "sumeragi::v2_worker::tests::"
+            "durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+        ),
+        (
+            "sumeragi::authoritative_runtime_gate_tests::"
+            "fair_v2_ingress_certified_escape_survives_exact_same_source_saturation",
+            "sumeragi::authoritative_runtime_gate_tests::"
+            "fair_v2_ingress_certified_escape_survives_exact_same_source_saturation_omitted",
+        ),
+        (
+            "sumeragi::authoritative_runtime_gate_tests::"
+            "fair_v2_ingress_serializes_distinct_timeout_certificates_per_source",
+            "sumeragi::authoritative_runtime_gate_tests::"
+            "fair_v2_ingress_serializes_distinct_timeout_certificates_per_source_omitted",
+        ),
+    )
+    for reviewed_name, mutation in reviewed_inventory_name_mutations:
+        assert canonical_g4p_runner.count(reviewed_name) == 1, reviewed_name
+        g4p_runner_path.write_text(
+            canonical_g4p_runner.replace(reviewed_name, mutation, 1),
+            encoding="utf-8",
+        )
+        reviewed_name_errors = (
+            module._production_liveness_release_inventory_errors(
+                g4p_fidelity_root
+            )
+        )
+        assert any(
+            "canonical module/test inventory SHA-256" in error
+            for error in reviewed_name_errors
+        ), (reviewed_name, reviewed_name_errors)
+        g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
+
+    late_lane_recovery_path = (
+        g4p_fidelity_root
+        / "crates"
+        / "iroha_core"
+        / "src"
+        / "sumeragi"
+        / "v2_lane_work.rs"
+    )
+    canonical_late_lane_recovery = late_lane_recovery_path.read_text(
+        encoding="utf-8"
+    )
+    late_lane_recovery_items = module.rust_items(
+        canonical_late_lane_recovery,
+        "globally_applied_lane_body_without_certificate_remains_recoverable",
+    )
+    assert len(late_lane_recovery_items) == 1
+    late_lane_recovery_item = late_lane_recovery_items[0]
+    late_lane_recovery_item_start = canonical_late_lane_recovery.index(
+        late_lane_recovery_item.source
+    )
+    late_lane_recovery_item_end = (
+        late_lane_recovery_item_start + len(late_lane_recovery_item.source)
+    )
+    late_lane_baseline_errors = (
+        module._production_liveness_release_inventory_errors(
+            g4p_fidelity_root
+        )
+    )
+    assert not any(
+        "late canonical lane" in error
+        for error in late_lane_baseline_errors
+    ), late_lane_baseline_errors
+    late_lane_recovery_mutations = (
+        (
+            "retained_prepare_qc = lane_qc_for_phase("
+            "&proposal, &keys[..3], CertPhase::Prepare);",
+            "retained_prepare_qc = lane_qc_for_phase("
+            "&proposal, &keys[..3], CertPhase::Commit);",
+            "late canonical lane recovery must transfer an exact retained "
+            "PrepareQC owner into successor rollover authority",
+        ),
+        (
+            "let subsumed_prepare_vote = signed_lane_vote("
+            "&proposal, CertPhase::Prepare, &keys[3]);",
+            "let subsumed_prepare_vote = signed_lane_vote("
+            "&proposal, CertPhase::Commit, &keys[3]);",
+            "late canonical lane recovery must retire only an authenticated "
+            "same-phase vote subsumed by retained quorum evidence",
+        ),
+        (
+            "!authority\n                .uses_retained_source",
+            "authority\n                .uses_retained_source",
+            "late canonical lane recovery must retire only an authenticated "
+            "same-phase vote subsumed by retained quorum evidence",
+        ),
+        (
+            "forged_subsumed_vote.bls_signature[0] ^= 0x80;",
+            "forged_subsumed_vote.bls_signature[0] ^= 0x00;",
+            "late canonical lane recovery must reject forged and phase-distinct "
+            "vote retirement",
+        ),
+        (
+            "let unique_commit_vote = signed_lane_vote("
+            "&proposal, CertPhase::Commit, &keys[3]);",
+            "let unique_commit_vote = signed_lane_vote("
+            "&proposal, CertPhase::Prepare, &keys[3]);",
+            "late canonical lane recovery must reject forged and phase-distinct "
+            "vote retirement",
+        ),
+        (
+            "&BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),",
+            "&BlockMessage::LaneBlockQc(retained_prepare_qc.clone()),",
+            "late canonical lane recovery must carry an alternate valid "
+            "PrepareQC while retaining phase-distinct Commit progress",
+        ),
+        (
+            "&BlockMessage::LaneBlockQc(recovered.commit_qc.clone()),",
+            "&BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),",
+            "late canonical lane recovery must carry an alternate valid "
+            "PrepareQC while retaining phase-distinct Commit progress",
+        ),
+        (
+            ".contains(&retained_prepare_qc),",
+            ".contains(&recovered.commit_qc),",
+            "late canonical lane recovery must retain the exact successor-owned "
+            "QC and reject forged aggregate variants",
+        ),
+        (
+            "forged_rollover_qc.bls_aggregate_signature[0] ^= 0x80;",
+            "forged_rollover_qc.bls_aggregate_signature[0] ^= 0x00;",
+            "late canonical lane recovery must retain the exact successor-owned "
+            "QC and reject forged aggregate variants",
+        ),
+    )
+    for reviewed_source, mutation, expected_error in late_lane_recovery_mutations:
+        assert late_lane_recovery_item.source.count(reviewed_source) == 1
+        late_lane_recovery_path.write_text(
+            canonical_late_lane_recovery[:late_lane_recovery_item_start]
+            + late_lane_recovery_item.source.replace(
+                reviewed_source, mutation, 1
+            )
+            + canonical_late_lane_recovery[late_lane_recovery_item_end:],
+            encoding="utf-8",
+        )
+        late_lane_recovery_errors = (
+            module._production_liveness_release_inventory_errors(
+                g4p_fidelity_root
+            )
+        )
+        assert any(
+            expected_error in error for error in late_lane_recovery_errors
+        ), (expected_error, late_lane_recovery_errors)
+        late_lane_recovery_path.write_text(
+            canonical_late_lane_recovery,
+            encoding="utf-8",
+        )
+
     scaling_environment = {
         "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
         "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
@@ -2482,7 +2893,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=835"
+    canonical_declaration = "readonly canonical_production_test_count=837"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -2504,8 +2915,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=835"
-    weakened = "readonly expected_production_liveness_test_count=834"
+    canonical = "readonly expected_production_liveness_test_count=837"
+    weakened = "readonly expected_production_liveness_test_count=836"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(
@@ -2555,8 +2966,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     guard_mutations = (
         (
             canonical_declaration,
-            "readonly canonical_production_test_count=834",
-            "must seal exactly 835 production tests",
+            "readonly canonical_production_test_count=836",
+            "must seal exactly 837 production tests",
         ),
         (
             '    "sumeragi::v2_effects::tests": 71,',
@@ -2569,19 +2980,19 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "e4c0ddb4a10a7256f986e3da53ec4608"',
+            '    "7f808256b4793433d3217600ac4f7320"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
         (
             "readonly expected_production_liveness_test_count="
             '${canonical_production_test_count}"',
-            "readonly expected_production_liveness_test_count=834\"",
+            "readonly expected_production_liveness_test_count=836\"",
             "must bind the release-runner production count exactly once",
         ),
         (
             '_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"',
-            '_PRODUCTION_TEST_COUNT = 834"',
+            '_PRODUCTION_TEST_COUNT = 836"',
             "must bind the receipt-writer production count exactly once",
         ),
         (

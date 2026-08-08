@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncCausalWorkBudgetProofs ----
-EXTENDS SumeragiV2AsyncInstallRunnerContinuationProofs
+EXTENDS SumeragiV2AsyncProgressOwnershipProofs
 
 (***************************************************************************
 Finite causal-successor work.
@@ -414,13 +414,14 @@ AsyncFrozenLeaderWireBarrierRemainingStage(record, barrierMode) ==
 
 AsyncFrozenLeaderWireBarrierStageTokens(
     node, logicalCutoff, physicalCut, barrierMode) ==
-  {<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
-     token>>:
-     record \in AsyncFrozenLeaderWireBarrierRecords(
-                   node, logicalCutoff, physicalCut, barrierMode),
-     token \in
-       1..AsyncFrozenLeaderWireBarrierRemainingStage(
-            record, barrierMode)}
+  (UNION {
+    {<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
+       token>>:
+       token \in
+         1..AsyncFrozenLeaderWireBarrierRemainingStage(
+              record, barrierMode)}:
+    record \in AsyncFrozenLeaderWireBarrierRecords(
+                  node, logicalCutoff, physicalCut, barrierMode)})
     \cup
   {<<"OrdinaryIngressBarrier", carrier.carrierIdentity, 1>>:
      carrier \in AsyncFrozenOrdinaryIngressBarrierRecords(
@@ -460,19 +461,21 @@ AsyncCausalEpisodeCandidates(node, cutoffOrdinal) ==
      /\ AsyncCandidateLifecycleOrdinal(candidate) <= cutoffOrdinal}
 
 AsyncCausalEpisodeCandidateWorkTokens(node, cutoffOrdinal) ==
-  {<<candidate, token>>:
-     candidate \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal),
-     token \in 1..AsyncCausalRemainingWorkWeight(candidate.kind)}
+  UNION {
+    {<<candidate, token>>:
+       token \in 1..AsyncCausalRemainingWorkWeight(candidate.kind)}:
+    candidate \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal)}
 
 AsyncCausalEpisodeCandidateWorkBudget(node, cutoffOrdinal) ==
   Cardinality(
     AsyncCausalEpisodeCandidateWorkTokens(node, cutoffOrdinal))
 
 AsyncCausalEpisodeExactCandidateOccurrenceTokens(node, cutoffOrdinal) ==
-  {<<candidate, token>>:
-     candidate \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal),
-     token
-       \in 1..AsyncCausalExactRemainingOccurrenceBudget(candidate.kind)}
+  UNION {
+    {<<candidate, token>>:
+       token
+         \in 1..AsyncCausalExactRemainingOccurrenceBudget(candidate.kind)}:
+    candidate \in AsyncCausalEpisodeCandidates(node, cutoffOrdinal)}
 
 AsyncCausalEpisodeExactCandidateOccurrenceBudget(node, cutoffOrdinal) ==
   Cardinality(

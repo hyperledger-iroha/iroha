@@ -10,7 +10,7 @@ readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
 readonly RETAINED_PRODUCER_PROOF_MODULE="SumeragiV2AdequateLeaderRetainedProducerClosureProofs"
-readonly RETAINED_PRODUCER_PROOF_SHA256="74b800bb99f1c5acb2d625c18c1787db0101186249a559caea14a07cb2079399"
+readonly RETAINED_PRODUCER_PROOF_SHA256="00d100b5d15a29984794367d88c0de070207276168cd980c22faa92b91029a8e"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 
 if [[ -n "${JAVA_BIN:-}" ]]; then

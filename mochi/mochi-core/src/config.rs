@@ -273,7 +273,6 @@ impl NetworkPaths {
     pub fn ensure(&self) -> std::io::Result<()> {
         fs::create_dir_all(self.root())?;
         fs::create_dir_all(self.peers_dir())?;
-        fs::create_dir_all(self.genesis_dir())?;
         fs::create_dir_all(self.logs_dir())?;
         fs::create_dir_all(self.snapshots_dir())
     }
@@ -283,19 +282,20 @@ impl NetworkPaths {
         &self.root
     }
 
-    /// Directory storing per-peer configuration folders.
+    /// Runtime peer-container directory.
+    ///
+    /// This is the container for generation-bound mutable storage. Immutable
+    /// peer configs live under a selected configuration generation, not here.
     pub fn peers_dir(&self) -> PathBuf {
         self.root.join("peers")
     }
 
-    /// Directory for a specific peer.
+    /// Runtime container for a specific peer.
+    ///
+    /// This is not the peer's selected storage. Use the supervisor's
+    /// generation-validated storage resolver for that path.
     pub fn peer_dir(&self, alias: &str) -> PathBuf {
         self.peers_dir().join(alias)
-    }
-
-    /// Directory for genesis manifests and collateral.
-    pub fn genesis_dir(&self) -> PathBuf {
-        self.root.join("genesis")
     }
 
     /// Directory storing supervisor logs.
@@ -553,8 +553,12 @@ mod tests {
 
         assert!(paths.root().exists());
         assert!(paths.peers_dir().exists());
-        assert!(paths.genesis_dir().exists());
         assert!(paths.logs_dir().exists());
+        assert!(paths.snapshots_dir().exists());
+        assert!(
+            !paths.root().join("genesis").exists(),
+            "genesis exists only inside immutable configuration generations"
+        );
     }
 
     #[test]

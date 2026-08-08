@@ -40,7 +40,7 @@ use iroha_data_model::{
     isi::InstructionBox,
     nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
     peer::PeerId,
-    prelude::Quantity,
+    prelude::{DomainId, Quantity},
     query::{
         QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
         executor::FindExecutorDataModel, prelude::SingularQueryBox,
@@ -53,6 +53,7 @@ use reqwest::{
     StatusCode,
     header::{HeaderMap, HeaderValue},
 };
+use tokio_tungstenite::tungstenite::http;
 
 use super::*;
 
@@ -438,7 +439,7 @@ fn websocket_rate_limit_preserves_retry_after() {
         .header(reqwest::header::RETRY_AFTER, "3")
         .body(None)
         .expect("valid WebSocket HTTP response");
-    let error = websocket_connect_error(WebSocketError::Http(response));
+    let error = websocket_connect_error(WebSocketError::Http(Box::new(response)));
     assert!(matches!(
         error,
         ToriiError::RateLimited {
@@ -1140,13 +1141,13 @@ fn caller_supplied_readiness_transactions_keep_the_exact_signed_envelope() {
     assert_eq!(exact.transactions[0].hash(), hash);
 }
 
-const BLOCK_WIRE_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/canonical_block_wire.bin");
+const BLOCK_WIRE_FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/canonical_block_wire.bin");
 const EVENT_MESSAGE_FIXTURE: &[u8] =
-    include_bytes!("../tests/fixtures/canonical_event_message.bin");
+    include_bytes!("../../tests/fixtures/canonical_event_message.bin");
 const PIPELINE_EVENT_MESSAGE_FIXTURE: &[u8] =
-    include_bytes!("../tests/fixtures/canonical_pipeline_event_message.bin");
+    include_bytes!("../../tests/fixtures/canonical_pipeline_event_message.bin");
 const DATA_EVENT_MESSAGE_FIXTURE: &[u8] =
-    include_bytes!("../tests/fixtures/canonical_data_event_message.bin");
+    include_bytes!("../../tests/fixtures/canonical_data_event_message.bin");
 
 fn block_stream_frame(block: &SignedBlock) -> Vec<u8> {
     norito::to_bytes(&BlockMessage(block.clone())).expect("encode block stream message")

@@ -14,8 +14,8 @@ description: Logical lane taxonomy, lane configuration geometry, and world-state
 
 This document captures the production architecture for Nexus’ multilane
 consensus layer. It produces one deterministic world state while allowing
-individual data spaces (lanes) to run public or private validator sets with
-isolated workloads.
+internal execution lanes, grouped by governance-scoped dataspaces, to run
+public or private validator sets with isolated workloads.
 
 > **Cross-lane proofs:** This note focuses on geometry and storage. The per-lane settlement commitments, relay pipeline, and merge-ledger proofs required for roadmap **NX-4** are spelled out in [nexus_cross_lane.md](nexus_cross_lane.md).
 

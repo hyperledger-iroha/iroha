@@ -1104,7 +1104,7 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::decision_retains_in_flight_body_pipeline_without_duplicate_fetch
   sumeragi::v2_core::tests::timeout_elapsed_cannot_start_durable_timeout_after_decision
   sumeragi::v2_core::tests::quorum_completing_timeout_vote_cannot_form_tc_after_decision
-  sumeragi::v2_core::tests::commit_qc_cannot_overtake_timeout_frontier
+  sumeragi::v2_core::tests::commit_qc_preempts_hung_timeout_signature_but_not_pending_wal
   sumeragi::v2_core::tests::future_view_commit_qc_uses_current_owner_through_application
   sumeragi::v2_core::tests::later_reproposal_commit_qc_replays_and_applies_its_exact_certified_round
   sumeragi::v2_core::tests::valid_commit_qc_supersedes_different_subject_prepare_lock_live_and_replay
@@ -1179,6 +1179,8 @@ required_production_liveness_tests=(
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_reserves_timeout_vote_bytes_behind_auxiliary_pressure
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_rejects_timeout_vote_larger_than_its_byte_reserve
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_escape_survives_exact_same_source_saturation
+  sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_serializes_distinct_timeout_certificates_per_source
   sumeragi::authoritative_runtime_gate_tests::direct_and_synthetic_envelopes_keep_identity_roles_consistent
   sumeragi::authoritative_runtime_gate_tests::atomic_lane_certificate_uses_the_shared_progress_owner
   sumeragi::authoritative_runtime_gate_tests::oversized_atomic_lane_certificate_is_returned_exactly
@@ -1191,7 +1193,7 @@ required_production_liveness_tests=(
   sumeragi::authoritative_runtime_gate_tests::transport_reply_route_construction_is_fallible_and_target_bound
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_maximum_merge_sidecar_chunk_frame_matches_canonical_wire
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary
-  sumeragi::authoritative_runtime_gate_tests::sidecar_allocations_require_roster_requester_before_lane_queue_admission
+  sumeragi::authoritative_runtime_gate_tests::sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner
   merge_sidecar::tests::pending_pruning_keeps_only_authoritative_live_carrier_identities
   merge_sidecar::tests::holder_derivation_rejects_noncanonical_qc_rosters_and_bitmaps
   merge_sidecar::tests::unsolicited_and_wrong_sender_chunks_are_rejected
@@ -1322,7 +1324,7 @@ required_production_liveness_tests=(
   sumeragi::v2::tests::unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics
   sumeragi::v2::tests::admission_keeps_only_the_exact_locked_commit_vote_beyond_one_rotation
   sumeragi::v2::tests::deferred_service_cursor_cycles_nonempty_classes
-  sumeragi::v2::tests::unowned_busy_certificates_roll_back_staged_registry_and_active_subject
+  sumeragi::v2::tests::unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subject
   sumeragi::v2::tests::unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable
   sumeragi::v2::tests::capacity_bypass_records_follow_current_lock_and_timeout_view
   sumeragi::v2::tests::deferred_progress_capacity_matches_partition_geometry
@@ -1334,7 +1336,7 @@ required_production_liveness_tests=(
   sumeragi::v2::tests::authentication_rejects_valid_commitment_conflicts_without_mutating_adapter
   sumeragi::v2::tests::deferred_adapter_activation_marker_survives_a_no_progress_publication
   sumeragi::v2::tests::deferred_adapter_replay_with_startup_effects_publishes_no_status
-  sumeragi::v2::tests::persistence_macro_step_budgets_have_exact_five_effect_maximum
+  sumeragi::v2::tests::persistence_macro_step_budgets_have_exact_four_effect_maximum
   sumeragi::v2::tests::drive_effects_rejects_oversized_non_persisting_batch
   sumeragi::v2::tests::drive_effects_rejects_record_specific_overbudget_before_wal_append
   sumeragi::v2::tests::drive_effects_rejects_multiple_persist_owners_before_wal_append
@@ -1360,7 +1362,7 @@ required_production_liveness_tests=(
   sumeragi::v2_body_store::tests::rotating_leader_reproposal_authenticates_the_immutable_header_leader
   sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue
   sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts
-  sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_a_non_signer_archive_can_serve
+  sumeragi::v2_block_sync::tests::historical_body_uses_self_contained_kura_finality_without_context_store
   sumeragi::v2_apply::tests::committed_merge_reservation_rejects_bare_norito
   sumeragi::v2_effects::tests::retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it
   sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
@@ -1491,11 +1493,11 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::body_pipeline_acquires_commit_authority_monotonically_under_one_owner
   sumeragi::v2_runtime::tests::retiring_exact_body_completion_releases_a_capacity_one_ingress_slot
   sumeragi::v2_runtime::tests::exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot
-  sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot
+  sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer
   sumeragi::v2_runtime::tests::same_semantic_qc_with_conflicting_route_authority_fails_closed_atomically
   sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
-  sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc
+  sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix
   sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
   sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation
   sumeragi::v2_runtime::tests::body_available_rebind_rejects_uninstalled_destination_without_mutation
@@ -1524,7 +1526,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::successor_activation_snapshot_requires_armed_live_clocks
   sumeragi::v2_runtime::tests::production_ingress_pop_uses_shared_selector_for_every_ready_mask
   sumeragi::v2_runtime::tests::network_admission_uses_exact_normal_and_progress_reservations
-  sumeragi::v2_runtime::tests::serviceable_adapter_debt_drains_one_macro_step_before_new_work
+  sumeragi::v2_runtime::tests::absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains
   sumeragi::v2_runtime::tests::serviceable_adapter_debt_runs_without_runtime_ingress
   sumeragi::v2_runtime::tests::runtime_rejects_driver_selection_outside_eligible_deferred_owner_set
   sumeragi::v2_runtime::tests::runtime_physical_cut_is_monotone_and_regression_fails_closed
@@ -1583,7 +1585,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
-  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_heartbeat_for_replacement_lock
+  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock
   sumeragi::v2_runner::tests::decision_retires_local_work_before_prepared_delivery
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff
@@ -1596,10 +1598,9 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::direct_close_ack_retains_reply_route_from_lane_through_worker
   sumeragi::v2_runner::tests::empty_drain_after_peek_is_restart_required_without_panicking
   sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker
-  sumeragi::v2_runner::tests::deferred_startup_producer_turn_is_retained_until_one_exclusive_claim
   sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation
-  sumeragi::v2_runner::tests::terminal_sweep_source_binds_chain_route_and_empty_post_readback
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
+  sumeragi::v2_runner::tests::dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester
   sumeragi::v2_worker::tests::fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner
   sumeragi::v2_worker::tests::entered_view_accepts_same_view_higher_generation_supersession
   sumeragi::v2_worker::tests::invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner
@@ -1634,10 +1635,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::checked_serve_dequeue_rejects_mutated_fair_lifecycle_ordinal
   sumeragi::v2_worker::tests::dormant_exact_head_fail_stops_after_saturated_fair_prefix_without_repair
   sumeragi::v2_worker::tests::dormant_serve_waiters_fail_stop_without_requester_ordinal_repair
-  sumeragi::v2_worker::tests::durable_raw_admission_restart_reuses_lifecycle_and_excludes_family_replacement
+  sumeragi::v2_worker::tests::durable_raw_admission_restart_locally_seals_before_later_producers
   sumeragi::v2_worker::tests::durable_raw_higher_view_drop_restarts_into_local_successor_completion
   sumeragi::v2_worker::tests::durable_raw_waiter_rejects_mutated_logical_lineage
-  sumeragi::v2_worker::tests::durable_serve_state_v4_rejects_v3_header_and_payload_layouts
+  sumeragi::v2_worker::tests::durable_serve_state_v5_rejects_v4_header_and_payload_layouts
   sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity
   sumeragi::v2_worker::tests::raw_admission_persistence_failure_rolls_back_logical_lineage
   sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission
@@ -1645,7 +1646,8 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack
   sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection
   sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission
-  sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle
+  sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry
+  sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry
   sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source
   sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion
   sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay
@@ -1866,7 +1868,7 @@ required_production_liveness_tests=(
   network::tests::network_actor_drop_retires_routes_and_only_its_waiters
   network::tests::reply_route_tenure_retires_only_after_final_receiver_guard_drops
   network::tests::duplicate_configured_termination_does_not_advance_backoff_or_metrics
-  network::inbound_source_memory_bound_tests::reliable_actor_waiter_geometry_rejects_zero_and_combined_overflow
+  network::inbound_source_memory_bound_tests::reliable_actor_waiter_geometry_rejects_source_overflow
   network::handle_update_tests::configured_producer_geometry_gives_six_same_source_waiters_decreasing_ranks
   consensus_message_control::tests::controlled_v2_admission_preserves_distinct_relay_identity
   consensus_message_control::tests::stale_duplicate_reordered_and_unknown_releases_are_atomic
@@ -1895,7 +1897,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=835
+readonly expected_production_liveness_test_count=837
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1994,7 +1996,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 835-test liveness inventory above. The later
+# not belong to the canonical 837-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2115,8 +2117,8 @@ required_multilane_core_focus_tests=(
   state::tests::queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set
   state::tests::same_carrier_queue_plan_certificate_cannot_authorize_autonomous_execution
   smartcontracts::ivm::host::tests::state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker
-  sumeragi::v2_lane_work::tests::repeated_heartbeat_retries_never_make_autonomous_routes_ordinary_eligible
-  sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat
+  sumeragi::v2_lane_work::tests::repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible
+  sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_a_non_empty_retry
   torii_proxy::tests::torii_transaction_admission_wire_indexes_are_stable
   torii_proxy::tests::queue_plan_synced_request_identity_is_semantic_and_source_bound
   torii_proxy::tests::queue_plan_certificate_rejects_noncanonical_semantic_request_identity

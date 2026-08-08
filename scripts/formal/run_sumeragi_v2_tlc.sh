@@ -105,7 +105,9 @@ allowed_configs=(
   chain_epoch
   liveness
   revision4_safety
+  revision4_adversarial_safety
   revision4_liveness
+  revision4_certified_fence_reservation
   effective_lock_acquisition
   resume_locked_commit_witness
   multilane_autoscale_lifecycle_fixed
@@ -141,7 +143,9 @@ seed=424242
 for config in "${configs[@]}"; do
   case "$config" in
     revision4_safety) cfg="SumeragiV2Revision4.cfg" ;;
+    revision4_adversarial_safety) cfg="SumeragiV2Revision4AdversarialSafety.cfg" ;;
     revision4_liveness) cfg="SumeragiV2Revision4Liveness.cfg" ;;
+    revision4_certified_fence_reservation) cfg="revision4_certified_fence_reservation_fixed.cfg" ;;
     *) cfg="${config}.cfg" ;;
   esac
   metadir="${run_dir}/${config}"
@@ -184,6 +188,12 @@ for config in "${configs[@]}"; do
         ;;
       revision4_safety|revision4_liveness)
         "${common[@]}" SumeragiV2Revision4.tla
+        ;;
+      revision4_adversarial_safety)
+        "${common[@]}" SumeragiV2Revision4AdversarialSafety.tla
+        ;;
+      revision4_certified_fence_reservation)
+        "${common[@]}" SumeragiV2Revision4CertifiedFenceReservation.tla
         ;;
       effective_lock_acquisition)
         "${common[@]}" SumeragiV2EffectiveLockAcquisition.tla

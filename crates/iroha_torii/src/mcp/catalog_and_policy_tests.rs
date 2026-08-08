@@ -948,25 +948,29 @@ fn vpn_canonical_auth_bridge_passes_exact_target_proof_to_authoritative_verifier
     }))
     .expect("canonical VPN body");
     let signed = signed_app_headers(&account, &key_pair, &method, &uri, &body);
+    let signed_account = signed
+        .get(crate::HEADER_ACCOUNT)
+        .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+        .expect("signed account");
+    let signed_signature = signed
+        .get(crate::HEADER_SIGNATURE)
+        .and_then(|value| value.to_str().ok())
+        .expect("signed signature");
+    let signed_timestamp_ms = signed
+        .get(crate::HEADER_TIMESTAMP_MS)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("signed timestamp");
+    let signed_nonce = signed
+        .get(crate::HEADER_NONCE)
+        .and_then(|value| value.to_str().ok())
+        .expect("signed nonce");
     let arguments = norito::json!({
         "canonical_auth": {
-            "account": signed
-                .get(crate::HEADER_ACCOUNT)
-                .and_then(|value| value.to_str().ok())
-                .expect("signed account"),
-            "signature": signed
-                .get(crate::HEADER_SIGNATURE)
-                .and_then(|value| value.to_str().ok())
-                .expect("signed signature"),
-            "timestamp_ms": signed
-                .get(crate::HEADER_TIMESTAMP_MS)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-                .expect("signed timestamp"),
-            "nonce": signed
-                .get(crate::HEADER_NONCE)
-                .and_then(|value| value.to_str().ok())
-                .expect("signed nonce")
+            "account": signed_account,
+            "signature": signed_signature,
+            "timestamp_ms": signed_timestamp_ms,
+            "nonce": signed_nonce
         }
     });
     let canonical_headers = vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
@@ -1685,7 +1689,7 @@ fn every_openapi_derived_tool_has_an_enabled_exact_catalog_projection() {
 
 #[test]
 fn musubi_mcp_guide_lists_the_exact_curated_tool_inventory() {
-    let guide = include_str!("../docs/mcp_api.md");
+    let guide = include_str!("../../docs/mcp_api.md");
     let section = guide
         .split_once("### Musubi Package Registry Tools")
         .expect("Musubi MCP guide section")
@@ -1757,14 +1761,14 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-    let query_fixture: Value = json::from_str(include_str!("../../../fixtures/musubi/sdk_v1.json"))
+    let query_fixture: Value = json::from_str(include_str!("../../../../fixtures/musubi/sdk_v1.json"))
         .expect("Musubi SDK fixture");
     let query_routes = query_fixture
         .get("routes")
         .and_then(Value::as_array)
         .expect("Musubi query fixture routes");
     let instruction_fixture: Value = json::from_str(include_str!(
-        "../../../fixtures/musubi/instructions_v1.json"
+        "../../../../fixtures/musubi/instructions_v1.json"
     ))
     .expect("Musubi instruction fixture");
     let instruction_cases = instruction_fixture
@@ -1853,7 +1857,7 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
     reason = "the fixture contract and cache-retention tooling route stay visible in one matrix"
 )]
 fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
-    let fixture: Value = json::from_str(include_str!("../../../fixtures/musubi/sdk_v1.json"))
+    let fixture: Value = json::from_str(include_str!("../../../../fixtures/musubi/sdk_v1.json"))
         .expect("Musubi SDK V1 fixture must parse");
     let fixture_routes = fixture
         .get("routes")

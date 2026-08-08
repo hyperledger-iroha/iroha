@@ -33,6 +33,26 @@ mod version_tests {
 }
 
 #[cfg(feature = "telemetry")]
+fn ensure_status_metrics_match_authoritative_height(
+    status: &Status,
+    authoritative_block_height: Option<u64>,
+) -> std::result::Result<(), Error> {
+    let Some(authoritative_block_height) = authoritative_block_height else {
+        return Ok(());
+    };
+    if status.blocks != authoritative_block_height {
+        return Err(Error::AppServiceUnavailable {
+            code: "status_metrics_stale",
+            message: format!(
+                "status metrics classified height {} while applied state is at height {authoritative_block_height}; retry",
+                status.blocks
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "telemetry")]
 /// Anchor the public chain-height field to applied state.
 ///
 /// The Prometheus block counter is populated by a lazy Kura scan and can trail
@@ -55,7 +75,41 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
 mod status_block_visibility_tests {
     use iroha_telemetry::metrics::SumeragiConsensusStatus;
 
-    use super::{Status, normalize_status_block_visibility};
+    use super::{
+        Error, Status, ensure_status_metrics_match_authoritative_height,
+        normalize_status_block_visibility,
+    };
+
+    #[test]
+    fn stale_classified_height_is_retriable_instead_of_publishing_a_false_empty_gap() {
+        let status = Status {
+            blocks: 2,
+            blocks_non_empty: 2,
+            ..Status::default()
+        };
+
+        let error = ensure_status_metrics_match_authoritative_height(&status, Some(3))
+            .expect_err("an authoritative height ahead of classification must be retriable");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "status_metrics_stale",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn matching_classified_and_authoritative_heights_are_publishable() {
+        let status = Status {
+            blocks: 3,
+            blocks_non_empty: 3,
+            ..Status::default()
+        };
+
+        ensure_status_metrics_match_authoritative_height(&status, Some(3))
+            .expect("a single classified frontier is publishable");
+    }
 
     #[test]
     fn authoritative_state_height_replaces_lagging_and_leading_counters() {

@@ -794,18 +794,18 @@ PROOF
       BY <2>1,
          HistoricalDiscoveryDueNodeModeHasEnabledExactFairAction,
          PTL
-    <2>3. [](HistoricalDiscoveryDueNodeOwnerAtMode(
+    <2>3. HistoricalDiscoveryDueNodeOwnerAtMode(
                 node, clockValue, sourceRank, owner, mode)
               /\ ~HistoricalDiscoveryDueNodeModeProgressGoal(
                    node, clockValue, sourceRank, owner, mode)
               /\ <<HistoricalDiscoveryDueNodeModeFairAction(
                        owner, mode)>>_AsyncAllVars
              => HistoricalDiscoveryDueNodeModeProgressGoal(
-                  node, clockValue, sourceRank, owner, mode)')
+                  node, clockValue, sourceRank, owner, mode)'
       BY HistoricalDiscoveryDueNodeModeFairOccurrenceReachesRankGoal,
          PTL
          DEF HistoricalDiscoveryDueNodeModeProgressGoal
-    <2>4. [](HistoricalDiscoveryDueNodeOwnerAtMode(
+    <2>4. HistoricalDiscoveryDueNodeOwnerAtMode(
                 node, clockValue, sourceRank, owner, mode)
               /\ ~HistoricalDiscoveryDueNodeModeProgressGoal(
                    node, clockValue, sourceRank, owner, mode)
@@ -813,7 +813,7 @@ PROOF
              => \/ HistoricalDiscoveryDueNodeModeProgressGoal(
                      node, clockValue, sourceRank, owner, mode)'
                 \/ HistoricalDiscoveryDueNodeOwnerAtMode(
-                     node, clockValue, sourceRank, owner, mode)')
+                     node, clockValue, sourceRank, owner, mode)'
       BY HistoricalDiscoveryDueNodeModeStepPreservesOrProgresses, PTL
     <2>5. WF_AsyncAllVars(
              HistoricalDiscoveryDueNodeModeFairAction(owner, mode))
@@ -862,18 +862,18 @@ PROOF
       BY <2>1,
          HistoricalDiscoveryDueIoModeHasEnabledExactFairAction,
          PTL
-    <2>3. [](HistoricalDiscoveryDueIoOwnerAtMode(
+    <2>3. HistoricalDiscoveryDueIoOwnerAtMode(
                 node, clockValue, sourceRank, owner, mode)
               /\ ~HistoricalDiscoveryDueIoModeProgressGoal(
                    node, clockValue, sourceRank, owner, mode)
               /\ <<HistoricalDiscoveryDueIoModeFairAction(
                        owner, mode)>>_AsyncAllVars
              => HistoricalDiscoveryDueIoModeProgressGoal(
-                  node, clockValue, sourceRank, owner, mode)')
+                  node, clockValue, sourceRank, owner, mode)'
       BY HistoricalDiscoveryDueIoModeFairOccurrenceReachesRankGoal,
          PTL
          DEF HistoricalDiscoveryDueIoModeProgressGoal
-    <2>4. [](HistoricalDiscoveryDueIoOwnerAtMode(
+    <2>4. HistoricalDiscoveryDueIoOwnerAtMode(
                 node, clockValue, sourceRank, owner, mode)
               /\ ~HistoricalDiscoveryDueIoModeProgressGoal(
                    node, clockValue, sourceRank, owner, mode)
@@ -881,7 +881,7 @@ PROOF
              => \/ HistoricalDiscoveryDueIoModeProgressGoal(
                      node, clockValue, sourceRank, owner, mode)'
                 \/ HistoricalDiscoveryDueIoOwnerAtMode(
-                     node, clockValue, sourceRank, owner, mode)')
+                     node, clockValue, sourceRank, owner, mode)'
       BY HistoricalDiscoveryDueIoModeStepPreservesOrProgresses, PTL
     <2>5. WF_AsyncAllVars(
              HistoricalDiscoveryDueIoModeFairAction(owner, mode))
@@ -1122,16 +1122,16 @@ PROOF
                    node, clockValue, sourceRank)
              => ENABLED <<AsyncTick>>_AsyncAllVars)
       BY HistoricalDiscoveryTickBlockedHasEnabledExactTick, PTL
-    <2>2. [](HistoricalDiscoveryTickBlockedAtRank(
+    <2>2. HistoricalDiscoveryTickBlockedAtRank(
                 node, clockValue, sourceRank)
               /\ ~HistoricalDiscoveryFixedClockStrictRankGoal(
                    node, clockValue, sourceRank)
               /\ <<AsyncTick>>_AsyncAllVars
              => HistoricalDiscoveryFixedClockStrictRankGoal(
-                  node, clockValue, sourceRank)')
+                  node, clockValue, sourceRank)'
       BY HistoricalDiscoveryExactTickReachesStrictRankGoal, PTL
          DEF AsyncTick
-    <2>3. [](HistoricalDiscoveryTickBlockedAtRank(
+    <2>3. HistoricalDiscoveryTickBlockedAtRank(
                 node, clockValue, sourceRank)
               /\ ~HistoricalDiscoveryFixedClockStrictRankGoal(
                    node, clockValue, sourceRank)
@@ -1139,7 +1139,7 @@ PROOF
              => \/ HistoricalDiscoveryFixedClockStrictRankGoal(
                      node, clockValue, sourceRank)'
                 \/ HistoricalDiscoveryTickBlockedAtRank(
-                     node, clockValue, sourceRank)')
+                     node, clockValue, sourceRank)'
       BY HistoricalDiscoveryTickStepPreservesOrProgresses, PTL
     <2>4. WF_AsyncAllVars(AsyncTick)
       BY <1>1 DEF AsyncSpecAt, AsyncFairnessAt
@@ -1192,81 +1192,86 @@ THEOREM AsyncSpecClosesHistoricalDiscoveryFixedClockNonPacketService ==
     HistoricalDiscoveryFixedClockNonPacketServiceProperty(
       AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE HistoricalDiscoveryFixedClockNonPacketServiceProperty(
-                 AsyncSpecAt(initialContext))
-    <2>1. CASE AsyncSpecAt(initialContext)
-      <3>1. ASSUME NEW node \in Responsive,
-                    NEW clockValue \in Nat,
-                    NEW sourceRank \in
-                      HistoricalDiscoveryFixedClockBlockerCarrier
-             PROVE (HistoricalDiscoveryFixedClockBlockedAtRank(
-                       node, clockValue, sourceRank)
-                      /\ OverdueResponsivePackets = {})
-                     ~>
-                   HistoricalDiscoveryFixedClockStrictRankGoal(
-                     node, clockValue, sourceRank)
-        <4>1. \A owner:
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext)
+         PROVE \A node \in Responsive,
+                   clockValue \in Nat,
+                   sourceRank \in
+                     HistoricalDiscoveryFixedClockBlockerCarrier:
                  (HistoricalDiscoveryFixedClockBlockedAtRank(
                     node, clockValue, sourceRank)
+                   /\ OverdueResponsivePackets = {})
+                   ~>
+                 HistoricalDiscoveryFixedClockStrictRankGoal(
+                   node, clockValue, sourceRank)
+    <2>1. ASSUME NEW node \in Responsive,
+                  NEW clockValue \in Nat,
+                  NEW sourceRank \in
+                    HistoricalDiscoveryFixedClockBlockerCarrier
+           PROVE (HistoricalDiscoveryFixedClockBlockedAtRank(
+                     node, clockValue, sourceRank)
+                    /\ OverdueResponsivePackets = {})
+                   ~>
+                 HistoricalDiscoveryFixedClockStrictRankGoal(
+                   node, clockValue, sourceRank)
+      <3>1. \A owner:
+               (HistoricalDiscoveryFixedClockBlockedAtRank(
+                  node, clockValue, sourceRank)
+                 /\ OverdueResponsivePackets = {}
+                 /\ owner
+                      \in HistoricalDiscoveryNodeBlockersAt(clockValue))
+                ~> HistoricalDiscoveryFixedClockStrictRankGoal(
+                     node, clockValue, sourceRank)
+        BY <1>1,
+           AsyncSpecHistoricalDiscoveryDueNodeOwnerReachesRankGoal
+      <3>2. \A owner:
+               (HistoricalDiscoveryFixedClockBlockedAtRank(
+                  node, clockValue, sourceRank)
+                 /\ OverdueResponsivePackets = {}
+                 /\ HistoricalDiscoveryNodeBlockersAt(clockValue) = {}
+                 /\ owner
+                      \in HistoricalDiscoveryActiveIoBlockersAt(
+                           clockValue))
+                ~> HistoricalDiscoveryFixedClockStrictRankGoal(
+                     node, clockValue, sourceRank)
+        BY <1>1,
+           AsyncSpecHistoricalDiscoveryDueIoOwnerReachesRankGoal
+      <3>3. HistoricalDiscoveryTickBlockedAtRank(
+               node, clockValue, sourceRank)
+              ~>
+            HistoricalDiscoveryFixedClockStrictRankGoal(
+              node, clockValue, sourceRank)
+        BY <1>1,
+           AsyncSpecHistoricalDiscoveryTickReachesRankGoal
+      <3>4. (HistoricalDiscoveryFixedClockBlockedAtRank(
+                node, clockValue, sourceRank)
+               /\ OverdueResponsivePackets = {})
+              ~>
+            (HistoricalDiscoveryFixedClockStrictRankGoal(
+               node, clockValue, sourceRank)
+             \/ (\E owner:
+                   /\ HistoricalDiscoveryFixedClockBlockedAtRank(
+                        node, clockValue, sourceRank)
                    /\ OverdueResponsivePackets = {}
                    /\ owner
-                        \in HistoricalDiscoveryNodeBlockersAt(clockValue))
-                  ~> HistoricalDiscoveryFixedClockStrictRankGoal(
-                       node, clockValue, sourceRank)
-          BY <2>1,
-             AsyncSpecHistoricalDiscoveryDueNodeOwnerReachesRankGoal
-        <4>2. \A owner:
-                 (HistoricalDiscoveryFixedClockBlockedAtRank(
-                    node, clockValue, sourceRank)
+                        \in HistoricalDiscoveryNodeBlockersAt(
+                             clockValue))
+             \/ (\E owner:
+                   /\ HistoricalDiscoveryFixedClockBlockedAtRank(
+                        node, clockValue, sourceRank)
                    /\ OverdueResponsivePackets = {}
                    /\ HistoricalDiscoveryNodeBlockersAt(clockValue) = {}
                    /\ owner
                         \in HistoricalDiscoveryActiveIoBlockersAt(
                              clockValue))
-                  ~> HistoricalDiscoveryFixedClockStrictRankGoal(
-                       node, clockValue, sourceRank)
-          BY <2>1,
-             AsyncSpecHistoricalDiscoveryDueIoOwnerReachesRankGoal
-        <4>3. HistoricalDiscoveryTickBlockedAtRank(
-                 node, clockValue, sourceRank)
-                ~>
-              HistoricalDiscoveryFixedClockStrictRankGoal(
-                node, clockValue, sourceRank)
-          BY <2>1,
-             AsyncSpecHistoricalDiscoveryTickReachesRankGoal
-        <4>4. (HistoricalDiscoveryFixedClockBlockedAtRank(
-                  node, clockValue, sourceRank)
-                 /\ OverdueResponsivePackets = {})
-                ~>
-              (HistoricalDiscoveryFixedClockStrictRankGoal(
-                 node, clockValue, sourceRank)
-               \/ \E owner:
-                    /\ HistoricalDiscoveryFixedClockBlockedAtRank(
-                         node, clockValue, sourceRank)
-                    /\ OverdueResponsivePackets = {}
-                    /\ owner
-                         \in HistoricalDiscoveryNodeBlockersAt(
-                              clockValue)
-               \/ \E owner:
-                    /\ HistoricalDiscoveryFixedClockBlockedAtRank(
-                         node, clockValue, sourceRank)
-                    /\ OverdueResponsivePackets = {}
-                    /\ HistoricalDiscoveryNodeBlockersAt(clockValue) = {}
-                    /\ owner
-                         \in HistoricalDiscoveryActiveIoBlockersAt(
-                              clockValue)
-               \/ HistoricalDiscoveryTickBlockedAtRank(
-                    node, clockValue, sourceRank))
-          BY Isa, PTL
-             DEF HistoricalDiscoveryTickBlockedAtRank
-        <4> QED BY <4>1, <4>2, <4>3, <4>4, PTL
-      <3> QED BY <3>1
-    <2>2. CASE ~AsyncSpecAt(initialContext)
-      BY <2>2
-         DEF HistoricalDiscoveryFixedClockNonPacketServiceProperty
-    <2> QED BY <2>1, <2>2
+             \/ HistoricalDiscoveryTickBlockedAtRank(
+                  node, clockValue, sourceRank))
+        BY Isa, PTL
+           DEF HistoricalDiscoveryTickBlockedAtRank
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
+    <2> QED BY <2>1
   <1> QED BY <1>1
+       DEF HistoricalDiscoveryFixedClockNonPacketServiceProperty
 
 HistoricalDiscoveryFixedClockPacketServiceProperty(specification) ==
   specification
@@ -1685,11 +1690,12 @@ The definitions below never turn child creation itself into progress.
 ***************************************************************************)
 
 HistoricalDiscoveryCandidateCausalWorkTokenSet(packet) ==
-  {<<HistoricalDiscoveryCandidateExactPhysicalIdentity(candidate), token>>:
-     candidate \in HistoricalDiscoveryPacketCandidateOwners(packet),
-     token \in
-       1..(AsyncCausalRemainingWorkWeight(candidate.kind)
-             * (HistoricalDiscoveryTimedOwnerMode(candidate.node) + 1))}
+  UNION {
+    {<<HistoricalDiscoveryCandidateExactPhysicalIdentity(candidate), token>>:
+       token \in
+         1..(AsyncCausalRemainingWorkWeight(candidate.kind)
+               * (HistoricalDiscoveryTimedOwnerMode(candidate.node) + 1))}:
+    candidate \in HistoricalDiscoveryPacketCandidateOwners(packet)}
 
 HistoricalDiscoveryCandidateCausalWorkBudget(packet) ==
   Cardinality(HistoricalDiscoveryCandidateCausalWorkTokenSet(packet))

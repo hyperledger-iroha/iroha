@@ -200,6 +200,18 @@ invariant checking. The finite `Views = 0..(n - 1)` horizon is one complete
 role rotation; unlike the former unbounded natural-valued executable view, it
 has a finite state graph which TLC can exhaust.
 
+[`SumeragiV2Revision4AdversarialSafety.tla`](SumeragiV2Revision4AdversarialSafety.tla)
+separately removes the main compact model's single-proposal and retained-lock
+shortcuts from the agreement search. Its bounded round contains four
+validators, quorum three, two independent candidate bodies, and one Byzantine
+validator which may vote for both. Each honest validator may receive both full
+bodies but its durable Commit intent permits at most one vote. Vote, QC, and
+decision actions remain enabled after the first QC, so TLC continues searching
+for a second, conflicting QC and decision instead of obtaining agreement by
+terminating progress. The exhaustive
+[`SumeragiV2Revision4AdversarialSafety.cfg`](SumeragiV2Revision4AdversarialSafety.cfg)
+checks both conflicting-CommitQC unreachability and decision agreement.
+
 [`SumeragiV2Revision4Liveness.cfg`](SumeragiV2Revision4Liveness.cfg) checks the
 same finite geometry with `PostGSTSpec`. That specification makes the
 conditional partial-synchrony premises executable: while the current leader
@@ -818,8 +830,8 @@ representative roster of at least four voting peers, a responsive dual quorum,
 deterministic terminating validation/fsync/application, and a representable
 service bound that some view-indexed timeout can exceed, deterministic
 consensus cannot guarantee progress. The paper argument derives
-height progress under those premises, including a valid internal or
-recovery-heartbeat carrier when that work is armed; it
+height progress under those premises when valid transaction, autonomous,
+internal, or state-derived time-trigger work exists; it
 does not prove transaction inclusion or censorship fairness. It is not a
 machine-checked liveness completion while the ledger reports
 `machine_checked_completion: false` and retains downstream asynchronous and
@@ -1104,6 +1116,14 @@ receipt, exact artifact, and original reducer tag as a completion tombstone.
 An exact post-drain retry is absorbed; tag, subject, context, or CommitQC drift
 fails closed. This closes old-stage recreation in source but does not promote
 the application theorem or any cross-tool production-refinement obligation.
+At the enclosing adapter boundary, a zero-to-one semantic candidate publishes
+its immutable owner, while a one-to-one retry must present that exact owner.
+A different owner for the same semantic lifecycle is rejected before the
+effect-to-candidate trace projection is constructed. The separate physical
+Fetch/Store/Validate lineage may retain a stronger carrier only after its
+distinct phase/commitment identity passes the typed monotone authority gate and
+the adopted lineage is re-projected. These source and mutation checks do not
+promote the effect-to-candidate cross-tool obligation before its strict pass.
 Recovered publication requires absent
 process-visible predecessor ownership plus durable complete-tip authority. For
 a tip whose canonical block owns lane payloads, that authority additionally
@@ -1208,6 +1228,18 @@ rank counts every distinct target/leader owner at the frozen semantic rank,
 preventing one serviced owner from hiding another. Equal-count replacement
 and count-increasing replenishment remain explicit non-progress cases and
 require a prior finite or coalesced producer argument.
+
+The production queue closes the matching final-retirement race with a one-shot
+local handoff. The last owner in a frozen Serve batch arms
+`producer_episode_due` under the same mutex that retires it; fresh Serve
+admission is `Busy` while the handoff is due or while
+`producer_episode_active` owns its bounded outer turn. The runner atomically
+consumes due into active, and the local lease clears active before admission
+reopens. Rejected replenishment cannot mint either scheduler or logical
+lifecycle ordinals. Digest-refreshed mutations bind both Busy boundaries, the
+high-water marks, timeout-owner ordering, strict predecessor service, and the
+real timeout-certificate/EnterView suffix. This source refinement does not
+count replenishment as progress, add fairness, or promote a ledger row.
 
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
@@ -1391,7 +1423,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 835 tests across thirty-nine Rust
+The current pre-network release inventory names 837 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1490,7 +1522,11 @@ checkpoint. Five admission/coalescing, Busy pre-runtime ownership, and
 reconstructed-chunk terminality regressions yield the 818-test checkpoint.
 Thirteen exact admission, retry, tombstone, and high-water regressions yield the
 831-test checkpoint. Retiring five obsolete peer-genesis protocol regressions
-yields the current 835-test,
+yields the 826-test checkpoint. Replacing one obsolete restart selector with
+its separate raw/coalesced crash boundaries and restoring two implemented
+certified-ingress regressions yields the 829-test checkpoint. Autonomous-
+lifecycle terminal-outcome and startup-recovery coverage plus the final source
+reconciliation yield the current 837-test,
 39-module inventory. The complete source-sealed
 pre-network corridor
 contains 86 legs. Six source-sealed command legs and the G-SCALE
@@ -1562,10 +1598,10 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`3ae09bb260bd06b1592d973a5df561fe4466467c56e4e6c9f1a50a35aa07f9cb`.
+`7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf`.
 The separate source-sealed G-UNIT inventory contains 524 focused tests,
 including 318 `iroha_core` tests. Its 525-line canonical TSV has SHA-256
-`de9ab0da201d361e912b935d1349c584ba78fb52f70acd3c91e8d4a7c76fab24`;
+`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1596,9 +1632,9 @@ atomic-lane, semantic-origin, P2P source-fairness, daemon-relay, and active-
 watchdog regressions. The 232-name baseline already included two exact locked-Commit
 progress-witness regressions
 and six outer TransportCompletion-corridor regressions. The current
-geometry inventories four owners per validator, two owners for every one of
+geometry inventories five owners per validator, three owners for every one of
 the `H` simultaneously materialized authenticated non-validator lanes, and two
-anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
+anonymous owners (`5N+3H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
@@ -1615,24 +1651,59 @@ includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
-`4N+2H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
+`5N+3H+2` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, retained effect-capacity ownership,
 post-decision timeout/TC quiescence, and watchdog classification. It also pins
-the adapter's maximum flattened persistence macro-step at five effects within
+the adapter's maximum flattened persistence macro-step at four effects within
 the reducer's eight-effect bound, services at most one Busy-deferred adapter
 macro-step per serialized runtime turn, and forbids terminal readiness while
 any Completion, Progress, or Normal deferred queue remains nonempty. The
 production-default saturation regression fills all 256 certified-request
-owners, 640 Normal ingress slots, and the 128-slot reserved Progress increment
-while preserving the 256-slot Completion reserve, then proves that an exact
+owners, 639 Normal ingress slots, and the 128-slot reserved Progress increment
+while preserving the 256-slot Completion reserve and one separately charged
+certified-fence slot, then proves that an exact
 authenticated `CertifiedBodyResponse` with a still-live matching logical
-request registration can retire the old request; the executor then retries the
+request registration can retire the old request. The fence slot is one
+retained physical credit rather than a limit of one
+certificate. Multiple distinct authenticated TCs, CommitQCs, or
+CommitQC-carrying recovery responses share that credit; every certificate
+after the first consumes ordinary Progress capacity, and the ordinary
+reservation is independent of whether the first certificate arrives before
+or after ordinary work. While an authenticated certified-body
+response remains retained, its escape episode is explicitly `Fresh`,
+`Charged`, or `Spent`: Fresh admits at most one new direct TC, CommitQC, or
+`CommitCertificateResponse` carrying a CommitQC root; Charged and Spent reject
+every further fresh root, and only claim retirement resets the latch.
+The claimed-response rank counts the exact frozen direct
+roots and their strictly decreasing trusted causal tail, so pacemaker priority
+cannot be replenished indefinitely. The standalone revision-4 kernel charges
+an unpublished `BodyAvailable` token as an ordinary Completion owner and
+atomically replaces its conflicting proposal owner without changing physical
+occupancy. Production refinement additionally persists a complete Busy-
+deferred producer-release batch before removing queue owners, reconciles
+obsolete Reserved producers only after restart WAL replay while preserving the
+exact protected body pipeline, and retires a restored stage-7 Fetch parent even
+when no Completion token was reserved. The fresh post-restart Fetch owner proves
+only its exact effect; the adapter resolves the old parent by durable
+round/subject coordinates plus exact manifest identity when supplied, and
+requires a unique match when the manifest is absent. Body rebind preserves the sole
+persistent producer and rejects two persistent roots before mutation. The
+generic productive-wire cut is monotone at certified EnterView and durable
+Decision: the durable gate prunes exactly obsolete Dormant records before the
+fair-ingress mirror, preserves ordinal high-waters, rolls back on store failure,
+and rejects below-cut view-scoped admission. A `CertifiedResponse` is not
+view-scoped at this boundary: durable Decision may precede recovery of its exact
+body, so both cuts preserve the bounded response owner and defer authority to
+the outstanding signed request, QC, responder signature, canonical body, and
+manifest checks. Proposal chunks remain cut-scoped. These are source-bound
+production-refinement contracts; the existing deductive asynchronous proof
+does not by itself prove their Rust persistence ordering. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership
 atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; that 826-name checkpoint still requires a clean committed, detached,
+names; the current 837-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

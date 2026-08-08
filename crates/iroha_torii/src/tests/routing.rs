@@ -228,7 +228,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_response_does_not_wait_for_lazy_block_counter_sync() {
+    async fn status_response_bounds_unavailable_fresh_block_counter_sync() {
         let metrics = Arc::new(Metrics::default());
         metrics.block_height.inc_by(4_193);
         let telemetry = MaybeTelemetry::from_profile(
@@ -236,7 +236,7 @@ mod tests {
             TelemetryProfile::Full,
         );
 
-        let response = super::handle_status(
+        let error = super::handle_status(
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
@@ -246,20 +246,14 @@ mod tests {
             None,
         )
         .await
-        .expect("status succeeds");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect status body")
-            .to_bytes();
-        let payload: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode status payload");
-
-        assert_eq!(
-            payload.get("blocks").and_then(norito::json::Value::as_u64),
-            Some(4_274)
-        );
+        .expect_err("an unavailable telemetry actor must fail status retriably");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "status_metrics_unavailable",
+                ..
+            }
+        ));
     }
 
     #[cfg(feature = "app_api")]

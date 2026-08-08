@@ -155,11 +155,16 @@ EnterFreshWindow ==
          runtimeOwners, deferredOwners, causalOwners, handoffOwners,
          ioOwners, outstandingOwners, ioReadyOwners, localReadyOwners>>
 
+TerminalFreshWindow ==
+  /\ stage = "Fresh"
+  /\ UNCHANGED vars
+
 Next ==
   \/ PersistInstallTC
   \/ RetryRetiredExactRoots
   \/ SameHeightRestart
   \/ EnterFreshWindow
+  \/ TerminalFreshWindow
 
 Spec ==
   /\ Init

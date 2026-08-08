@@ -903,24 +903,93 @@ BY AsyncVoterRunNodeWorkStrictlyDecreasesFrozenProducerContinuationCompositeRank
        PreGstResponsiveRestart, PreGstResponsiveReplay,
        AsyncAllVars
 
+THEOREM AsyncVoterRunNodeIsNonstuttering ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+      => <<RunNode(node)>>_AsyncAllVars
+BY Isa
+   DEF RunNode, RunNodeWork,
+       LocalAdmissionStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       AsyncAllVars, AsyncSchedulerVars,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+
 THEOREM AsyncVoterProducerContinuationFairRunnerIsEnabled ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
     /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
     /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ AsyncVoterCandidateProducerContinuationEpisodePending(node)
-      => ENABLED PostGstRunNode(node)
-BY ResponsiveUnappliedRunNodeIsEnabled,
-   EnabledRunNodeLiftsPostGst,
-   AsyncStrongTypeProjectsAsyncType,
-   GstResponsiveNodesAreUp,
-   GstExcludesResponsiveReplayQuarantine,
-   IsaT(600)
-   DEF AsyncVoterCandidateProducerContinuationEpisodePending,
-       AsyncStrongTypeInvariant, AsyncCurrentResponsiveVoters,
-       AsyncCandidateProducerContinuationRunnerResolutionRequired,
-       AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode,
-       RecoveryRunNodeGuard
+      => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncCandidateProducerContinuationExternalCoverageInvariant,
+                AsyncCandidateProducerContinuationLocalReplayCapacityInvariant,
+                AsyncVoterCandidateProducerContinuationEpisodePending(node)
+         PROVE ENABLED <<PostGstRunNode(node)>>_AsyncAllVars
+    <2>1. /\ AsyncTypeInvariant
+           /\ node \in AsyncCurrentResponsiveVoters
+           /\ gst
+           /\ ~NodeHasApplication(node)
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+         DEF AsyncVoterCandidateProducerContinuationEpisodePending,
+             AsyncCandidateProducerContinuationRunnerResolutionRequired,
+             AsyncCandidateProducerContinuationRunnerResolutionRecordsForNode
+    <2>2. ENABLED PostGstRunNode(node)
+      BY <1>1, <2>1,
+         ResponsiveUnappliedRunNodeIsEnabled,
+         EnabledRunNodeLiftsPostGst,
+         GstResponsiveNodesAreUp,
+         GstExcludesResponsiveReplayQuarantine,
+         IsaT(600)
+         DEF AsyncStrongTypeInvariant, AsyncCurrentResponsiveVoters,
+             RecoveryRunNodeGuard
+    <2>3. PostGstRunNode(node)
+             => <<PostGstRunNode(node)>>_AsyncAllVars
+      BY <2>1, AsyncVoterRunNodeIsNonstuttering, Isa
+         DEF PostGstRunNode
+    <2> QED BY <2>2, <2>3, ENABLEDaxioms
+  <1> QED BY <1>1
+
+THEOREM AsyncVoterProducerContinuationFairRunnerOccurrenceReachesRankGoal ==
+  \A node \in ValidatorIds, rank \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ AsyncVoterCandidateProducerContinuationEpisodeAtRank(node, rank)
+    /\ <<PostGstRunNode(node)>>_AsyncAllVars
+      => AsyncVoterCandidateProducerContinuationEpisodeRankGoal(node, rank)'
+BY AsyncVoterRunNodeWorkStrictlyDecreasesFrozenProducerContinuationCompositeRank,
+   IsaT(900)
+   DEF AsyncVoterCandidateProducerContinuationEpisodeAtRank,
+       AsyncVoterCandidateProducerContinuationEpisodeRankGoal,
+       AsyncVoterCandidateProducerContinuationEpisodePending,
+       AsyncVoterCandidateProducerContinuationFrozenCompositeRankDecreases,
+       PostGstRunNode, RunNode,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       SetLessThan, OpToRel
+
+THEOREM AsyncVoterProducerContinuationRankStepPreservesOrProgresses ==
+  \A node \in ValidatorIds, rank \in Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ AsyncVoterCandidateProducerContinuationEpisodeAtRank(node, rank)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                node, rank)'
+         \/ AsyncVoterCandidateProducerContinuationEpisodeAtRank(node, rank)'
+BY AsyncVoterProducerContinuationCompositeRankStepCannotIncrease,
+   IsaT(900)
+   DEF AsyncVoterCandidateProducerContinuationEpisodeAtRank,
+       AsyncVoterCandidateProducerContinuationEpisodeRankGoal,
+       AsyncVoterCandidateProducerContinuationEpisodePending,
+       SetLessThan, OpToRel
 
 AsyncVoterCandidateProducerContinuationRankStepProperty(
     specification, initialContext) ==
@@ -943,22 +1012,69 @@ THEOREM AsyncSpecProvidesVoterCandidateProducerContinuationRankStep ==
   \A initialContext:
     AsyncVoterCandidateProducerContinuationRankStepProperty(
       AsyncSpecAt(initialContext), initialContext)
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   AsyncSpecAlwaysUsesFixedResponsiveVoters,
-   AsyncVoterProducerContinuationCompositeRankStepCannotIncrease,
-   AsyncVoterProducerContinuationFairRunnerIsEnabled,
-   AsyncVoterRunNodeWorkStrictlyDecreasesFrozenProducerContinuationCompositeRank,
-   WF1, PTL, IsaT(1800)
-   DEF AsyncVoterCandidateProducerContinuationRankStepProperty,
-       AsyncVoterCandidateProducerContinuationEpisodeAtRank,
-       AsyncVoterCandidateProducerContinuationEpisodeRankGoal,
-       AsyncVoterCandidateProducerContinuationEpisodePending,
-       AsyncVoterCandidateProducerContinuationFrozenCompositeRankDecreases,
-       PostGstRunNode, RunNode,
-       AsyncSpecAt, AsyncFairnessAt,
-       SetLessThan, OpToRel
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncVoterCandidateProducerContinuationRankStepProperty(
+                 AsyncSpecAt(initialContext), initialContext)
+    <2>1. ASSUME NEW node \in AsyncVotersAt(initialContext),
+                  NEW rank \in Nat,
+                  AsyncSpecAt(initialContext)
+           PROVE AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                   node, rank)
+                   ~>
+                 AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                   node, rank)
+      <3>1. [](/\ AsyncStrongTypeInvariant
+                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                /\ AsyncCurrentResponsiveVoters
+                     = AsyncVotersAt(initialContext))
+        BY <2>1,
+           AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+           AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL
+      <3>2. [](AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                  node, rank)
+                /\ ~AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                     node, rank)
+               => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars)
+        BY <3>1,
+           AsyncCurrentResponsiveVotersAreValidators,
+           AsyncVoterProducerContinuationFairRunnerIsEnabled,
+           PTL
+      <3>3. (AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                  node, rank)
+                /\ ~AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                     node, rank)
+                /\ <<PostGstRunNode(node)>>_AsyncAllVars
+               => AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                    node, rank)')
+        BY <3>1,
+           AsyncCurrentResponsiveVotersAreValidators,
+           AsyncVoterProducerContinuationFairRunnerOccurrenceReachesRankGoal,
+           PTL
+      <3>4. (AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                  node, rank)
+                /\ ~AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                     node, rank)
+                /\ [AsyncNext]_AsyncAllVars
+               => \/ AsyncVoterCandidateProducerContinuationEpisodeRankGoal(
+                       node, rank)'
+                  \/ AsyncVoterCandidateProducerContinuationEpisodeAtRank(
+                       node, rank)')
+        BY <3>1,
+           AsyncCurrentResponsiveVotersAreValidators,
+           AsyncVoterProducerContinuationRankStepPreservesOrProgresses,
+           PTL
+      <3>5. WF_AsyncAllVars(PostGstRunNode(node))
+        BY <2>1 DEF AsyncSpecAt, AsyncFairnessAt
+      <3>6. [][AsyncNext]_AsyncAllVars
+        BY <2>1 DEF AsyncSpecAt
+      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, PTL
+    <2> QED BY <2>1
+         DEF AsyncVoterCandidateProducerContinuationRankStepProperty
+  <1> QED BY <1>1
 
 THEOREM AsyncSpecProvidesVoterCandidateProducerContinuationResolutionClosure ==
   \A initialContext:

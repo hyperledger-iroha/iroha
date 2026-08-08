@@ -56845,6 +56845,15 @@ fn queue_plan_admission_certificate_for_state_test(
         u64::from(tag).saturating_add(100),
     )
     .expect("canonical QueuePlan admission binding");
+    let certificate =
+        queue_plan_admission_certificate_bytes_for_state_test(&binding, validator_keypairs);
+    (binding, certificate)
+}
+
+fn queue_plan_admission_certificate_bytes_for_state_test(
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    validator_keypairs: &[KeyPair],
+) -> Vec<u8> {
     let binding_hash = binding.canonical_hash();
     let coordinator = &binding.admission_context.route_incarnations[0];
     let attestations = coordinator
@@ -56877,10 +56886,7 @@ fn queue_plan_admission_certificate_for_state_test(
         binding: binding.clone(),
         attestations,
     };
-    (
-        binding,
-        norito::to_bytes(&certificate).expect("canonical QueuePlan admission certificate"),
-    )
+    norito::to_bytes(&certificate).expect("canonical QueuePlan admission certificate")
 }
 
 include!("autonomous_merge_and_queue_plan_tests.rs");

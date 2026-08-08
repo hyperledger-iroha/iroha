@@ -38,11 +38,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "time"] }
 tikv-jemallocator = { version = "0.6.0", optional = true }
 
-# Use halo2curves ASM on x86_64 by default; disable ASM on non-x86_64
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+# Use halo2curves ASM for native x86_64 targets. Its build script checks the
+# build-host architecture rather than Cargo's target architecture, so enabling
+# ASM while cross-compiling the x86_64 iOS simulator on an Apple Silicon host
+# fails before the target-specific assembly can be compiled.
+[target.'cfg(all(target_arch = "x86_64", not(target_os = "ios")))'.dependencies]
 halo2curves = { version = "0.10.0", features = ["std", "bits", "derive_serde", "asm"] }
 
-[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
+[target.'cfg(any(not(target_arch = "x86_64"), target_os = "ios"))'.dependencies]
 halo2curves = { version = "0.10.0", features = ["std", "bits", "derive_serde"] }
 
 [target.wasm32-unknown-unknown.dependencies]

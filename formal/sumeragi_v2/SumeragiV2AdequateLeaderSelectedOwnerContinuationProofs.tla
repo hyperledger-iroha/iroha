@@ -1054,24 +1054,24 @@ THEOREM AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix ==
     /\ AdequateLeaderTargetSelectedOwnerReservedContinuationResidual(
          target, leaderContext, leader, leaderView,
          subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-      => \E candidate \in sourceCandidates,
-            record \in
-              AsyncCandidateProducerContinuationRecordsForIdentity(
-                AsyncCandidateServiceIdentity(candidate)),
-            budget \in
-              AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
-           /\ record.status = "Reserved"
-           /\ AdequateLeaderFrozenTargetCandidateIdentity(
-                candidate, sourceOccurrenceRank[1],
-                target, leaderContext, leader, leaderView, subject)
-           /\ owner =
-                AdequateLeaderFrozenCandidateOwnerIdentity(
+      => \E candidate \in sourceCandidates:
+           \E record \in
+                AsyncCandidateProducerContinuationRecordsForIdentity(
+                  AsyncCandidateServiceIdentity(candidate)),
+              budget \in
+                AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+             /\ record.status = "Reserved"
+             /\ AdequateLeaderFrozenTargetCandidateIdentity(
                   candidate, sourceOccurrenceRank[1],
                   target, leaderContext, leader, leaderView, subject)
-           /\ record.node \in AsyncVotersAt(initialContext)
-           /\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
-                record.node, record.identity, record.ordinal,
-                record.address.stage, "Reserved", budget)
+             /\ owner =
+                  AdequateLeaderFrozenCandidateOwnerIdentity(
+                    candidate, sourceOccurrenceRank[1],
+                    target, leaderContext, leader, leaderView, subject)
+             /\ record.node \in AsyncVotersAt(initialContext)
+             /\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
+                  record.node, record.identity, record.ordinal,
+                  record.address.stage, "Reserved", budget)
 BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
    FrozenContextFixesResponsiveVoters,
    IsaT(900)
@@ -1107,24 +1107,24 @@ THEOREM AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix ==
     /\ AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual(
          target, leaderContext, leader, leaderView,
          subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-      => \E candidate \in sourceCandidates,
-            record \in
-              AsyncCandidateProducerContinuationRecordsForIdentity(
-                AsyncCandidateServiceIdentity(candidate)),
-            budget \in
-              AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
-           /\ record.status = "Materialized"
-           /\ AdequateLeaderFrozenTargetCandidateIdentity(
-                candidate, sourceOccurrenceRank[1],
-                target, leaderContext, leader, leaderView, subject)
-           /\ owner =
-                AdequateLeaderFrozenCandidateOwnerIdentity(
+      => \E candidate \in sourceCandidates:
+           \E record \in
+                AsyncCandidateProducerContinuationRecordsForIdentity(
+                  AsyncCandidateServiceIdentity(candidate)),
+              budget \in
+                AsyncCandidateProducerContinuationFrozenPrefixRankCarrier:
+             /\ record.status = "Materialized"
+             /\ AdequateLeaderFrozenTargetCandidateIdentity(
                   candidate, sourceOccurrenceRank[1],
                   target, leaderContext, leader, leaderView, subject)
-           /\ record.node \in AsyncVotersAt(initialContext)
-           /\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
-                record.node, record.identity, record.ordinal,
-                record.address.stage, "Materialized", budget)
+             /\ owner =
+                  AdequateLeaderFrozenCandidateOwnerIdentity(
+                    candidate, sourceOccurrenceRank[1],
+                    target, leaderContext, leader, leaderView, subject)
+             /\ record.node \in AsyncVotersAt(initialContext)
+             /\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
+                  record.node, record.identity, record.ordinal,
+                  record.address.stage, "Materialized", budget)
 BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
    FrozenContextFixesResponsiveVoters,
    IsaT(900)
@@ -1399,131 +1399,141 @@ BY AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure,
 AdequateLeaderTargetSelectedOwnerContinuationOriginExposureProperty(
     specification) ==
   specification
-    => \A target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          subject \in Subjects,
-          sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          sourceCandidates \in SUBSET AsyncCandidateSet:
-         AdequateLeaderTargetSelectedOwnerUnrecordedOriginDebt(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-           ~> (AdequateLeaderTargetUniversalOccurrenceServiceGoal(
-                 target, leaderContext, leader, leaderView,
-                 subject, sourceOccurrenceRank, known, owner)
-                \/ AdequateLeaderTargetSelectedOwnerActiveContinuationResidual(
-                     target, leaderContext, leader, leaderView,
-                     subject, sourceOccurrenceRank, known, owner,
-                     sourceCandidates))
+    => \A target \in ValidatorIds:
+         \A leaderContext \in ContextRecords:
+           \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+               \A subject \in Subjects:
+                 \A sourceOccurrenceRank \in
+                      AdequateLeaderTargetOccurrenceRankCarrier:
+                   \A known \in
+                        SUBSET AdequateLeaderFrozenOwnerUniverse(
+                          target, leaderContext, leader, leaderView, subject):
+                     \A owner \in
+                          AdequateLeaderFrozenCandidateOwnerUniverse(
+                            target, leaderContext, leader, leaderView, subject):
+                       \A sourceCandidates \in SUBSET AsyncCandidateSet:
+                         AdequateLeaderTargetSelectedOwnerUnrecordedOriginDebt(
+                           target, leaderContext, leader, leaderView,
+                           subject, sourceOccurrenceRank, known, owner,
+                           sourceCandidates)
+                           ~>
+                             (AdequateLeaderTargetUniversalOccurrenceServiceGoal(
+                                target, leaderContext, leader, leaderView,
+                                subject, sourceOccurrenceRank, known, owner)
+                              \/ AdequateLeaderTargetSelectedOwnerActiveContinuationResidual(
+                                   target, leaderContext, leader, leaderView,
+                                   subject, sourceOccurrenceRank, known, owner,
+                                   sourceCandidates))
 
 AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty(
     specification) ==
   specification
-    => \A target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          subject \in Subjects,
-          sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          sourceCandidates \in SUBSET AsyncCandidateSet:
-         AdequateLeaderTargetSelectedOwnerReservedContinuationResidual(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-           ~> AdequateLeaderTargetSelectedOwnerReservedContinuationStepGoal(
-                target, leaderContext, leader, leaderView,
-                subject, sourceOccurrenceRank, known, owner,
-                sourceCandidates)
+    => \A target \in ValidatorIds:
+         \A leaderContext \in ContextRecords:
+           \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+               \A subject \in Subjects:
+                 \A sourceOccurrenceRank \in
+                      AdequateLeaderTargetOccurrenceRankCarrier:
+                   \A known \in
+                        SUBSET AdequateLeaderFrozenOwnerUniverse(
+                          target, leaderContext, leader, leaderView, subject):
+                     \A owner \in
+                          AdequateLeaderFrozenCandidateOwnerUniverse(
+                            target, leaderContext, leader, leaderView, subject):
+                       \A sourceCandidates \in SUBSET AsyncCandidateSet:
+                         AdequateLeaderTargetSelectedOwnerReservedContinuationResidual(
+                           target, leaderContext, leader, leaderView,
+                           subject, sourceOccurrenceRank, known, owner,
+                           sourceCandidates)
+                           ~>
+                             AdequateLeaderTargetSelectedOwnerReservedContinuationStepGoal(
+                               target, leaderContext, leader, leaderView,
+                               subject, sourceOccurrenceRank, known, owner,
+                               sourceCandidates)
 
 AdequateLeaderTargetSelectedOwnerMaterializedContinuationClosureProperty(
     specification) ==
   specification
-    => \A target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          subject \in Subjects,
-          sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          sourceCandidates \in SUBSET AsyncCandidateSet:
-         AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-           ~> AdequateLeaderTargetUniversalOccurrenceServiceGoal(
-                target, leaderContext, leader, leaderView,
-                subject, sourceOccurrenceRank, known, owner)
+    => \A target \in ValidatorIds:
+         \A leaderContext \in ContextRecords:
+           \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+               \A subject \in Subjects:
+                 \A sourceOccurrenceRank \in
+                      AdequateLeaderTargetOccurrenceRankCarrier:
+                   \A known \in
+                        SUBSET AdequateLeaderFrozenOwnerUniverse(
+                          target, leaderContext, leader, leaderView, subject):
+                     \A owner \in
+                          AdequateLeaderFrozenCandidateOwnerUniverse(
+                            target, leaderContext, leader, leaderView, subject):
+                       \A sourceCandidates \in SUBSET AsyncCandidateSet:
+                         AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual(
+                           target, leaderContext, leader, leaderView,
+                           subject, sourceOccurrenceRank, known, owner,
+                           sourceCandidates)
+                           ~>
+                             AdequateLeaderTargetUniversalOccurrenceServiceGoal(
+                               target, leaderContext, leader, leaderView,
+                               subject, sourceOccurrenceRank, known, owner)
 
 AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty(
     specification) ==
   specification
-    => \A target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          subject \in Subjects,
-          sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          sourceCandidates \in SUBSET AsyncCandidateSet:
-         AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-           ~> (AdequateLeaderTargetUniversalOccurrenceServiceGoal(
-                 target, leaderContext, leader, leaderView,
-                 subject, sourceOccurrenceRank, known, owner)
-                \/ AdequateLeaderTargetSelectedOwnerTerminalContinuationResidual(
-                     target, leaderContext, leader, leaderView,
-                     subject, sourceOccurrenceRank,
-                     known, owner, sourceCandidates))
+    => \A target \in ValidatorIds:
+         \A leaderContext \in ContextRecords:
+           \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+               \A subject \in Subjects:
+                 \A sourceOccurrenceRank \in
+                      AdequateLeaderTargetOccurrenceRankCarrier:
+                   \A known \in
+                        SUBSET AdequateLeaderFrozenOwnerUniverse(
+                          target, leaderContext, leader, leaderView, subject):
+                     \A owner \in
+                          AdequateLeaderFrozenCandidateOwnerUniverse(
+                            target, leaderContext, leader, leaderView, subject):
+                       \A sourceCandidates \in SUBSET AsyncCandidateSet:
+                         AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual(
+                           target, leaderContext, leader, leaderView,
+                           subject, sourceOccurrenceRank, known, owner,
+                           sourceCandidates)
+                           ~>
+                             (AdequateLeaderTargetUniversalOccurrenceServiceGoal(
+                                target, leaderContext, leader, leaderView,
+                                subject, sourceOccurrenceRank, known, owner)
+                              \/ AdequateLeaderTargetSelectedOwnerTerminalContinuationResidual(
+                                   target, leaderContext, leader, leaderView,
+                                   subject, sourceOccurrenceRank,
+                                   known, owner, sourceCandidates))
 
 AdequateLeaderTargetSelectedOwnerTerminalContinuationProjectionProperty(
     specification) ==
   specification
-    => \A target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          subject \in Subjects,
-          sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          sourceCandidates \in SUBSET AsyncCandidateSet:
-         AdequateLeaderTargetSelectedOwnerTerminalContinuationResidual(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-           ~> AdequateLeaderTargetUniversalOccurrenceServiceGoal(
-                target, leaderContext, leader, leaderView,
-                subject, sourceOccurrenceRank, known, owner)
+    => \A target \in ValidatorIds:
+         \A leaderContext \in ContextRecords:
+           \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+               \A subject \in Subjects:
+                 \A sourceOccurrenceRank \in
+                      AdequateLeaderTargetOccurrenceRankCarrier:
+                   \A known \in
+                        SUBSET AdequateLeaderFrozenOwnerUniverse(
+                          target, leaderContext, leader, leaderView, subject):
+                     \A owner \in
+                          AdequateLeaderFrozenCandidateOwnerUniverse(
+                            target, leaderContext, leader, leaderView, subject):
+                       \A sourceCandidates \in SUBSET AsyncCandidateSet:
+                         AdequateLeaderTargetSelectedOwnerTerminalContinuationResidual(
+                           target, leaderContext, leader, leaderView,
+                           subject, sourceOccurrenceRank, known, owner,
+                           sourceCandidates)
+                           ~>
+                             AdequateLeaderTargetUniversalOccurrenceServiceGoal(
+                               target, leaderContext, leader, leaderView,
+                               subject, sourceOccurrenceRank, known, owner)
 
 (***************************************************************************
 Conditional authority-receipt bridge.
@@ -1576,26 +1586,28 @@ BY PTL
 AdequateLeaderTargetSelectedOwnerActiveContinuationClosureProperty(
     specification) ==
   specification
-    => \A target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          subject \in Subjects,
-          sourceOccurrenceRank \in
-            AdequateLeaderTargetOccurrenceRankCarrier,
-          known \in
-            SUBSET AdequateLeaderFrozenOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          owner \in
-            AdequateLeaderFrozenCandidateOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          sourceCandidates \in SUBSET AsyncCandidateSet:
-         AdequateLeaderTargetSelectedOwnerActiveContinuationResidual(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, known, owner, sourceCandidates)
-           ~> AdequateLeaderTargetUniversalOccurrenceServiceGoal(
-                target, leaderContext, leader, leaderView,
-                subject, sourceOccurrenceRank, known, owner)
+    => \A target \in ValidatorIds:
+         \A leaderContext \in ContextRecords:
+           \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+               \A subject \in Subjects:
+                 \A sourceOccurrenceRank \in
+                      AdequateLeaderTargetOccurrenceRankCarrier:
+                   \A known \in
+                        SUBSET AdequateLeaderFrozenOwnerUniverse(
+                          target, leaderContext, leader, leaderView, subject):
+                     \A owner \in
+                          AdequateLeaderFrozenCandidateOwnerUniverse(
+                            target, leaderContext, leader, leaderView, subject):
+                       \A sourceCandidates \in SUBSET AsyncCandidateSet:
+                         AdequateLeaderTargetSelectedOwnerActiveContinuationResidual(
+                           target, leaderContext, leader, leaderView,
+                           subject, sourceOccurrenceRank, known, owner,
+                           sourceCandidates)
+                           ~>
+                             AdequateLeaderTargetUniversalOccurrenceServiceGoal(
+                               target, leaderContext, leader, leaderView,
+                               subject, sourceOccurrenceRank, known, owner)
 
 THEOREM CandidateProducerDormantClosureProvidesReservedContinuationStep ==
   \A initialContext:

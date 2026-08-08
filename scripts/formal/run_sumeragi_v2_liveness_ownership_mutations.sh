@@ -62,6 +62,7 @@ run_dir="$(
 trap 'rm -rf -- "$run_dir"' EXIT
 
 models=(
+  SumeragiV2Revision4CertifiedFenceReservation.tla
   SumeragiV2LocalIngressSchedulerReservationMutation.tla
   SumeragiV2RestartTerminalDurabilityMutation.tla
   SumeragiV2ExactIngressTicketPriorityMutation.tla
@@ -215,6 +216,7 @@ run_case() {
 }
 
 fixed_cases=(
+  "revision4-certified-fence-reservation|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_fixed.cfg"
   "local-ingress-scheduler-reservation|SumeragiV2LocalIngressSchedulerReservationMutation.tla|local_ingress_scheduler_reservation_fixed.cfg"
   "restart-terminal-durability|SumeragiV2RestartTerminalDurabilityMutation.tla|restart_terminal_durability_fixed.cfg"
   "exact-ingress-ticket-priority|SumeragiV2ExactIngressTicketPriorityMutation.tla|exact_ingress_ticket_priority_fixed.cfg"
@@ -253,6 +255,7 @@ for case_spec in "${fixed_cases[@]}"; do
 done
 
 mutation_cases=(
+  "revision4-certified-fence-arrival-order|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_arrival_order_bug.cfg|CertifiedFirstProgressCorridor"
   "local-ingress-scheduler-mutable-next|SumeragiV2LocalIngressSchedulerReservationMutation.tla|local_ingress_scheduler_reservation_mutable_next_bug.cfg|LaterLocalWorkCannotRewriteAcceptedOrdinal"
   "restart-volatile-terminal-suppression|SumeragiV2RestartTerminalDurabilityMutation.tla|restart_terminal_durability_blanket_terminal_bug.cfg|VolatileTerminalReopensExactWireIdentity"
   "exact-ingress-runtime-first|SumeragiV2ExactIngressTicketPriorityMutation.tla|exact_ingress_ticket_runtime_first_bug.cfg|ProvisionalTargetPrecedesRuntimeWork"
@@ -350,6 +353,7 @@ for case_spec in "${mutation_cases[@]}"; do
 done
 
 temporal_mutation_cases=(
+  "revision4-certified-fence-reservation-blocked|SumeragiV2Revision4CertifiedFenceReservation.tla|revision4_certified_fence_reservation_blocked_bug.cfg"
   "external-continuation-missing-conditional-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_conditional_fairness_bug.cfg"
   "external-continuation-missing-volatile-fairness|SumeragiV2ExternalProducerContinuationMutation.tla|external_producer_continuation_missing_volatile_fairness_bug.cfg"
   "producer-replay-capacity-replenishment-lasso|SumeragiV2ProducerReplayCapacityMutation.tla|producer_replay_capacity_replenishment_lasso_bug.cfg"

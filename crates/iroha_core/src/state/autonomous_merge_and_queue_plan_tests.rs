@@ -542,6 +542,113 @@ fn equivalent_queue_plan_quorums_collapse_to_one_deterministic_admission() {
 }
 
 #[test]
+fn competing_retry_queue_plan_bindings_choose_one_deterministic_admission() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let tag = 0x6A;
+    let (first_binding, first_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        1,
+        tag,
+    );
+    let retry_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        &state.chain_id,
+        &queue_plan_entrypoint_for_state_test(&state, tag),
+        &routing_plan,
+        first_binding.admission_context.clone(),
+        first_binding.enqueue_timestamp_ms.saturating_add(1),
+    )
+    .expect("byte-identical retry has a second canonical admission binding");
+    let retry_certificate =
+        queue_plan_admission_certificate_bytes_for_state_test(&retry_binding, &validator_keypairs);
+
+    assert_eq!(first_binding.registry_key(), retry_binding.registry_key());
+    assert_ne!(
+        first_binding.registry_value(),
+        retry_binding.registry_value()
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&first_certificate, 2)
+            .expect("first retry-era certificate is independently eligible")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&retry_certificate, 2)
+            .expect("second retry-era certificate is independently eligible")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+
+    let (expected, winning_binding, losing_certificate) =
+        if (first_binding.registry_value(), first_certificate.as_slice())
+            <= (retry_binding.registry_value(), retry_certificate.as_slice())
+        {
+            (
+                first_certificate.clone(),
+                &first_binding,
+                retry_certificate.clone(),
+            )
+        } else {
+            (
+                retry_certificate.clone(),
+                &retry_binding,
+                first_certificate.clone(),
+            )
+        };
+    let forward = state
+        .merge_candidate_with_queue_plan_admissions(
+            &parent.header(),
+            0,
+            None,
+            vec![first_certificate.clone(), retry_certificate.clone()],
+        )
+        .expect("competing valid retry bindings must not stop merge production")
+        .expect("one QueuePlan control produces a candidate");
+    let reverse = state
+        .merge_candidate_with_queue_plan_admissions(
+            &parent.header(),
+            0,
+            None,
+            vec![retry_certificate, first_certificate],
+        )
+        .expect("retry arrival order must not affect merge production")
+        .expect("one QueuePlan control produces a candidate");
+
+    assert_eq!(forward.queue_plan_admissions, vec![expected]);
+    assert_eq!(forward.canonical_bytes(), reverse.canonical_bytes());
+
+    let registry_key =
+        State::queue_plan_admission_registry_marker_key(&winning_binding.registry_key())
+            .expect("winning retry registry key");
+    let registry_value =
+        State::queue_plan_admission_registry_marker_payload(&winning_binding.registry_value())
+            .expect("winning retry registry value");
+    {
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(registry_key, registry_value);
+        world.commit();
+    }
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&losing_certificate, 2)
+            .expect("the competing retry is classifiable after its winner commits")
+            .1,
+        PendingQueuePlanAdmissionDisposition::DefinitiveConflict,
+        "post-commit reconciliation must retire only the losing exact queue claim"
+    );
+}
+
+#[test]
 fn queue_plan_only_carriers_require_exact_committed_active_lane_bindings() {
     let (state, validator_keypairs, commit_keypairs, parent) = configured_two_lane_merge_state();
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
@@ -2696,6 +2803,199 @@ fn assert_control_only_pending_selection_skips_execution(
         .kura
         .remove_pending_certified_merge_entry(control_hash)
         .expect("remove control-only selection fixture");
+}
+
+#[test]
+fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_advance() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        1,
+        0x63,
+    );
+
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, 2)
+            .expect("certificate is classifiable at its authority frontier")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+
+    let successor = empty_global_block_after(Some(&parent));
+    state
+        .kura
+        .store_block(Arc::new(successor.clone()))
+        .expect("store the canonical successor before committing State metadata");
+    commit_block_metadata_to_state(&state, &successor);
+    assert_eq!(state.committed_height(), 2);
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, 3)
+            .expect("historically bound certificate remains classifiable after advancement")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent,
+        "advancing the receiver must retain the exact predecessor, roster, and incarnation authority at H"
+    );
+}
+
+#[test]
+fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let successor = empty_global_block_after(Some(&parent));
+
+    // Construct an authentic certificate at H + 1, then restore the receiver to H. The durable
+    // certificate can arrive before block sync, so classification must retain it without treating
+    // the locally missing predecessor as stale.
+    {
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(successor.hash());
+        block_hashes.commit_for_tests();
+    }
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        2,
+        0x64,
+    );
+    {
+        let block_hashes = state.block_hashes.block_and_revert();
+        assert_eq!(block_hashes.last().copied(), Some(parent.hash()));
+        block_hashes.commit_for_tests();
+    }
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, 3)
+            .expect("future authenticated certificate is retained, not rejected")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Future
+    );
+
+    state
+        .kura
+        .store_block(Arc::new(successor.clone()))
+        .expect("store the arriving canonical successor");
+    commit_block_metadata_to_state(&state, &successor);
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&certificate, 3)
+            .expect("certificate is reclassifiable after canonical catch-up")
+            .1,
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+}
+
+#[test]
+fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_stale() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+
+    let forged_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"mutated-pending-queue-plan-predecessor",
+    ));
+    {
+        let mut block_hashes = state.block_hashes.block_and_revert();
+        block_hashes.push_for_tests(forged_predecessor);
+        block_hashes.commit_for_tests();
+    }
+    let (_, predecessor_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        1,
+        0x65,
+    );
+    {
+        let mut block_hashes = state.block_hashes.block_and_revert();
+        block_hashes.push_for_tests(parent.hash());
+        block_hashes.commit_for_tests();
+    }
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&predecessor_certificate, 2)
+            .expect("authenticated predecessor mutation is classifiable")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale
+    );
+
+    let (alternate_validator_ids, alternate_validator_keypairs) =
+        bls_accounts_in("mutated-queue-plan-roster", 4);
+    seed_consensus_keys_with_pops(&state, &alternate_validator_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            alternate_validator_ids,
+        )],
+    );
+    let (_, roster_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &alternate_validator_keypairs,
+        1,
+        0x66,
+    );
+    let original_validator_ids = validator_keypairs
+        .iter()
+        .map(|keypair| AccountId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        &state,
+        &[(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            original_validator_ids,
+        )],
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&roster_certificate, 2)
+            .expect("authenticated roster mutation is classifiable")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale
+    );
+
+    let (_, incarnation_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        1,
+        0x67,
+    );
+    let original_incarnation = state
+        .lane_incarnation(LaneId::SINGLE)
+        .expect("fixture lane incarnation");
+    let _ = state.lane_incarnations.write().insert(
+        LaneId::SINGLE,
+        Hash::new(b"mutated-pending-queue-plan-incarnation"),
+    );
+    assert_eq!(
+        state
+            .classify_pending_queue_plan_admission(&incarnation_certificate, 2)
+            .expect("authenticated incarnation mutation is classifiable")
+            .1,
+        PendingQueuePlanAdmissionDisposition::Stale
+    );
+    let _ = state
+        .lane_incarnations
+        .write()
+        .insert(LaneId::SINGLE, original_incarnation);
 }
 
 #[test]

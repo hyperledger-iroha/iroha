@@ -147,6 +147,18 @@ fn v2_certified_body_request(requester: &PeerId) -> BlockMessage {
     ))
 }
 
+fn v2_certified_body_request_inbound(requester: &PeerId) -> InboundBlockMessage {
+    let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+    let route = routes.mint(requester.clone());
+    InboundBlockMessage::try_from_transport_with_reply_route(
+        v2_certified_body_request(requester),
+        requester.clone(),
+        requester.clone(),
+        route,
+    )
+    .expect("certified body request fixture retains its live authenticated reply route")
+}
+
 fn minimal_rs16_layout() -> wire::DataAvailabilityLayout {
     wire::DataAvailabilityLayout {
         encoding: wire::PayloadEncoding::ReedSolomon16,

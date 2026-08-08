@@ -6127,8 +6127,7 @@ impl Queue {
             return Ok(LaneQueueReservationOutcome::AlreadyFinalized);
         };
         self.validate_live_reservation_against_queue(&record)?;
-        let restored_fifo =
-            self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
+        self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
         let transition = self
             .begin_durability_transition_locked([key.signed_transaction_hash])
             .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
@@ -6139,6 +6138,25 @@ impl Queue {
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self
+            .fifo_with_released_reservations_locked(core::slice::from_ref(&record))
+        {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish a durably released lane reservation against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         store.live_by_hash.remove(&key.signed_transaction_hash);
         self.replace_fifo_locked(&restored_fifo);
         self.reconcile_missing_reservation_payloads_locked(&mut store);
@@ -6343,8 +6361,24 @@ impl Queue {
         })?;
 
         let queue_guard = self.push_remove_lock.lock();
-        let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self.fifo_with_released_reservations_locked(&released_records) {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish durably released lane reservations against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         for (key, _) in &records {
             store.live_by_hash.remove(&key.signed_transaction_hash);
         }
@@ -10058,6 +10092,24 @@ impl Queue {
             );
         }
         true
+    }
+
+    /// Fail closed when an already durable reservation release cannot be published against the
+    /// current in-memory FIFO. The durable journal is authoritative, while retaining the live
+    /// in-memory owner is the restrictive state until restart replay completes the transition.
+    ///
+    /// The caller holds `push_remove_lock` and must publish backpressure only after releasing all
+    /// queue and reservation-store guards.
+    fn latch_lane_reservation_post_journal_publication_fault_locked(&self, error: &std::io::Error) {
+        if !self
+            .lane_reservation_durability_fault
+            .swap(true, Ordering::AcqRel)
+        {
+            iroha_logger::error!(
+                %error,
+                "lane queue reservation publication failed after a durable journal transition; disabling all transaction selection until restart recovery"
+            );
+        }
     }
 
     /// Execute one blocking reservation-journal transition without queue or owner-index locks.
@@ -14464,11 +14516,17 @@ impl Queue {
                 ) {
                     Ok(Some(existing)) => {
                         if let Some(binding) = expected_admission_binding {
-                            let exact_global_claim = existing.global_admission_identity
+                            // A client can lose the first Torii response and submit the same
+                            // signed transaction again. The new ingress request necessarily
+                            // samples a later enqueue timestamp, so its derived journal digest
+                            // differs even though its deterministic global identity, exact
+                            // transaction, route, and lifecycle context are unchanged. Once an
+                            // authority owns the durable claim, that original timestamp and
+                            // digest are canonical. Return them instead of treating the
+                            // byte-identical transaction retry as a conflicting admission.
+                            if existing.global_admission_identity
                                 == Some(binding.global_admission_identity())
-                                && existing.enqueue_timestamp_ms == binding.enqueue_timestamp_ms
-                                && existing.journal_record_digest == binding.journal_record_digest;
-                            if exact_global_claim {
+                            {
                                 return Ok(QueuePushOutcome {
                                     routing_decision: existing.routing_plan.coordinator_route(),
                                     routing_plan: existing.routing_plan,
@@ -14568,6 +14626,20 @@ impl Queue {
                         };
 
                         if let Some(binding) = expected_admission_binding {
+                            if existing.global_admission_identity
+                                == Some(binding.global_admission_identity())
+                            {
+                                return Ok(QueuePushOutcome {
+                                    routing_decision: existing.routing_plan.coordinator_route(),
+                                    routing_plan: existing.routing_plan,
+                                    entrypoint_hash: existing.entrypoint_hash,
+                                    signed_transaction_hash: existing.signed_transaction_hash,
+                                    enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
+                                    journal_record_digest: Some(existing.journal_record_digest),
+                                    admission_context: Some(existing.admission_context),
+                                    global_admission_identity: existing.global_admission_identity,
+                                });
+                            }
                             if existing.global_admission_identity.is_some() {
                                 return Err(Failure {
                                     tx: tx.into(),
@@ -15862,8 +15934,10 @@ impl Queue {
     /// Push a transaction using one ingress-authored global admission binding.
     ///
     /// Every authority persists byte-identical chain/request identity, context, timestamp, and
-    /// journal claim. Existing ownership is returned only when it matches the complete binding;
-    /// a same-entrypoint/different-binding retry fails closed.
+    /// journal claim. Existing ownership is returned for the same exact transaction, route, and
+    /// deterministic global identity; its first durable timestamp and digest remain canonical
+    /// when a later ingress retries after losing the response. A genuinely different global
+    /// identity or transaction binding fails closed.
     ///
     /// # Errors
     /// Fails before acknowledgement when the binding differs from the transaction, routing plan,
@@ -17828,7 +17902,26 @@ impl Queue {
         &self,
         records: &[LaneQueueReservationRecordV5],
     ) -> Result<Vec<SignedTxHash>, LaneQueueReservationError> {
-        let mut hashes = self.fifo_snapshot_locked();
+        let raw_hashes = self.fifo_snapshot_locked();
+        // Committed removals deliberately retain a physical FIFO cell behind an exact removal
+        // fence until a consumer rebuilds the queue. Such a terminal tombstone no longer has a
+        // FIFO ordinal because it no longer owns a transaction. Exclude only that exact state;
+        // every other incomplete ownership combination remains a fail-closed invariant error.
+        let mut hashes = Vec::with_capacity(raw_hashes.len().saturating_add(records.len()));
+        for hash in raw_hashes {
+            let removed = self.removed_hashes.contains_key(&hash);
+            let tracked = self.txs.contains_key(&hash);
+            let has_fifo_order = self.fifo_order_by_hash.contains_key(&hash);
+            match (removed, tracked, has_fifo_order) {
+                (true, false, false) => {}
+                (false, true, true) => hashes.push(hash),
+                _ => {
+                    return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                        "queued transaction {hash} has inconsistent FIFO ownership: removed={removed}, tracked={tracked}, fifo_order={has_fifo_order}"
+                    )));
+                }
+            }
+        }
         let mut members = hashes.iter().copied().collect::<HashSet<_>>();
         for record in records {
             record
@@ -17881,7 +17974,17 @@ impl Queue {
     /// Caller must hold `push_remove_lock`.
     fn replace_fifo_locked(&self, hashes: &[SignedTxHash]) {
         let mut age_ring = self.queued_age_ring.lock();
-        while self.tx_hashes.pop().is_some() {}
+        let retained = hashes.iter().copied().collect::<HashSet<_>>();
+        let mut drained_terminal_tombstones = Vec::new();
+        while let Some(hash) = self.tx_hashes.pop() {
+            if !retained.contains(&hash)
+                && self.removed_hashes.contains_key(&hash)
+                && !self.txs.contains_key(&hash)
+                && !self.fifo_order_by_hash.contains_key(&hash)
+            {
+                drained_terminal_tombstones.push(hash);
+            }
+        }
         self.clear_queued_age_index_locked(&mut age_ring);
         for hash in hashes.iter().copied() {
             self.tx_hashes
@@ -17892,6 +17995,11 @@ impl Queue {
                 .get(&hash)
                 .map_or(0, |entry| *entry.value());
             self.record_queued_age_locked(&mut age_ring, hash, enqueued_at_ms);
+        }
+        // Clear only fences whose exact terminal physical cells were removed by this atomic FIFO
+        // replacement. Unrelated non-FIFO removal fences continue to reject stale retries.
+        for hash in drained_terminal_tombstones {
+            self.removed_hashes.remove(&hash);
         }
     }
 
@@ -17929,14 +18037,13 @@ impl Queue {
         // missing transaction, or a tombstoned hash that is still tracked, remains a fail-closed
         // invariant violation below.
         let mut hashes = Vec::with_capacity(raw_hashes.len().saturating_add(1));
-        let mut drained_terminal_tombstones = Vec::new();
         for queued_hash in raw_hashes {
             let removed = self.removed_hashes.contains_key(&queued_hash);
             let tracked = self.txs.contains_key(&queued_hash);
             let has_fifo_order = self.fifo_order_by_hash.contains_key(&queued_hash);
             match (removed, tracked, has_fifo_order) {
-                (true, false, false) => drained_terminal_tombstones.push(queued_hash),
-                (false, true, _) => hashes.push(queued_hash),
+                (true, false, false) => {}
+                (false, true, true) => hashes.push(queued_hash),
                 _ => {
                     return Err(format!(
                         "queued transaction {queued_hash} has inconsistent FIFO ownership: removed={removed}, tracked={tracked}, fifo_order={has_fifo_order}"
@@ -17979,11 +18086,6 @@ impl Queue {
                 .map(|(_, queued_hash)| queued_hash)
                 .collect::<Vec<_>>(),
         );
-        // Clear only the removal fences whose physical FIFO entries were atomically drained.
-        // Non-FIFO fences can still protect concurrent guard/conflict reconciliation.
-        for drained_hash in drained_terminal_tombstones {
-            self.removed_hashes.remove(&drained_hash);
-        }
         self.removed_hashes.remove(&hash);
         Ok(())
     }
@@ -24272,6 +24374,131 @@ pub mod tests {
     }
 
     #[test]
+    fn strict_global_admission_retry_keeps_the_first_durable_binding_canonical() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-global-idempotent-retry-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        install_single_validator_topology_for_queue_test(&state, 0xBE);
+        seed_committed_height_for_queue_test(&state, 1);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_515));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install strict-global retry journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve strict-global retry route");
+        let original_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture original strict-global retry context");
+        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            tx.entrypoint(),
+            &plan,
+            original_context.clone(),
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build original strict-global binding");
+        let original = queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &original_binding,
+            )
+            .expect("persist original strict-global binding");
+        let original_journal_len = fs::metadata(&journal_path)
+            .expect("strict-global retry journal metadata")
+            .len();
+
+        let later_same_context_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            tx.entrypoint(),
+            &plan,
+            original_context,
+            original.enqueue_timestamp_ms.saturating_add(17),
+        )
+        .expect("build later same-context ingress binding");
+        assert_ne!(
+            later_same_context_binding.journal_record_digest,
+            original_binding.journal_record_digest,
+            "a later ingress timestamp must exercise the lost-response retry path"
+        );
+        let same_context_retry = queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &later_same_context_binding,
+            )
+            .expect("same transaction retry must recover original durable ownership");
+        assert_eq!(same_context_retry, original);
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("journal metadata after same-context retry")
+                .len(),
+            original_journal_len,
+            "same-context retry must not append or replace the canonical Put"
+        );
+
+        seed_committed_height_for_queue_test(&state, 3);
+        let current_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture height-advanced strict-global retry context");
+        let later_height_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            tx.entrypoint(),
+            &plan,
+            current_context,
+            original.enqueue_timestamp_ms.saturating_add(33),
+        )
+        .expect("build height-advanced ingress binding");
+        let height_advanced_retry = queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                tx,
+                &state,
+                plan,
+                &later_height_binding,
+            )
+            .expect("height-advanced retry must recover original durable ownership");
+        assert_eq!(height_advanced_retry, original);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(
+            crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                &height_advanced_retry
+            ),
+            Ok(original_binding),
+            "the first durable timestamp and digest must remain canonical"
+        );
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("journal metadata after height-advanced retry")
+                .len(),
+            original_journal_len,
+            "height-advanced retry must not append or replace the canonical Put"
+        );
+    }
+
+    #[test]
     fn strict_durable_claim_rollover_recovers_every_replacement_fault_boundary() {
         let cases = [
             (
@@ -24593,6 +24820,7 @@ pub mod tests {
         queue.removed_hashes.insert(non_fifo_marker, ());
         time_handle.advance(Duration::from_millis(1));
         let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
         let second_hash = second.hash();
         let second_plan = queue
             .route_plan_with_state(&second, &state)

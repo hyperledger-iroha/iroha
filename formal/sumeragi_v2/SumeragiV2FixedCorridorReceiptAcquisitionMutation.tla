@@ -55,7 +55,13 @@ InstallSynchronizedLeaderView ==
          [] OTHER ->
               {LeaderReceipt(2, now), OtherReceipt(otherView, 0)}
 
-Next == InstallSynchronizedLeaderView
+RemainAfterInstall ==
+  /\ phase = "AfterInstall"
+  /\ UNCHANGED vars
+
+Next ==
+  \/ InstallSynchronizedLeaderView
+  \/ RemainAfterInstall
 
 Spec == Init /\ [][Next]_vars
 

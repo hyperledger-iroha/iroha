@@ -240,9 +240,8 @@ int32_t connect_norito_decode_ciphertext_frame(
 #define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS 2
 
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV4`.
-// ABI21 callers must require `proof_backend_available`; this build reports
-// false until authenticated V4 artifacts and every external evidence gate are
-// complete.
+// ABI21 callers must require `proof_backend_available`; the production bridge
+// reports true after an authenticated V4 artifact release is installed.
 int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
     uint8_t** out_capabilities_ptr,
     unsigned long* out_capabilities_len);
@@ -255,8 +254,8 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
 // a parallel JSON projection or generation label. Returns 0 only after the
 // manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
 // exact anchor path all verify. Recursive init performs this same verification
-// inside its native boundary. This standalone symbol remains unavailable until
-// the authenticated release-envelope trust root is wired.
+// inside its native boundary. The standalone symbol is active in the ABI-21
+// production bridge and does not treat a content address as a trust root.
 int32_t connect_norito_kagemusha_topup_finality_verify_v4(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,

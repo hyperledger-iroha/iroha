@@ -2163,9 +2163,6 @@ fn key_asset_def_detail(id: &AssetDefinitionId, key: &Name) -> AccessKey {
 fn key_asset(id: &AssetId) -> AccessKey {
     format!("asset:{id}")
 }
-fn key_zk_asset(id: &AssetDefinitionId) -> AccessKey {
-    format!("zk_asset:{id}")
-}
 fn key_nft(id: &NftId) -> AccessKey {
     format!("nft:{id}")
 }
@@ -2242,14 +2239,6 @@ where
     set.add_read(k.clone());
     set.add_write(k);
 }
-fn add_asset_def_r<R>(set: &mut AccessSet, id: &AssetDefinitionId, state_ro: Option<&R>)
-where
-    R: StateReadOnly,
-{
-    set.add_read(ASSET_DEF_WILDCARD_KEY.to_owned());
-    add_asset_definition_domain_r(set, id, state_ro);
-    set.add_read(key_asset_def(id));
-}
 fn add_asset_def_detail_rw<R>(
     set: &mut AccessSet,
     id: &AssetDefinitionId,
@@ -2263,24 +2252,6 @@ fn add_asset_def_detail_rw<R>(
     let d = key_asset_def_detail(id, key);
     set.add_read(d.clone());
     set.add_write(d);
-}
-fn add_asset_rw<R>(set: &mut AccessSet, id: &AssetId, state_ro: Option<&R>)
-where
-    R: StateReadOnly,
-{
-    set.add_read(ASSET_WILDCARD_KEY.to_owned());
-    set.add_write(ASSET_WILDCARD_KEY.to_owned());
-    let k = key_asset(id);
-    set.add_read(k.clone());
-    set.add_write(k);
-    // Asset operations rely on the owning account/domain and definition state.
-    add_account_r(set, id.account());
-    add_asset_def_r(set, id.definition(), state_ro);
-}
-fn add_zk_asset_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
-    let k = key_zk_asset(id);
-    set.add_read(k.clone());
-    set.add_write(k);
 }
 fn add_nft_rw(set: &mut AccessSet, id: &NftId) {
     let k = key_nft(id);

@@ -107,24 +107,28 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
     .expect("minimal-context outbound charge is representable");
 
     let ordinary_bytes = super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES;
+    let certified_bytes = super::fair_v2_ingress_required_certified_fence_escape_bytes(1);
     let completion_bytes = super::MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES;
     let source_bytes = ordinary_bytes
-        .checked_add(completion_bytes)
+        .checked_add(certified_bytes)
+        .and_then(|bytes| bytes.checked_add(completion_bytes))
         .expect("test source geometry fits usize");
     let byte_capacity = source_bytes
         .checked_mul(2)
         .expect("validator and anonymous partitions fit usize");
     let ingress_with_transport_caps = |block_sync, outbound_high| {
-        super::FairV2Ingress::new_with_transport_frame_caps(
-            6,
+        super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            7,
             byte_capacity,
             source_bytes,
+            certified_bytes,
             0,
             completion_bytes,
             required_consensus,
             required_control,
             block_sync,
             outbound_high,
+            None,
         )
     };
 

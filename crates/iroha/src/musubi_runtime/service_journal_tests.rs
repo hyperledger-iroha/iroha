@@ -24,7 +24,7 @@ use iroha_data_model::{
         ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     },
 };
-use norito::codec::{Decode as _, Encode as _};
+use norito::codec::Encode as _;
 use sorafs_car::{CarVerifier, CarWriter, FileEntry, compute_por_root};
 
 #[derive(Clone)]

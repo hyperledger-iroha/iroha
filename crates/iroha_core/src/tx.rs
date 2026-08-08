@@ -5302,7 +5302,6 @@ fn expected_band_from_score(score_bps: u16) -> iroha_config::parameters::actual:
 #[cfg(test)]
 /// Tests for transaction acceptance and validation.
 pub mod tests {
-    use crate::smartcontracts::Execute;
     use core::panic;
     use std::sync::LazyLock; // for Name::from_str in tests
     use std::{
@@ -5385,7 +5384,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
-        smartcontracts::ivm::cache::IvmCache,
+        smartcontracts::{Execute, ivm::cache::IvmCache},
         state::{State, StateBlock, StateReadOnly, World},
     };
 
@@ -6845,7 +6844,7 @@ pub mod tests {
         let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
         let secp_signed = TransactionBuilder::new(
-            chain.clone(),
+            chain,
             secp_authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

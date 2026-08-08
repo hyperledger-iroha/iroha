@@ -1683,6 +1683,22 @@ where
         telemetry.metrics().await
     }
 
+    /// Access metrics after a bounded synchronization with the telemetry worker.
+    ///
+    /// Unlike [`Self::metrics`], this reports synchronization failure so a
+    /// consistency-sensitive endpoint can refuse to mix metric frontiers.
+    #[cfg(feature = "telemetry")]
+    #[allow(clippy::future_not_send)]
+    pub async fn metrics_fresh_checked(
+        &self,
+    ) -> Result<&iroha_telemetry::metrics::Metrics, String> {
+        let telemetry = self
+            .telemetry
+            .as_ref()
+            .expect("telemetry metrics requested without handle");
+        telemetry.metrics_fresh_checked().await
+    }
+
     /// Map the handle to another gate value while retaining the telemetry instance.
     pub fn map_gate<H>(self, gate: H) -> MaybeTelemetry<H>
     where
@@ -73797,7 +73813,23 @@ pub async fn handle_status(
         ));
     }
 
-    let mut status = Status::from(telemetry.metrics().await);
+    // Keep the Kura-derived total and semantic non-empty counters on the same
+    // classified frontier before replacing total height with the authoritative
+    // applied-state height below. A lazy snapshot can otherwise transiently
+    // publish `blocks = N` with `blocks_non_empty = N - 1` for a valid
+    // NPoS-effects-only block and falsely report an empty block.
+    let metrics =
+        telemetry
+            .metrics_fresh_checked()
+            .await
+            .map_err(|error| Error::AppServiceUnavailable {
+                code: "status_metrics_unavailable",
+                message: format!(
+                    "status metrics could not reach a fresh classified frontier: {error}"
+                ),
+            })?;
+    let mut status = Status::from(metrics);
+    ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
     normalize_status_block_visibility(&mut status, authoritative_block_height);
     if !nexus_enabled {
         status.strip_nexus();

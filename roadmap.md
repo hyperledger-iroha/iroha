@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-03
+Last updated: 2026-08-07
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -23,6 +23,17 @@ regressions, generated-artifact determinism, exact profile-config admission,
 and public consensus wire roundtrips are complete. The outstanding revision-4
 work is limited to:
 
+- Finish source-seal, proof, and release validation for the selected-Serve
+  Taira `missing_proposal` repair. The focused composed regression now drives a
+  completed predecessor claim, local absolute timeout, two responsive remote
+  TimeoutVotes, grouped three-signer TC, and `EnterView`; the post-retirement
+  queue handoff also blocks fresh Serve replenishment until one ordinary
+  producer turn runs. The remaining closure is the digest-refreshed mutation
+  matrix, strict non-promotional proof pass, complete four-peer release build,
+  deployment, and observed Taira height advancement. Keep exact semantic
+  retries on their immutable owner, reject owner replacement before refinement,
+  and retain only the separately typed monotone Fetch/Store/Validate authority
+  lineage.
 - Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
   and daemon test-harness compilation failures, and extend the host guard
   allowlist to the reviewed Python and pinned Java/TLC formal commands. Then
@@ -473,7 +484,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 86-leg release inventory contract is
-sealed at 834 production tests across 39 modules, 474 G-UNIT rows, and four
+sealed at 837 production tests across 39 modules, 524 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -517,15 +528,15 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `834/834` production tests across 39
-modules and `474/474` focused `G-UNIT` entries. Its canonical 475-line TSV has
+The static release inventory now matches `837/837` production tests across 39
+modules and `524/524` focused `G-UNIT` entries. Its canonical 525-line TSV has
 SHA-256
-`e74381ab01530611cb6ae2c7c8080af4a60024bf2b090e073a0d5c00b84d2989`.
+`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
 The separate canonical production module/test TSV has SHA-256
-`2f818f6a1174b77a9078b9e80b000671a44d045f23088fdf0da271b91ff2ea12`;
+`7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf`;
 the six new rows bind crash-safe autonomous lifecycle terminal completion and
 startup reconciliation before lane-work activation.
-The 268-entry core group additionally source-seals grouped Native prevote
+The 318-entry core group additionally source-seals grouped Native prevote
 budget rejection before Kura/WSV mutation, historical source-bundle
 authentication, crash-safe latest-index and prune-V2 recovery, cross-route
 manifest-barrier isolation, durable Native signing-boundary drift rejection,
@@ -567,9 +578,12 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_no_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 834-test production inventory, 474-test G-UNIT source inventory, 12
+exact 837-test production inventory, 524-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
-contract controls require a fresh source-bound rerun.
+contract controls require a fresh source-bound rerun. The ledger retains the
+distinct fifth layout-only Apalache result after the four refinement rows. The
+G-UNIT inventory has 525 TSV lines and SHA-256
+`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and the total Rust transition projection
@@ -611,12 +625,12 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 834-test,
+  mutations before promotion, then finish the remaining 837-test,
   39-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 474 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 524 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -25987,7 +26001,8 @@ signed ancestor-linked solid-block header proof,
   verifier-key hashes, empty payloads, oversized payloads, and admission
   auxiliary bytes before backend-specific proof logic runs.
 - Fold focused ZK/FHE adversarial tests into the long workspace validation
-  corridor.
+  corridor, including the explicit full-domain PQ-MASP, IVM private-note, and
+  maximum-batch ZK-AMS release gates in a serial, resource-isolated lane.
 
 **Next checkpoints:** replace the generated full-bootstrap proof-key fixture
 payloads with externally audited prover/verifier artifacts, carry the
@@ -26145,11 +26160,12 @@ included in each edge-triggered record.
 
 Reliable transport ownership now covers the bounded local seams in both
 directions. For outer ingress, the exact non-empty-roster count geometry is
-`4N+2H+2`: each validator transport hop owns generic, non-timeout Progress,
-TimeoutVote, and TransportCompletion positions; each of the at most `H`
-simultaneously materialized authenticated non-validator lanes owns generic and
-TransportCompletion positions; and the persistent anonymous lane owns the
-final pair. The no-roster diagnostic minimum is `2H+1`. Semantic origin remains
+`5N+3H+2`: each validator transport hop owns generic, ordinary Progress,
+certified-fence-escape, TimeoutVote, and TransportCompletion positions; each of
+the at most `H` simultaneously materialized authenticated non-validator lanes
+owns generic, certified-fence-escape, and TransportCompletion positions; and
+the persistent anonymous lane owns the final pair. The no-roster diagnostic
+minimum is `3H+1`. Semantic origin remains
 available to the protocol, but authenticated `via` owns count, bytes, fairness,
 and reservations, so relay identity churn cannot multiply capacity or borrow a
 validator reserve. Semantic duplicate/alternate-route attachment precedes the
@@ -26316,7 +26332,7 @@ preflight allocates neither work nor request ownership on failure. An exact
 transport-only `CertifiedBodyResponse` with a still-live matching logical
 request registration may cross retained reducer-effect debt and release that
 request capacity, while `CommitCertificateResponse` remains
-reducer-ordered. The largest flattened persistence macro-step has five effects
+reducer-ordered. The largest flattened persistence macro-step has four effects
 against the eight-effect adapter/reducer bound. Runtime scheduling services one
 deferred adapter step per turn before timers and newer ingress once older
 WAL/signature work is serviceable; a subsequent unexpected `Busy` is terminal,
@@ -26386,7 +26402,7 @@ scheduler/adapter/effect regressions raised it to 218, and four final
 post-WAL, terminal-readiness, real-adapter-ordering, and production-capacity
 adversarial regressions raised the preceding inventory to 222. Six outer
 TransportCompletion-corridor regressions raise it to 228; explicitly pinning
-the four-per-validator plus two shared relay-lane owners (`4N+2` total)
+the five-per-validator plus two shared relay-lane owners (`5N+2` total)
 capacity-negative raises it to
 229; and the four-validator exact PrepareQC count-and-power quorum regression
 raised the preceding inventory to 230. Atomic lane-certificate, authenticated-
@@ -26555,7 +26571,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-826-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+829-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -26810,7 +26826,7 @@ runtime premise on the final signed source.
   fourteen scheduler/adapter/effect regressions raised it to 218, and four
   final adversarial regressions raised the preceding inventory to 222. Six
   outer TransportCompletion-corridor regressions, explicit inventory coverage
-  of the four-per-validator plus two shared relay-lane owners (`4N+2` total)
+  of the five-per-validator plus two shared relay-lane owners (`5N+2` total)
   capacity-negative, and one
   four-validator exact PrepareQC count-and-power quorum regression raise the
   preceding inventory to 230. Atomic lane, authenticated-via, historical-
@@ -26861,7 +26877,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  826-test target above supersedes that checkpoint. The 38-module pre-network
+  829-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,
