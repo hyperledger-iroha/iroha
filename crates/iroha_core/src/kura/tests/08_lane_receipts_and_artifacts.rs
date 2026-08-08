@@ -423,6 +423,334 @@
         );
     }
 
+    pub(crate) fn persist_merge_application_receipt_for_autonomous_payload_for_test(
+        kura: &Kura,
+        payload: &LaneExecutablePayloadV1,
+    ) -> LaneBlockApplicationReceiptArtifact {
+        assert_eq!(
+            payload.entrypoints.len(),
+            1,
+            "merge-terminal helper currently requires one entrypoint"
+        );
+        let proposal = payload.origin_proposal.clone();
+        let mut merge_entry =
+            merge_entry_with_indexed_entrypoint(payload.entrypoints[0].clone());
+        let source_bundle =
+            norito::encode_canonical(payload).expect("frame autonomous merge source");
+        {
+            let batch = merge_entry
+                .execution_batch
+                .as_mut()
+                .expect("merge terminal fixture has an execution batch");
+            let execution = batch.lanes.first_mut().expect("merge execution fixture");
+            execution.source_bundle_hash = Hash::new(&source_bundle);
+            execution.source_bundle = source_bundle;
+            execution.proposal = proposal.clone();
+            execution.origin_proposal = proposal.clone();
+            execution.prepare_qc = LaneBlockQcV1 {
+                body: proposal.vote_body(CertPhase::Prepare),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&proposal.descriptor.validator_set),
+                validator_set: proposal.descriptor.validator_set.clone(),
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+                payload_availability_qc: None,
+            };
+            execution.commit_qc = LaneBlockQcV1 {
+                body: proposal.vote_body(CertPhase::Commit),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&proposal.descriptor.validator_set),
+                validator_set: proposal.descriptor.validator_set.clone(),
+                signers_bitmap: Vec::new(),
+                bls_aggregate_signature: Vec::new(),
+                payload_availability_qc: None,
+            };
+            execution.autonomous_chain_id_hash = payload.chain_id_hash;
+            execution.autonomous_epoch = payload.epoch;
+            execution.autonomous_payload_hash = payload.payload_hash;
+            execution.entrypoint_hashes = payload.entrypoint_hashes.clone();
+            execution.entrypoints = payload.entrypoints.clone();
+            execution.reservation_keys = payload
+                .reservation_keys
+                .iter()
+                .map(|key| norito::encode_canonical(key).expect("encode reservation"))
+                .collect();
+            execution.routing_plans = payload
+                .routing_plans
+                .iter()
+                .map(|plan| norito::encode_canonical(plan).expect("encode routing plan"))
+                .collect();
+            execution.native_amx_receipts = payload.native_amx_receipts.clone();
+            execution.results = payload
+                .entrypoints
+                .iter()
+                .map(|_| {
+                    TransactionResult::new(TransactionResultInner::Ok(
+                        DataTriggerSequence::default(),
+                    ))
+                })
+                .collect();
+            execution.result_hashes = execution
+                .results
+                .iter()
+                .map(|result| Hash::from(result.hash()))
+                .collect();
+            execution.settlement_commitment.block_height =
+                proposal.descriptor.lane_block_height;
+            execution.settlement_commitment.lane_id = proposal.descriptor.lane_id;
+            execution.settlement_commitment.dataspace_id = proposal.descriptor.dataspace_id;
+            execution.settlement_commitment.lane_incarnation =
+                proposal.descriptor.lane_incarnation;
+            execution.settlement_hash = iroha_data_model::nexus::compute_settlement_hash(
+                &execution.settlement_commitment,
+            )
+            .expect("merge terminal settlement hashes canonically");
+            batch.entrypoint_count = u64::try_from(execution.entrypoints.len())
+                .expect("merge entrypoint count fits u64");
+            batch.entrypoint_merkle_root =
+                crate::merge::merge_execution_entrypoint_merkle_root(&batch.lanes)
+                    .expect("merge execution has an entrypoint");
+            batch.result_merkle_root =
+                crate::merge::merge_execution_result_merkle_root(&batch.lanes)
+                    .expect("merge execution has a result");
+            batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
+            batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        }
+
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let raw_carrier = blocks.next();
+        let batch = merge_entry
+            .execution_batch
+            .as_mut()
+            .expect("merge terminal fixture has an execution batch");
+        batch.application_block_header =
+            crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        let mut executed_carrier = raw_carrier.as_ref().clone();
+        attach_ok_results_to_block(&mut executed_carrier);
+        let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut merge_entry);
+        let carrier_height = carrier.header().height().get();
+        let carrier_hash = carrier.hash();
+        kura.store_block(parent).expect("store merge carrier parent");
+        kura.store_block_with_merge_entry(Arc::clone(&carrier), &merge_entry)
+            .expect("store committed merge carrier");
+        kura.persist_merge_lane_block_application_receipts(
+            &merge_entry,
+            carrier_height,
+            carrier_hash,
+        )
+        .expect("persist terminal merge receipt and frontier");
+        kura.read_lane_block_application_receipt(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .expect("read terminal merge receipt")
+    }
+
+    #[test]
+    fn merge_application_frontier_makes_autonomous_auxiliary_persistence_terminal() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let lane_entry = lane_config.primary();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entrypoint = offline_top_up_entrypoint_for_index([0xD2; 32], [0xD3; 32]);
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+        let mut merge_entry = merge_entry_with_indexed_entrypoint(entrypoint.clone());
+        let proposal = merge_entry
+            .execution_batch
+            .as_ref()
+            .and_then(|batch| batch.lanes.first())
+            .expect("merge execution fixture")
+            .proposal
+            .clone();
+        let producer = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::BlsNormal)
+            .expect("derive merge execution producer");
+        let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+        ));
+        let reservation = LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: accepted.hash(),
+            entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"merge-terminal-queue-plan-admission-binding",
+            ),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"merge-terminal-reservation-owner"),
+            proposal_identity_hash: proposal.proposal_hash,
+        };
+        let chain_id_hash = Hash::new(b"merge-terminal-autonomous-chain");
+        let epoch = 0;
+        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            chain_id_hash,
+            epoch,
+            proposal.clone(),
+            vec![entrypoint],
+            vec![reservation],
+            vec![routing_plan],
+            vec![None],
+            PeerId::new(producer.public_key().clone()),
+            producer.private_key(),
+        )
+        .expect("construct merge-terminal autonomous payload");
+        let source_bundle = norito::encode_canonical(
+            &crate::lane_consensus::autonomous_lane_payload_envelope(
+                &payload,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("encode autonomous merge source"),
+        )
+        .expect("frame autonomous merge source");
+        {
+            let batch = merge_entry
+                .execution_batch
+                .as_mut()
+                .expect("merge terminal fixture has an execution batch");
+            let execution = batch.lanes.first_mut().expect("merge execution fixture");
+            execution.source_bundle_hash = Hash::new(&source_bundle);
+            execution.source_bundle = source_bundle;
+            execution.proposal = proposal.clone();
+            execution.origin_proposal = proposal.clone();
+            execution.autonomous_chain_id_hash = chain_id_hash;
+            execution.autonomous_epoch = epoch;
+            execution.autonomous_payload_hash = payload.payload_hash;
+            execution.entrypoint_hashes = payload.entrypoint_hashes.clone();
+            execution.entrypoints = payload.entrypoints.clone();
+            execution.reservation_keys = payload
+                .reservation_keys
+                .iter()
+                .map(|key| norito::encode_canonical(key).expect("encode reservation"))
+                .collect();
+            execution.routing_plans = payload
+                .routing_plans
+                .iter()
+                .map(|plan| norito::encode_canonical(plan).expect("encode routing plan"))
+                .collect();
+            execution.native_amx_receipts = payload.native_amx_receipts.clone();
+            batch.entrypoint_count = u64::try_from(execution.entrypoints.len())
+                .expect("merge entrypoint count fits u64");
+            batch.entrypoint_merkle_root =
+                crate::merge::merge_execution_entrypoint_merkle_root(&batch.lanes)
+                    .expect("merge execution has an entrypoint");
+            batch.result_merkle_root =
+                crate::merge::merge_execution_result_merkle_root(&batch.lanes)
+                    .expect("merge execution has a result");
+            batch.execution_root = crate::merge::merge_execution_root(&batch.lanes);
+            batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        }
+
+        kura.install_lane_incarnation_marker_for_test(
+            lane_entry,
+            proposal.descriptor.lane_incarnation,
+            0,
+        )
+        .expect("install merge-terminal lane marker");
+        assert!(matches!(
+            kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch),
+            Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
+        ));
+        let recovered = kura
+            .recover_autonomous_lane_block_payload(&proposal, chain_id_hash, epoch)
+            .expect("recover autonomous merge execution input");
+        assert!(matches!(
+            kura.persist_lane_block_execution_input(&recovered),
+            Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
+        ));
+
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let raw_carrier = blocks.next();
+        let batch = merge_entry
+            .execution_batch
+            .as_mut()
+            .expect("merge terminal fixture has an execution batch");
+        batch.application_block_header =
+            crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        let mut executed_carrier = raw_carrier.as_ref().clone();
+        attach_ok_results_to_block(&mut executed_carrier);
+        let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut merge_entry);
+        let carrier_height = carrier.header().height().get();
+        let carrier_hash = carrier.hash();
+        kura.store_block(parent).expect("store merge carrier parent");
+        kura.store_block_with_merge_entry(Arc::clone(&carrier), &merge_entry)
+            .expect("store committed merge carrier");
+        kura.persist_merge_lane_block_application_receipts(
+            &merge_entry,
+            carrier_height,
+            carrier_hash,
+        )
+        .expect("persist terminal merge receipt and frontier");
+
+        let receipt = kura
+            .read_lane_block_application_receipt(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("read terminal merge receipt");
+        assert_eq!(
+            receipt.format,
+            LaneBlockApplicationReceiptArtifactFormat::MergeExecution
+        );
+        assert!(kura.lane_block_application_receipt_available(&proposal));
+        assert!(
+            kura.read_autonomous_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+                chain_id_hash,
+                epoch,
+            )
+            .is_none(),
+            "merge-frontier compaction must remove autonomous payload auxiliaries"
+        );
+        assert!(
+            kura.read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_none(),
+            "merge-frontier compaction must remove execution-input auxiliaries"
+        );
+        assert!(matches!(
+            kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch),
+            Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal)
+        ), "a merge receipt serialized before payload persistence must be terminal");
+        assert!(matches!(
+            kura.persist_lane_block_execution_input(&recovered),
+            Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal)
+        ), "a merge receipt serialized before execution-input persistence must be terminal");
+        assert!(
+            kura.read_autonomous_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+                chain_id_hash,
+                epoch,
+            )
+            .is_none(),
+            "terminal payload persistence must not recreate compacted files"
+        );
+        assert!(
+            kura.read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_none(),
+            "terminal input persistence must not recreate compacted files"
+        );
+    }
+
     #[test]
     fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -2878,4 +3206,3 @@
             "sparse placeholder entries must not decode as artifacts"
         );
     }
-

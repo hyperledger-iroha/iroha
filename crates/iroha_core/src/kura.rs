@@ -25816,6 +25816,17 @@ pub enum LaneBlockPayloadAvailability {
     EntrypointHashMismatch,
 }
 
+/// Result of a lane auxiliary-artifact persistence attempt serialized with
+/// application-receipt publication and merge-frontier compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneBlockAuxiliaryPersistenceOutcome {
+    /// The requested auxiliary artifact crossed its durability boundary.
+    Persisted,
+    /// The exact lane proposal is already durably applied, so auxiliary
+    /// payload/input state is terminal and must not be recreated.
+    AlreadyTerminal,
+}
+
 /// Verified payload material recovered for a certified standalone lane block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredLaneBlockPayload {
@@ -32222,11 +32233,9 @@ impl Kura {
         payload: &LaneExecutablePayloadV1,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
-    ) -> Result<()> {
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
-        self.durable_mutation_authorized()?;
-        let _geometry_guard = self.lane_geometry_lock.lock();
         payload
             .validate(expected_chain_id_hash, expected_epoch)
             .map_err(|err| {
@@ -32241,6 +32250,11 @@ impl Kura {
                 "autonomous lane payload must originate at view zero",
             ));
         }
+        if self.lane_block_application_receipt_available(&payload.origin_proposal) {
+            return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
+        }
+        self.durable_mutation_authorized()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
         let descriptor = &payload.origin_proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
@@ -32280,7 +32294,7 @@ impl Kura {
                     &entry,
                     &AutonomousLaneBlockLatestAttemptV1::from_payload(payload),
                 )?;
-                return Ok(());
+                return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
 
             if existing_record.retirement.is_none()
@@ -32319,7 +32333,7 @@ impl Kura {
                 self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
                 self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
                 self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
-                return Ok(());
+                return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
 
             if let Some(retirement) = existing_record.retirement.as_ref() {
@@ -32358,7 +32372,7 @@ impl Kura {
                 self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
                 self.finalize_autonomous_lane_entrypoint_claims_locked(&staged)?;
                 self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
-                return Ok(());
+                return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
             return Err(Self::invalid_lane_artifact_error(
                 attempt_path,
@@ -32379,7 +32393,7 @@ impl Kura {
         self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
         self.finalize_autonomous_lane_entrypoint_claims_locked(&staged_claims)?;
         self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
-        Ok(())
+        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 
     /// Durably close one exact autonomous lane-height slot before releasing its reservations.
@@ -33967,9 +33981,12 @@ impl Kura {
     pub fn persist_lane_block_execution_input(
         &self,
         recovered: &RecoveredLaneBlockPayload,
-    ) -> Result<()> {
+    ) -> Result<LaneBlockAuxiliaryPersistenceOutcome> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.lane_block_application_receipt_available(&recovered.proposal) {
+            return Ok(LaneBlockAuxiliaryPersistenceOutcome::AlreadyTerminal);
+        }
         let verified = self
             .recover_lane_block_execution_input_source(
                 &recovered.proposal,
@@ -33991,7 +34008,8 @@ impl Kura {
             ));
         }
         let artifact = LaneBlockExecutionInputArtifact::new(verified);
-        self.write_lane_block_execution_input_artifact(&artifact)
+        self.write_lane_block_execution_input_artifact(&artifact)?;
+        Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted)
     }
 
     fn write_lane_block_execution_input_artifact(
@@ -49563,7 +49581,7 @@ impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
