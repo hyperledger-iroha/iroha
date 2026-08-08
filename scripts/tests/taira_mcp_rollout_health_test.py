@@ -461,7 +461,7 @@ def test_sumeragi_checker_rejects_legacy_rbc_status(tmp_path: Path) -> None:
 
 def test_sumeragi_checker_rejects_wrong_protocol_version(tmp_path: Path) -> None:
     payload = _healthy_base_payload()
-    payload["protocol_version"] = 1
+    payload["protocol_version"] = 3
 
     result = _run_checker(tmp_path, payload)
 

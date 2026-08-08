@@ -1,17 +1,15 @@
 //! Verus refinement model for the executable Sumeragi v2 reducer.
 //!
-//! This module is ghost-only and is erased by normal Rust compilation.  It
-//! gives every production `Event` and `WalRecord` variant an explicit abstract
-//! action.  The WAL relation is transition complete at the safety projection:
-//! sequence, context, view, local intent, highest-PrepareQC, lock, timeout, and
-//! decision changes are represented branch by branch.  The reducer relation
-//! additionally models the pending-append fence and historical body-store
-//! tokens needed to justify signing and application effects.
+//! This module is ghost-only and is erased by normal Rust compilation. It gives every production
+//! `Event` and `WalRecord` variant an explicit abstract action. The WAL relation is transition
+//! complete at the safety projection: sequence, context, view, local intent, highest-PrepareQC,
+//! lock, timeout, and decision changes are represented branch by branch. The reducer relation
+//! additionally models the pending-append fence and historical body-store tokens needed to justify
+//! signing and application effects.
 //!
-//! The definitions and proof bodies contain no proof escape hatches.  See
-//! `VERIFICATION.md` for pinned execution evidence and the residual
-//! collection-extraction, adapter-contract, WAL-byte, cross-tool, and liveness
-//! boundaries that remain before a complete production-correctness claim.
+//! The definitions and proof bodies contain no proof escape hatches. See `VERIFICATION.md` for
+//! pinned execution evidence and the residual collection-extraction, adapter-contract, WAL-byte,
+//! cross-tool, and liveness boundaries that remain before a complete production-correctness claim.
 
 use vstd::{assert_seqs_equal, prelude::*};
 
@@ -40,12 +38,10 @@ use crate::refinement::{
     WAL_RECORD_TIMEOUT_INTENT,
 };
 
-// These expressions are instantiated both as specifications and as executable
-// Verus functions.  The PrepareIntent and TimeoutIntent WAL guards below are
-// derived directly from primitive vote and frozen-context fields.  The
-// remaining projected WAL certificate/proposal predicates are called out
-// explicitly in `VERIFICATION.md` until they are migrated to the same
-// representation.
+// These expressions are instantiated both as specifications and as executable Verus functions.
+// The PrepareIntent and TimeoutIntent WAL guards below are derived directly from primitive vote
+// and frozen-context fields. The remaining projected WAL certificate/proposal predicates are
+// called out explicitly in `VERIFICATION.md` until they are migrated to the same representation.
 // Cargo Verus consumes these macros inside `verus!`; the trailing ordinary
 // Rust metadata pass sees the ghost module erased and would otherwise report
 // them as unused.
@@ -4156,6 +4152,108 @@ pub struct ProductionInFlightReservationTransitionProjection {
     pub after: ProductionInFlightReservationOwnerProjection,
 }
 
+/// Verus-side QueuePlan V4 and reservation journal V5 state.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseQueueProjection {
+    pub plan_state: u8,
+    pub selected_count: u64,
+    pub reservation_state: u8,
+}
+
+/// Verus-side durable Kura/input/READY-QC state.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseCarrierProjection {
+    pub kura_active: u128,
+    pub execution_input_durable: u128,
+    pub ready_qc_durable: bool,
+}
+
+/// Verus-side volatile body and READY authorization custody.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseSessionProjection {
+    pub bodies: u128,
+    pub ready_authorized: u128,
+    pub crashed: u128,
+    pub producer_alive: bool,
+}
+
+/// Verus-side monotonic durable history.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseHistoryProjection {
+    pub ever_queue_plan_v4: bool,
+    pub ever_reservation_v5: bool,
+    pub ever_execution_input_durable: u128,
+    pub ever_ready_authorized: u128,
+    pub ready_signed: u128,
+    pub ever_ready_qc_durable: bool,
+    pub reservation_committed_prefix: u64,
+    pub queue_plan_tombstoned_prefix: u64,
+    pub reservation_commit_forgotten_prefix: u64,
+    pub pending_high_water: u64,
+    pub released_high_water: u64,
+}
+
+/// Verus-side lane decision, canonical WSV, and release owner.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseDecisionProjection {
+    pub lane_commit_scope: CanonicalIdentityProjection,
+    pub release_scope: CanonicalIdentityProjection,
+    pub lane_commit_owner: u128,
+    pub release_owner: u128,
+    pub wsv_committed: bool,
+    pub application_count: u8,
+    pub applied_by: u128,
+}
+
+/// Verus-side four-stage release progress.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseReleaseProjection {
+    pub kura_retired: bool,
+    pub pending_prefix: u64,
+    pub released_prefix: u64,
+    pub fifo_restored: bool,
+}
+
+/// Verus-side total fixed-width first-release carrier state for canonical
+/// committees of 1 through 128 validators.
+///
+/// The paired TLA+ instance remains explicitly bounded to three validators;
+/// its states embed into this wider production relation.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseStateProjection {
+    pub validator_count: u8,
+    pub producer: u128,
+    pub producer_selected_owner: u128,
+    pub replicated_carrier_owners: u128,
+    pub payload_binding_a: u128,
+    pub binding_a: CanonicalIdentityProjection,
+    pub queue: ProductionInFlightFirstReleaseQueueProjection,
+    pub carrier: ProductionInFlightFirstReleaseCarrierProjection,
+    pub session: ProductionInFlightFirstReleaseSessionProjection,
+    pub history: ProductionInFlightFirstReleaseHistoryProjection,
+    pub decision: ProductionInFlightFirstReleaseDecisionProjection,
+    pub release: ProductionInFlightFirstReleaseReleaseProjection,
+}
+
+/// Verus-side named action over the total first-release carrier state.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseTransitionProjection {
+    pub action: u8,
+    pub actor: u128,
+    pub target: u128,
+    pub before: ProductionInFlightFirstReleaseStateProjection,
+    pub after: ProductionInFlightFirstReleaseStateProjection,
+}
+
+/// Verus-side reverse classification of one terminal economic owner.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
+    pub ordinary_fifo_owner: bool,
+    pub canonical_wsv_owner: bool,
+    pub commit_terminal: bool,
+    pub release_terminal: bool,
+}
+
 /// Verus-side complete immutable identity of one durable predecessor.
 #[derive(Copy, Clone)]
 pub struct ProductionDurablePredecessorIdentityProjection {
@@ -4498,6 +4596,50 @@ pub closed spec fn check_production_in_flight_reservation_transition(
     }
 }
 
+/// Total gate over one complete bounded first-release carrier transition.
+pub closed spec fn check_production_in_flight_first_release_transition(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
+    if production_in_flight_first_release_transition_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
+}
+
+/// Reverse terminal-owner extractor mirrored from the production kernel.
+pub closed spec fn production_in_flight_first_release_terminal_owner(
+    projection: ProductionInFlightFirstReleaseStateProjection,
+) -> Option<ProductionInFlightFirstReleaseTerminalOwnerProjection> {
+    if !production_in_flight_first_release_state_kernel(projection) {
+        None
+    } else if projection.queue.reservation_state
+        == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMIT_FORGOTTEN)
+        && projection.history.reservation_commit_forgotten_prefix
+            == projection.queue.selected_count
+    {
+        Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
+            ordinary_fifo_owner: false,
+            canonical_wsv_owner: true,
+            commit_terminal: true,
+            release_terminal: false,
+        })
+    } else if projection.queue.reservation_state
+        == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN)
+        || projection.queue.reservation_state
+            == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED)
+    {
+        Some(ProductionInFlightFirstReleaseTerminalOwnerProjection {
+            ordinary_fifo_owner: true,
+            canonical_wsv_owner: false,
+            commit_terminal: false,
+            release_terminal: true,
+        })
+    } else {
+        None
+    }
+}
+
 /// Exact Verus mirror of the durable predecessor production gate.
 pub closed spec fn production_durable_predecessor_identity_kernel(
     projection: ProductionDurablePredecessorIdentityProjection,
@@ -4651,6 +4793,20 @@ pub closed spec fn production_in_flight_reservation_transition_kernel(
     projection: ProductionInFlightReservationTransitionProjection,
 ) -> bool {
     production_in_flight_reservation_transition_body!(projection)
+}
+
+/// Exact Verus mirror of the complete bounded first-release state invariant.
+pub closed spec fn production_in_flight_first_release_state_kernel(
+    projection: ProductionInFlightFirstReleaseStateProjection,
+) -> bool {
+    production_in_flight_first_release_state_body!(projection)
+}
+
+/// Exact Verus mirror of the complete bounded first-release action relation.
+pub closed spec fn production_in_flight_first_release_transition_kernel(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+) -> bool {
+    production_in_flight_first_release_transition_body!(projection)
 }
 
 /// Exact applied predecessor ownership and the prepared successor marker admit
@@ -5400,31 +5556,6 @@ pub proof fn production_terminal_application_without_successor_activation_refine
     reveal(production_terminal_application_without_successor_activation_kernel);
 }
 
-/// A successful primitive checker result is exactly the shared executable
-/// identity/state relation. Collection extraction and cross-store ordering are
-/// deliberately outside this theorem.
-pub proof fn production_in_flight_reservation_transition_preserves_primitive_identity(
-    projection: ProductionInFlightReservationTransitionProjection,
-)
-    ensures
-        check_production_in_flight_reservation_transition(projection) == Some(projection)
-            ==> production_in_flight_reservation_transition_kernel(projection),
-{
-    reveal(check_production_in_flight_reservation_transition);
-}
-
-/// Runtime commit cannot fabricate a commit barrier from absent ownership.
-pub proof fn production_in_flight_reservation_commit_rejects_absent_owner(
-    projection: ProductionInFlightReservationTransitionProjection,
-)
-    requires
-        projection.action == refinement_tag_value!(IN_FLIGHT_RESERVATION_ACTION_COMMIT),
-        projection.before.state == refinement_tag_value!(IN_FLIGHT_RESERVATION_STATE_ABSENT),
-    ensures
-        !production_in_flight_reservation_transition_kernel(projection),
-{
-    reveal(production_in_flight_reservation_transition_kernel);
-}
 
 /// Verus-side shape of one fixed-width effect capability key.
 #[derive(Copy, Clone)]
@@ -6713,484 +6844,12 @@ pub open spec fn production_effect_order_relation(
 }
 
 /// Complete fixed-vector effect relation.
-pub open spec fn production_effect_trace_relation(
-    trace: ProductionEffectTraceProjection,
-    event_kind: u8,
-) -> bool {
-    production_effect_slots_authorized(trace)
-        && production_effect_order_relation(trace, event_kind)
-}
-
-/// Branch relation after the exact effect trace has passed its independent
-/// authorization and ordering check.
-pub open spec fn production_transition_branch_constraints(
-    facts: ProductionTransitionFactsProjection,
-    persist_count: u64,
-    fetch_count: u64,
-    sign_count: u64,
-    apply_count: u64,
-    enter_count: u64,
-) -> bool {
-    transition_branch_constraints_body!(
-        facts,
-        persist_count,
-        fetch_count,
-        sign_count,
-        apply_count,
-        enter_count,
-    )
-}
-
-/// Branch relation after the exact effect trace has passed its independent
-/// authorization and ordering check.
-pub open spec fn production_transition_branch_relation(
-    facts: ProductionTransitionFactsProjection,
-) -> bool {
-    production_transition_branch_constraints(
-        facts,
-        production_effect_count(facts.effects, 1),
-        production_effect_count(facts.effects, 2),
-        production_effect_count(facts.effects, 5),
-        production_effect_count(facts.effects, 7),
-        production_effect_count(facts.effects, 8),
-    )
-}
-
-pub closed spec fn production_transition_action_relation(
-    facts: ProductionTransitionFactsProjection,
-) -> bool {
-    production_transition_gate_body!(
-        facts,
-        production_volatile_summary_well_formed,
-        production_named_action_relation,
-        production_effect_trace_relation,
-        production_transition_branch_relation,
-    )
-}
-
-/// Every accepted production action has an explicit TLA+ macro-step name and
-/// its durable-boundary name permits exactly the projected state delta.
-pub proof fn production_action_has_named_tla_mapping(
-    facts: ProductionTransitionFactsProjection,
-)
-    requires
-        production_transition_action_relation(facts),
-    ensures
-        production_tla_boundary_delta(
-            facts,
-            production_tla_macro_step(facts).boundary,
-        ),
-        production_tla_macro_step(facts).boundary
-                == TlaActionNameProjection::NoAction
-            ==> facts.action_kind == 3 || facts.action_kind == 4 || facts.action_kind == 6,
-        facts.action_kind == 6 && facts.replay_effect_kind != 0
-            ==> production_tla_macro_step(facts).source
-                != TlaActionNameProjection::NoAction,
-{
-    reveal(production_transition_action_relation);
-    reveal(production_named_action_relation);
-    reveal(production_action_kind_relation);
-    reveal(production_stutter_action_relation);
-    reveal(production_begin_wal_action_relation);
-    reveal(production_acknowledge_wal_action_relation);
-    reveal(production_body_progress_action_relation);
-    reveal(production_volatile_protocol_action_relation);
-    reveal(production_complete_application_action_relation);
-    reveal(production_resume_after_replay_action_relation);
-    match facts.action_kind {
-        0 => {},
-        1 | 2 => {
-            match facts.wal_record_kind {
-                1 | 2 | 3 | 4 | 5 | 6 | 7 => {},
-                _ => {},
-            }
-        },
-        3 | 4 | 5 => {},
-        6 => {
-            match facts.replay_effect_kind {
-                0 | 1 | 2 | 3 | 4 | 5 => {},
-                _ => {},
-            }
-        },
-        _ => {},
-    }
-}
-
-/// The executable gate bounds the safety-relevant volatile structures on both
-/// sides of every committed step and makes bounded persisted-TC retention explicit.
-pub proof fn production_action_preserves_volatile_bounds(
-    facts: ProductionTransitionFactsProjection,
-)
-    requires
-        production_transition_action_relation(facts),
-    ensures
-        facts.volatile_after.vote_pools <= 2,
-        facts.volatile_after.vote_entries <= facts.validator_count * 2,
-        facts.volatile_after.timeout_vote_pools <= 2,
-        facts.volatile_after.timeout_vote_entries <= facts.validator_count * 2,
-        facts.volatile_after.formed_certificates <= 2,
-        facts.volatile_after.formed_timeouts <= 2,
-        facts.volatile_after.outbound_control <= 7,
-        facts.volatile_after.pending_prepare <= facts.volatile_after.known_prepare,
-        facts.volatile_after.known_prepare - facts.volatile_after.pending_prepare <= 2,
-        facts.volatile_after.signature_queue
-            <= facts.volatile_after.durable_signable_limit,
-        facts.volatile_after.awaiting_signature
-            ==> facts.volatile_after.signature_queue
-                < facts.volatile_after.durable_signable_limit,
-        facts.action_kind == 2 && facts.wal_record_kind == 6
-            ==> !facts.volatile_after.candidate_present
-                && facts.volatile_after.body_work <= 1
-                && facts.volatile_after.pending_prepare == 0
-                && facts.volatile_after.vote_pools == 0
-                && facts.volatile_after.vote_entries == 0
-                && (if facts.install_view_unchanged {
-                    facts.timeout_vote_pool_unchanged
-                        && facts.volatile_after.timeout_vote_pools
-                            == facts.volatile_before.timeout_vote_pools
-                        && facts.volatile_after.timeout_vote_entries
-                            == facts.volatile_before.timeout_vote_entries
-                } else {
-                    facts.timeout_evidence_after_in_installed_window
-                        && facts.volatile_after.timeout_vote_pools
-                            <= facts.volatile_before.timeout_vote_pools
-                        && facts.volatile_after.timeout_vote_entries
-                            <= facts.volatile_before.timeout_vote_entries
-                })
-                && facts.volatile_after.formed_certificates == 0
-                && (if facts.install_view_unchanged {
-                    facts.formed_timeouts_unchanged
-                        && facts.volatile_after.formed_timeouts
-                            == facts.volatile_before.formed_timeouts
-                } else {
-                    facts.volatile_after.formed_timeouts
-                        <= facts.volatile_before.formed_timeouts
-                })
-                && (if facts.install_view_unchanged {
-                    facts.timeout_control_unchanged
-                } else {
-                    facts.timeout_control_after_absent
-                })
-                && facts.volatile_after.known_prepare <= 2
-                && facts.volatile_after.outbound_control <= 4,
-{
-    reveal(production_transition_action_relation);
-}
-
-/// Exact executable volatile-cardinality checker used by production.
-pub fn verified_volatile_summary_gate(
-    summary: ProductionVolatileSummaryProjection,
-    validator_count: u64,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_volatile_summary_well_formed(summary, validator_count),
-{
-    volatile_summary_well_formed_body!(summary, validator_count)
-}
-
-/// Exact executable signed-completion classifier used by production.
-pub fn verified_signed_message_class_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_signed_message_class_relation(facts),
-{
-    let accepted = signed_message_class_body!(facts);
-    proof {
-        reveal(production_signed_message_class_relation);
-    }
-    accepted
-}
-
-/// Exact executable stutter-action checker used by production.
-pub fn verified_stutter_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_stutter_action_relation(facts),
-{
-    let accepted = stutter_action_body!(facts);
-    proof {
-        reveal(production_stutter_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable begin-WAL action checker used by production.
-pub fn verified_begin_wal_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_begin_wal_action_relation(facts),
-{
-    let accepted = begin_wal_action_body!(facts);
-    proof {
-        reveal(production_begin_wal_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable acknowledge-WAL action checker used by production.
-pub fn verified_acknowledge_wal_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_acknowledge_wal_action_relation(facts),
-{
-    let accepted = acknowledge_wal_action_body!(facts);
-    proof {
-        reveal(production_acknowledge_wal_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable successful-validation effect checker used by production.
-pub fn verified_validation_completed_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_validation_completed_action_relation(facts),
-{
-    let accepted = validation_completed_action_body!(facts, verified_effect_count_gate);
-    proof {
-        reveal(production_validation_completed_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable body-progress action checker used by production.
-pub fn verified_body_progress_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_body_progress_action_relation(facts),
-{
-    let accepted = body_progress_action_body!(facts, verified_validation_completed_action_gate);
-    proof {
-        reveal(production_body_progress_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable volatile-protocol action checker used by production.
-#[verifier::spinoff_prover]
-pub fn verified_volatile_protocol_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_volatile_protocol_action_relation(facts),
-{
-    let accepted = volatile_protocol_action_body!(facts);
-    proof {
-        reveal(production_volatile_protocol_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable application-completion action checker used by production.
-pub fn verified_complete_application_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_complete_application_action_relation(facts),
-{
-    let accepted = complete_application_action_body!(facts);
-    proof {
-        reveal(production_complete_application_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable replay-resumption checker used by production.
-pub fn verified_resume_after_replay_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_resume_after_replay_action_relation(facts),
-{
-    let accepted = resume_after_replay_action_body!(facts, verified_effect_count_gate);
-    proof {
-        reveal(production_resume_after_replay_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable action-discriminant checker used by production.
-pub fn verified_action_kind_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_action_kind_relation(facts),
-{
-    let accepted = action_kind_relation_body!(
-        facts,
-        verified_stutter_action_gate,
-        verified_begin_wal_action_gate,
-        verified_acknowledge_wal_action_gate,
-        verified_body_progress_action_gate,
-        verified_volatile_protocol_action_gate,
-        verified_complete_application_action_gate,
-        verified_resume_after_replay_action_gate,
-    );
-    proof {
-        reveal(production_action_kind_relation);
-    }
-    accepted
-}
-
-/// Exact executable action/WAL/signature-class checker used by production.
-pub fn verified_named_action_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_named_action_relation(facts),
-{
-    let accepted = production_action_relation_body!(
-        facts,
-        verified_signed_message_class_gate,
-        verified_action_kind_gate,
-    );
-    proof {
-        reveal(production_named_action_relation);
-    }
-    accepted
-}
-
-/// Exact executable per-slot authorization checker used by production.
-pub fn verified_effect_slots_gate(
-    trace: ProductionEffectTraceProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_effect_slots_authorized(trace),
-{
-    effect_slots_authorized_body!(trace)
-}
-
-/// Exact executable effect-discriminant counter used by production.
-pub fn verified_effect_count_gate(
-    trace: ProductionEffectTraceProjection,
-    kind: u8,
-) -> (count: u64)
-    ensures
-        count == production_effect_count(trace, kind),
-{
-    effect_count_body!(trace, kind)
-}
-
-/// Exact executable order constraints used by production.
-pub fn verified_effect_order_constraints_gate(
-    trace: ProductionEffectTraceProjection,
-    event_kind: u8,
-    persist_count: u64,
-    fetch_count: u64,
-    store_count: u64,
-    validate_count: u64,
-    sign_count: u64,
-    apply_count: u64,
-    enter_count: u64,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_effect_order_constraints(
-            trace,
-            event_kind,
-            persist_count,
-            fetch_count,
-            store_count,
-            validate_count,
-            sign_count,
-            apply_count,
-            enter_count,
-        ),
-{
-    effect_order_constraints_body!(
-        trace,
-        event_kind,
-        persist_count,
-        fetch_count,
-        store_count,
-        validate_count,
-        sign_count,
-        apply_count,
-        enter_count,
-    )
-}
-
-/// Exact executable vector-order checker used by production.
-pub fn verified_effect_order_gate(
-    trace: ProductionEffectTraceProjection,
-    event_kind: u8,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_effect_order_relation(trace, event_kind),
-{
-    effect_ordering_gate_body!(
-        trace,
-        event_kind,
-        verified_effect_count_gate,
-        verified_effect_order_constraints_gate,
-    )
-}
-
-/// Exact executable combined effect checker used by the production gate.
-pub fn verified_effect_trace_gate(
-    trace: ProductionEffectTraceProjection,
-    event_kind: u8,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_effect_trace_relation(trace, event_kind),
-{
-    effect_trace_gate_body!(
-        trace,
-        event_kind,
-        verified_effect_slots_gate,
-        verified_effect_order_gate,
-    )
-}
-
-/// Exact executable branch constraints used by the production gate.
-pub fn verified_transition_branch_constraints_gate(
-    facts: ProductionTransitionFactsProjection,
-    persist_count: u64,
-    fetch_count: u64,
-    sign_count: u64,
-    apply_count: u64,
-    enter_count: u64,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_transition_branch_constraints(
-            facts,
-            persist_count,
-            fetch_count,
-            sign_count,
-            apply_count,
-            enter_count,
-        ),
-{
-    transition_branch_constraints_body!(
-        facts,
-        persist_count,
-        fetch_count,
-        sign_count,
-        apply_count,
-        enter_count,
-    )
-}
-
-/// Exact executable branch checker used by the production gate.
-pub fn verified_transition_branch_gate(
-    facts: ProductionTransitionFactsProjection,
-) -> (accepted: bool)
-    ensures
-        accepted ==> production_transition_branch_relation(facts),
-{
-    transition_branch_gate_body!(
-        facts,
-        verified_effect_count_gate,
-        verified_transition_branch_constraints_gate,
-    )
-}
-
 } // verus!
+
+include!("verus_proofs/production_transition_contracts.rs");
+
+// The in-flight reservation/first-release proofs remain in this lexical module.
+include!("verus_proofs/in_flight_first_release_proofs.rs");
 
 // The production-kernel proof tail remains in this lexical module.
 include!("verus_proofs/production_kernel_tail.rs");

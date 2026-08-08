@@ -16,6 +16,10 @@ run_swift_test() {
 }
 
 cd "${ROOT_DIR}"
+if grep -Fq 'getKagemushaReadiness' IrohaSwift/Sources/IrohaSwift/ToriiClient.swift; then
+  echo "error: Swift offline capability must not expose a selector-taking readiness alias" >&2
+  exit 1
+fi
 "${SWIFTC_BIN}" --version
 "${SWIFT_BIN}" --version
 "${SWIFTC_BIN}" -parse -parse-as-library \
@@ -97,7 +101,7 @@ cd "${ROOT_DIR}"
 (
   cd IrohaSwift
   run_swift_test \
-    --filter 'ToriiClientTests/testGetOfflineCapabilityParsesExactUniversalContractAndIgnoresDeprecatedSelector|ToriiClientTests/testGetOfflineCapabilityRejectsNonUniversalClaims'
+    --filter 'ToriiClientTests/testGetOfflineCapabilityParsesExactUniversalContractOnExactRoute|ToriiClientTests/testGetOfflineCapabilityRejectsNonUniversalClaims'
 )
 
 (

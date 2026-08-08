@@ -17,7 +17,7 @@
     "./browser": {
       "browser": "./dist/browser.js",
       "import": "./dist/browser.js",
-      "types": "./index.d.ts"
+      "types": "./browser.d.ts"
     },
     "./privacy-capabilities": {
       "browser": "./dist/privacyCapabilities.js",
@@ -53,11 +53,6 @@
       "browser": "./dist/ivmArtifact.js",
       "import": "./dist/ivmArtifact.js",
       "types": "./ivm-artifact.d.ts"
-    },
-    "./ivm-artifact-admission-wasm": {
-      "browser": "./dist/ivmArtifactAdmissionWasm.js",
-      "import": "./dist/ivmArtifactAdmissionWasm.js",
-      "types": "./ivm-artifact-admission-wasm.d.ts"
     },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
@@ -116,7 +111,7 @@
         "./index.d.ts"
       ],
       "browser": [
-        "./index.d.ts"
+        "./browser.d.ts"
       ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"
@@ -138,9 +133,6 @@
       ],
       "ivm-artifact": [
         "./ivm-artifact.d.ts"
-      ],
-      "ivm-artifact-admission-wasm": [
-        "./ivm-artifact-admission-wasm.d.ts"
       ],
       "instruction-builders": [
         "./index.d.ts"
@@ -183,8 +175,11 @@
     "build:native": "node ./scripts/build-native.mjs && node ./scripts/copy-native.mjs",
     "build:dist": "node ./scripts/build-dist.mjs",
     "bundle:check": "node ./scripts/bundle-size-check.mjs",
-    "test": "npm run build:native && node ./scripts/run-tests.mjs",
-    "test:dist": "npm run build:dist && node ./scripts/run-tests.mjs",
+    "test": "npm run build:native && node ./scripts/run-test-profile.mjs unit",
+    "test:dist": "npm run build:dist && node ./scripts/run-test-profile.mjs unit",
+    "test:native-provenance": "node ./scripts/run-test-profile.mjs native-provenance",
+    "test:sorafs-native": "node ./scripts/run-test-profile.mjs sorafs-native",
+    "test:heavy": "node ./scripts/run-test-profile.mjs heavy",
     "test:pack-install": "node ./scripts/package-install-smoke.mjs",
     "check:changelog": "node ./scripts/check-changelog.mjs",
     "release:update-docs": "node ./scripts/update-release-docs.mjs",
@@ -195,6 +190,7 @@
     "release:publish": "npm publish --access public --provenance",
     "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
+    "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
     "telemetry:capture": "node ./scripts/capture_sumeragi_telemetry.mjs",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
   },
@@ -219,13 +215,13 @@
   "files": [
     "README.md",
     "LICENSE",
+    "browser.d.ts",
     "index.d.ts",
     "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",
     "bootle-lantern-issuance.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
-    "ivm-artifact-admission-wasm.d.ts",
     "transaction-codec.d.ts",
     "smart-contract-deployment.d.ts",
     "connect.browser.d.ts",

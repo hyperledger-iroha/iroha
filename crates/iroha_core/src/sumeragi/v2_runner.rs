@@ -43,14 +43,20 @@ use super::{
     FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressCapacityError,
     FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
     InboundBlockMessage, SumeragiWorker,
-    message::BlockMessage,
+    message::{BlockMessage, CanonicalExecutedBlockNeedV1},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     serviced_candidate_store::LeaderWireLifecycleStoreGate,
     v2::{
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, LocalProposalDirective,
         ServicedCandidateCapacityGeometry, SignRequest, SumeragiV2Adapter,
     },
-    v2_apply::{V2ApplyService, V2ReservationLifecycleError, reconcile_lane_reservation_ownership},
+    v2_apply::{
+        LaneReservationReconciliationPlanning, V2ApplyService, V2ReservationLifecycleError,
+        apply_lane_reservation_reconciliation_plan,
+        persist_preflighted_historical_autonomous_lane_recoveries, plan_lane_reservation_ownership,
+        preflight_historical_autonomous_lane_recovery,
+        validate_installed_historical_autonomous_lane_recoveries,
+    },
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
@@ -65,10 +71,17 @@ use super::{
         PostFinalityCleanupTarget, V2EffectExecutor, network_ingress_is_certified_fence_escape,
     },
     v2_lane_work::{
-        AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
-        HistoricalRecoveryServiceOutcome, MergeSidecarDeferralDisposition, RetainedMergeSidecars,
-        V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError,
-        V2LaneWorkLimits, require_validator_storage_platform,
+        AuthenticatedGenesisNexusAmxContext, CanonicalExecutedBlockRecovery, GlobalBodyLockOutcome,
+        HistoricalRecoveryServiceOutcome, LaneApplicationEvidenceRepairPlanning,
+        MergeSidecarDeferralDisposition, RetainedMergeSidecars, V2LaneIngressOutcome,
+        V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkError, V2LaneWorkLimits,
+        apply_lane_application_evidence_repair,
+        persist_canonical_historical_recovery_payload_custody,
+        plan_lane_application_evidence_repair, require_validator_storage_platform,
+    },
+    v2_lifecycle_recovery::{
+        AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,
+        reconcile_pending_autonomous_lifecycle_terminal_outcomes,
     },
     v2_npos::V2NposVrfLifecycle,
     v2_recovery::{
@@ -81,19 +94,19 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
         CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServeNegativeOutcome,
-        CertifiedServePrepareError, ExactFanoutOwnership, ProductionV2Services,
-        V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        CertifiedServePrepareError, ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner,
+        ProductionV2Services, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
-    kura::{Kura, KuraV2CommitReceipt},
+    kura::{AutonomousLifecycleProcessGenerationClaim, Kura, KuraV2CommitReceipt},
     merge_sidecar::{
         CertifiedMergeSidecarClosedPrefix, CertifiedMergeSidecarMessage, MergeSidecarLimits,
         MergeSigningGuardLimits,
     },
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
-    state::State,
+    state::{PendingCertifiedMergeSelection, State},
 };
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
@@ -760,206 +773,8 @@ impl Drop for LeaderWireIngressBinding {
     }
 }
 
-/// Joint per-height ownership of the fair-ingress durable gates.
-///
-/// Once both gates are live they must retire in one queue transaction: the
-/// Serve binding and leader-wire binding describe carriers in the same lanes.
-struct HeightIngressBindings {
-    certified_serve: CertifiedServeIngressBinding,
-    leader_wire: LeaderWireIngressBinding,
-}
-
-impl HeightIngressBindings {
-    fn new(
-        certified_serve: CertifiedServeIngressBinding,
-        leader_wire: LeaderWireIngressBinding,
-    ) -> Self {
-        Self {
-            certified_serve,
-            leader_wire,
-        }
-    }
-
-    fn retire(&mut self) -> Result<(), V2RunnerError> {
-        match (
-            self.certified_serve.gate.as_ref(),
-            self.leader_wire.gate.as_ref(),
-        ) {
-            (None, None) => return Ok(()),
-            (Some(_), None) | (None, Some(_)) => {
-                return Err(V2RunnerError::Service(
-                    "per-height ingress gates changed joint ownership".to_owned(),
-                ));
-            }
-            (Some(_), Some(_)) => {}
-        }
-        if !Arc::ptr_eq(
-            &self.certified_serve.ingress_ready,
-            &self.leader_wire.ingress_ready,
-        ) || !Arc::ptr_eq(
-            &self.certified_serve.block_ingress,
-            &self.leader_wire.block_ingress,
-        ) {
-            return Err(V2RunnerError::Service(
-                "per-height ingress gates changed their shared queue".to_owned(),
-            ));
-        }
-
-        close_ingress_for_rollover(
-            &self.certified_serve.ingress_ready,
-            &self.certified_serve.block_ingress,
-        );
-        self.certified_serve
-            .block_ingress
-            .unbind_height_ingress_gates(
-                self.certified_serve
-                    .gate
-                    .as_ref()
-                    .expect("joint binding retains the certified Serve gate"),
-                self.leader_wire
-                    .gate
-                    .as_ref()
-                    .expect("joint binding retains the leader-wire gate"),
-            )
-            .map_err(V2RunnerError::Service)?;
-        self.certified_serve.gate = None;
-        self.leader_wire.gate = None;
-        Ok(())
-    }
-}
-
-impl Drop for HeightIngressBindings {
-    fn drop(&mut self) {
-        if let Err(error) = self.retire() {
-            // Joint validation failed before mutation. Keep the shared queue
-            // fail-closed and disarm the child guards: retrying their former
-            // split teardown would recreate the carrierless-Ingress cut this
-            // owner exists to prevent.
-            close_ingress_for_rollover(
-                &self.certified_serve.ingress_ready,
-                &self.certified_serve.block_ingress,
-            );
-            self.certified_serve.gate = None;
-            self.leader_wire.gate = None;
-            iroha_logger::error!(
-                %error,
-                "failed to atomically retire the per-height ingress gates"
-            );
-        }
-    }
-}
-
-struct V2StatusClearGuard {
-    clear_on_drop: bool,
-}
-
-impl V2StatusClearGuard {
-    fn new() -> Self {
-        super::status::clear_v2_status();
-        Self {
-            clear_on_drop: false,
-        }
-    }
-
-    fn clear_on_drop(&mut self) {
-        self.clear_on_drop = true;
-    }
-}
-
-impl Drop for V2StatusClearGuard {
-    fn drop(&mut self) {
-        if self.clear_on_drop {
-            super::status::clear_v2_status();
-        }
-    }
-}
-
-fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
-    ingress_ready.store(false, Ordering::Release);
-    block_ingress.close();
-}
-
-fn open_ingress_for_active_height(
-    output_guard: &ConsensusOutputGuard,
-    ingress_ready: &AtomicBool,
-    block_ingress: &FairV2Ingress,
-    activation: Option<(PendingSuccessorActivation, wire::SumeragiV2Status)>,
-) -> Result<(), V2RunnerError> {
-    let Some(ingress_permit) = output_guard.acquire() else {
-        return Err(V2RunnerError::RestartRequired);
-    };
-    block_ingress.open().map_err(ingress_capacity_error)?;
-    ingress_ready.store(true, Ordering::Release);
-    if let Some((activation, successor)) = activation
-        && let Err(error) = activation.publish(successor)
-    {
-        close_ingress_for_rollover(ingress_ready, block_ingress);
-        return Err(error);
-    }
-    drop(ingress_permit);
-    Ok(())
-}
-
-fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
-    if error.is_bytes() {
-        V2RunnerError::IngressByteCapacity {
-            configured: error.configured(),
-            required: error.required(),
-        }
-    } else {
-        V2RunnerError::IngressCapacity {
-            configured: error.configured(),
-            required: error.required(),
-        }
-    }
-}
-
-fn validate_deadline_duration(duration: Duration) -> Result<(), V2RunnerError> {
-    Instant::now()
-        .checked_add(duration)
-        .ok_or(V2RunnerError::InvalidLimits)?;
-    Ok(())
-}
-
-fn deadline_after(now: Instant, duration: Duration) -> Instant {
-    now.checked_add(duration)
-        .expect("consensus deadline duration was prevalidated before height startup")
-}
-
-fn initial_block_sync_deadline(
-    height_started_at: Instant,
-    round_timeout: Duration,
-    eager_recovery: bool,
-) -> Instant {
-    if eager_recovery {
-        height_started_at
-    } else {
-        deadline_after(height_started_at, round_timeout)
-    }
-}
-
-const fn retain_eager_block_sync(
-    recovering_interrupted_tip: bool,
-    admitted_discovered_commit_qc: bool,
-) -> bool {
-    recovering_interrupted_tip || admitted_discovered_commit_qc
-}
-
-fn snapshot_successor_logical_time(
-    anchor: &wire::SnapshotBootstrapAnchor,
-    block_cadence: Duration,
-) -> Result<Duration, V2RunnerError> {
-    let cadence_ms =
-        u64::try_from(block_cadence.as_millis()).map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
-    if cadence_ms == 0 || Duration::from_millis(cadence_ms) != block_cadence {
-        return Err(V2RunnerError::InvalidSnapshotBootstrapCadence);
-    }
-    let successor_ms = anchor
-        .snapshot_block_creation_time_ms
-        .checked_add(cadence_ms)
-        .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
-    Ok(Duration::from_millis(successor_ms))
-}
+include!("v2_runner/height_ingress_bindings.rs");
+include!("v2_runner/lifecycle_terminal_recovery.rs");
 
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
@@ -1021,6 +836,25 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         recovered_successor_activation,
         mut staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
+    let local_peer = common_config.peer.id().clone();
+    // Height-local roster membership is read-only and must precede the first
+    // lifecycle mutation. It controls global duty for this frozen height, not
+    // the immutable process capability: a configured validator may be absent
+    // now and later rotate into a global roster, or still serve an independently
+    // frozen lane descriptor which names its key.
+    let _initial_local_validator =
+        local_validator_index(verified_context.context(), &local_peer, config.role)?;
+    // Claim the process generation before constructing any height-local lane
+    // service.  The claim is rooted in the authenticated recovered chain
+    // context and the immutable local Kura identity; later startup lifecycle
+    // reconciliation consumes this same process-lifetime claim rather than
+    // allowing each height adapter to invent a generation.
+    let _lifecycle_process_generation = claim_runner_lifecycle_process_generation(
+        config.role,
+        kura.as_ref(),
+        verified_context.context(),
+        &local_peer,
+    )?;
     // A process which recovered durable v2 height ownership may be behind its
     // peers. Probe that exact active context immediately, then retain eager
     // discovery only while an authenticated discovered CommitQC acquires or
@@ -1028,27 +862,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     // clears the hint, so this does not add permanent all-to-all traffic.
     let mut eager_block_sync =
         recovered_successor_activation.is_some() || pending_kura_apply.is_some();
-    let reservation_recovery = output_guard
-        .begin_fail_stop_operation()
-        .ok_or(V2RunnerError::RestartRequired)?;
-    let recovered_reservations = queue.live_lane_reservations().len();
-    let (finalized_committed_reservations, released_orphans) =
-        reconcile_lane_reservation_ownership(
-            state.as_ref(),
-            queue.as_ref(),
-            kura.as_ref(),
-            &verified_context.context().chain_id,
-        )?;
-    reservation_recovery.complete();
-    if recovered_reservations > 0 || finalized_committed_reservations > 0 || released_orphans > 0 {
-        iroha_logger::info!(
-            recovered = recovered_reservations,
-            finalized_committed = finalized_committed_reservations,
-            released_orphans,
-            "reconciled durable lane reservations against committed v2 merge history"
-        );
-    }
-    let local_peer = common_config.peer.id().clone();
+    // Reconcile exactly once, after an interrupted canonical tip (if any) has
+    // completed State application. Running before that boundary could mistake
+    // the tip's not-yet-published membership for a losing lane proposal.
+    let mut reservation_reconciliation_pending = true;
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
@@ -1069,6 +886,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
     let mut retained_merge_sidecars: Option<RetainedMergeSidecars> = None;
+    let kura_replica_advert_refresh = Arc::new(
+        KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
+            .map_err(V2RunnerError::Service)?,
+    );
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -1383,6 +1204,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             lifecycle_ordinals,
             Arc::clone(&output_guard),
             Arc::clone(&block_rx),
+            Arc::clone(&kura_replica_advert_refresh),
             leader_wire_recovery_authority,
             exact_output_service_owner,
         )
@@ -1478,6 +1300,345 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // must enter through its exact post-apply recovery path.
             authenticated_genesis_nexus_amx_context = None;
         }
+        if reservation_reconciliation_pending {
+            let evidence_repair_queue_fence =
+                LaneApplicationEvidenceRepairQueueFence::capture(queue.as_ref())?;
+            loop {
+                evidence_repair_queue_fence.revalidate(queue.as_ref())?;
+                match plan_lane_application_evidence_repair(
+                    &context,
+                    state.as_ref(),
+                    kura.as_ref(),
+                    lane_work_limits,
+                )? {
+                    LaneApplicationEvidenceRepairPlanning::Ready(plan) if plan.is_empty() => {
+                        break;
+                    }
+                    LaneApplicationEvidenceRepairPlanning::Ready(plan) => {
+                        let planned_items = plan.item_count();
+                        let evidence_repair = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        let summary = apply_lane_application_evidence_repair(
+                            state.as_ref(),
+                            kura.as_ref(),
+                            plan,
+                        )?;
+                        let progressed = summary.publication_count();
+                        if planned_items == 0 || progressed == 0 {
+                            return Err(V2RunnerError::Service(
+                                "lane application evidence startup repair made no bounded progress"
+                                    .to_owned(),
+                            ));
+                        }
+                        evidence_repair.complete();
+                        iroha_logger::info!(
+                            ordinary_pairs = summary.ordinary_pairs,
+                            ordinary_receipts = summary.ordinary_receipts,
+                            native_carriers = summary.native_carriers,
+                            native_routes = summary.native_routes,
+                            merge_carriers = summary.merge_carriers,
+                            "published preflighted lane application evidence before Queue startup"
+                        );
+                    }
+                    LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies(needs) => {
+                        if needs.is_empty() {
+                            return Err(V2RunnerError::Service(
+                                "lane application evidence repair requested an empty body set"
+                                    .to_owned(),
+                            ));
+                        }
+                        open_ingress_for_active_height(
+                            output_guard.as_ref(),
+                            &ingress_ready,
+                            &block_rx,
+                            None,
+                        )?;
+                        let recovery_capacity =
+                            CanonicalExecutedBlockRecovery::need_capacity(lane_work_limits);
+                        let recovery_batches =
+                            canonical_executed_block_recovery_batches(&needs, recovery_capacity)?;
+                        for bounded_needs in recovery_batches {
+                            let mut body_recovery = CanonicalExecutedBlockRecovery::new(
+                                context.clone(),
+                                local_peer.clone(),
+                                Arc::clone(&state),
+                                Arc::clone(&kura),
+                                Arc::clone(&output_guard),
+                                lane_work_limits,
+                                bounded_needs.to_vec(),
+                            )?;
+                            let mut next_retry = Instant::now();
+                            while body_recovery.has_pending() {
+                                if output_guard.restart_required() {
+                                    return Err(V2RunnerError::RestartRequired);
+                                }
+                                if shutdown_signal.is_sent() {
+                                    height_ingress_bindings.retire()?;
+                                    services.allow_clean_shutdown();
+                                    return Ok(());
+                                }
+                                let now = Instant::now();
+                                if now >= next_retry {
+                                    body_recovery.service_next()?;
+                                    next_retry = deadline_after(now, retransmit_interval);
+                                }
+                                let drained = drain_canonical_executed_block_recovery_ingress(
+                                    &block_rx,
+                                    &mut body_recovery,
+                                    control_queue_capacity,
+                                )?;
+                                if drained != 0 && body_recovery.has_pending() {
+                                    body_recovery.service_next()?;
+                                }
+                                let dispatched =
+                                    dispatch_canonical_executed_block_recovery_effects(
+                                        &mut body_recovery,
+                                        &services,
+                                        control_queue_capacity,
+                                    )?;
+                                if body_recovery.has_pending() && drained == 0 && dispatched == 0 {
+                                    let wait = next_retry
+                                        .saturating_duration_since(Instant::now())
+                                        .min(IDLE_POLL);
+                                    if !wait.is_zero() {
+                                        let _ = wake_rx.recv_timeout(wait);
+                                    }
+                                }
+                            }
+                        }
+                        close_ingress_for_rollover(&ingress_ready, &block_rx);
+                    }
+                }
+            }
+        }
+        if reservation_reconciliation_pending {
+            let summary = loop {
+                let deferred_terminal_recovery =
+                    reconcile_lifecycle_terminal_outcomes_before_queue_planning(
+                        &output_guard,
+                        state.as_ref(),
+                        queue.as_ref(),
+                        kura.as_ref(),
+                        &context,
+                    )?;
+                let planning = plan_lane_reservation_ownership(
+                    state.as_ref(),
+                    queue.as_ref(),
+                    kura.as_ref(),
+                    &verified_context,
+                    None,
+                )?;
+                let planning = match planning {
+                    LaneReservationReconciliationPlanning::Ready(pre_lifecycle_plan) => {
+                        // Classification is read-only. Discard its first receipt, reconcile every
+                        // signed local lifecycle boundary while the Queue gate remains closed, then
+                        // rebuild the complete plan with the exact receipt retained by that flow.
+                        let planner_evidence =
+                            pre_lifecycle_plan.startup_snapshot_recovery_evidence()?;
+                        let lifecycle = reconcile_autonomous_lifecycle_startup(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            &context,
+                            planner_evidence,
+                            deferred_terminal_recovery,
+                            _lifecycle_process_generation.as_ref(),
+                            &local_peer,
+                            &common_config.key_pair,
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                        let completed_bootstraps = lifecycle.completed_bootstraps();
+                        let recovered_attempts = lifecycle.recovered_attempts();
+                        let replanned = plan_lane_reservation_ownership(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            &verified_context,
+                            Some(lifecycle),
+                        )?;
+                        if completed_bootstraps != 0 || recovered_attempts != 0 {
+                            iroha_logger::info!(
+                                completed_bootstraps,
+                                recovered_attempts,
+                                "reconciled signed autonomous lifecycle custody before Queue publication"
+                            );
+                        }
+                        replanned
+                    }
+                    pending => pending,
+                };
+                match planning {
+                    LaneReservationReconciliationPlanning::Ready(plan) => {
+                        let reservation_recovery = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        let summary = apply_lane_reservation_reconciliation_plan(
+                            state.as_ref(),
+                            queue.as_ref(),
+                            kura.as_ref(),
+                            plan,
+                        )?;
+                        reservation_recovery.complete();
+                        break summary;
+                    }
+                    LaneReservationReconciliationPlanning::RecoverCanonicalBodies(needs) => {
+                        if !queue.lane_reservation_startup_reconciliation_pending() {
+                            return Err(V2RunnerError::Service(
+                                "reservation body recovery was requested after the Queue startup gate opened"
+                                    .to_owned(),
+                            ));
+                        }
+                        iroha_logger::info!(
+                            body_count = needs.len(),
+                            "starting authenticated recovery of pruned canonical executed blocks"
+                        );
+                        open_ingress_for_active_height(
+                            output_guard.as_ref(),
+                            &ingress_ready,
+                            &block_rx,
+                            None,
+                        )?;
+                        let recovery_capacity =
+                            CanonicalExecutedBlockRecovery::need_capacity(lane_work_limits);
+                        let recovery_batches =
+                            canonical_executed_block_recovery_batches(&needs, recovery_capacity)?;
+                        for bounded_needs in recovery_batches {
+                            let mut body_recovery = CanonicalExecutedBlockRecovery::new(
+                                context.clone(),
+                                local_peer.clone(),
+                                Arc::clone(&state),
+                                Arc::clone(&kura),
+                                Arc::clone(&output_guard),
+                                lane_work_limits,
+                                bounded_needs.to_vec(),
+                            )?;
+                            let mut next_retry = Instant::now();
+                            while body_recovery.has_pending() {
+                                if output_guard.restart_required() {
+                                    return Err(V2RunnerError::RestartRequired);
+                                }
+                                if shutdown_signal.is_sent() {
+                                    height_ingress_bindings.retire()?;
+                                    services.allow_clean_shutdown();
+                                    return Ok(());
+                                }
+                                let now = Instant::now();
+                                if now >= next_retry {
+                                    body_recovery.service_next()?;
+                                    next_retry = deadline_after(now, retransmit_interval);
+                                }
+                                let drained = drain_canonical_executed_block_recovery_ingress(
+                                    &block_rx,
+                                    &mut body_recovery,
+                                    control_queue_capacity,
+                                )?;
+                                if drained != 0 && body_recovery.has_pending() {
+                                    body_recovery.service_next()?;
+                                }
+                                let dispatched =
+                                    dispatch_canonical_executed_block_recovery_effects(
+                                        &mut body_recovery,
+                                        &services,
+                                        control_queue_capacity,
+                                    )?;
+                                if body_recovery.has_pending() && drained == 0 && dispatched == 0 {
+                                    let wait = next_retry
+                                        .saturating_duration_since(Instant::now())
+                                        .min(IDLE_POLL);
+                                    if !wait.is_zero() {
+                                        let _ = wake_rx.recv_timeout(wait);
+                                    }
+                                }
+                            }
+                        }
+                        close_ingress_for_rollover(&ingress_ready, &block_rx);
+                        iroha_logger::info!(
+                            "cached authenticated canonical executed blocks; rebuilding the complete immutable reconciliation plan"
+                        );
+                    }
+                    LaneReservationReconciliationPlanning::InstallHistoricalAutonomousRecoveries(
+                        installs,
+                    ) => {
+                        if installs.is_empty() {
+                            return Err(V2RunnerError::Service(
+                                "reservation reconciliation requested an empty historical recovery installation"
+                                    .to_owned(),
+                            ));
+                        }
+                        if !queue.lane_reservation_startup_reconciliation_pending() {
+                            return Err(V2RunnerError::Service(
+                                "historical reservation recovery was requested after the Queue startup gate opened"
+                                    .to_owned(),
+                            ));
+                        }
+                        let historical_recovery = output_guard
+                            .begin_fail_stop_operation()
+                            .ok_or(V2RunnerError::RestartRequired)?;
+                        iroha_logger::info!(
+                            install_count = installs.len(),
+                            "installing finalized historical autonomous recovery inputs"
+                        );
+                        let records = installs
+                            .iter()
+                            .map(|install| {
+                                preflight_historical_autonomous_lane_recovery(
+                                    state.as_ref(),
+                                    kura.as_ref(),
+                                    install,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let process_generation = _lifecycle_process_generation
+                            .as_ref()
+                            .ok_or_else(|| {
+                                V2RunnerError::Service(
+                                    "historical autonomous recovery payload custody requires a validator process generation"
+                                        .to_owned(),
+                                )
+                            })?;
+                        for record in &records {
+                            persist_canonical_historical_recovery_payload_custody(
+                                kura.as_ref(),
+                                process_generation,
+                                &common_config.key_pair,
+                                &local_peer,
+                                record,
+                            )?;
+                        }
+                        let _outcomes =
+                            persist_preflighted_historical_autonomous_lane_recoveries(
+                                kura.as_ref(),
+                                &records,
+                            )?;
+                        validate_installed_historical_autonomous_lane_recoveries(
+                            kura.as_ref(),
+                            &records,
+                        )?;
+                        historical_recovery.complete();
+                        iroha_logger::info!(
+                            install_count = installs.len(),
+                            "installed historical autonomous recovery inputs; rebuilding the complete immutable reconciliation plan"
+                        );
+                    }
+                }
+            };
+            reservation_reconciliation_pending = false;
+            if summary != Default::default() {
+                iroha_logger::info!(
+                    recovered = summary.recovered,
+                    finalized_committed = summary.finalized_committed,
+                    retained_current = summary.retained_current,
+                    retained_certified = summary.retained_certified,
+                    retained_pending_merge = summary.retained_pending_merge,
+                    retained_historical_recovery = summary.retained_historical_recovery,
+                    released_strictly_absent = summary.released_strictly_absent,
+                    released_terminal_loser = summary.released_terminal_loser,
+                    resumed_retirement = summary.resumed_retirement,
+                    "reconciled durable lane reservations from one exact startup evidence plan"
+                );
+            }
+        }
         let mut lane_work = construct_after_pending_tip_application_recovery(
             recovering_interrupted_tip,
             executor.durable_finality().is_some() && recovered_applied_height.is_some(),
@@ -1495,11 +1656,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     Arc::clone(&output_guard),
                     exact_output_transport_owner,
                     retained_merge_sidecars.take(),
+                    _lifecycle_process_generation.clone(),
                 )
                 .map_err(V2RunnerError::from)
             },
         )?;
         lane_work.install_lane_drain_queue(Arc::clone(&queue))?;
+        // Signed lifecycle bootstrap, generation takeover, Queue snapshot recovery, and local
+        // Kura body rehydration completed above while the adapter was still carrier-silent.
+        // Activation is one-shot and independently revalidates every hydrated owner before work.
+        lane_work.activate_after_lane_drain_queue_install(&queue)?;
         let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
         committed_lane_status_publisher.publish_if_changed(&lane_work);
         if let Some(scheduler_ordinal) = services
@@ -1812,39 +1978,49 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         )
                         .map_err(V2RunnerError::Service)?;
                 }
-                if !recovering_interrupted_tip {
-                    // The one-shot older-runtime claim above cannot own the
-                    // whole timeout-recovery episode. Admit one authenticated
-                    // direct-roster TimeoutVote on every selected-Serve outer
-                    // turn, including after that claim reaches Complete.
-                    drain_v2_ingress(
-                        &block_rx,
-                        &mut executor,
-                        &mut services,
-                        &mut lane_work,
-                        output_guard.as_ref(),
-                        kura.as_ref(),
-                        &common_config.key_pair,
-                        block_sync_server
-                            .as_mut()
-                            .expect("block-sync server initialized before ingress"),
-                        &mut block_sync,
-                        &mut block_sync_request,
-                        &mut npos_vrf,
-                        V2IngressDrainMode::TimeoutVoteEpisode,
-                        1,
-                    )?;
-                }
-                if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
-                    services.drain_timeout_recovery_prefix_completion(
-                        &mut executor,
-                        timeout_recovery_cut,
-                    )?;
-                }
-                service_certified_serve_barrier_pacemaker_turn(
+                service_certified_serve_barrier_liveness_turn(
                     recovering_interrupted_tip,
                     claimed_older_runtime_episode,
-                    || advance_pacemaker_once(&block_rx, &mut executor, &mut services),
+                    |action| match action {
+                        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
+                            // The one-shot older-runtime claim above cannot own
+                            // the whole timeout-recovery episode. Admit one
+                            // authenticated direct-roster TimeoutVote on every
+                            // selected-Serve outer turn, including after that
+                            // claim reaches Complete.
+                            drain_v2_ingress(
+                                &block_rx,
+                                &mut executor,
+                                &mut services,
+                                &mut lane_work,
+                                output_guard.as_ref(),
+                                kura.as_ref(),
+                                &common_config.key_pair,
+                                block_sync_server
+                                    .as_mut()
+                                    .expect("block-sync server initialized before ingress"),
+                                &mut block_sync,
+                                &mut block_sync_request,
+                                &mut npos_vrf,
+                                V2IngressDrainMode::TimeoutVoteEpisode,
+                                1,
+                            )
+                        }
+                        CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
+                            if let Some(timeout_recovery_cut) =
+                                executor.timeout_recovery_lifecycle_cut()?
+                            {
+                                services.drain_timeout_recovery_prefix_completion(
+                                    &mut executor,
+                                    timeout_recovery_cut,
+                                )?;
+                            }
+                            Ok(())
+                        }
+                        CertifiedServeBarrierLivenessAction::Pacemaker => {
+                            advance_pacemaker_once(&block_rx, &mut executor, &mut services)
+                        }
+                    },
                 )?;
                 if !older_predecessor_remains {
                     // A full prefix may include an earlier Serve lifecycle whose
@@ -1918,6 +2094,18 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &services,
                 control_queue_capacity,
             )?;
+            let advert_refresh = services
+                .service_kura_replica_advert_refresh_turn(Instant::now())
+                .map_err(V2RunnerError::Service)?;
+            if advert_refresh.fanout_attempted {
+                iroha_logger::debug!(
+                    height = context.height,
+                    probes = advert_refresh.probes,
+                    retained_source = advert_refresh.retained_source,
+                    scan_active = advert_refresh.scan_active,
+                    "advanced bounded Kura replica-advert refresh"
+                );
+            }
             services.drain_completions(&mut executor)?;
             let _ = retry_exact_output_and_apply_sidecar_admissions(
                 &mut lane_work,
@@ -2020,7 +2208,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
                     let _ = service_historical_recovery_tick(&mut lane_work)?;
-                    lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -2065,7 +2252,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
                     let _ = service_historical_recovery_tick(&mut lane_work)?;
-                    lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -2869,6 +3055,7 @@ enum DecidedLaneRecoveryCurrentServe {
 
 enum DecidedLaneRecoveryIngressPreparation {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe(DecidedLaneRecoveryCurrentServe),
     HistoricalServe,
     LeaderWireRetire,
@@ -2881,6 +3068,7 @@ enum DecidedLaneRecoveryCurrentDrain<Admission> {
 
 enum DecidedLaneRecoveryDrainAuthorization<Admission> {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe(DecidedLaneRecoveryCurrentDrain<Admission>),
     HistoricalServe,
     LeaderWireRetire,
@@ -2936,6 +3124,11 @@ fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
         DecidedLaneRecoveryIngressPreparation::LaneLocal => {
             DecidedLaneRecoveryDrainDecision::Authorized(
                 DecidedLaneRecoveryDrainAuthorization::LaneLocal,
+            )
+        }
+        DecidedLaneRecoveryIngressPreparation::KuraReplicaAdvert => {
+            DecidedLaneRecoveryDrainDecision::Authorized(
+                DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
             )
         }
         DecidedLaneRecoveryIngressPreparation::HistoricalServe => {
@@ -3002,6 +3195,9 @@ fn prepare_decided_lane_recovery_ingress(
         &PeerId,
     ) -> Result<AuthenticatedCertifiedBodyRequest, String>,
 ) -> DecidedLaneRecoveryIngressPreparation {
+    if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+        return DecidedLaneRecoveryIngressPreparation::KuraReplicaAdvert;
+    }
     if inbound.message().is_lane_local() {
         return DecidedLaneRecoveryIngressPreparation::LaneLocal;
     }
@@ -3094,6 +3290,104 @@ fn prepare_decided_lane_recovery_ingress(
             request: authenticated,
         },
     )
+}
+
+#[derive(Debug)]
+enum KuraReplicaAdvertAdmissionError {
+    InvalidAdvert(String),
+    Fatal(crate::kura::Error),
+}
+
+fn classify_kura_replica_advert_admission_error(
+    error: crate::kura::Error,
+) -> KuraReplicaAdvertAdmissionError {
+    match error {
+        crate::kura::Error::InvalidKuraReplicaAdvert(reason) => {
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason)
+        }
+        error => KuraReplicaAdvertAdmissionError::Fatal(error),
+    }
+}
+
+/// Consume one fixed-small authenticated Kura replica advert without exposing
+/// it to either consensus reducer.
+///
+/// Fair admission already checks the signature and direct transport binding.
+/// This terminal seam repeats the complete local ownership proof so mutation
+/// of the queued carrier fails closed. Kura then revalidates the exact durable
+/// body, finality artifact, CommitQC signer, and deterministic keeper set; a
+/// remotely invalid claim is simply retired.
+fn admit_kura_replica_advert_ingress(
+    receiver: &FairV2Ingress,
+    kura: &Kura,
+    mut inbound: InboundBlockMessage,
+) -> Result<(), V2RunnerError> {
+    let advertised_keeper = match inbound.message() {
+        BlockMessage::KuraReplicaAdvert(advert) => advert.keeper.clone(),
+        _ => {
+            return Err(V2RunnerError::Service(
+                "Kura replica advert terminal received another message class".to_owned(),
+            ));
+        }
+    };
+    let authenticated_via = inbound.via().cloned();
+    let mut ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
+        V2RunnerError::Service(
+            "Kura replica advert lost its fair-ingress ownership carrier".to_owned(),
+        )
+    })?;
+    if !ingress_ownership.validate_exact()
+        || !ingress_ownership.matches_message(inbound.message())
+        || !ingress_ownership.matches_semantic_origin(inbound.sender())
+        || !ingress_ownership.matches_reply_routes(inbound.reply_routes())
+    {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert carried altered fair-ingress ownership".to_owned(),
+        ));
+    }
+    receiver
+        .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
+        .map_err(V2RunnerError::Service)?;
+    let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
+    let BlockMessage::KuraReplicaAdvert(advert) = message else {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert changed message class after ownership validation".to_owned(),
+        ));
+    };
+    if sender.as_ref() != Some(&advertised_keeper)
+        || authenticated_via.as_ref() != Some(&advertised_keeper)
+        || advert.keeper != advertised_keeper
+        || !ingress_ownership.matches_reply_routes(reply_routes.as_ref())
+    {
+        return Err(V2RunnerError::Service(
+            "Kura replica advert changed its direct authenticated keeper route".to_owned(),
+        ));
+    }
+    match kura.admit_kura_replica_advert(&advert) {
+        Ok(()) => {
+            iroha_logger::debug!(
+                height = advert.height,
+                keeper = %advert.keeper,
+                "admitted authenticated Kura replica advert"
+            );
+        }
+        Err(error) => match classify_kura_replica_advert_admission_error(error) {
+            KuraReplicaAdvertAdmissionError::InvalidAdvert(reason) => {
+                iroha_logger::debug!(
+                    %reason,
+                    height = advert.height,
+                    keeper = %advert.keeper,
+                    "retired invalid Kura replica advert"
+                );
+            }
+            KuraReplicaAdvertAdmissionError::Fatal(error) => {
+                return Err(V2RunnerError::Service(format!(
+                    "Kura replica advert admission encountered local durable-state failure: {error}"
+                )));
+            }
+        },
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3339,6 +3633,10 @@ fn drain_v2_ingress(
         else {
             break;
         };
+        if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
+            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
+            continue;
+        }
         if inbound.message().is_lane_local() {
             let _ = lane_work
                 .accept_lane_message_with_ingress_ownership(inbound, executor.current_tag().view());
@@ -3743,6 +4041,7 @@ fn drain_v2_ingress(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DecidedLaneRecoveryDrainCommitOutcome {
     LaneLocal,
+    KuraReplicaAdvert,
     CurrentServe,
     HistoricalServe,
     LeaderWireVolatile,
@@ -3752,6 +4051,8 @@ trait DecidedLaneRecoveryDrainCommitter {
     type Admission;
 
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError>;
+
+    fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError>;
 
     fn commit_current_serve(
         &mut self,
@@ -3773,6 +4074,10 @@ fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
         DecidedLaneRecoveryDrainAuthorization::LaneLocal => {
             committer.commit_lane_local()?;
             Ok(DecidedLaneRecoveryDrainCommitOutcome::LaneLocal)
+        }
+        DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert => {
+            committer.commit_kura_replica_advert()?;
+            Ok(DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert)
         }
         DecidedLaneRecoveryDrainAuthorization::CurrentServe(current) => {
             committer.commit_current_serve(current)?;
@@ -3834,6 +4139,11 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
             .accept_lane_message_with_ingress_ownership(inbound, self.active_view);
         let _ = self.lane_work.service_next_historical_recovery()?;
         Ok(())
+    }
+
+    fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
+        let inbound = self.take_inbound()?;
+        admit_kura_replica_advert_ingress(self.receiver, self.kura, inbound)
     }
 
     fn commit_current_serve(
@@ -4355,6 +4665,35 @@ fn advance_executor_once_before_exact_serve(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CertifiedServeBarrierLivenessAction {
+    TimeoutVoteEpisode,
+    TimeoutRecoveryPrefix,
+    Pacemaker,
+}
+
+/// Service the complete timeout-recovery suffix of one selected Serve turn.
+///
+/// The one-shot predecessor claim is deliberately not an episode owner. Once
+/// it is Complete, the still-selected Serve carrier continues to admit one
+/// eligible direct-roster timeout vote, service an already-owned prefix
+/// completion, and run one typed pacemaker transition in that exact order.
+fn service_certified_serve_barrier_liveness_turn<E>(
+    recovering_interrupted_tip: bool,
+    older_runtime_episode_claimed: bool,
+    mut service: impl FnMut(CertifiedServeBarrierLivenessAction) -> Result<(), E>,
+) -> Result<(), E> {
+    if !recovering_interrupted_tip {
+        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;
+    }
+    service(CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix)?;
+    service_certified_serve_barrier_pacemaker_turn(
+        recovering_interrupted_tip,
+        older_runtime_episode_claimed,
+        || service(CertifiedServeBarrierLivenessAction::Pacemaker),
+    )
+}
+
 /// Keep the pacemaker live for the full lifetime of a certified Serve barrier.
 ///
 /// `older_runtime_episode_claimed` deliberately does not gate service. The
@@ -4467,6 +4806,35 @@ fn local_validator_index(
         // serve any independently frozen lane descriptor that still names
         // its key, including unfinished predecessor work.
         (NodeRole::Validator, None) => Ok(None),
+    }
+}
+
+/// Claim the immutable process capability independently of this height's roster duty.
+///
+/// Configured validators must own one generation even while absent from the recovered global
+/// roster: a later height may rotate them back in, and a retained frozen lane descriptor may
+/// still name their key. Explicit observers never mutate this Kura lifecycle namespace.
+fn claim_runner_lifecycle_process_generation(
+    role: NodeRole,
+    kura: &Kura,
+    context: &wire::HeightContext,
+    local_peer: &PeerId,
+) -> Result<Option<AutonomousLifecycleProcessGenerationClaim>, V2RunnerError> {
+    match role {
+        NodeRole::Observer => Ok(None),
+        NodeRole::Validator => {
+            let lifecycle_chain_id = context.chain_id.clone().into_inner();
+            kura.claim_autonomous_lifecycle_process_generation(
+                Hash::new(lifecycle_chain_id.as_bytes()),
+                local_peer,
+            )
+            .map(Some)
+            .map_err(|error| {
+                V2RunnerError::Service(format!(
+                    "failed to claim the durable autonomous lifecycle process generation: {error}"
+                ))
+            })
+        }
     }
 }
 
@@ -4625,21 +4993,6 @@ fn candidate_attachments(
             "certified merge carrier probe differs from the frozen round".to_owned(),
         ));
     }
-    let expected_merge_epoch = state
-        .merge_ledger()
-        .latest()
-        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    let certified_merge_entry = state
-        .select_pending_certified_merge_entry_for_round(round_header, expected_merge_epoch)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
-        .map(|(_, entry, _)| entry)
-        .map(|entry| {
-            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
-                .map(|()| entry)
-                .map_err(V2RunnerError::Candidate)
-        })
-        .transpose()?;
-
     let effects = if context.mode == wire::ConsensusMode::Npos {
         super::penalties::PenaltyApplier::from_parts(
             state,
@@ -4653,6 +5006,36 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
+    let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
+    super::v2_npos::validate_candidate_records(context, state, npos_consensus_effects.as_ref())
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let merge_selection = certified_merge_selection_for_npos(npos_consensus_effects.is_some());
+    if merge_selection == PendingCertifiedMergeSelection::ControlOnly {
+        iroha_logger::debug!(
+            height = context.height,
+            view,
+            "prioritizing deterministic NPoS effects before a certified execution carrier"
+        );
+    }
+    let expected_merge_epoch = state
+        .merge_ledger()
+        .latest()
+        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+    let selected_merge_entry = state
+        .select_pending_certified_merge_entry_for_round(
+            round_header,
+            expected_merge_epoch,
+            merge_selection,
+        )
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let certified_merge_entry = selected_merge_entry
+        .map(|(_, entry, _)| entry)
+        .map(|entry| {
+            super::v2_lane_work::authenticate_merge_entry_for_height_context(context, &entry)
+                .map(|()| entry)
+                .map_err(V2RunnerError::Candidate)
+        })
+        .transpose()?;
     let parent_creation_time = match parent {
         CandidateParent::Block(parent) => parent.header().creation_time(),
         CandidateParent::Snapshot(anchor) => {
@@ -4662,7 +5045,7 @@ fn candidate_attachments(
     Ok(CandidateAttachments {
         time_trigger_clock_progress_required: state
             .time_trigger_clock_progress_required_fast(parent_creation_time),
-        npos_consensus_effects: (!effects.is_empty()).then_some(effects),
+        npos_consensus_effects,
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
@@ -4670,6 +5053,16 @@ fn candidate_attachments(
         certified_merge_entry,
         ..CandidateAttachments::default()
     })
+}
+
+const fn certified_merge_selection_for_npos(
+    has_npos_effects: bool,
+) -> PendingCertifiedMergeSelection {
+    if has_npos_effects {
+        PendingCertifiedMergeSelection::ControlOnly
+    } else {
+        PendingCertifiedMergeSelection::Any
+    }
 }
 
 fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
@@ -4738,92 +5131,7 @@ fn retry_exact_output_and_apply_sidecar_admissions(
     Ok(pending)
 }
 
-fn rollover_finalized_height_outputs(
-    mut lane_work: V2LaneWorkAdapter,
-    services: &ProductionV2Services,
-    receipt: &KuraV2CommitReceipt,
-    artifact: &wire::finality::V2FinalityArtifact,
-    successor: &wire::HeightContext,
-    control_queue_capacity: usize,
-) -> Result<RetainedMergeSidecars, V2RunnerError> {
-    // Finality makes every current-height global/lane output either
-    // Kura-reconstructible or explicitly superseded. Move those owners across
-    // one local durable boundary before the successor opens the merge journal;
-    // no predecessor thread survives this function.
-    let _ = retry_exact_output_and_apply_sidecar_admissions(
-        &mut lane_work,
-        services,
-        control_queue_capacity,
-    )?;
-    let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
-    lane_work.persist_anchored_sessions()?;
-    lane_work.prepare_canonical_lane_rollover(artifact)?;
-    let durable_lane_authority = lane_work
-        .durable_lane_rollover_authority(artifact)?
-        .ok_or_else(|| {
-            V2RunnerError::Service(
-                "finalized lane output has not crossed its local durable reconstruction boundary"
-                    .to_owned(),
-            )
-        })?;
-    lane_work.prune_finalized_merge_sidecars()?;
-    lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
-
-    loop {
-        apply_certified_merge_sidecar_closed_prefixes(&mut lane_work, services)?;
-        apply_certified_merge_sidecar_chunk_admissions(
-            &mut lane_work,
-            services,
-            control_queue_capacity,
-        )?;
-        let retired = services
-            .handoff_applied_height_output_to_durable_reconstruction(
-                receipt,
-                artifact,
-                &durable_lane_authority,
-            )
-            .map_err(V2RunnerError::Service)?;
-        apply_certified_merge_sidecar_chunk_admissions(
-            &mut lane_work,
-            services,
-            control_queue_capacity,
-        )?;
-        if !services
-            .has_pending_exact_output()
-            .map_err(V2RunnerError::Service)?
-        {
-            break;
-        }
-        if retired == 0 {
-            return Err(V2RunnerError::Service(
-                "finalized exact output has no durable or move-only successor source".to_owned(),
-            ));
-        }
-    }
-
-    let _ = services
-        .handoff_applied_height_output_to_durable_reconstruction(
-            receipt,
-            artifact,
-            &durable_lane_authority,
-        )
-        .map_err(V2RunnerError::Service)?;
-    if lane_work.has_pending_committed_output_handoff()
-        || services
-            .has_pending_exact_output()
-            .map_err(V2RunnerError::Service)?
-    {
-        return Err(V2RunnerError::Service(
-            "finalized output remained owned after durable handoff".to_owned(),
-        ));
-    }
-    let exact_output_handoff = services
-        .seal_applied_height_output_handoff(receipt, artifact, &durable_lane_authority)
-        .map_err(V2RunnerError::Service)?;
-    lane_work
-        .into_retained_merge_sidecars(exact_output_handoff, artifact, successor)
-        .map_err(V2RunnerError::from)
-}
+include!("v2_runner/finalized_output_rollover.rs");
 
 fn apply_certified_merge_sidecar_closed_prefixes(
     lane_work: &mut V2LaneWorkAdapter,
@@ -4865,6 +5173,8 @@ fn require_peeked_lane_work_effect(
 ) -> Result<V2LaneWorkEffect, V2RunnerError> {
     drained.ok_or(V2RunnerError::RestartRequired)
 }
+
+include!("v2_runner/canonical_recovery_ingress.rs");
 
 fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
@@ -4919,97 +5229,7 @@ fn dispatch_lane_work_effects(
     Ok(())
 }
 
-/// Remove retired source occurrences from semantic work already owned by the
-/// lane adapter. A malformed effect which never carried its required route is
-/// left intact so normal strict validation rejects it.
-fn retain_active_owned_reply_routes(effect: &mut V2LaneWorkEffect) -> bool {
-    retain_active_owned_reply_routes_with_snapshot_hook(effect, || {})
-}
-
-#[cfg(test)]
-fn retain_active_owned_reply_routes_after_snapshot<AfterSnapshot>(
-    effect: &mut V2LaneWorkEffect,
-    after_snapshot: AfterSnapshot,
-) -> bool
-where
-    AfterSnapshot: FnOnce(),
-{
-    retain_active_owned_reply_routes_with_snapshot_hook(effect, after_snapshot)
-}
-
-fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(
-    effect: &mut V2LaneWorkEffect,
-    after_snapshot: AfterSnapshot,
-) -> bool
-where
-    AfterSnapshot: FnOnce(),
-{
-    if let V2LaneWorkEffect::PostDurableLaneCertificate {
-        reply_routes,
-        ingress_ownership,
-        ..
-    } = effect
-    {
-        let Some(routes) = reply_routes.as_mut() else {
-            return true;
-        };
-        let Some(ownership) = ingress_ownership.as_mut() else {
-            return true;
-        };
-        if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {
-            return true;
-        }
-        let (retained_routes, receipt) = routes.retain_active_with_receipt();
-        after_snapshot();
-        let Some(projected_routes) = ownership.project_retained_reply_routes(receipt) else {
-            // Preserve malformed pre-existing ownership for strict dispatch;
-            // ordinary retirement cannot reach this branch because the exact
-            // route snapshot is projected without another liveness read.
-            return true;
-        };
-        *routes = projected_routes;
-        return retained_routes != 0;
-    }
-    let reply_routes = match effect {
-        V2LaneWorkEffect::PostNativeAmx {
-            reply_routes,
-            message: NativeAmxMessage::PrepareVote(_) | NativeAmxMessage::CommitVote(_),
-            ..
-        } => reply_routes,
-        V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            reply_routes,
-            message,
-            ..
-        } if matches!(
-            message.as_ref(),
-            CertifiedMergeSidecarMessage::CloseAck(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_)
-                | CertifiedMergeSidecarMessage::Chunk(_)
-        ) =>
-        {
-            reply_routes
-        }
-        V2LaneWorkEffect::PostLaneBlock { .. }
-        | V2LaneWorkEffect::PostDurableLaneCertificate { .. }
-        | V2LaneWorkEffect::PostNativeAmx { .. }
-        | V2LaneWorkEffect::PostLaneDrainVote { .. }
-        | V2LaneWorkEffect::BroadcastMerge(_)
-        | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
-    };
-    let Some(routes) = reply_routes.as_mut() else {
-        return true;
-    };
-    let before = routes.clone();
-    let (retained, receipt) = routes.retain_active_with_receipt();
-    let Some(projected) = receipt.into_output(&before) else {
-        // Preserve the operation's mutated value for normal strict dispatch;
-        // this branch is unreachable for a module-minted receipt and exists
-        // only to fail closed if its exact-history contract is broken.
-        return true;
-    };
-    *routes = projected;
-    retained != 0
-}
+include!("v2_runner/reply_route_retention.rs");
 
 #[derive(Debug)]
 enum LaneWorkEffectDispatch {
@@ -5111,66 +5331,7 @@ fn dispatch_lane_work_effect(
     Ok(LaneWorkEffectDispatch::Complete)
 }
 
-fn drive_merge_sidecar_recovery(
-    executor: &mut V2EffectExecutor,
-    services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
-) -> Result<(), V2RunnerError> {
-    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
-    while let Some(deferred) = services.take_merge_sidecar_deferral() {
-        let entry_hash = deferred.reference().entry_hash;
-        if !executor.retains_deferred_merge_sidecar(
-            deferred.work_id(),
-            deferred.round(),
-            deferred.subject(),
-            entry_hash,
-        ) {
-            continue;
-        }
-        let disposition = if executor.deferred_merge_sidecar_is_decided(deferred.work_id()) {
-            lane_work.defer_missing_decided_merge_sidecar(
-                deferred.round(),
-                deferred.subject(),
-                deferred.reference().clone(),
-            )?
-        } else {
-            lane_work.defer_missing_merge_sidecar(
-                deferred.round(),
-                deferred.subject(),
-                deferred.reference().clone(),
-            )?
-        };
-        match disposition {
-            MergeSidecarDeferralDisposition::Fetching
-            | MergeSidecarDeferralDisposition::Available => {}
-            MergeSidecarDeferralDisposition::RetryLater => {
-                services
-                    .requeue_merge_sidecar_deferral(deferred)
-                    .map_err(V2RunnerError::Service)?;
-                break;
-            }
-            MergeSidecarDeferralDisposition::Rejected(reason) => {
-                let _ = executor.reject_deferred_merge_sidecar_work(
-                    deferred.work_id(),
-                    reason,
-                    services,
-                )?;
-            }
-        }
-    }
-    while let Some(entry_hash) = lane_work.take_completed_merge_sidecar() {
-        let _ = executor.retry_deferred_merge_sidecar(entry_hash, services)?;
-    }
-    while let Some(rejected) = lane_work.take_rejected_merge_sidecar() {
-        let _ = executor.reject_deferred_merge_sidecar(
-            rejected.entry_hash(),
-            rejected.reason(),
-            services,
-        )?;
-    }
-    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
-    Ok(())
-}
+include!("v2_runner/merge_sidecar_recovery.rs");
 
 fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
@@ -5407,6 +5568,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn complete_certified_serve_episode_cannot_veto_pacemaker() {
         let calls = Cell::new(0_u8);
         for older_runtime_episode_claimed in [true, false] {
@@ -5439,6 +5601,37 @@ mod tests {
         })
         .expect("interrupted-tip recovery does not arm a fresh pacemaker");
         assert_eq!(calls.get(), 3);
+
+        #[cfg(feature = "bls")]
+        {
+            let mut recovery =
+                super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new();
+            for _ in 0..16 {
+                let older_runtime_episode_claimed = recovery
+                    .service_exact_serve_runtime_prefix()
+                    .expect("service the exact selected-Serve runtime prefix");
+                service_certified_serve_barrier_liveness_turn(
+                    false,
+                    older_runtime_episode_claimed,
+                    |action| match action {
+                        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
+                            recovery.service_timeout_vote_episode()
+                        }
+                        CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
+                            recovery.service_timeout_recovery_prefix()
+                        }
+                        CertifiedServeBarrierLivenessAction::Pacemaker => {
+                            recovery.service_pacemaker()
+                        }
+                    },
+                )
+                .expect("the selected-Serve suffix retains typed timeout recovery");
+                if recovery.entered_view_one() {
+                    break;
+                }
+            }
+            recovery.assert_complete();
+        }
     }
 
     #[test]
@@ -5667,10 +5860,11 @@ mod tests {
                 proposal_round: round,
                 phase: wire::GlobalPhase::Prepare,
                 subject,
-                execution_commitment: wire::ExecutionCommitment::without_topups(
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                     Hash::new(b"runner recovery parent state"),
                     Hash::new(b"runner recovery post state"),
                     Hash::new(b"runner recovery ordinary writes"),
+                    1,
                     Hash::new(b"runner recovery executed block"),
                 ),
                 signers: (0..context.roster.len())
@@ -5798,6 +5992,10 @@ mod tests {
 
         fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
             self.record("lane-local")
+        }
+
+        fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
+            self.record("kura-replica-advert")
         }
 
         fn commit_current_serve(
@@ -5962,6 +6160,17 @@ mod tests {
             DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
         );
         assert_eq!(negative.calls, ["retire-staged-negative"]);
+
+        let mut kura_replica_advert = RecordingDecidedLaneCommitter::new(None);
+        assert_eq!(
+            commit_decided_lane_recovery_drain(
+                DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
+                &mut kura_replica_advert,
+            )
+            .expect("route Kura replica advert"),
+            DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert
+        );
+        assert_eq!(kura_replica_advert.calls, ["kura-replica-advert"]);
 
         let mut historical = RecordingDecidedLaneCommitter::new(None);
         assert_eq!(
@@ -6134,6 +6343,221 @@ mod tests {
             ),
             DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
         ));
+    }
+
+    fn height_ingress_bindings_fixture(
+        owner_marker: u8,
+    ) -> (
+        TempDir,
+        Arc<FairV2Ingress>,
+        Arc<AtomicBool>,
+        HeightIngressBindings,
+        CertifiedServeIngressGate,
+        Arc<LeaderWireLifecycleStoreGate>,
+    ) {
+        let (context, _) = context();
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let directory = TempDir::new().expect("temporary joint height-ingress directory");
+        let ingress = Arc::new(
+            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
+        ingress
+            .configure_roster_for_context(
+                roster.iter().cloned(),
+                &context.chain_id,
+                context.da_layout,
+            )
+            .expect("configure joint height ingress");
+        ingress.require_certified_serve_gate();
+        ingress.require_leader_wire_lifecycle_gate();
+
+        let ingress_ready = Arc::new(AtomicBool::new(false));
+        let (serve_gate, lifecycle_ordinals) =
+            super::super::v2_worker::tests::certified_serve_ingress_gate_fixture();
+        let certified_serve = CertifiedServeIngressBinding::bind(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&ingress),
+            serve_gate.clone(),
+        )
+        .expect("bind joint height Serve gate");
+
+        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
+            roster.len(),
+            context.da_layout.max_chunk_count,
+        )
+        .expect("derive joint height leader-wire capacity");
+        let owner = [owner_marker; 32];
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                context.id(),
+                context.height,
+                owner,
+                0,
+                false,
+            );
+        let (leader_gate, restore) = LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("joint-height-ingress.wal"),
+            context.id(),
+            context.height,
+            owner,
+            roster,
+            capacity,
+            context.da_layout.max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open joint height leader-wire gate");
+        let leader_wire = LeaderWireIngressBinding::bind(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&ingress),
+            Arc::clone(&leader_gate),
+            restore,
+            lifecycle_ordinals,
+            context.id(),
+            context.height,
+        )
+        .expect("bind joint height leader-wire gate");
+        let bindings = HeightIngressBindings::new(certified_serve, leader_wire);
+        ingress.open().expect("open joint height ingress");
+        ingress_ready.store(true, Ordering::Release);
+        (
+            directory,
+            ingress,
+            ingress_ready,
+            bindings,
+            serve_gate,
+            leader_gate,
+        )
+    }
+
+    #[test]
+    fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
+        let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+            height_ingress_bindings_fixture(0xD5);
+        {
+            let state = ingress.state.lock();
+            assert!(state.open);
+            assert!(
+                state
+                    .certified_serve_gate
+                    .as_ref()
+                    .is_some_and(|bound| bound.ptr_eq(&serve_gate))
+            );
+            assert!(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate))
+            );
+        }
+
+        bindings
+            .retire()
+            .expect("retire both per-height ingress gates atomically");
+        assert!(!ingress_ready.load(Ordering::Acquire));
+        assert!(bindings.certified_serve.gate.is_none());
+        assert!(bindings.leader_wire.gate.is_none());
+        {
+            let state = ingress.state.lock();
+            assert!(!state.open);
+            assert!(state.certified_serve_gate.is_none());
+            assert!(state.leader_wire_lifecycle_gate.is_none());
+            assert!(state.leader_wire_lifecycle_ordinals.is_none());
+            assert!(state.leader_wire_context.is_none());
+        }
+        bindings
+            .retire()
+            .expect("joint height retirement remains idempotent");
+    }
+
+    #[test]
+    fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership() {
+        {
+            let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+                height_ingress_bindings_fixture(0xD6);
+            bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));
+            let error = bindings
+                .retire()
+                .expect_err("mismatched readiness ownership must reject joint retirement");
+            assert!(matches!(
+                error,
+                V2RunnerError::Service(ref reason)
+                    if reason == "per-height ingress gates changed their shared queue"
+            ));
+            assert!(ingress_ready.load(Ordering::Acquire));
+            assert!(ingress.state.lock().open);
+
+            drop(bindings);
+            assert!(!ingress_ready.load(Ordering::Acquire));
+            let state = ingress.state.lock();
+            assert!(!state.open);
+            assert!(
+                state
+                    .certified_serve_gate
+                    .as_ref()
+                    .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
+                "a failed joint validation cannot partially detach the Serve gate"
+            );
+            assert!(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
+                "a failed joint validation cannot partially detach the leader-wire gate"
+            );
+        }
+
+        {
+            let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+                height_ingress_bindings_fixture(0xD7);
+            bindings.leader_wire.gate = None;
+            let error = bindings
+                .retire()
+                .expect_err("partial child ownership must reject joint retirement");
+            assert!(matches!(
+                error,
+                V2RunnerError::Service(ref reason)
+                    if reason == "per-height ingress gates changed joint ownership"
+            ));
+            assert!(ingress_ready.load(Ordering::Acquire));
+            assert!(ingress.state.lock().open);
+
+            drop(bindings);
+            assert!(!ingress_ready.load(Ordering::Acquire));
+            let state = ingress.state.lock();
+            assert!(!state.open);
+            assert!(
+                state
+                    .certified_serve_gate
+                    .as_ref()
+                    .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
+                "partial child ownership cannot trigger split Serve teardown"
+            );
+            assert!(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
+                "partial child ownership cannot trigger split leader-wire teardown"
+            );
+        }
     }
 
     fn leader_wire_runtime_ingress_fixture() -> (
@@ -8598,10 +9022,11 @@ mod tests {
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"terminal ingress parent state"),
                 Hash::new(b"terminal ingress post state"),
                 Hash::new(b"terminal ingress writes"),
+                1,
                 Hash::new(b"terminal ingress executed block"),
             ),
             signers: vec![0, 1, 2],

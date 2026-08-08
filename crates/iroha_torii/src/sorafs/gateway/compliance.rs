@@ -98,13 +98,15 @@ pub struct GatewayComplianceTrustPolicyV1 {
     pub policy_id: [u8; 32],
     /// Minimum distinct governance approvals.
     pub catalog_threshold: u16,
-    /// Governance catalog signers in strictly increasing identifier order.
+    /// Governance catalog signers in strictly increasing identifier order,
+    /// disjoint from gateway acknowledgement identities and keys.
     pub catalog_signers: Vec<GatewayComplianceTrustedSignerV1>,
     /// Revoked governance signer identifiers in strictly increasing order.
     pub revoked_catalog_signer_ids: Vec<String>,
     /// Minimum distinct positive gateway acknowledgements before promotion.
     pub gateway_ack_threshold: u16,
-    /// Gateway acknowledgement signers in strictly increasing identifier order.
+    /// Gateway acknowledgement signers in strictly increasing identifier
+    /// order, disjoint from catalog approval identities and keys.
     pub gateway_signers: Vec<GatewayComplianceTrustedSignerV1>,
     /// Revoked gateway signer identifiers in strictly increasing order.
     pub revoked_gateway_signer_ids: Vec<String>,
@@ -129,7 +131,8 @@ impl GatewayComplianceTrustPolicyV1 {
             &self.revoked_gateway_signer_ids,
             self.gateway_ack_threshold,
             "gateway acknowledgement",
-        )
+        )?;
+        validate_disjoint_signer_roles(&self.catalog_signers, &self.gateway_signers)
     }
 
     /// Return the domain-separated canonical policy digest.
@@ -2641,6 +2644,29 @@ fn validate_signer_inventory(
     Ok(())
 }
 
+fn validate_disjoint_signer_roles(
+    catalog_signers: &[GatewayComplianceTrustedSignerV1],
+    gateway_signers: &[GatewayComplianceTrustedSignerV1],
+) -> Result<(), GatewayComplianceError> {
+    let catalog_ids = catalog_signers
+        .iter()
+        .map(|signer| signer.signer_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let catalog_keys = catalog_signers
+        .iter()
+        .map(|signer| signer.public_key)
+        .collect::<BTreeSet<_>>();
+    if gateway_signers.iter().any(|signer| {
+        catalog_ids.contains(signer.signer_id.as_str()) || catalog_keys.contains(&signer.public_key)
+    }) {
+        return Err(GatewayComplianceError::InvalidPolicy(
+            "catalog and gateway acknowledgement signer identities must be administratively disjoint"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn find_signer<'a>(
     signers: &'a [GatewayComplianceTrustedSignerV1],
     signer_id: &str,
@@ -4644,6 +4670,47 @@ mod tests {
     }
 
     #[test]
+    fn cross_role_signer_reuse_fails_before_provider_or_store_access() {
+        let mut reused_id = config();
+        reused_id.trust_policy.gateway_signers[0].signer_id =
+            reused_id.trust_policy.catalog_signers[0].signer_id.clone();
+        let mut reused_key = config();
+        reused_key.trust_policy.gateway_signers[0].public_key =
+            reused_key.trust_policy.catalog_signers[0].public_key;
+
+        for (label, config) in [
+            ("signer identifier", reused_id),
+            ("Ed25519 public key", reused_key),
+        ] {
+            let transport = QualifiableTransport::expected();
+            let store = Arc::new(UnexpectedStore::default());
+            let error = GatewayComplianceController::new_with_feed_transport(
+                config,
+                store.clone(),
+                &transport,
+            )
+            .expect_err("cross-role signer reuse must fail startup");
+            assert!(
+                matches!(&error, GatewayComplianceError::InvalidPolicy(message)
+                    if message.contains("administratively disjoint")),
+                "unexpected {label} reuse error: {error}"
+            );
+            assert_eq!(
+                transport
+                    .qualification_calls
+                    .load(TestAtomicOrdering::SeqCst),
+                0,
+                "{label} reuse must fail before provider qualification"
+            );
+            assert_eq!(
+                store.acquire_calls.load(TestAtomicOrdering::SeqCst),
+                0,
+                "{label} reuse must fail before checkpoint access"
+            );
+        }
+    }
+
+    #[test]
     fn feed_transport_qualification_rejects_bad_providers_before_store_access() {
         let cases = [
             (
@@ -6285,108 +6352,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn feed_transport_response_debug_is_payload_free() {
-        let mut response = fetch_response(b"PRIVATE-FEED-BODY".to_vec());
-        response.redirect_location = Some("https://feed.example/PRIVATE-REDIRECT".into());
-        let debug = format!("{response:?}");
-
-        assert!(debug.contains("body_bytes"));
-        assert!(debug.contains("redirect_location_bytes"));
-        assert!(!debug.contains("PRIVATE-FEED-BODY"));
-        assert!(!debug.contains("PRIVATE-REDIRECT"));
-    }
-
-    #[test]
-    fn feed_fetch_rejects_private_dns_and_rebinding() {
-        let policy = feed_policy();
-        let private = ScriptedTransport {
-            resolutions: Mutex::new(VecDeque::from([vec![
-                "127.0.0.1".parse().expect("private IP"),
-            ]])),
-            response: fetch_response(Vec::new()),
-        };
-        assert!(matches!(
-            fetch_feed_bytes(
-                &policy,
-                GatewayComplianceFetchLimits::default(),
-                &test_feed_transport_identity(),
-                &private,
-            ),
-            Err(GatewayComplianceError::NonPublicAddress)
-        ));
-
-        let rebinding = ScriptedTransport {
-            resolutions: Mutex::new(VecDeque::from([
-                vec!["93.184.216.34".parse().expect("public IP")],
-                vec!["93.184.216.35".parse().expect("public IP")],
-            ])),
-            response: fetch_response(Vec::new()),
-        };
-        assert!(matches!(
-            fetch_feed_bytes(
-                &policy,
-                GatewayComplianceFetchLimits::default(),
-                &test_feed_transport_identity(),
-                &rebinding,
-            ),
-            Err(GatewayComplianceError::DnsRebinding)
-        ));
-    }
-
-    #[test]
-    fn feed_fetch_rejects_wrong_trust_pin_and_decompression_bomb() {
-        let policy = feed_policy();
-        let mut wrong_pin_response = fetch_response(Vec::new());
-        wrong_pin_response.peer_spki_sha256 = [0x99; 32];
-        let wrong_pin = ScriptedTransport {
-            resolutions: Mutex::new(VecDeque::from([vec![
-                "93.184.216.34".parse().expect("public IP"),
-            ]])),
-            response: wrong_pin_response,
-        };
-        assert!(matches!(
-            fetch_feed_bytes(
-                &policy,
-                GatewayComplianceFetchLimits::default(),
-                &test_feed_transport_identity(),
-                &wrong_pin,
-            ),
-            Err(GatewayComplianceError::TrustPinMismatch)
-        ));
-
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&vec![0x41; 4_096]).expect("gzip write");
-        let compressed = encoder.finish().expect("gzip finish");
-        assert!(matches!(
-            decompress_bounded(&compressed, GatewayComplianceContentEncoding::Gzip, 128),
-            Err(GatewayComplianceError::ResourceLimit { .. })
-        ));
-    }
-
-    #[test]
-    fn feed_fetch_rejects_redirect_outside_exact_allowlist() {
-        let policy = feed_policy();
-        let mut response = fetch_response(Vec::new());
-        response.status = 302;
-        response.redirect_location = Some("https://mirror.example/catalog".into());
-        let redirect = ScriptedTransport {
-            resolutions: Mutex::new(VecDeque::from([
-                vec!["93.184.216.34".parse().expect("public IP")],
-                vec!["93.184.216.34".parse().expect("public IP")],
-            ])),
-            response,
-        };
-        assert!(matches!(
-            fetch_feed_bytes(
-                &policy,
-                GatewayComplianceFetchLimits::default(),
-                &test_feed_transport_identity(),
-                &redirect,
-            ),
-            Err(GatewayComplianceError::UnsafeUrl(_))
-        ));
-    }
+    include!("compliance_feed_transport_tests.rs");
 
     #[derive(Debug)]
     struct DeadlineTransport {

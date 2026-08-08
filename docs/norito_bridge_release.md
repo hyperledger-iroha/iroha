@@ -1,10 +1,12 @@
 # NoritoBridge Release Packaging
 
-This guide outlines the steps required to publish the `NoritoBridge` Swift bindings as
-an XCFramework that can be consumed from Swift Package Manager and CocoaPods. The
-workflow keeps the Swift artifacts in lock-step with the Rust crate releases that ship
-Iroha's Norito codec. For end-to-end instructions on consuming the published
-artifacts inside an app, see the
+This guide covers producing and publishing the authenticated `NoritoBridge`
+XCFramework release asset. Swift Package Manager consumes that exact artifact
+from an ignored local `dist/` directory or an explicitly configured external
+artifact directory. Native CocoaPods delivery is not complete; see
+[CocoaPods](#cocoapods) below. The workflow keeps the Swift artifact in
+lock-step with the Rust crate releases that ship Iroha's Norito codec. For
+end-to-end instructions on consuming a published artifact inside an app, see the
 [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
 The `.github/workflows/mobile_sdk_artifacts.yml` workflow builds, validates,
@@ -17,20 +19,21 @@ that workflow for local release verification.
 - Exact Rust 1.93.1 `cargo`, `rustc`, and `rustdoc`.
 - Python 3.12.
 - Swift toolchain 5.9 or newer.
-- CocoaPods (via Ruby gems) if publishing to the central specs repository.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
 
 ## Versioning model
 
 1. Determine the Rust crate version for the Norito codec (`crates/norito/Cargo.toml`).
 2. Tag the workspace with the release identifier (`v<version>`).
-3. Use the same semantic version for the Swift package and the CocoaPods podspec.
-4. When the Rust crate increments its version, publish a matching Swift
+3. Keep `IrohaSwift/VERSION`, the Swift loader's expected version, and the
+   reviewed release version map aligned.
+4. When the Rust crate increments its version, publish a matching authenticated Swift
    artifact.
 
 ## Build steps
 
-1. From the repository root, invoke the helper script to assemble the XCFramework:
+1. From a clean pinned commit, create dedicated canonical build and artifact
+   directories outside the repository and invoke the helper:
 
    ```bash
    export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
@@ -142,25 +145,22 @@ that workflow for local release verification.
 
 ### Swift Package Manager
 
-- Push the tag to the public Git repository.
-- Ensure the tag is reachable by the package index (Apple or the community mirror).
-- Consumers can now depend on `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")`.
+The checked-in package manifest uses a path-based binary target. Before package
+resolution, materialize the verified release asset either under the ignored
+repository `dist/` path or in a canonical external directory selected with
+`MOBILE_SDK_APPLE_ARTIFACT_DIR`. Reviewed builds additionally set
+`MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1`. A Git tag by itself does not
+materialize the XCFramework and must not be reported as an installed native
+package.
 
 ### CocoaPods
 
-1. Validate the pod locally:
-
-   ```bash
-   pod lib lint IrohaSwift.podspec --allow-warnings
-   ```
-
-2. Push the updated podspec:
-
-   ```bash
-   pod trunk push IrohaSwift.podspec
-   ```
-
-3. Confirm the new version appears in the CocoaPods index.
+Native CocoaPods publication remains blocked. The current podspec does not yet
+define an authenticated vendored-XCFramework archive path. The lint wrapper now
+fails when CocoaPods is unavailable, but a local lint does not close artifact
+delivery. Do not run `pod trunk push` or claim native CocoaPods readiness until
+the vendored artifact design, install smoke, and signed provenance are
+implemented and reviewed.
 
 ## CI considerations
 

@@ -22,12 +22,12 @@ use std::{
 };
 
 use iroha_config::parameters::{
-    ProductionRuntimeHandleError, is_production_runtime_handle, validate_production_runtime_handle,
+    ProductionRuntimeHandleError, is_canonical_webauthn_origin_v1, is_canonical_webauthn_rp_id_v1,
+    is_production_runtime_handle, validate_production_runtime_handle,
 };
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
-use url::Url;
 
 use crate::{
     ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerSessionInput,
@@ -143,13 +143,16 @@ pub struct EvidenceViewerConfigV1 {
     pub erasure_handle: String,
     /// Independently governed erasure adapter and policy qualification.
     pub expected_erasure_qualification: EvidenceViewerRuntimeProviderQualificationV1,
-    /// Governed identity of the immutable compaction archive.
+    /// Governed stable handle of the immutable compaction archive.
+    ///
+    /// The handle and namespace remain stable across key/policy epochs so the
+    /// current qualified provider can read every historical operation.
     pub compaction_archive_handle: String,
     /// Independently governed archive adapter and policy qualification.
     pub expected_compaction_archive_qualification: EvidenceViewerRuntimeProviderQualificationV1,
-    /// Stable non-secret archive namespace identity.
+    /// Stable non-secret archive namespace identity across every epoch.
     pub compaction_archive_id: [u8; 32],
-    /// Exact Ed25519 key authenticating durable archive install/readback.
+    /// Exact current-epoch Ed25519 key authenticating archive install/readback.
     pub compaction_archive_public_key: [u8; 32],
     /// Supervised archive-compaction cadence.
     pub compaction_interval_ms: u64,
@@ -191,7 +194,7 @@ impl EvidenceViewerConfigV1 {
         {
             return Err(EvidenceViewerErrorV1::InvalidConfig);
         }
-        if !is_canonical_rp_id(&self.webauthn_rp_id) {
+        if !is_canonical_webauthn_rp_id_v1(&self.webauthn_rp_id) {
             return Err(EvidenceViewerErrorV1::InvalidConfig);
         }
         if !is_production_runtime_handle(&self.webauthn_handle)
@@ -223,7 +226,7 @@ impl EvidenceViewerConfigV1 {
             || self
                 .webauthn_allowed_origins
                 .iter()
-                .any(|origin| !is_canonical_https_origin(origin, &self.webauthn_rp_id))
+                .any(|origin| !is_canonical_webauthn_origin_v1(origin, &self.webauthn_rp_id))
         {
             return Err(EvidenceViewerErrorV1::InvalidConfig);
         }
@@ -707,7 +710,7 @@ pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
     /// Return the stable non-secret archive namespace identity.
     fn archive_id(&self) -> [u8; 32];
 
-    /// Return the exact Ed25519 key authenticating install/readback.
+    /// Return the exact current-epoch Ed25519 key authenticating new installs.
     fn signing_public_key(&self) -> [u8; 32];
 
     /// Durably install one exact signed archive artifact.
@@ -729,6 +732,9 @@ pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
     /// Read back the exact artifact bound to `operation_id`.
     ///
     /// `Ok(None)` is valid only when the identifier has never been installed.
+    /// A qualified current provider must retain historical operations and
+    /// return each operation's original epoch signature; callers authenticate
+    /// that historical key through the governed signed lineage.
     ///
     /// # Errors
     ///
@@ -1700,19 +1706,22 @@ pub struct EvidenceViewerSignedCompactionArchiveHeadV1 {
     pub session_count: u32,
     /// Digest of the exact canonical archived records.
     pub compacted_payload_digest: [u8; 32],
-    /// Stable authenticated archive-provider identity.
+    /// Stable authenticated archive-provider handle across every epoch.
     pub archive_handle: String,
-    /// Exact archive adapter/public-policy revision.
+    /// Monotonic archive identity epoch.
+    ///
+    /// A successor either retains this revision and exact identity or advances
+    /// it by one under the governed evidence-viewer signature.
     pub archive_revision: u64,
     /// Exact archive public-policy digest.
     pub archive_policy_digest: [u8; 32],
-    /// Stable non-secret archive namespace identity.
+    /// Stable non-secret archive namespace identity across every epoch.
     pub archive_id: [u8; 32],
-    /// Exact Ed25519 key authenticating durable archive readback.
+    /// Epoch-specific Ed25519 key authenticating durable archive readback.
     pub archive_public_key: [u8; 32],
-    /// Governed evidence-viewer signer identity.
+    /// Governed evidence-viewer signer identity, stable across this lineage.
     pub signer_handle: String,
-    /// Governed Ed25519 signer public key.
+    /// Governed Ed25519 signer public key, stable across this lineage.
     pub signer_public_key: [u8; 32],
     /// Ed25519 signature over the exact transition and operation identifier.
     pub signature: [u8; 64],
@@ -2170,21 +2179,6 @@ impl EvidenceViewerCheckpointCommitFailureV1 {
 }
 
 impl EvidenceViewerServiceV1 {
-    /// Reject provider-less startup for an enabled production service.
-    ///
-    /// # Errors
-    ///
-    /// Always returns [`EvidenceViewerErrorV1::CheckpointUnavailable`].
-    /// Call [`Self::open_with_checkpoint_store`] with an exact qualified
-    /// deployment-owned authority.
-    pub fn open(
-        _config: EvidenceViewerConfigV1,
-        _deps: EvidenceViewerRuntimeDepsV1,
-        _node: NodeHandle,
-    ) -> Result<Self, EvidenceViewerErrorV1> {
-        Err(EvidenceViewerErrorV1::CheckpointUnavailable)
-    }
-
     /// Open against an exact qualified authoritative checkpoint store.
     ///
     /// The external CAS head is authoritative. The configured local file is
@@ -3872,9 +3866,11 @@ impl EvidenceViewerServiceV1 {
         if source_record.checkpoint_digest != source_anchor.checkpoint_digest {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
-        if let Some(predecessor) = state.compaction_archive_head.as_ref() {
-            self.verify_compaction_archive_lineage(predecessor)?;
-        }
+        let predecessor_identity_history = state
+            .compaction_archive_head
+            .as_ref()
+            .map(|predecessor| self.compaction_archive_identity_history(predecessor))
+            .transpose()?;
 
         let maximum_records = usize::try_from(request.maximum_records)
             .map_err(|_| EvidenceViewerErrorV1::InvalidRequest)?;
@@ -3957,8 +3953,14 @@ impl EvidenceViewerServiceV1 {
             self.config.receipt_signer_public_key,
         )
         .map_err(|_| EvidenceViewerErrorV1::RuntimeUnavailable)?;
+        verify_compaction_archive_current_provider_binding(&head, archive)
+            .map_err(|_| EvidenceViewerErrorV1::RuntimeUnavailable)?;
         if let Some(predecessor) = state.compaction_archive_head.as_ref() {
             verify_compaction_archive_lineage_link(&head, predecessor)?;
+            predecessor_identity_history
+                .as_ref()
+                .ok_or(EvidenceViewerErrorV1::InvalidCheckpoint)?
+                .verify_successor(&head, predecessor)?;
         }
         let artifact = EvidenceViewerCompactionArchiveArtifactV1 {
             version: EVIDENCE_VIEWER_COMPACTION_ARCHIVE_VERSION_V1,
@@ -3972,8 +3974,7 @@ impl EvidenceViewerServiceV1 {
         {
             return Err(EvidenceViewerErrorV1::ResourceExhausted);
         }
-        let verified_artifact =
-            verify_compaction_archive_artifact(&self.config, archive, &artifact_bytes)?;
+        let verified_artifact = verify_compaction_archive_artifact(&self.config, &artifact_bytes)?;
         if verified_artifact != artifact {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
@@ -3999,11 +4000,8 @@ impl EvidenceViewerServiceV1 {
         {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
-        let installed = verify_compaction_archive_artifact(
-            &self.config,
-            archive,
-            &readback.canonical_artifact,
-        )?;
+        let installed =
+            verify_compaction_archive_artifact(&self.config, &readback.canonical_artifact)?;
         if installed != artifact {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
@@ -4121,10 +4119,18 @@ impl EvidenceViewerServiceV1 {
         &self,
         head: &EvidenceViewerSignedCompactionArchiveHeadV1,
     ) -> Result<(), EvidenceViewerErrorV1> {
+        self.compaction_archive_identity_history(head).map(|_| ())
+    }
+
+    fn compaction_archive_identity_history(
+        &self,
+        head: &EvidenceViewerSignedCompactionArchiveHeadV1,
+    ) -> Result<CompactionArchiveIdentityHistoryV1, EvidenceViewerErrorV1> {
         let mut current = self.load_verified_compaction_archive_head(head.operation_id)?;
         if current != *head {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
+        let mut history = CompactionArchiveIdentityHistoryV1::new(&current);
         while current.generation > 1 {
             let predecessor_operation_id = current
                 .predecessor_operation_id
@@ -4132,9 +4138,10 @@ impl EvidenceViewerServiceV1 {
             let predecessor =
                 self.load_verified_compaction_archive_head(predecessor_operation_id)?;
             verify_compaction_archive_lineage_link(&current, &predecessor)?;
+            history.observe_predecessor(&current, &predecessor)?;
             current = predecessor;
         }
-        Ok(())
+        Ok(history)
     }
 
     fn load_verified_compaction_archive_head(
@@ -4147,11 +4154,8 @@ impl EvidenceViewerServiceV1 {
             .read(operation_id)
             .map_err(map_archive_external_error)?
             .ok_or(EvidenceViewerErrorV1::RuntimeUnavailable)?;
-        let artifact = verify_compaction_archive_artifact(
-            &self.config,
-            &self.deps.compaction_archive,
-            &readback.canonical_artifact,
-        )?;
+        let artifact =
+            verify_compaction_archive_artifact(&self.config, &readback.canonical_artifact)?;
         if artifact.head.operation_id != operation_id {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
@@ -5212,31 +5216,184 @@ fn verify_compaction_archive_head_core(
         .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)
 }
 
-fn verify_compaction_archive_lineage_link(
-    successor: &EvidenceViewerSignedCompactionArchiveHeadV1,
-    predecessor: &EvidenceViewerSignedCompactionArchiveHeadV1,
+struct CompactionArchiveIdentityHistoryV1 {
+    public_keys: BTreeSet<[u8; 32]>,
+    policy_digests: BTreeSet<[u8; 32]>,
+    key_policy_tuples: BTreeSet<([u8; 32], [u8; 32])>,
+}
+
+impl CompactionArchiveIdentityHistoryV1 {
+    fn new(head: &EvidenceViewerSignedCompactionArchiveHeadV1) -> Self {
+        Self {
+            public_keys: BTreeSet::from([head.archive_public_key]),
+            policy_digests: BTreeSet::from([head.archive_policy_digest]),
+            key_policy_tuples: BTreeSet::from([(
+                head.archive_public_key,
+                head.archive_policy_digest,
+            )]),
+        }
+    }
+
+    fn observe_predecessor(
+        &mut self,
+        successor: &EvidenceViewerSignedCompactionArchiveHeadV1,
+        predecessor: &EvidenceViewerSignedCompactionArchiveHeadV1,
+    ) -> Result<(), EvidenceViewerErrorV1> {
+        if predecessor.archive_public_key != successor.archive_public_key
+            && !self.public_keys.insert(predecessor.archive_public_key)
+        {
+            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+        }
+        if predecessor.archive_policy_digest != successor.archive_policy_digest
+            && !self
+                .policy_digests
+                .insert(predecessor.archive_policy_digest)
+        {
+            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+        }
+        let successor_tuple = (
+            successor.archive_public_key,
+            successor.archive_policy_digest,
+        );
+        let predecessor_tuple = (
+            predecessor.archive_public_key,
+            predecessor.archive_policy_digest,
+        );
+        if predecessor_tuple != successor_tuple && !self.key_policy_tuples.insert(predecessor_tuple)
+        {
+            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+        }
+        Ok(())
+    }
+
+    fn verify_successor(
+        &self,
+        successor: &EvidenceViewerSignedCompactionArchiveHeadV1,
+        predecessor: &EvidenceViewerSignedCompactionArchiveHeadV1,
+    ) -> Result<(), EvidenceViewerErrorV1> {
+        if successor.archive_public_key != predecessor.archive_public_key
+            && self.public_keys.contains(&successor.archive_public_key)
+        {
+            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+        }
+        if successor.archive_policy_digest != predecessor.archive_policy_digest
+            && self
+                .policy_digests
+                .contains(&successor.archive_policy_digest)
+        {
+            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+        }
+        let successor_tuple = (
+            successor.archive_public_key,
+            successor.archive_policy_digest,
+        );
+        let predecessor_tuple = (
+            predecessor.archive_public_key,
+            predecessor.archive_policy_digest,
+        );
+        if successor_tuple != predecessor_tuple && self.key_policy_tuples.contains(&successor_tuple)
+        {
+            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+        }
+        Ok(())
+    }
+}
+
+fn verify_compaction_archive_current_provider_binding(
+    head: &EvidenceViewerSignedCompactionArchiveHeadV1,
+    archive: &QualifiedEvidenceViewerCompactionArchiveV1,
 ) -> Result<(), EvidenceViewerErrorV1> {
-    if predecessor.generation.checked_add(1) != Some(successor.generation)
-        || successor.predecessor_head_digest != Some(predecessor.head_digest)
-        || successor.predecessor_operation_id != Some(predecessor.operation_id)
-        || successor.source_checkpoint_generation <= predecessor.source_checkpoint_generation
-        || successor.compacted_through_unix_ms < predecessor.compacted_through_unix_ms
-        || successor.archive_handle != predecessor.archive_handle
-        || successor.archive_revision != predecessor.archive_revision
-        || successor.archive_policy_digest != predecessor.archive_policy_digest
-        || successor.archive_id != predecessor.archive_id
-        || successor.archive_public_key != predecessor.archive_public_key
-        || successor.signer_handle != predecessor.signer_handle
-        || successor.signer_public_key != predecessor.signer_public_key
+    if head.archive_handle != archive.handle()
+        || head.archive_revision != archive.qualification().revision()
+        || head.archive_policy_digest != archive.qualification().policy_digest()
+        || head.archive_id != archive.archive_id
+        || head.archive_public_key != archive.public_key
     {
         return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
     }
     Ok(())
 }
 
+fn verify_compaction_archive_checkpoint_binding(
+    config: &EvidenceViewerConfigV1,
+    head: &EvidenceViewerSignedCompactionArchiveHeadV1,
+) -> Result<(), EvidenceViewerErrorV1> {
+    // The independently governed receipt signer authenticates both the
+    // historical identity and any exactly-next archive epoch before the
+    // configured current provider is considered an authorized successor.
+    head.verify(
+        &config.receipt_signer_handle,
+        config.receipt_signer_public_key,
+    )?;
+    let current_revision = config.expected_compaction_archive_qualification.revision();
+    let same_epoch = head.archive_revision == current_revision;
+    let pending_next_epoch = head.archive_revision.checked_add(1) == Some(current_revision);
+    if head.archive_handle != config.compaction_archive_handle
+        || head.archive_id != config.compaction_archive_id
+        || !(same_epoch || pending_next_epoch)
+        || (same_epoch
+            && (head.archive_policy_digest
+                != config
+                    .expected_compaction_archive_qualification
+                    .policy_digest()
+                || head.archive_public_key != config.compaction_archive_public_key))
+    {
+        return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+    }
+    Ok(())
+}
+
+fn verify_compaction_archive_lineage_link(
+    successor: &EvidenceViewerSignedCompactionArchiveHeadV1,
+    predecessor: &EvidenceViewerSignedCompactionArchiveHeadV1,
+) -> Result<(), EvidenceViewerErrorV1> {
+    if successor.signer_handle != predecessor.signer_handle
+        || successor.signer_public_key != predecessor.signer_public_key
+    {
+        return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+    }
+    // A revision change is an authorization event, not an observation of
+    // self-claimed archive metadata. Verify both service signatures before an
+    // exactly-next identity epoch can be accepted.
+    verify_compaction_archive_head_core(
+        predecessor,
+        &successor.signer_handle,
+        successor.signer_public_key,
+    )?;
+    verify_compaction_archive_head_core(
+        successor,
+        &successor.signer_handle,
+        successor.signer_public_key,
+    )?;
+    let same_archive_epoch = successor.archive_revision == predecessor.archive_revision;
+    let next_archive_epoch =
+        predecessor.archive_revision.checked_add(1) == Some(successor.archive_revision);
+    let same_epoch_identity = successor.archive_policy_digest == predecessor.archive_policy_digest
+        && successor.archive_public_key == predecessor.archive_public_key;
+    if predecessor.generation.checked_add(1) != Some(successor.generation)
+        || successor.predecessor_head_digest != Some(predecessor.head_digest)
+        || successor.predecessor_operation_id != Some(predecessor.operation_id)
+        || successor.source_checkpoint_generation <= predecessor.source_checkpoint_generation
+        || successor.compacted_through_unix_ms < predecessor.compacted_through_unix_ms
+        || successor.archive_handle != predecessor.archive_handle
+        || successor.archive_id != predecessor.archive_id
+        || !(same_archive_epoch || next_archive_epoch)
+        || (same_archive_epoch && !same_epoch_identity)
+    {
+        return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
+    }
+    Ok(())
+}
+
+// Historical artifacts intentionally carry their epoch-specific key and
+// policy rather than the configured current identity. Every caller reads
+// through the currently qualified stable handle/namespace boundary; the
+// governed service signature authenticates the epoch, the archive receipt is
+// verified under that authenticated historical key, and the complete lineage
+// is checked back to generation one. New installations additionally pass
+// `verify_compaction_archive_current_provider_binding` before provider use.
 fn verify_compaction_archive_artifact(
     config: &EvidenceViewerConfigV1,
-    archive: &QualifiedEvidenceViewerCompactionArchiveV1,
     bytes: &[u8],
 ) -> Result<EvidenceViewerCompactionArchiveArtifactV1, EvidenceViewerErrorV1> {
     if bytes.is_empty() || len_u64(bytes.len()) > compaction_archive_max_bytes(config) {
@@ -5264,11 +5421,6 @@ fn verify_compaction_archive_artifact(
     .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
     if artifact.version != EVIDENCE_VIEWER_COMPACTION_ARCHIVE_VERSION_V1
         || artifact.payload.version != EVIDENCE_VIEWER_COMPACTION_ARCHIVE_VERSION_V1
-        || artifact.head.archive_handle != archive.handle()
-        || artifact.head.archive_revision != archive.qualification().revision()
-        || artifact.head.archive_policy_digest != archive.qualification().policy_digest()
-        || artifact.head.archive_id != archive.archive_id
-        || artifact.head.archive_public_key != archive.public_key
         || artifact.head.archive_signature != [0; 64]
         || artifact.head.challenge_count
             != u32::try_from(artifact.payload.challenges.len())
@@ -5722,21 +5874,7 @@ fn validate_checkpoint(
         return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
     }
     if let Some(head) = checkpoint.compaction_archive_head.as_ref() {
-        if head.archive_handle != config.compaction_archive_handle
-            || head.archive_revision != config.expected_compaction_archive_qualification.revision()
-            || head.archive_policy_digest
-                != config
-                    .expected_compaction_archive_qualification
-                    .policy_digest()
-            || head.archive_id != config.compaction_archive_id
-            || head.archive_public_key != config.compaction_archive_public_key
-        {
-            return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
-        }
-        head.verify(
-            &config.receipt_signer_handle,
-            config.receipt_signer_public_key,
-        )?;
+        verify_compaction_archive_checkpoint_binding(config, head)?;
     }
     ensure_unique_sorted(
         checkpoint
@@ -6184,27 +6322,6 @@ fn validate_purpose(value: &str) -> Result<(), EvidenceViewerErrorV1> {
     Ok(())
 }
 
-fn is_canonical_rp_id(rp_id: &str) -> bool {
-    rp_id.len() <= 253
-        && rp_id.contains('.')
-        && rp_id == rp_id.to_ascii_lowercase()
-        && rp_id.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .next()
-                    .is_some_and(|byte| byte.is_ascii_alphanumeric())
-                && label
-                    .bytes()
-                    .last()
-                    .is_some_and(|byte| byte.is_ascii_alphanumeric())
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-}
-
 fn validate_evidence_viewer_runtime_provider_handle(
     handle: &str,
     configured: bool,
@@ -6268,32 +6385,6 @@ fn assert_evidence_viewer_runtime_provider_qualification<
         return Err(EvidenceViewerRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
     }
     Ok(())
-}
-
-fn is_canonical_https_origin(origin: &str, rp_id: &str) -> bool {
-    if origin.len() > 512
-        || origin != origin.trim()
-        || !origin.is_ascii()
-        || origin
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    let Ok(parsed) = Url::parse(origin) else {
-        return false;
-    };
-    let Some(host) = parsed.host_str() else {
-        return false;
-    };
-    parsed.scheme() == "https"
-        && parsed.username().is_empty()
-        && parsed.password().is_none()
-        && parsed.path() == "/"
-        && parsed.query().is_none()
-        && parsed.fragment().is_none()
-        && parsed.origin().ascii_serialization() == origin
-        && (host == rp_id || host.ends_with(&format!(".{rp_id}")))
 }
 
 fn ensure_unique_sorted<const N: usize>(
@@ -6725,7 +6816,10 @@ mod tests {
     use std::{
         collections::VecDeque,
         fs,
-        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        sync::{
+            Mutex,
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        },
     };
 
     use ed25519_dalek::{Signer as _, SigningKey};
@@ -6759,6 +6853,7 @@ mod tests {
     const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION:
         ModerationQuarantineKeyProviderQualificationV1 =
         ModerationQuarantineKeyProviderQualificationV1::new(1, [0x51; 32]);
+    static EVIDENCE_VIEWER_FIXTURE_SETUP_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_quarantine_key_provider_config()
     -> iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
@@ -7574,12 +7669,15 @@ mod tests {
         }
     }
 
+    type MockCompactionArchiveArtifacts =
+        BTreeMap<[u8; 32], ([u8; 32], EvidenceViewerCompactionArchiveReadbackV1)>;
+
     struct MockCompactionArchive {
         handle: String,
         qualification: MockProviderQualification,
         archive_id: [u8; 32],
         signing_key: SigningKey,
-        artifacts: Mutex<BTreeMap<[u8; 32], ([u8; 32], EvidenceViewerCompactionArchiveReadbackV1)>>,
+        artifacts: Mutex<MockCompactionArchiveArtifacts>,
         install_calls: AtomicUsize,
         read_calls: AtomicUsize,
         append_trailing_on_next_read: AtomicBool,
@@ -7679,6 +7777,18 @@ mod tests {
                 .get_mut(&operation_id)
                 .expect("installed compaction artifact");
             readback.signature[0] ^= 1;
+        }
+
+        fn copy_artifacts_from(&self, source: &Self) {
+            let artifacts = source
+                .artifacts
+                .lock()
+                .expect("source compaction archive artifacts lock")
+                .clone();
+            *self
+                .artifacts
+                .lock()
+                .expect("destination compaction archive artifacts lock") = artifacts;
         }
     }
 
@@ -7874,6 +7984,14 @@ mod tests {
 
     impl EvidenceViewerFixture {
         fn new() -> Self {
+            // `NodeHandle` owns a process-wide, non-blocking PDP checkpoint
+            // writer fence. Keep this fixture's two setup mutations together
+            // so parallel evidence-viewer tests do not manufacture transient
+            // checkpoint-writer backpressure unrelated to the behavior under
+            // test. The guard is released before the fixture is returned.
+            let _setup_guard = EVIDENCE_VIEWER_FIXTURE_SETUP_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let temp_dir = tempfile::tempdir().expect("create evidence-viewer temp dir");
             let root = temp_dir
                 .path()
@@ -8034,6 +8152,67 @@ mod tests {
             .expect("read signed checkpoint anchor")
             .checkpoint_anchor
             .checkpoint_digest
+    }
+
+    fn current_compaction_archive_head(
+        service: &EvidenceViewerServiceV1,
+    ) -> Option<EvidenceViewerSignedCompactionArchiveHeadV1> {
+        service
+            .state
+            .lock()
+            .expect("evidence-viewer state lock")
+            .compaction_archive_head
+            .clone()
+    }
+
+    fn rotated_archive_deployment(
+        fixture: &EvidenceViewerFixture,
+        source: &MockCompactionArchive,
+        revision: u64,
+        policy_digest: [u8; 32],
+        signing_seed: [u8; 32],
+    ) -> (
+        EvidenceViewerConfigV1,
+        EvidenceViewerRuntimeDepsV1,
+        Arc<MockCompactionArchive>,
+    ) {
+        let archive = Arc::new(MockCompactionArchive::with_identity(
+            TEST_COMPACTION_ARCHIVE_HANDLE,
+            TEST_COMPACTION_ARCHIVE_ID,
+            signing_seed,
+        ));
+        archive.qualification.set_revision(revision);
+        archive.qualification.set_policy_digest(policy_digest);
+        archive.copy_artifacts_from(source);
+        let mut config = fixture.config.clone();
+        config.expected_compaction_archive_qualification =
+            EvidenceViewerRuntimeProviderQualificationV1::new(revision, policy_digest);
+        config.compaction_archive_public_key = archive.signing_public_key();
+        let mut deps = fixture.deps.clone();
+        deps.compaction_archive = archive.clone();
+        (config, deps, archive)
+    }
+
+    fn fixture_with_first_archive_generation() -> (
+        EvidenceViewerFixture,
+        EvidenceViewerSignedCompactionArchiveHeadV1,
+    ) {
+        let mut fixture = EvidenceViewerFixture::new();
+        fixture.config.compaction_max_records = 1;
+        let service = fixture.open();
+        fixture.issue_challenge(
+            &service,
+            JUROR_ACCOUNT,
+            EvidenceViewerRoleV1::Juror,
+            [0xB1; 32],
+            BASE_UNIX_MS,
+        );
+        let first = service
+            .compact_expired_tick(BASE_UNIX_MS + fixture.config.challenge_ttl_ms)
+            .expect("first archive generation")
+            .expect("one expired challenge");
+        drop(service);
+        (fixture, first)
     }
 
     fn test_erasure_intent(
@@ -8374,516 +8553,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart() {
-        let fixture = EvidenceViewerFixture::new();
-        let service = fixture.open();
-        assert!(
-            !format!("{service:?}").contains(MOCK_PROVIDER_SECRET),
-            "runtime provider Debug output must remain outside service logs"
-        );
-        let challenge = fixture.issue_challenge(
-            &service,
-            JUROR_ACCOUNT,
-            EvidenceViewerRoleV1::Juror,
-            [0x01; 32],
-            BASE_UNIX_MS,
-        );
-        assert_eq!(
-            challenge.expires_at_unix_ms,
-            BASE_UNIX_MS + fixture.config.challenge_ttl_ms
-        );
-        let challenge_token = challenge.challenge.expose().to_owned();
-        let issued = fixture
-            .create_session(
-                &service,
-                &challenge_token,
-                b"valid-webauthn-assertion",
-                [0x02; 32],
-                BASE_UNIX_MS + 1,
-            )
-            .expect("create case-bound session");
-        assert_eq!(issued.session.case_id, CASE_ID);
-        assert_eq!(issued.session.round_id, ROUND_ID);
-        assert_eq!(issued.session.role, EvidenceViewerRoleV1::Juror);
-        assert_eq!(
-            issued.session.local_session.expires_at_unix_ms,
-            BASE_UNIX_MS + 1 + EVIDENCE_VIEWER_MAX_SESSION_TTL_MS_V1
-        );
-        assert_eq!(
-            issued.receipt.body.kind,
-            EvidenceViewerReceiptKindV1::SessionIssued
-        );
-        let session_id = issued.session.local_session.session_id;
-        let initial_grant = issued.grant.expose().to_owned();
-
-        let first_manifest = service
-            .manifest(
-                session_id,
-                JUROR_ACCOUNT,
-                &opaque(&initial_grant),
-                [0x03; 32],
-                [0xA3; 32],
-                BASE_UNIX_MS + 2,
-            )
-            .expect("read first manifest");
-        assert_eq!(first_manifest.manifest.case_id, CASE_ID);
-        assert_eq!(first_manifest.manifest.round_id, ROUND_ID);
-        assert_eq!(first_manifest.manifest.quarantine_id, fixture.quarantine_id);
-        assert_eq!(first_manifest.manifest.object_id, fixture.object.object_id);
-        assert_eq!(
-            first_manifest.manifest.evidence_digest,
-            fixture.object.payload_digest
-        );
-        assert_eq!(
-            first_manifest.manifest.payload_len,
-            EVIDENCE_PAYLOAD.len() as u64
-        );
-        assert!(
-            first_manifest
-                .manifest
-                .visible_watermark
-                .starts_with("CONFIDENTIAL · juror · ")
-        );
-        assert_eq!(
-            first_manifest.receipt.body.kind,
-            EvidenceViewerReceiptKindV1::ManifestAccessed
-        );
-        let second_grant = first_manifest.rotated_grant.expose().to_owned();
-        assert_ne!(initial_grant, second_grant);
-        assert!(fixture.grants.was_revoked(&initial_grant));
-        assert_eq!(
-            service
-                .manifest(
-                    session_id,
-                    JUROR_ACCOUNT,
-                    &opaque(&initial_grant),
-                    [0x04; 32],
-                    [0xA4; 32],
-                    BASE_UNIX_MS + 3,
-                )
-                .expect_err("rotated grant must be single use"),
-            EvidenceViewerErrorV1::AuthenticationRejected
-        );
-
-        drop(service);
-        let restarted = fixture.open();
-        let second_manifest = restarted
-            .manifest(
-                session_id,
-                JUROR_ACCOUNT,
-                &opaque(&second_grant),
-                [0x05; 32],
-                [0xA5; 32],
-                BASE_UNIX_MS + 4,
-            )
-            .expect("continue rotating grant after restart");
-        let third_grant = second_manifest.rotated_grant.expose().to_owned();
-        assert!(fixture.grants.was_revoked(&second_grant));
-        let receipts = restarted.receipts(None, 16).expect("read receipt chain");
-        assert_eq!(receipts.len(), 3);
-        assert_receipt_chain(&receipts, &fixture.config);
-
-        fixture
-            .authorization
-            .set_allowed(JUROR_ACCOUNT, EvidenceViewerRoleV1::Juror, false);
-        assert_eq!(
-            restarted
-                .manifest(
-                    session_id,
-                    JUROR_ACCOUNT,
-                    &opaque(&third_grant),
-                    [0x06; 32],
-                    [0xA6; 32],
-                    BASE_UNIX_MS + 5,
-                )
-                .expect_err("revoked finalized assignment must fail"),
-            EvidenceViewerErrorV1::Forbidden
-        );
-        fixture
-            .authorization
-            .set_allowed(JUROR_ACCOUNT, EvidenceViewerRoleV1::Juror, true);
-        fixture.authorization.set_policy_digest([0x93; 32]);
-        assert_eq!(
-            restarted
-                .manifest(
-                    session_id,
-                    JUROR_ACCOUNT,
-                    &opaque(&third_grant),
-                    [0x07; 32],
-                    [0xA7; 32],
-                    BASE_UNIX_MS + 6,
-                )
-                .expect_err("policy substitution must fail"),
-            EvidenceViewerErrorV1::Forbidden
-        );
-        fixture.authorization.set_policy_digest([0x91; 32]);
-        let third_manifest = restarted
-            .manifest(
-                session_id,
-                JUROR_ACCOUNT,
-                &opaque(&third_grant),
-                [0x08; 32],
-                [0xA8; 32],
-                BASE_UNIX_MS + 7,
-            )
-            .expect("failed reauthorization must not consume the active grant");
-        let fourth_grant = third_manifest.rotated_grant.expose().to_owned();
-        assert_eq!(
-            restarted
-                .manifest(
-                    session_id,
-                    JUROR_ACCOUNT,
-                    &opaque(&fourth_grant),
-                    [0x09; 32],
-                    [0xA9; 32],
-                    issued.session.local_session.expires_at_unix_ms,
-                )
-                .expect_err("exact expiry boundary must fail"),
-            EvidenceViewerErrorV1::SessionInactive,
-            "the exact fifteen-minute boundary must be expired"
-        );
-    }
-
-    #[test]
-    fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stable() {
-        let fixture = EvidenceViewerFixture::new();
-        let service = fixture.open();
-        let challenge = fixture.issue_challenge(
-            &service,
-            JUROR_ACCOUNT,
-            EvidenceViewerRoleV1::Juror,
-            [0x81; 32],
-            BASE_UNIX_MS,
-        );
-        let challenge_token = challenge.challenge.expose().to_owned();
-        let issued = fixture
-            .create_session(
-                &service,
-                &challenge_token,
-                b"valid-webauthn-assertion-projection",
-                [0x82; 32],
-                BASE_UNIX_MS + 1,
-            )
-            .expect("create projected session");
-        let initial_grant = issued.grant.expose().to_owned();
-        let (rotated_grant, _) = service
-            .record_interaction(
-                issued.session.local_session.session_id,
-                JUROR_ACCOUNT,
-                &opaque(&initial_grant),
-                ModerationEvidenceViewerAccessKind::Viewed,
-                Some([0x83; 32]),
-                [0x84; 32],
-                [0x85; 32],
-                BASE_UNIX_MS + 2,
-            )
-            .expect("record signed interaction");
-        let rotated_grant = rotated_grant.expose().to_owned();
-
-        let legacy = fixture.node.moderation_evidence_viewer_snapshot();
-        assert!(
-            legacy.sessions.is_empty() && legacy.access_events.is_empty(),
-            "the production viewer must not populate the competing local registry"
-        );
-
-        let checkpoint_digest = current_checkpoint_digest(&service);
-        let signer_calls_before_reads = fixture.signer.sign_call_count();
-        let first_page = service
-            .transparency_projection(checkpoint_digest, None, 1)
-            .expect("read first signed projection page");
-        assert_eq!(first_page.receipts.len(), 1);
-        assert!(first_page.has_more);
-        assert_eq!(
-            first_page.receipts[0].body.kind,
-            EvidenceViewerReceiptKindV1::SessionIssued
-        );
-        first_page
-            .verify(
-                &fixture.config.receipt_signer_handle,
-                fixture.config.receipt_signer_public_key,
-            )
-            .expect("verify first transparency page");
-        let cursor = first_page.next_cursor.expect("first exact cursor");
-        let second_page = service
-            .transparency_projection(checkpoint_digest, Some(cursor), 16)
-            .expect("read second signed projection page");
-        assert_eq!(second_page.receipts.len(), 1);
-        assert!(!second_page.has_more);
-        assert_eq!(
-            second_page.receipts[0].body.kind,
-            EvidenceViewerReceiptKindV1::InteractionRecorded
-        );
-        second_page
-            .verify(
-                &fixture.config.receipt_signer_handle,
-                fixture.config.receipt_signer_public_key,
-            )
-            .expect("verify second transparency page");
-        let full_projection = service
-            .transparency_projection(checkpoint_digest, None, 16)
-            .expect("read complete signed projection");
-        assert_eq!(full_projection.receipts.len(), 2);
-        assert_receipt_chain(&full_projection.receipts, &fixture.config);
-        full_projection
-            .verify(
-                &fixture.config.receipt_signer_handle,
-                fixture.config.receipt_signer_public_key,
-            )
-            .expect("verify complete transparency page");
-
-        let mut substituted_cursor = cursor;
-        substituted_cursor.receipt_digest[0] ^= 1;
-        assert_eq!(
-            service
-                .transparency_projection(checkpoint_digest, Some(substituted_cursor), 16)
-                .expect_err("same-sequence digest substitution must fail"),
-            EvidenceViewerErrorV1::InvalidRequest
-        );
-        assert_eq!(
-            fixture.signer.sign_call_count(),
-            signer_calls_before_reads,
-            "audit reads must return the retained signed anchor without invoking the signer"
-        );
-
-        let encoded =
-            norito::to_bytes(&full_projection).expect("encode payload-free transparency page");
-        for secret in [
-            std::str::from_utf8(EVIDENCE_PAYLOAD).expect("ASCII evidence fixture"),
-            "valid-webauthn-assertion-projection",
-            challenge_token.as_str(),
-            initial_grant.as_str(),
-            rotated_grant.as_str(),
-            JUROR_ACCOUNT,
-            MOCK_PROVIDER_SECRET,
-        ] {
-            assert!(
-                !encoded
-                    .windows(secret.len())
-                    .any(|window| window == secret.as_bytes()),
-                "payload-free projection leaked forbidden material"
-            );
-        }
-
-        drop(service);
-        let restarted = fixture.open();
-        assert_eq!(
-            restarted
-                .transparency_projection(checkpoint_digest, None, 16)
-                .expect("rebuild signed projection after restart"),
-            full_projection
-        );
-        let legacy = fixture.node.moderation_evidence_viewer_snapshot();
-        assert!(legacy.sessions.is_empty() && legacy.access_events.is_empty());
-    }
-
-    #[test]
-    fn transparency_projection_binds_signed_checkpoint_limit_and_freshness() {
-        let fixture = EvidenceViewerFixture::new();
-        let service = fixture.open();
-        let checkpoint_digest = current_checkpoint_digest(&service);
-        let signer_calls_before_reads = fixture.signer.sign_call_count();
-        assert_eq!(
-            service
-                .transparency_projection([0; 32], None, 16)
-                .expect_err("zero checkpoint expectation must fail"),
-            EvidenceViewerErrorV1::InvalidRequest
-        );
-        for invalid_limit in [0, 1_025] {
-            assert_eq!(
-                service
-                    .transparency_projection(checkpoint_digest, None, invalid_limit)
-                    .expect_err("out-of-bounds page limit must fail"),
-                EvidenceViewerErrorV1::InvalidRequest
-            );
-        }
-        assert_eq!(
-            service
-                .transparency_projection(
-                    checkpoint_digest,
-                    Some(EvidenceViewerReceiptCursorV1 {
-                        sequence: 0,
-                        receipt_digest: [0xF2; 32],
-                    }),
-                    16,
-                )
-                .expect_err("zero-sequence predecessor must fail"),
-            EvidenceViewerErrorV1::InvalidRequest
-        );
-
-        let empty_page = service
-            .transparency_projection(checkpoint_digest, None, 16)
-            .expect("read signed empty checkpoint");
-        assert_eq!(empty_page.checkpoint_anchor.receipt_count, 0);
-        assert_eq!(empty_page.checkpoint_anchor.chain_head, None);
-        assert_eq!(empty_page.next_cursor, None);
-        assert!(!empty_page.has_more);
-        empty_page
-            .verify(
-                &fixture.config.receipt_signer_handle,
-                fixture.config.receipt_signer_public_key,
-            )
-            .expect("verify signed empty checkpoint");
-
-        let differently_bounded = service
-            .transparency_projection(checkpoint_digest, None, 17)
-            .expect("read same checkpoint with a different bound");
-        assert_ne!(
-            differently_bounded.projection_digest, empty_page.projection_digest,
-            "the exact requested page bound must be digest-bound"
-        );
-        assert_eq!(
-            fixture.signer.sign_call_count(),
-            signer_calls_before_reads,
-            "status and projection reads must not invoke the signer"
-        );
-
-        let mut tampered_limit = empty_page.clone();
-        tampered_limit.page_limit = 15;
-        assert_eq!(
-            tampered_limit.verify(
-                &fixture.config.receipt_signer_handle,
-                fixture.config.receipt_signer_public_key,
-            ),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-        let mut tampered_anchor = empty_page;
-        tampered_anchor.checkpoint_anchor.receipt_count = 1;
-        assert_eq!(
-            tampered_anchor.verify(
-                &fixture.config.receipt_signer_handle,
-                fixture.config.receipt_signer_public_key,
-            ),
-            Err(EvidenceViewerErrorV1::InvalidCheckpoint)
-        );
-
-        fixture.issue_challenge(
-            &service,
-            JUROR_ACCOUNT,
-            EvidenceViewerRoleV1::Juror,
-            [0xF1; 32],
-            BASE_UNIX_MS,
-        );
-        assert_ne!(current_checkpoint_digest(&service), checkpoint_digest);
-        assert_eq!(
-            service
-                .transparency_projection(checkpoint_digest, None, 16)
-                .expect_err("a stale checkpoint expectation must not silently repaginate"),
-            EvidenceViewerErrorV1::CheckpointChanged
-        );
-    }
-
-    #[test]
-    fn finalized_reauthorization_rejects_same_height_forks_and_persists_monotonic_head() {
-        let fixture = EvidenceViewerFixture::new();
-        let service = fixture.open();
-        let challenge = fixture.issue_challenge(
-            &service,
-            JUROR_ACCOUNT,
-            EvidenceViewerRoleV1::Juror,
-            [0x86; 32],
-            BASE_UNIX_MS,
-        );
-        let challenge_token = challenge.challenge.expose().to_owned();
-
-        fixture
-            .authorization
-            .set_finalized_anchor(77, [0x93; 32], BASE_UNIX_MS - 1_000);
-        assert_eq!(
-            fixture
-                .create_session(
-                    &service,
-                    &challenge_token,
-                    b"valid-webauthn-assertion-fork",
-                    [0x87; 32],
-                    BASE_UNIX_MS + 1,
-                )
-                .expect_err("same-height challenge fork must fail before WebAuthn consumption"),
-            EvidenceViewerErrorV1::Forbidden
-        );
-        fixture
-            .authorization
-            .set_finalized_anchor(77, [0x92; 32], BASE_UNIX_MS - 1_000);
-        let issued = fixture
-            .create_session(
-                &service,
-                &challenge_token,
-                b"valid-webauthn-assertion-fork",
-                [0x87; 32],
-                BASE_UNIX_MS + 2,
-            )
-            .expect("exact challenge anchor remains usable");
-        let session_id = issued.session.local_session.session_id;
-        let first_grant = issued.grant.expose().to_owned();
-
-        fixture
-            .authorization
-            .set_finalized_anchor(78, [0x94; 32], BASE_UNIX_MS - 500);
-        let advanced = service
-            .manifest(
-                session_id,
-                JUROR_ACCOUNT,
-                &opaque(&first_grant),
-                [0x88; 32],
-                [0x89; 32],
-                BASE_UNIX_MS + 3,
-            )
-            .expect("strictly newer finalized anchor extends the session");
-        assert_eq!(advanced.manifest.finalized_height, 78);
-        assert_eq!(advanced.manifest.finalized_block_hash, [0x94; 32]);
-        let second_grant = advanced.rotated_grant.expose().to_owned();
-
-        fixture
-            .authorization
-            .set_finalized_anchor(78, [0x95; 32], BASE_UNIX_MS - 500);
-        assert_eq!(
-            service
-                .manifest(
-                    session_id,
-                    JUROR_ACCOUNT,
-                    &opaque(&second_grant),
-                    [0x8A; 32],
-                    [0x8B; 32],
-                    BASE_UNIX_MS + 4,
-                )
-                .expect_err("same-height session fork must fail"),
-            EvidenceViewerErrorV1::Forbidden
-        );
-        fixture
-            .authorization
-            .set_finalized_anchor(77, [0x92; 32], BASE_UNIX_MS - 1_000);
-        assert_eq!(
-            service
-                .manifest(
-                    session_id,
-                    JUROR_ACCOUNT,
-                    &opaque(&second_grant),
-                    [0x8C; 32],
-                    [0x8D; 32],
-                    BASE_UNIX_MS + 5,
-                )
-                .expect_err("persisted finalized head must reject rollback"),
-            EvidenceViewerErrorV1::Forbidden
-        );
-
-        drop(service);
-        let restarted = fixture.open();
-        fixture
-            .authorization
-            .set_finalized_anchor(79, [0x96; 32], BASE_UNIX_MS);
-        let after_restart = restarted
-            .manifest(
-                session_id,
-                JUROR_ACCOUNT,
-                &opaque(&second_grant),
-                [0x8E; 32],
-                [0x8F; 32],
-                BASE_UNIX_MS + 6,
-            )
-            .expect("new finalized head extends the persisted cursor after restart");
-        assert_eq!(after_restart.manifest.finalized_height, 79);
-        assert_eq!(after_restart.manifest.finalized_block_hash, [0x96; 32]);
-    }
+    include!("evidence_viewer/webauthn_session_transparency_tests.rs");
 
     #[test]
     fn missing_checkpoint_capacity_fails_closed_before_service_exposure() {
@@ -8896,23 +8566,6 @@ mod tests {
                 .expect_err("the initial signed checkpoint must be durable before exposure"),
             EvidenceViewerErrorV1::ResourceExhausted
         );
-    }
-
-    #[test]
-    fn provider_less_open_fails_before_checkpoint_access() {
-        let fixture = EvidenceViewerFixture::new();
-        assert_eq!(
-            EvidenceViewerServiceV1::open(
-                fixture.config.clone(),
-                fixture.deps.clone(),
-                fixture.node.clone(),
-            )
-            .expect_err("provider-less startup must fail closed"),
-            EvidenceViewerErrorV1::CheckpointUnavailable
-        );
-        assert_eq!(fixture.checkpoint_store.load_call_count(), 0);
-        assert_eq!(fixture.checkpoint_store.cas_call_count(), 0);
-        assert!(!fixture.config.checkpoint_path.exists());
     }
 
     #[test]
@@ -9177,7 +8830,7 @@ mod tests {
             .create_session(
                 &service,
                 challenge.challenge.expose(),
-                b"archive-compaction-assertion",
+                b"valid-webauthn-assertion-archive-compaction",
                 [0xD0; 32],
                 BASE_UNIX_MS + 1,
             )
@@ -9469,6 +9122,312 @@ mod tests {
                 .open_with(corrupt_fixture.config.clone(), corrupt_fixture.deps.clone(),)
                 .expect_err("restart must fail when an old generation is corrupt"),
             EvidenceViewerErrorV1::InvalidCheckpoint
+        );
+    }
+
+    #[test]
+    fn archive_key_and_policy_rotation_preserves_authenticated_history() {
+        let (fixture, first) = fixture_with_first_archive_generation();
+        let second_policy = [0xB6; 32];
+        let second_seed = [0x62; 32];
+        let (second_config, second_deps, second_archive) = rotated_archive_deployment(
+            &fixture,
+            fixture.compaction_archive.as_ref(),
+            2,
+            second_policy,
+            second_seed,
+        );
+        let service = fixture
+            .open_with(second_config.clone(), second_deps.clone())
+            .expect("open with one exactly-next governed archive epoch pending");
+        assert_eq!(
+            current_compaction_archive_head(&service),
+            Some(first.clone())
+        );
+
+        fixture.issue_challenge(
+            &service,
+            JUROR_ACCOUNT,
+            EvidenceViewerRoleV1::Juror,
+            [0xB2; 32],
+            BASE_UNIX_MS + 1,
+        );
+        let second = service
+            .compact_expired_tick(BASE_UNIX_MS + fixture.config.challenge_ttl_ms + 1)
+            .expect("rotated archive transition")
+            .expect("one expired challenge in the rotated epoch");
+        assert_eq!(second.generation, first.generation + 1);
+        assert_eq!(second.archive_revision, 2);
+        assert_eq!(second.archive_policy_digest, second_policy);
+        assert_eq!(
+            second.archive_public_key,
+            SigningKey::from_bytes(&second_seed)
+                .verifying_key()
+                .to_bytes()
+        );
+        verify_compaction_archive_lineage_link(&second, &first)
+            .expect("service-signed exactly-next archive transition");
+        drop(service);
+
+        let reopened = fixture
+            .open_with(second_config, second_deps)
+            .expect("restart verifies both historical archive identities");
+        assert_eq!(current_compaction_archive_head(&reopened), Some(second));
+        assert!(
+            second_archive
+                .read(first.operation_id)
+                .expect("qualified current archive reads historical operation")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn archive_rotation_rejects_skipped_epoch() {
+        let (fixture, _) = fixture_with_first_archive_generation();
+        let (config, deps, _) = rotated_archive_deployment(
+            &fixture,
+            fixture.compaction_archive.as_ref(),
+            3,
+            [0xC6; 32],
+            [0x63; 32],
+        );
+        assert_eq!(
+            fixture
+                .open_with(config, deps)
+                .expect_err("archive configuration cannot skip an unpublished epoch"),
+            EvidenceViewerErrorV1::InvalidCheckpoint
+        );
+    }
+
+    #[test]
+    fn archive_rotation_rejects_same_revision_identity_substitution() {
+        let (fixture, _) = fixture_with_first_archive_generation();
+        let (config, deps, _) = rotated_archive_deployment(
+            &fixture,
+            fixture.compaction_archive.as_ref(),
+            1,
+            [0xD6; 32],
+            [0x64; 32],
+        );
+        assert_eq!(
+            fixture
+                .open_with(config, deps)
+                .expect_err("same-revision archive identity substitution must fail"),
+            EvidenceViewerErrorV1::InvalidCheckpoint
+        );
+    }
+
+    #[test]
+    fn archive_rotation_keeps_handle_and_namespace_stable() {
+        let (fixture, _) = fixture_with_first_archive_generation();
+        let archive = Arc::new(MockCompactionArchive::with_identity(
+            TEST_COMPACTION_ARCHIVE_HANDLE,
+            [0xD7; 32],
+            [0x65; 32],
+        ));
+        archive.qualification.set_revision(2);
+        archive.qualification.set_policy_digest([0xE6; 32]);
+        archive.copy_artifacts_from(fixture.compaction_archive.as_ref());
+        let mut config = fixture.config.clone();
+        config.expected_compaction_archive_qualification =
+            EvidenceViewerRuntimeProviderQualificationV1::new(2, [0xE6; 32]);
+        config.compaction_archive_id = archive.archive_id();
+        config.compaction_archive_public_key = archive.signing_public_key();
+        let mut deps = fixture.deps.clone();
+        deps.compaction_archive = archive;
+        assert_eq!(
+            fixture
+                .open_with(config, deps)
+                .expect_err("archive namespace cannot change across an identity epoch"),
+            EvidenceViewerErrorV1::InvalidCheckpoint
+        );
+    }
+
+    #[test]
+    fn archive_rotation_rejects_revision_rollback() {
+        let (fixture, first) = fixture_with_first_archive_generation();
+        let (second_config, second_deps, second_archive) = rotated_archive_deployment(
+            &fixture,
+            fixture.compaction_archive.as_ref(),
+            2,
+            [0xF6; 32],
+            [0x66; 32],
+        );
+        let service = fixture
+            .open_with(second_config, second_deps)
+            .expect("open second archive epoch");
+        fixture.issue_challenge(
+            &service,
+            JUROR_ACCOUNT,
+            EvidenceViewerRoleV1::Juror,
+            [0xB3; 32],
+            BASE_UNIX_MS + 1,
+        );
+        let second = service
+            .compact_expired_tick(BASE_UNIX_MS + fixture.config.challenge_ttl_ms + 1)
+            .expect("second archive generation")
+            .expect("one expired challenge");
+        assert_eq!(second.predecessor_head_digest, Some(first.head_digest));
+        drop(service);
+
+        let (rollback_config, rollback_deps, _) = rotated_archive_deployment(
+            &fixture,
+            second_archive.as_ref(),
+            1,
+            TEST_COMPACTION_ARCHIVE_QUALIFICATION.policy_digest(),
+            TEST_COMPACTION_ARCHIVE_SIGNING_SEED,
+        );
+        assert_eq!(
+            fixture
+                .open_with(rollback_config, rollback_deps)
+                .expect_err("archive provider revision rollback must fail"),
+            EvidenceViewerErrorV1::InvalidCheckpoint
+        );
+    }
+
+    #[test]
+    fn archive_rotation_rejects_retired_key_reuse_before_install() {
+        let (fixture, _) = fixture_with_first_archive_generation();
+        let (second_config, second_deps, second_archive) = rotated_archive_deployment(
+            &fixture,
+            fixture.compaction_archive.as_ref(),
+            2,
+            [0x96; 32],
+            [0x67; 32],
+        );
+        let service = fixture
+            .open_with(second_config, second_deps)
+            .expect("open second archive epoch");
+        fixture.issue_challenge(
+            &service,
+            JUROR_ACCOUNT,
+            EvidenceViewerRoleV1::Juror,
+            [0xB4; 32],
+            BASE_UNIX_MS + 1,
+        );
+        service
+            .compact_expired_tick(BASE_UNIX_MS + fixture.config.challenge_ttl_ms + 1)
+            .expect("second archive generation")
+            .expect("one expired challenge");
+        drop(service);
+
+        let (third_config, third_deps, third_archive) = rotated_archive_deployment(
+            &fixture,
+            second_archive.as_ref(),
+            3,
+            TEST_COMPACTION_ARCHIVE_QUALIFICATION.policy_digest(),
+            TEST_COMPACTION_ARCHIVE_SIGNING_SEED,
+        );
+        let service = fixture
+            .open_with(third_config, third_deps)
+            .expect("pending third epoch is independently configured");
+        fixture.issue_challenge(
+            &service,
+            JUROR_ACCOUNT,
+            EvidenceViewerRoleV1::Juror,
+            [0xB5; 32],
+            BASE_UNIX_MS + 2,
+        );
+        assert_eq!(
+            service
+                .compact_expired_tick(BASE_UNIX_MS + fixture.config.challenge_ttl_ms + 2)
+                .expect_err("a retired archive key cannot become a new head"),
+            EvidenceViewerErrorV1::InvalidCheckpoint
+        );
+        assert_eq!(third_archive.install_call_count(), 0);
+        assert_eq!(
+            service
+                .audit_status()
+                .expect("retired-key rejection preserves source state")
+                .challenge_count,
+            1
+        );
+    }
+
+    #[test]
+    fn archive_rotation_rejects_retired_policy_reuse_with_a_fresh_key() {
+        let (fixture, _) = fixture_with_first_archive_generation();
+        let (second_config, second_deps, second_archive) = rotated_archive_deployment(
+            &fixture,
+            fixture.compaction_archive.as_ref(),
+            2,
+            [0x76; 32],
+            [0x69; 32],
+        );
+        let service = fixture
+            .open_with(second_config, second_deps)
+            .expect("open second archive policy epoch");
+        fixture.issue_challenge(
+            &service,
+            JUROR_ACCOUNT,
+            EvidenceViewerRoleV1::Juror,
+            [0xB6; 32],
+            BASE_UNIX_MS + 1,
+        );
+        service
+            .compact_expired_tick(BASE_UNIX_MS + fixture.config.challenge_ttl_ms + 1)
+            .expect("second archive policy generation")
+            .expect("one expired challenge");
+        drop(service);
+
+        let (third_config, third_deps, third_archive) = rotated_archive_deployment(
+            &fixture,
+            second_archive.as_ref(),
+            3,
+            TEST_COMPACTION_ARCHIVE_QUALIFICATION.policy_digest(),
+            [0x6A; 32],
+        );
+        let service = fixture
+            .open_with(third_config, third_deps)
+            .expect("pending third policy epoch is independently configured");
+        fixture.issue_challenge(
+            &service,
+            JUROR_ACCOUNT,
+            EvidenceViewerRoleV1::Juror,
+            [0xB7; 32],
+            BASE_UNIX_MS + 2,
+        );
+        assert_eq!(
+            service
+                .compact_expired_tick(BASE_UNIX_MS + fixture.config.challenge_ttl_ms + 2)
+                .expect_err("a retired archive policy cannot become a new head"),
+            EvidenceViewerErrorV1::InvalidCheckpoint
+        );
+        assert_eq!(third_archive.install_call_count(), 0);
+    }
+
+    #[test]
+    fn archive_rotation_rejects_bad_governance_signature() {
+        let (fixture, first) = fixture_with_first_archive_generation();
+        let (_, _, archive) = rotated_archive_deployment(
+            &fixture,
+            fixture.compaction_archive.as_ref(),
+            2,
+            [0x86; 32],
+            [0x68; 32],
+        );
+        let mut forged = first;
+        forged.archive_revision = 2;
+        forged.archive_policy_digest = [0x86; 32];
+        forged.archive_public_key = archive.signing_public_key();
+        forged.operation_id = [0; 32];
+        forged.head_digest = [0; 32];
+        forged.archive_signature = [0; 64];
+        forged.operation_id =
+            compaction_archive_operation_id(&forged).expect("forged transition operation id");
+        forged.head_digest =
+            compaction_archive_head_digest(&forged).expect("forged transition head digest");
+        forged.archive_signature = archive
+            .signing_key
+            .sign(&compaction_archive_receipt_message(&forged))
+            .to_bytes();
+        assert_eq!(
+            forged.verify(
+                &fixture.config.receipt_signer_handle,
+                fixture.config.receipt_signer_public_key,
+            ),
+            Err(EvidenceViewerErrorV1::InvalidCheckpoint),
+            "an archive receipt cannot authorize a transition without the governed service signature"
         );
     }
 
@@ -10683,13 +10642,12 @@ mod tests {
             .expect("erase at the retained boundary");
         assert_eq!(fixture.erasure.call_count(), 1);
         assert!(
-            reopened
+            !reopened
                 .state
                 .lock()
                 .expect("post-erasure state lock")
                 .default_retention_floors
-                .get(&fixture.quarantine_id)
-                .is_none(),
+                .contains_key(&fixture.quarantine_id),
             "a completed erasure removes the no-longer-needed retention floor"
         );
     }

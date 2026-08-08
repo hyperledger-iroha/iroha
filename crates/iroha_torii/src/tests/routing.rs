@@ -631,6 +631,8 @@ mod tests {
             "consensus_missing_qc_reacquire_attempt_total",
             "lane_settlement_commitments",
             "lane_relay_envelopes",
+            "native_amx_participant_applications",
+            "autonomous_lane_executions",
         ] {
             assert!(
                 json.get(retired).is_none(),

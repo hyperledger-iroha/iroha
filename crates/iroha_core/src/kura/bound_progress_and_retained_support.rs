@@ -444,7 +444,7 @@ struct KuraRetainedSccpMessage {
     payload_bytes: Vec<u8>,
 }
 
-/// Legacy retained-record layout written before the merge-reference witness was added.
+/// Legacy retained-record layout written before wire-length and merge-reference binding.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct KuraRetainedBlockRecordV2 {
@@ -472,6 +472,7 @@ impl KuraRetainedBlockRecordV2 {
             block_hash: self.block_hash,
             block_header: self.block_header,
             proposal_wire_hash: self.proposal_wire_hash,
+            executed_block_wire_len: 0,
             executed_block_wire_hash: self.executed_block_wire_hash,
             merge_reference: None,
             sccp_archive: self.sccp_archive,
@@ -480,6 +481,7 @@ impl KuraRetainedBlockRecordV2 {
 
     fn from_current(record: &KuraRetainedBlockRecord) -> Option<Self> {
         (record.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
+            && record.executed_block_wire_len == 0
             && record.merge_reference.is_none())
         .then(|| Self {
             format_version: record.format_version,
@@ -507,6 +509,8 @@ struct KuraRetainedBlockRecord {
     block_header: BlockHeader,
     /// Hash of the canonical resultless proposal wire authenticated by the subject.
     proposal_wire_hash: Hash,
+    /// Exact byte length of the complete result-bearing canonical block wire.
+    executed_block_wire_len: u64,
     /// Hash of the complete result-bearing canonical `SignedBlock::encode_wire()` bytes.
     executed_block_wire_hash: Hash,
     /// Exact compact merge reference extracted while the canonical body was present.
@@ -525,6 +529,7 @@ impl KuraRetainedBlockRecord {
     fn new(
         block_header: BlockHeader,
         proposal_wire_hash: Hash,
+        executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
         merge_reference: Option<CertifiedMergeLedgerReference>,
         sccp_archive: Vec<KuraRetainedSccpMessage>,
@@ -535,6 +540,7 @@ impl KuraRetainedBlockRecord {
             block_hash: block_header.hash(),
             block_header,
             proposal_wire_hash,
+            executed_block_wire_len,
             executed_block_wire_hash,
             merge_reference,
             sccp_archive,
@@ -542,23 +548,21 @@ impl KuraRetainedBlockRecord {
     }
 
     fn canonical_storage_bytes(&self) -> Vec<u8> {
-        KuraRetainedBlockRecordV2::from_current(self).map_or_else(
-            || self.encode(),
-            |legacy| legacy.encode(),
-        )
+        KuraRetainedBlockRecordV2::from_current(self)
+            .map_or_else(|| self.encode(), |legacy| legacy.encode())
     }
 
     fn canonical_storage_encoded_len(&self) -> usize {
-        KuraRetainedBlockRecordV2::from_current(self).map_or_else(
-            || self.encoded_len(),
-            |legacy| legacy.encoded_len(),
-        )
+        KuraRetainedBlockRecordV2::from_current(self)
+            .map_or_else(|| self.encoded_len(), |legacy| legacy.encoded_len())
     }
 
     fn is_legacy_upgrade_of(&self, legacy: &Self) -> bool {
         self.format_version == RETAINED_BLOCK_RECORD_VERSION
             && legacy.format_version == RETAINED_BLOCK_RECORD_VERSION_V2
+            && legacy.executed_block_wire_len == 0
             && legacy.merge_reference.is_none()
+            && self.executed_block_wire_len != 0
             && self.height == legacy.height
             && self.block_hash == legacy.block_hash
             && self.block_header == legacy.block_header

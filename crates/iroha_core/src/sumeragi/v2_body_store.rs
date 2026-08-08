@@ -31,7 +31,7 @@ use crate::kura::KuraV2CommitReceipt;
 
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
 const VALIDATED_MAGIC: &[u8; 8] = b"SUM2VALD";
-const STORE_VERSION: u16 = 3;
+const STORE_VERSION: u16 = 4;
 const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::<u64>();
 const CHECKSUM_LEN: usize = 32;
 
@@ -224,12 +224,13 @@ impl ValidatedBodyReceipt {
             Hash::new(preimage)
         };
         Self {
-            execution_commitment: wire::ExecutionCommitment::new(
+            execution_commitment: wire::ExecutionCommitment::new_without_merge_carrier(
                 bind_frame(b"iroha:sumeragi:v2:test-parent-state-root:v1"),
                 bind_frame(b"iroha:sumeragi:v2:test-post-state-root:v1"),
                 empty,
                 None,
                 0,
+                1,
                 bind_frame(b"iroha:sumeragi:v2:test-executed-block-wire:v1"),
             )
             .expect("test execution commitment is canonical"),
@@ -1414,9 +1415,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError, STORE_VERSION,
-        V2BodyStore, V2BodyStoreError, ValidatedBodyMarker, ValidatedBodyReceipt,
-        write_validated_marker,
+        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError, STORE_MAGIC,
+        STORE_VERSION, V2BodyStore, V2BodyStoreError, VALIDATED_MAGIC, ValidatedBodyMarker,
+        ValidatedBodyReceipt, write_validated_marker,
     };
 
     use crate::sumeragi::{
@@ -1689,10 +1690,11 @@ mod tests {
             .persist_validated_receipt(&receipt, expected)
             .expect("persist legitimate validation marker");
 
-        let forged = wire::ExecutionCommitment::without_topups(
+        let forged = wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"forged parent root"),
             Hash::new(b"forged post root"),
             Hash::new(b"forged ordinary writes"),
+            1,
             Hash::new(b"forged executed block"),
         );
         assert_ne!(expected, forged);
@@ -2047,6 +2049,53 @@ mod tests {
         let catalog = reopened.validated_recovery_catalog();
         assert!(catalog.contains_key(&(receipts[0].0.round(), receipts[0].0.subject())));
         assert!(!catalog.contains_key(&(receipts[1].0.round(), receipts[1].0.subject())));
+    }
+
+    #[test]
+    fn legacy_v3_body_and_validation_frames_are_rejected() {
+        const LEGACY_VERSION: u16 = 3;
+
+        let body_directory = TempDir::new().expect("temporary body directory");
+        let (body_context, body_keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&body_context, &body_keys, None);
+        let mut body_store =
+            V2BodyStore::open(body_directory.path(), body_context.clone()).expect("open store");
+        let body_receipt = body_store.store(manifest, body).expect("store body");
+        let body_path = body_store.path_for(body_receipt.round(), body_receipt.subject());
+        drop(body_store);
+        let mut body_frame = fs::read(&body_path).expect("read body frame");
+        body_frame[STORE_MAGIC.len()..STORE_MAGIC.len() + size_of::<u16>()]
+            .copy_from_slice(&LEGACY_VERSION.to_le_bytes());
+        fs::write(&body_path, body_frame).expect("write legacy body frame");
+        assert!(matches!(
+            V2BodyStore::open(body_directory.path(), body_context),
+            Err(V2BodyStoreError::UnsupportedVersion(LEGACY_VERSION))
+        ));
+
+        let marker_directory = TempDir::new().expect("temporary marker directory");
+        let (marker_context, marker_keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&marker_context, &marker_keys, None);
+        let mut marker_store = V2BodyStore::open(marker_directory.path(), marker_context.clone())
+            .expect("open marker store");
+        let marker_receipt = marker_store
+            .store(manifest, body)
+            .expect("store marker body");
+        let commitment =
+            ValidatedBodyReceipt::for_test(marker_receipt.clone()).execution_commitment();
+        let _validated_receipt = marker_store
+            .validate(&marker_receipt, |_| Ok::<_, &'static str>(commitment))
+            .expect("persist validation marker");
+        let marker_path =
+            marker_store.validated_path_for(marker_receipt.round(), marker_receipt.subject());
+        drop(marker_store);
+        let mut marker_frame = fs::read(&marker_path).expect("read validation frame");
+        marker_frame[VALIDATED_MAGIC.len()..VALIDATED_MAGIC.len() + size_of::<u16>()]
+            .copy_from_slice(&LEGACY_VERSION.to_le_bytes());
+        fs::write(&marker_path, marker_frame).expect("write legacy validation frame");
+        assert!(matches!(
+            V2BodyStore::open(marker_directory.path(), marker_context),
+            Err(V2BodyStoreError::UnsupportedVersion(LEGACY_VERSION))
+        ));
     }
 
     #[test]

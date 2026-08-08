@@ -1,4 +1,4 @@
-//! CLI helpers for interacting with the SoraFS storage backend.
+//! Offline developer CLI helpers for inspecting the SoraFS storage backend.
 
 use std::{
     env, fs,
@@ -55,7 +55,7 @@ fn print_usage() {
     eprintln!(
         "Usage: sorafs-node <command> [options]\n\n\
          Commands:\n  \
-         ingest [manifest] --data-dir=<dir> --manifest=<path> --payload=<path> [--plan-json-out=<path>]\n  \
+         ingest --data-dir=<dir> --manifest=<path> --payload=<path> [--plan-json-out=<path>]\n  \
          ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]\n  \
          export --data-dir=<dir> --manifest-id=<hex> --manifest-out=<path> --payload-out=<path> [--plan-json-out=<path>]\n  \
          --help, -h   Show this help message"
@@ -78,14 +78,9 @@ struct IngestOptions {
 }
 
 fn ingest_command(mut args: Vec<String>) -> Result<(), String> {
-    if let Some(first) = args.first().cloned() {
-        if first == "por" {
-            args.remove(0);
-            return ingest_por_command(args);
-        }
-        if first == "manifest" {
-            args.remove(0);
-        }
+    if args.first().is_some_and(|first| first == "por") {
+        args.remove(0);
+        return ingest_por_command(args);
     }
     let mut opts = IngestOptions::default();
     for arg in args {
@@ -203,8 +198,6 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
         if let Some(rest) = arg.strip_prefix("--data-dir=") {
             opts.data_dir = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--manifest-id=") {
-            opts.manifest_id = Some(rest.trim().to_ascii_lowercase());
-        } else if let Some(rest) = arg.strip_prefix("--manifest=") {
             opts.manifest_id = Some(rest.trim().to_ascii_lowercase());
         } else if let Some(rest) = arg.strip_prefix("--challenge=") {
             opts.challenge_path = Some(PathBuf::from(rest));

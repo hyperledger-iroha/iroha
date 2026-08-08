@@ -9,6 +9,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -25,7 +26,7 @@ public final class UrlConnectionTransportExecutorTests {
 
   @Test
   public void executeReturns404WithEmptyBodyWhenServerSendsNoContent() throws Exception {
-    try (ServerSocket server = new ServerSocket(0)) {
+    try (ServerSocket server = loopbackServer()) {
       final int port = server.getLocalPort();
       final Thread serverThread =
           new Thread(
@@ -70,7 +71,7 @@ public final class UrlConnectionTransportExecutorTests {
 
   @Test
   public void redirectsAreReturnedWithoutForwardingSensitiveHeaders() throws Exception {
-    try (ServerSocket server = new ServerSocket(0)) {
+    try (ServerSocket server = loopbackServer()) {
       server.setSoTimeout(1_000);
       final int port = server.getLocalPort();
       final AtomicReference<String> redirectedRequest = new AtomicReference<>();
@@ -407,7 +408,7 @@ public final class UrlConnectionTransportExecutorTests {
       final String requestMethod,
       final Long requestMaximumResponseBytes)
       throws Exception {
-    try (ServerSocket server = new ServerSocket(0)) {
+    try (ServerSocket server = loopbackServer()) {
       final Thread serverThread =
           new Thread(
               () -> {
@@ -446,6 +447,10 @@ public final class UrlConnectionTransportExecutorTests {
         serverThread.join(2000L);
       }
     }
+  }
+
+  private static ServerSocket loopbackServer() throws IOException {
+    return new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
   }
 
   private static boolean hasCauseMessage(final Throwable failure, final String fragment) {

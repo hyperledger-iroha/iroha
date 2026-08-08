@@ -572,78 +572,78 @@ impl SorafsFetchOtel {
                 .i64_up_down_counter("sorafs.fetch.active")
                 .with_description("Active SoraFS orchestrator fetch sessions.")
                 .with_unit("sessions")
-                .init();
+                .build();
 
             let duration_ms = meter
                 .f64_histogram("sorafs.fetch.duration_ms")
                 .with_description("Completed fetch duration in milliseconds.")
                 .with_unit("ms")
-                .init();
+                .build();
 
             let failures_total = meter
                 .u64_counter("sorafs.fetch.failures_total")
                 .with_description("Total number of orchestrator failures grouped by reason.")
-                .init();
+                .build();
 
             let retries_total = meter
                 .u64_counter("sorafs.fetch.retries_total")
                 .with_description("Retry attempts triggered during orchestrator sessions.")
-                .init();
+                .build();
 
             let provider_failures_total = meter
                 .u64_counter("sorafs.fetch.provider_failures_total")
                 .with_description("Provider-level failures observed while fetching chunks.")
-                .init();
+                .build();
             let chunk_latency_ms = meter
                 .f64_histogram("sorafs.fetch.chunk_latency_ms")
                 .with_description("Latency per chunk fetch served by the orchestrator.")
                 .with_unit("ms")
-                .init();
+                .build();
             let bytes_total = meter
                 .u64_counter("sorafs.fetch.bytes_total")
                 .with_description("Total bytes delivered by the orchestrator grouped by provider.")
-                .init();
+                .build();
             let stalls_total = meter
                 .u64_counter("sorafs.fetch.stalls_total")
                 .with_description("Chunks exceeding the configured latency cap.")
-                .init();
+                .build();
             let policy_events_total = meter
                 .u64_counter("sorafs.fetch.anonymity_events_total")
                 .with_description("Anonymity policy events grouped by stage/outcome/reason.")
-                .init();
+                .build();
             let pq_ratio = meter
                 .f64_histogram("sorafs.fetch.pq_ratio")
                 .with_description("PQ-capable relay ratio observed per session.")
                 .with_unit("ratio")
-                .init();
+                .build();
             let pq_candidate_ratio = meter
                 .f64_histogram("sorafs.fetch.pq_candidate_ratio")
                 .with_description("PQ-capable relay candidate ratio observed per session.")
                 .with_unit("ratio")
-                .init();
+                .build();
             let pq_deficit_ratio = meter
                 .f64_histogram("sorafs.fetch.pq_deficit_ratio")
                 .with_description("PQ policy shortfall ratio observed per session.")
                 .with_unit("ratio")
-                .init();
+                .build();
             let classical_ratio = meter
                 .f64_histogram("sorafs.fetch.classical_ratio")
                 .with_description("Classical relay selection ratio observed per session.")
                 .with_unit("ratio")
-                .init();
+                .build();
             let classical_selected = meter
                 .f64_histogram("sorafs.fetch.classical_selected")
                 .with_description("Classical relay selections observed per session.")
                 .with_unit("relays")
-                .init();
+                .build();
             let brownouts_total = meter
                 .u64_counter("sorafs.fetch.brownouts_total")
                 .with_description("Anonymity policy brownout events grouped by stage/reason.")
-                .init();
+                .build();
             let transport_events_total = meter
                 .u64_counter("sorafs.fetch.transport_events_total")
                 .with_description("Transport events emitted by the orchestrator grouped by protocol/event/reason.")
-                .init();
+                .build();
 
             Self {
                 active_fetches,
@@ -808,7 +808,7 @@ impl SorafsFetchOtel {
         {
             let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
             attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.pq_ratio.observe(ratio.clamp(0.0, 1.0), &attrs);
+            self.pq_ratio.record(ratio.clamp(0.0, 1.0), &attrs);
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
@@ -827,7 +827,7 @@ impl SorafsFetchOtel {
             let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
             attrs.push(KeyValue::new("stage", stage.to_string()));
             self.pq_candidate_ratio
-                .observe(ratio.clamp(0.0, 1.0), &attrs);
+                .record(ratio.clamp(0.0, 1.0), &attrs);
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
@@ -845,7 +845,7 @@ impl SorafsFetchOtel {
         {
             let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
             attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.pq_deficit_ratio.observe(ratio.clamp(0.0, 1.0), &attrs);
+            self.pq_deficit_ratio.record(ratio.clamp(0.0, 1.0), &attrs);
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
@@ -863,7 +863,7 @@ impl SorafsFetchOtel {
         {
             let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
             attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.classical_ratio.observe(ratio.clamp(0.0, 1.0), &attrs);
+            self.classical_ratio.record(ratio.clamp(0.0, 1.0), &attrs);
         }
         let _ = (self, manifest_id, region, job_id, stage, ratio);
     }
@@ -881,7 +881,7 @@ impl SorafsFetchOtel {
         {
             let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
             attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.classical_selected.observe(selected as f64, &attrs);
+            self.classical_selected.record(selected as f64, &attrs);
         }
         let _ = (self, manifest_id, region, job_id, stage, selected);
     }
@@ -1036,13 +1036,13 @@ impl FastpqOtel {
                 .with_description(
                     "FASTPQ execution mode resolutions (labels: requested, resolved, backend, device_class, chip_family, gpu_kind).",
                 )
-                .init();
+                .build();
             let poseidon_pipeline_resolutions_total = meter
                 .u64_counter("fastpq.poseidon_pipeline_resolutions_total")
                 .with_description(
                     "FASTPQ Poseidon pipeline resolutions (labels: requested, resolved, path, device_class, chip_family, gpu_kind).",
                 )
-                .init();
+                .build();
             Self {
                 execution_mode_resolutions_total,
                 poseidon_pipeline_resolutions_total,
@@ -1202,30 +1202,30 @@ impl SorafsRepairOtel {
             let tasks_total = meter
                 .u64_counter("sorafs.repair.tasks_total")
                 .with_description("SoraFS repair task transitions grouped by status.")
-                .init();
+                .build();
             let latency_minutes = meter
                 .f64_histogram("sorafs.repair.latency_minutes")
                 .with_description("SoraFS repair lifecycle latency in minutes.")
                 .with_unit("min")
-                .init();
+                .build();
             let backlog_oldest_age_seconds = meter
                 .f64_histogram("sorafs.repair.backlog_oldest_age_seconds")
                 .with_description("Age in seconds of the oldest queued SoraFS repair task.")
                 .with_unit("s")
-                .init();
+                .build();
             let queue_depth = meter
                 .f64_histogram("sorafs.repair.queue_depth")
                 .with_description("SoraFS repair queue depth per provider.")
                 .with_unit("tasks")
-                .init();
+                .build();
             let lease_expired_total = meter
                 .u64_counter("sorafs.repair.lease_expired_total")
                 .with_description("SoraFS repair lease expirations grouped by outcome.")
-                .init();
+                .build();
             let slash_proposals_total = meter
                 .u64_counter("sorafs.repair.slash_proposals_total")
                 .with_description("SoraFS repair slash proposals grouped by outcome.")
-                .init();
+                .build();
             Self {
                 tasks_total,
                 latency_minutes,
@@ -1345,19 +1345,19 @@ impl SorafsGcOtel {
             let runs_total = meter
                 .u64_counter("sorafs.gc.runs_total")
                 .with_description("SoraFS GC runs grouped by result.")
-                .init();
+                .build();
             let evictions_total = meter
                 .u64_counter("sorafs.gc.evictions_total")
                 .with_description("SoraFS GC evictions grouped by reason.")
-                .init();
+                .build();
             let bytes_freed_total = meter
                 .u64_counter("sorafs.gc.bytes_freed_total")
                 .with_description("SoraFS GC freed bytes grouped by reason.")
-                .init();
+                .build();
             let blocked_total = meter
                 .u64_counter("sorafs.gc.blocked_total")
                 .with_description("SoraFS GC evictions blocked grouped by reason.")
-                .init();
+                .build();
             Self {
                 runs_total,
                 evictions_total,
@@ -1430,11 +1430,11 @@ impl SorafsReconciliationOtel {
             let runs_total = meter
                 .u64_counter("sorafs.reconciliation.runs_total")
                 .with_description("SoraFS reconciliation runs grouped by result.")
-                .init();
+                .build();
             let divergence_total = meter
                 .u64_counter("sorafs.reconciliation.divergence_total")
                 .with_description("SoraFS reconciliation divergence count per run.")
-                .init();
+                .build();
             Self {
                 runs_total,
                 divergence_total,
@@ -1501,31 +1501,31 @@ impl SorafsGatewayOtel {
                 .i64_up_down_counter("sorafs.gateway.active")
                 .with_description("Active SoraFS gateway HTTP requests.")
                 .with_unit("requests")
-                .init();
+                .build();
 
             let responses_total = meter
                 .u64_counter("sorafs.gateway.responses_total")
                 .with_description(
                     "Total SoraFS gateway responses grouped by endpoint and bounded outcome.",
                 )
-                .init();
+                .build();
 
             let ttfb_ms = meter
                 .f64_histogram("sorafs.gateway.ttfb_ms")
                 .with_description("Gateway time-to-first-byte histogram (milliseconds).")
                 .with_unit("ms")
-                .init();
+                .build();
 
             let proof_verifications_total = meter
                 .u64_counter("sorafs.gateway.proof_verifications_total")
                 .with_description("SoraFS proof verification outcomes grouped by profile.")
-                .init();
+                .build();
 
             let proof_duration_ms = meter
                 .f64_histogram("sorafs.gateway.proof_duration_ms")
                 .with_description("SoraFS proof verification duration (milliseconds).")
                 .with_unit("ms")
-                .init();
+                .build();
 
             Self {
                 active_requests,
@@ -1821,16 +1821,20 @@ impl SorafsNodeOtel {
         {
             let meter = opentelemetry::global::meter("sorafs.node");
 
-            let build_counter = |name: &str, description: &str| {
-                meter.u64_counter(name).with_description(description).init()
-            };
-            let build_histogram = |name: &str, description: &str, unit: &str| {
+            let build_counter = |name: &'static str, description: &'static str| {
                 meter
-                    .f64_histogram(name)
+                    .u64_counter(name)
                     .with_description(description)
-                    .with_unit(unit)
-                    .init()
+                    .build()
             };
+            let build_histogram =
+                |name: &'static str, description: &'static str, unit: &'static str| {
+                    meter
+                        .f64_histogram(name)
+                        .with_description(description)
+                        .with_unit(unit)
+                        .build()
+                };
 
             let por_success_total = build_counter(
                 "sorafs.node.por_success_total",
@@ -3175,18 +3179,18 @@ fn install_otlp_metrics_exporter(
     resource: &[(&str, &str)],
     interval: Duration,
 ) -> eyre::Result<()> {
-    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_otlp::{MetricExporter, WithExportConfig};
     use opentelemetry_sdk::{
         Resource,
         metrics::{PeriodicReader, SdkMeterProvider},
-        runtime::Tokio,
     };
 
-    let exporter = opentelemetry_otlp::new_exporter()
-        .tonic()
-        .with_endpoint(endpoint.to_owned());
+    let exporter = MetricExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint.to_owned())
+        .build()?;
 
-    let reader = PeriodicReader::builder(exporter, Tokio)
+    let reader = PeriodicReader::builder(exporter)
         .with_interval(interval)
         .build();
 
@@ -3197,7 +3201,11 @@ fn install_otlp_metrics_exporter(
     }
 
     let provider = SdkMeterProvider::builder()
-        .with_resource(Resource::new(attributes))
+        .with_resource(
+            Resource::builder_empty()
+                .with_attributes(attributes)
+                .build(),
+        )
         .with_reader(reader)
         .build();
 
@@ -3328,6 +3336,18 @@ mod otel_tests {
             result.is_err(),
             "expected exporter installation to fail without otel-exporter feature"
         );
+    }
+
+    #[cfg(feature = "otel-exporter")]
+    #[tokio::test]
+    async fn installing_exporter_with_valid_configuration_succeeds() {
+        let result = install_sorafs_fetch_otlp_exporter(
+            "http://127.0.0.1:4317",
+            "sorafs-orchestrator-test",
+            &[("deployment.environment", "test")],
+            Duration::from_secs(3_600),
+        );
+        assert!(result.is_ok(), "OTLP exporter should install: {result:?}");
     }
 }
 
@@ -19620,79 +19640,7 @@ impl Metrics {
     }
 }
 
-fn record_gauge_stats(gauge: &GaugeVec, samples: &[f64]) {
-    const AVG_LABEL: [&str; 1] = ["avg"];
-    const P95_LABEL: [&str; 1] = ["p95"];
-    const MAX_LABEL: [&str; 1] = ["max"];
-    const COUNT_LABEL: [&str; 1] = ["count"];
-
-    if samples.is_empty() {
-        gauge.with_label_values(&AVG_LABEL).set(0.0);
-        gauge.with_label_values(&P95_LABEL).set(0.0);
-        gauge.with_label_values(&MAX_LABEL).set(0.0);
-        gauge.with_label_values(&COUNT_LABEL).set(0.0);
-        return;
-    }
-
-    let len = samples.len();
-    let count = u64::try_from(len).map_or_else(|_| u64_to_f64(u64::MAX), u64_to_f64);
-    let sum: f64 = samples.iter().copied().sum();
-    let avg = sum / count.max(1.0);
-
-    let mut sorted = samples.to_vec();
-    sorted.sort_by(f64::total_cmp);
-
-    let max = *sorted.last().expect("non-empty after guard");
-    let rank = ((len as u128) * 95).div_ceil(100);
-    let p95_index = rank
-        .saturating_sub(1)
-        .try_into()
-        .map_or(len - 1, |idx: usize| idx.min(len - 1));
-    let p95 = sorted[p95_index];
-
-    gauge.with_label_values(&AVG_LABEL).set(avg);
-    gauge.with_label_values(&P95_LABEL).set(p95);
-    gauge.with_label_values(&MAX_LABEL).set(max);
-    gauge.with_label_values(&COUNT_LABEL).set(count);
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn u64_to_f64(value: u64) -> f64 {
-    value as f64
-}
-
-fn clamp_u32_to_i64(value: u32) -> i64 {
-    i64::from(value)
-}
-
-fn u128_to_f64(value: u128) -> f64 {
-    u64::try_from(value).map_or(f64::MAX, u64_to_f64)
-}
-
-fn quantity_to_micro_f64(value: &iroha_data_model::prelude::Quantity) -> f64 {
-    let micros = value.as_numeric().to_f64_lossy() * 1_000_000.0;
-    if micros.is_finite() { micros } else { f64::MAX }
-}
-
-/// Project an exact quantity into the legacy nano-unit `f64` used only by
-/// telemetry instruments. This projection never feeds consensus state.
-fn quantity_to_nano_f64(value: &Quantity) -> f64 {
-    let nanos = value.as_numeric().to_f64_lossy() * 1_000_000_000.0;
-    if nanos.is_finite() { nanos } else { f64::MAX }
-}
-
-fn family_has_lane_labels(family: &prometheus::proto::MetricFamily) -> bool {
-    family
-        .get_metric()
-        .iter()
-        .flat_map(prometheus::proto::Metric::get_label)
-        .any(|label| {
-            matches!(
-                label.name(),
-                "lane" | "lane_id" | "dataspace" | "dataspace_id"
-            )
-        })
-}
+include!("metrics/tail_projection.rs");
 
 #[cfg(test)]
 #[path = "metrics/test.rs"]

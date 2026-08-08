@@ -989,6 +989,7 @@ def test_four_peer_health_requires_exact_is_and_is2_dataspace_identities(
 @pytest.mark.parametrize(
     ("path", "value"),
     [
+        (("protocol_version",), 3),
         (("height_context", "validator_count"), 1),
         (("last_commit_qc", "signer_count"), 2),
         (("last_commit_qc", "signed_power"), 2),

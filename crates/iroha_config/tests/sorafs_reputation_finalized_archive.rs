@@ -252,3 +252,79 @@ finalized_archive_root = "/run/secrets/forbidden-archive-root"
         "unknown-field diagnostics must not echo private path material"
     );
 }
+
+fn reserve_transparency_overlay(query_handle: &str) -> String {
+    let state_dir = if cfg!(target_os = "windows") {
+        r"C:\iroha\sorafs\reserve-transparency".to_owned()
+    } else {
+        "/var/lib/iroha/sorafs/reserve-transparency".to_owned()
+    };
+    format!(
+        r#"
+[sorafs.storage.reserve_transparency_runtime]
+enabled = true
+state_dir = "{}"
+finalized_query_handle = "{query_handle}"
+poll_interval_ms = 250
+retry_max_interval_ms = 4000
+page_items = 32
+max_pages_per_tick = 12
+checkpoint_max_bytes = 32768
+"#,
+        state_dir.replace('\\', "\\\\")
+    )
+}
+
+#[test]
+fn reserve_transparency_scanner_reuses_exact_reputation_query_binding() {
+    let source = format!(
+        "{}{}",
+        enabled_overlay(8 * 1024 * 1024, 1_234, 32 * 1024 * 1024, 0),
+        reserve_transparency_overlay("ledger.finalized.primary")
+    );
+    let actual = parse_overlay(&source).expect("valid reserve transparency scanner policy");
+    let scanner = actual
+        .torii
+        .sorafs_storage
+        .reserve_transparency_runtime
+        .expect("scanner enabled");
+
+    assert_eq!(scanner.finalized_query_handle, "ledger.finalized.primary");
+    assert_eq!(scanner.poll_interval, std::time::Duration::from_millis(250));
+    assert_eq!(
+        scanner.retry_max_interval,
+        std::time::Duration::from_secs(4)
+    );
+    assert_eq!(scanner.page_items, 32);
+    assert_eq!(scanner.max_pages_per_tick, 12);
+    assert_eq!(scanner.checkpoint_max_bytes.0, 32_768);
+}
+
+#[test]
+fn reserve_transparency_scanner_rejects_substituted_query_handle() {
+    let source = format!(
+        "{}{}",
+        enabled_overlay(8 * 1024 * 1024, 1_234, 32 * 1024 * 1024, 0),
+        reserve_transparency_overlay("ledger.finalized.substituted")
+    );
+    let error = parse_overlay(&source).expect_err("substituted scanner query must fail closed");
+    assert!(
+        error.contains("must exactly match reputation_runtime.finalized_query_handle"),
+        "unexpected query-binding diagnostic: {error}"
+    );
+}
+
+#[test]
+fn disabled_reserve_transparency_scanner_rejects_nondefault_policy() {
+    let error = parse_overlay(
+        r"
+[sorafs.storage.reserve_transparency_runtime]
+checkpoint_max_bytes = 4096
+",
+    )
+    .expect_err("disabled scanner policy must remain inert");
+    assert!(
+        error.contains("bindings and policy must be absent or default when disabled"),
+        "unexpected disabled scanner diagnostic: {error}"
+    );
+}

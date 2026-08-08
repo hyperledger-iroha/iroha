@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_hedging_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -196,7 +198,7 @@ def metrics_alerts(*, critical: bool = False) -> dict:
 
 def native_bridge_release(
     *,
-    abi: int = 12,
+    abi: int = 21,
     artifacts: list[dict[str, str]] | None = None,
 ) -> dict:
     artifacts = artifacts or [
@@ -1637,11 +1639,19 @@ def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
     assert "metrics must not include unknown values" in artifact["errors"]
 
 
-def test_native_bridge_abi_below_twelve_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize("abi", [20, 22])
+def test_native_bridge_abi_must_equal_twenty_one(tmp_path: Path, abi: int) -> None:
     write_complete_evidence(tmp_path)
-    write_json(tmp_path / "native-bridge-release.json", native_bridge_release(abi=11))
+    write_json(tmp_path / "native-bridge-release.json", native_bridge_release(abi=abi))
 
-    assert run_gate(tmp_path) == 1
+    summary = tmp_path / "summary.json"
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
+    assert (
+        "bridge_abi_version must equal the sole first-release ABI 21"
+        in artifact["errors"]
+    )
 
 
 def test_native_bridge_debug_artifacts_flag_is_required(tmp_path: Path) -> None:

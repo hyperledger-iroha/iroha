@@ -98,8 +98,12 @@ so reviewers can reproduce them verbatim.
 2. **Run the parity suite** – `cargo test -p sorafs_chunker` and the
    cross-language diff harness (`crates/sorafs_chunker/tests/vectors.rs`) must be
    green with the new fixtures in place.
-3. **Replay fuzz/back-pressure corpora** – execute `cargo fuzz list` and the
-   streaming harness (`fuzz/sorafs_chunker`) against the regenerated assets.
+3. **Replay deterministic back-pressure fixtures** – run
+   `cargo test --locked -p sorafs_chunker --test backpressure` against
+   `fuzz/sorafs_chunker/sf1_profile_v1_{input.bin,backpressure.json}`. These
+   are generated deterministic fixtures, not a libFuzzer corpus. Any future
+   chunker fuzz target must be separately workspace/lockfile-wired, executed,
+   and archived.
 4. **Verify Proof-of-Retrievability witnesses** – run
    `sorafs_manifest_chunk_store --por-sample=<n>` using the proposed profile and
    confirm the roots match the fixture manifest.

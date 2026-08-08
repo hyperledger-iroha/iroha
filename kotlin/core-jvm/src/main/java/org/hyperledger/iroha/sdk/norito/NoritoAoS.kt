@@ -316,9 +316,6 @@ internal object NoritoAoS {
                     out.write(1)
                     writeU32(out, value.code)
                 }
-                else -> throw IllegalArgumentException(
-                    "Unsupported enum value type: ${value.javaClass}"
-                )
             }
             out.write(if (row.flag) 1 else 0)
         }

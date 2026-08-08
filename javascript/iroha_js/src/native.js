@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -23,13 +24,13 @@ import {
   machOSigningIndependentSHA256,
   peSigningIndependentSHA256,
 } from "./nativeArtifactHash.js";
-import { readNativeBuildSourceState } from "../scripts/native-build-provenance.mjs";
 
 const NATIVE_FILENAME = "iroha_js_host.node";
 const CHECKSUM_FILENAME = "iroha_js_host.checksums.json";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const PLATFORM_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)+$/u;
 const PE_DOS_HEADER_BYTES = 64;
+const NATIVE_BUILD_SOURCE_STATE_READER = "read-native-build-source-state.mjs";
 
 let cachedBinding;
 let cachedBindingPath;
@@ -105,39 +106,31 @@ export function nativeSourceProvenanceMatches(
 }
 
 function assertLoadableSourceProvenance(verification, paths) {
-  if (
-    typeof verification.sourceGitRevision !== "string" ||
-    typeof verification.sourceTreeSha256 !== "string"
-  ) {
-    throw nativeBindingError(
-      `build provenance for ${paths.bindingPath} is missing exact source identity.`,
-      "source_provenance_error",
-    );
-  }
   if (verification.sourceTreeClean === true) return;
-  if (
-    verification.sourceTreeClean !== false ||
-    verification.cargoProfile !== "debug"
-  ) {
-    throw nativeBindingError(
-      `build provenance for ${paths.bindingPath} records a dirty source tree outside the debug profile.`,
-      "source_provenance_error",
-    );
-  }
-
-  let currentSource;
   try {
     const repoRoot = resolve(paths.jsRoot, "..", "..");
-    currentSource = readNativeBuildSourceState(repoRoot);
-  } catch (error) {
-    throw nativeBindingError(
-      `dirty source tree provenance for ${paths.bindingPath} cannot be authenticated against the current SDK source: ${error?.message ?? error}.`,
-      "source_provenance_error",
+    execFileSync(
+      process.execPath,
+      [
+        join(paths.jsRoot, "scripts", NATIVE_BUILD_SOURCE_STATE_READER),
+        "--verify",
+        repoRoot,
+        JSON.stringify({
+          cargoProfile: verification.cargoProfile,
+          sourceGitRevision: verification.sourceGitRevision,
+          sourceTreeClean: verification.sourceTreeClean,
+          sourceTreeSha256: verification.sourceTreeSha256,
+        }),
+      ],
+      {
+        env: { ...process.env, NODE_OPTIONS: "" },
+        maxBuffer: 16 * 1024,
+      },
     );
-  }
-  if (!nativeSourceProvenanceMatches(verification, currentSource)) {
+    return;
+  } catch {
     throw nativeBindingError(
-      `dirty source tree provenance for ${paths.bindingPath} does not match the exact current SDK source.`,
+      `dirty source tree from ${paths.bindingPath} does not match current SDK source.`,
       "source_provenance_error",
     );
   }

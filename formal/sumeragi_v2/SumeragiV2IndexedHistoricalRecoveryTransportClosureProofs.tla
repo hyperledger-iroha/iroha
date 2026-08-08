@@ -129,13 +129,16 @@ IndexedHistoricalTransport(initialContext) ==
        asyncProducerConsumedEpisodes <- IndexedProducer(initialContext, 2),
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
-         IndexedFixedCorridorDeadlines(initialContext)
+         IndexedFixedCorridorDeadlines(initialContext),
+       asyncServeProducerEpisodeDue <-
+         IndexedServeProducerEpisodeDue(initialContext)
 
 (***************************************************************************
 Exact projection.
 
 These are the same duplicated GST, 49 Core, 46 scheduler, five recovery,
-three producer-journal, and fixed-corridor receipt substitutions as
+three producer-journal, fixed-corridor receipt, and post-Serve producer-debt
+substitutions as
 `IndexedAsync` and `IndexedDecisionWitness`.  The extensional equality permits
 the product bracket to feed the transport instance without defining a second
 state machine.
@@ -155,7 +158,8 @@ BY Isa
        IndexedHistoricalTransport!vars,
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
-       IndexedFixedCorridorDeadlines
+       IndexedFixedCorridorDeadlines,
+       IndexedServeProducerEpisodeDue
 
 THEOREM IndexedInitProjectsEveryHistoricalTransportInit ==
   \A initialContext \in AdmissibleContextRecords:

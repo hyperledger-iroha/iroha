@@ -3,13 +3,14 @@ package org.hyperledger.iroha.android.samples;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Base64;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.junit.Test;
 
 public class SampleAddressTest {
   @Test
   public void buildsAddressFromAarSurface() throws AccountAddress.AccountAddressException {
-    byte[] key = new byte[32];
+    byte[] key = Base64.getDecoder().decode("zn+kbJ3OfqSxJeLja9tj6jMHPnWQrJKBauHoYbcEiwM=");
     AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 
     assertTrue(address.canonicalHex().startsWith("0x"));

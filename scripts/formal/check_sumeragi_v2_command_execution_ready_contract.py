@@ -453,7 +453,8 @@ def validate(network_path: Path, proof_path: Path) -> list[str]:
 /\ CommandExecutionReady(command)
 /\ (NodeIdle(command.node)
       \/ command.class = "Completion"
-      \/ LocalAssemblyBusyDispatchAllowed(command))
+      \/ LocalAssemblyBusyDispatchAllowed(command)
+      \/ AsyncCandidateHasCertifiedFenceRoot(command))
 """
     )
     try:

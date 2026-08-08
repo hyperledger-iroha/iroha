@@ -74,13 +74,13 @@ by `fixture_manifest.json`.
 Validate the positive payloads:
 
 ```sh
-sorafs-validate hedging --feed fixtures/sorafs_manifest/hedging/price_feed_primary_v1.to
-sorafs-validate hedging --feed fixtures/sorafs_manifest/hedging/price_feed_secondary_v1.to
-sorafs-validate hedging --decision fixtures/sorafs_manifest/hedging/reference_price_decision_v1.to
-sorafs-validate hedging --line fixtures/sorafs_manifest/hedging/billing_line_storage_v1.to
-sorafs-validate hedging --line fixtures/sorafs_manifest/hedging/billing_line_egress_v1.to
-sorafs-validate hedging --line fixtures/sorafs_manifest/hedging/billing_line_incentive_credit_v1.to
-sorafs-validate hedging --statement fixtures/sorafs_manifest/hedging/billing_statement_v1.to
+sorafs-validate hedging --kind price-feed --input fixtures/sorafs_manifest/hedging/price_feed_primary_v1.to
+sorafs-validate hedging --kind price-feed --input fixtures/sorafs_manifest/hedging/price_feed_secondary_v1.to
+sorafs-validate hedging --kind reference-price-decision --input fixtures/sorafs_manifest/hedging/reference_price_decision_v1.to
+sorafs-validate hedging --kind billing-line-item --input fixtures/sorafs_manifest/hedging/billing_line_storage_v1.to
+sorafs-validate hedging --kind billing-line-item --input fixtures/sorafs_manifest/hedging/billing_line_egress_v1.to
+sorafs-validate hedging --kind billing-line-item --input fixtures/sorafs_manifest/hedging/billing_line_incentive_credit_v1.to
+sorafs-validate hedging --kind billing-statement --input fixtures/sorafs_manifest/hedging/billing_statement_v1.to
 ```
 
 The generated `.to` and `.json` fixture files are checked in with this

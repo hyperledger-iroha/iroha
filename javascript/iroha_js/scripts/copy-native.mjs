@@ -2141,7 +2141,8 @@ export async function publishNativeBinding({
   assertBuildSourceMatchesCurrent(buildProvenance, publicationSource);
   if (
     cargoProfile !== "debug" &&
-    buildProvenance.source_tree_clean !== true
+    (publicationSource.sourceTreeClean !== true ||
+      buildProvenance.source_tree_clean !== true)
   ) {
     throw new Error(
       "Native release publication requires build provenance and current source to be clean.",

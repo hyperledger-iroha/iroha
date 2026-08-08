@@ -2405,7 +2405,7 @@ fn serialize_status_json() {
         .replace("[\n    \n  ]", "[\n  ]")
         .replace("[\n      \n    ]", "[\n  ]");
     // CAUTION: if this is outdated, make sure to update the documentation:
-    // https://docs.iroha.tech/reference/torii-endpoints.html#status
+    // https://docs.iroha.tech/reference/torii-endpoints.html#status-and-metrics
     let expected = expect_test::expect![[r#"
         {
           "build": {

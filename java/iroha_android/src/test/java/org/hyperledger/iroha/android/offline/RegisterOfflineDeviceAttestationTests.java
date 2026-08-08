@@ -26,6 +26,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
+import org.hyperledger.iroha.android.testing.FixtureGeneratorBuildCommand;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -327,7 +328,7 @@ public final class RegisterOfflineDeviceAttestationTests {
       // Always ask Cargo to refresh the generator. Finding an older binary is not
       // sufficient after a wire-ABI cutover and can compare Java against stale Rust bytes.
       final ProcessBuilder build =
-          new ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
+          new ProcessBuilder(FixtureGeneratorBuildCommand.command())
               .directory(root)
               .redirectErrorStream(true);
       build.environment().put("CARGO_TARGET_DIR", target.getAbsolutePath());

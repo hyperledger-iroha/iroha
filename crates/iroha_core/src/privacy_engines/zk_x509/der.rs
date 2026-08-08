@@ -10,14 +10,10 @@
 
 use thiserror::Error;
 
-/// Maximum bytes in one certificate or CRL DER document.
-pub(crate) const ZK_X509_DER_MAX_DOCUMENT_BYTES_V1: usize = 16 * 1024;
-/// Maximum content bytes in one DER value.
-pub(crate) const ZK_X509_DER_MAX_VALUE_BYTES_V1: usize = 16 * 1024;
-/// Maximum constructed-value nesting depth, counting the top-level value.
-pub(crate) const ZK_X509_DER_MAX_NESTING_DEPTH_V1: usize = 16;
-/// Maximum number of DER values in one recursively validated document.
-pub(crate) const ZK_X509_DER_MAX_VALUES_V1: usize = 2_048;
+pub(crate) use super::der_limits::{
+    ZK_X509_DER_MAX_DOCUMENT_BYTES_V1, ZK_X509_DER_MAX_NESTING_DEPTH_V1,
+    ZK_X509_DER_MAX_VALUE_BYTES_V1, ZK_X509_DER_MAX_VALUES_V1,
+};
 
 /// DER content octets of `ecdsa-with-SHA256` (`1.2.840.10045.4.3.2`).
 pub(crate) const ZK_X509_ECDSA_WITH_SHA256_OID_CONTENT_V1: &[u8] =

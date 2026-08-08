@@ -560,10 +560,9 @@ pub struct PdpProviderProtocol {
 }
 
 impl PdpProviderProtocol {
-    /// Construct a non-persistent runtime, intended for focused composition tests.
-    pub fn in_memory(
-        policy: PdpProviderProtocolPolicyV1,
-    ) -> Result<Self, PdpProviderProtocolError> {
+    /// Construct a non-persistent runtime for focused composition tests.
+    #[cfg(test)]
+    fn in_memory(policy: PdpProviderProtocolPolicyV1) -> Result<Self, PdpProviderProtocolError> {
         policy.validate()?;
         Ok(Self {
             policy,

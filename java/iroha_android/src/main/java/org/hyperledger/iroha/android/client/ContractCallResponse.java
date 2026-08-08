@@ -16,8 +16,7 @@ public final class ContractCallResponse {
   private final String entrypoint;
   private final Long transactionTtlMs;
   private final String entrypointHashHex;
-  private final String transactionScaffoldB64;
-  private final String signedTransactionB64;
+  private final String transactionPayloadB64;
   private final String signingMessageB64;
   private final ContractOperationReceipt operationReceipt;
 
@@ -34,8 +33,7 @@ public final class ContractCallResponse {
       final String entrypoint,
       final Long transactionTtlMs,
       final String entrypointHashHex,
-      final String transactionScaffoldB64,
-      final String signedTransactionB64,
+      final String transactionPayloadB64,
       final String signingMessageB64,
       final ContractOperationReceipt operationReceipt) {
     this.ok = ok;
@@ -50,8 +48,7 @@ public final class ContractCallResponse {
     this.entrypoint = entrypoint;
     this.transactionTtlMs = transactionTtlMs;
     this.entrypointHashHex = entrypointHashHex;
-    this.transactionScaffoldB64 = transactionScaffoldB64;
-    this.signedTransactionB64 = signedTransactionB64;
+    this.transactionPayloadB64 = transactionPayloadB64;
     this.signingMessageB64 = signingMessageB64;
     this.operationReceipt = operationReceipt;
   }
@@ -68,8 +65,7 @@ public final class ContractCallResponse {
   public String entrypoint() { return entrypoint; }
   public Long transactionTtlMs() { return transactionTtlMs; }
   public String entrypointHashHex() { return entrypointHashHex; }
-  public String transactionScaffoldB64() { return transactionScaffoldB64; }
-  public String signedTransactionB64() { return signedTransactionB64; }
+  public String transactionPayloadB64() { return transactionPayloadB64; }
   public String signingMessageB64() { return signingMessageB64; }
   public ContractOperationReceipt operationReceipt() { return operationReceipt; }
 }

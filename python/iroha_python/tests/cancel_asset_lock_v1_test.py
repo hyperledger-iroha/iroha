@@ -114,8 +114,17 @@ def test_bare_cancel_asset_lock_v1_matches_the_exact_canonical_archive() -> None
         == archive
     )
     assert decode_cancel_asset_lock_v1(archive) == value
-    assert decode_cancel_asset_lock_v1(bytearray(archive)) == value
-    assert decode_cancel_asset_lock_v1(memoryview(archive)) == value
+
+
+def test_bare_cancel_asset_lock_v1_accepts_the_maximum_canonical_archive() -> None:
+    maximum_quantity = str((1 << 511) - 1)
+    archive = encode_cancel_asset_lock_v1(_ESCROW_ID, maximum_quantity)
+
+    assert len(archive) == 148
+    assert decode_cancel_asset_lock_v1(archive) == CancelAssetLockV1(
+        escrow_id=_ESCROW_ID,
+        expected_remaining_amount=maximum_quantity,
+    )
 
 
 def test_bare_cancel_asset_lock_v1_rejects_all_shared_negative_fixtures() -> None:
@@ -208,10 +217,12 @@ def test_bare_cancel_asset_lock_v1_rejects_quantity_aliases(
         encode_cancel_asset_lock_v1(_ESCROW_ID, quantity)
 
 
-def test_bare_cancel_asset_lock_v1_decoder_rejects_text_and_frame_substitution() -> None:
+def test_bare_cancel_asset_lock_v1_decoder_rejects_aliases_and_frame_substitution() -> None:
     canonical = _FIXTURES["cancel_asset_lock_v1.to"]
     for alias in (
         canonical.hex(),
+        bytearray(canonical),
+        memoryview(canonical),
         list(canonical),
         {"bytes": canonical},
     ):
@@ -224,22 +235,22 @@ def test_bare_cancel_asset_lock_v1_decoder_rejects_text_and_frame_substitution()
     wrong_version = bytearray(canonical)
     wrong_version[4] = 1
     with pytest.raises(ValueError, match="magic or version"):
-        decode_cancel_asset_lock_v1(wrong_version)
+        decode_cancel_asset_lock_v1(bytes(wrong_version))
 
     wrong_schema = bytearray(canonical)
     wrong_schema[6] ^= 1
     with pytest.raises(ValueError, match="schema"):
-        decode_cancel_asset_lock_v1(wrong_schema)
+        decode_cancel_asset_lock_v1(bytes(wrong_schema))
 
     compressed = bytearray(canonical)
     compressed[22] = 1
     with pytest.raises(ValueError, match="uncompressed"):
-        decode_cancel_asset_lock_v1(compressed)
+        decode_cancel_asset_lock_v1(bytes(compressed))
 
     wrong_flags = bytearray(canonical)
     wrong_flags[39] = 0
     with pytest.raises(ValueError, match="compact-length"):
-        decode_cancel_asset_lock_v1(wrong_flags)
+        decode_cancel_asset_lock_v1(bytes(wrong_flags))
 
     padded = canonical[:40] + b"\x00" + canonical[40:]
     with pytest.raises(ValueError, match="unpadded"):
@@ -260,6 +271,13 @@ def test_nested_escrow_id_and_true_trailing_bytes_are_independent_failures() -> 
     assert int.from_bytes(trailing[23:31], "little") == 46
     with pytest.raises(ValueError, match="trailing bytes"):
         decode_cancel_asset_lock_v1(trailing)
+
+
+def test_bare_cancel_asset_lock_v1_rejects_oversized_frames_before_decode() -> None:
+    oversized = _FIXTURES["cancel_asset_lock_v1.to"] + bytes(64)
+    assert len(oversized) == 149
+    with pytest.raises(ValueError, match="between 85 and 148 canonical bytes"):
+        decode_cancel_asset_lock_v1(oversized)
 
 
 def test_fixture_json_decoder_rejects_invalid_utf8() -> None:

@@ -3,6 +3,7 @@
 use std::{fs, io, path::Path};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use ed25519_dalek::{Signer as _, SigningKey};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy,
@@ -37,6 +38,51 @@ fn build_manifest(
         .pin_policy(PinPolicy::default())
         .build()?;
     Ok((plan, manifest))
+}
+
+#[test]
+fn sorafs_node_cli_help_documents_only_canonical_ingest_spellings()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut command = cargo_bin_cmd!("sorafs-node");
+    let assertion = command.arg("--help").assert().success();
+    let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+
+    assert!(stderr.contains(
+        "ingest --data-dir=<dir> --manifest=<path> --payload=<path> [--plan-json-out=<path>]"
+    ));
+    assert!(stderr.contains(
+        "ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]"
+    ));
+    assert!(!stderr.contains("ingest [manifest]"));
+
+    Ok(())
+}
+
+#[test]
+fn sorafs_node_cli_rejects_manifest_subcommand_alias() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = cargo_bin_cmd!("sorafs-node");
+    let assertion = command.arg("ingest").arg("manifest").assert().failure();
+    let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+
+    assert_eq!(stderr, "error: unknown option: manifest\n");
+
+    Ok(())
+}
+
+#[test]
+fn sorafs_node_cli_rejects_por_manifest_option_alias() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = cargo_bin_cmd!("sorafs-node");
+    let assertion = command
+        .arg("ingest")
+        .arg("por")
+        .arg("--manifest=00")
+        .assert()
+        .failure();
+    let stderr = String::from_utf8(assertion.get_output().stderr.clone())?;
+
+    assert_eq!(stderr, "error: unknown option: --manifest=00\n");
+
+    Ok(())
 }
 
 #[test]
@@ -165,7 +211,7 @@ fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
         value
             .get("proof_digest_hex")
             .and_then(norito::json::Value::as_str),
-        Some("b0fa66e8df64a6ea922344919aeb5732b152618d5b4bc30cb8f0313b55f40025")
+        Some("e725de3d9e31f4d5150cb9f26122f7e4ca1c21b177c1c27a3e7047ae7832a9da")
     );
     let verdict = value
         .get("verdict")
@@ -313,7 +359,7 @@ fn fixture_challenge() -> PorChallengeV1 {
 }
 
 fn fixture_proof(challenge: &PorChallengeV1) -> PorProofV1 {
-    PorProofV1 {
+    let mut proof = PorProofV1 {
         version: POR_PROOF_VERSION_V1,
         challenge_id: challenge.challenge_id,
         manifest_digest: challenge.manifest_digest,
@@ -337,9 +383,16 @@ fn fixture_proof(challenge: &PorChallengeV1) -> PorProofV1 {
         auth_path: vec![[9; 32], [10; 32]],
         signature: AdvertSignature {
             algorithm: SignatureAlgorithm::Ed25519,
-            public_key: vec![11; 32],
-            signature: vec![12; 64],
+            public_key: Vec::new(),
+            signature: Vec::new(),
         },
         submitted_at: 1_700_000_100,
-    }
+    };
+    let signing_key = SigningKey::from_bytes(&[0x11; 32]);
+    proof.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
+    let payload = proof
+        .signature_payload_bytes()
+        .expect("encode deterministic PoR proof signing payload");
+    proof.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
+    proof
 }

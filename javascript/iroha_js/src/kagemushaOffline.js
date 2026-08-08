@@ -77,10 +77,6 @@ function jsonSnapshot(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-export function normalizeKagemushaAssetSelector(value, context = "assetDefinitionId") {
-  return exactString(value, context, { maximum: 512 });
-}
-
 export function normalizeKagemushaOperationId(value, context = "operationId") {
   if (typeof value !== "string" || !OPERATION_ID.test(value)) {
     throw new TypeError(`${context} must be non-zero lowercase 32-byte hexadecimal`);
@@ -145,14 +141,6 @@ export function normalizeOfflineStatus(payload) {
     assets: Object.freeze([]),
     blockers: Object.freeze([]),
   });
-}
-
-/**
- * @deprecated Use normalizeOfflineStatus(payload). The selector is ignored
- * because Offline capability is universal.
- */
-export function normalizeKagemushaReadinessV4(payload, _requestedAssetSelector) {
-  return normalizeOfflineStatus(payload);
 }
 
 function normalizeKagemushaNoritoRequestV4(value, maximumBytes, context) {

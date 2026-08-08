@@ -1,27 +1,26 @@
 #!/usr/bin/env bash
 # Verify checked-in SoraFS fixtures, signatures, SDK inventory, and heavy
 # cross-language vectors. Requires Cargo, Python 3, and the repository's pinned
-# dependencies. Node.js and Go are mandatory when
-# SORAFS_FIXTURE_REQUIRE_TOOLCHAIN=1 (the release/nightly workflow sets it);
-# otherwise their heavyweight local-only checks are reported and skipped.
+# dependencies. Node.js and Go are mandatory because their heavyweight
+# cross-language checks are part of the release fixture contract.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture_snapshot_root=""
+fixture_worktrees=()
 
 usage() {
   cat <<'EOF'
 Usage: ci/check_sorafs_fixtures.sh
 
-Verify the complete checked-in SoraFS fixture set. The command is read-only
-when the fixtures are current. Reference-SDK generators run in two isolated
-temporary copies; any byte drift, missing or extra path, or second-run
-difference fails.
+Verify the complete checked-in SoraFS fixture set from a clean HEAD. Generators
+whose output paths are fixed run in two detached worktrees; reference-SDK
+generators run in two isolated temporary copies. Any byte drift, missing or
+extra path, or second-run difference fails.
 
 Environment:
   CARGO_NET_OFFLINE                    Cargo offline mode (default: true).
   CARGO_TERM_COLOR                     Cargo colour setting (default: never).
-  SORAFS_FIXTURE_REQUIRE_TOOLCHAIN     Set to 1 to require Node.js and Go.
 EOF
 }
 
@@ -39,33 +38,24 @@ if [[ "$#" -gt 0 ]]; then
   esac
 fi
 
-require_fixture_toolchain="${SORAFS_FIXTURE_REQUIRE_TOOLCHAIN:-0}"
-case "${require_fixture_toolchain}" in
-  0|1) ;;
-  *)
-    echo "[sorafs-fixtures] error: SORAFS_FIXTURE_REQUIRE_TOOLCHAIN must be 0 or 1" >&2
-    exit 2
-    ;;
-esac
-
 cleanup_fixture_snapshots() {
+  local worktree
+  for worktree in "${fixture_worktrees[@]}"; do
+    git -C "${repo_root}" worktree remove --force "${worktree}" >/dev/null 2>&1 || true
+  done
   if [[ -n "${fixture_snapshot_root}" && -d "${fixture_snapshot_root}" ]]; then
     rm -rf -- "${fixture_snapshot_root}"
   fi
 }
 
-fixture_tool_available() {
+require_fixture_tool() {
   local tool_name="$1"
   local check_label="$2"
   if command -v "${tool_name}" >/dev/null 2>&1; then
     return 0
   fi
-  if [[ "${require_fixture_toolchain}" == "1" ]]; then
-    echo "[sorafs-fixtures] error: ${check_label} requires ${tool_name}" >&2
-    exit 1
-  fi
-  echo "[sorafs-fixtures] skipping ${check_label} (${tool_name} not available)" >&2
-  return 1
+  echo "[sorafs-fixtures] error: ${check_label} requires ${tool_name}" >&2
+  exit 1
 }
 
 snapshot_manifest_tree() {
@@ -403,39 +393,88 @@ if actual_paths != tracked_paths:
 PY
 }
 
+require_clean_checkout() {
+  if [[ -n "$(git -C "${repo_root}" status --porcelain=v1 --untracked-files=all)" ]]; then
+    echo "[sorafs-fixtures] error: deterministic fixture generation requires a clean checkout" >&2
+    exit 1
+  fi
+}
+
+create_fixture_worktree() {
+  local worktree="$1"
+  fixture_worktrees+=("${worktree}")
+  git -C "${repo_root}" worktree add --quiet --detach "${worktree}" "${fixture_commit}"
+  cp "${repo_root}/Cargo.lock" "${worktree}/Cargo.lock"
+  if ! cmp -s "${repo_root}/Cargo.lock" "${worktree}/Cargo.lock"; then
+    echo "[sorafs-fixtures] error: isolated replay Cargo.lock copy changed bytes" >&2
+    exit 1
+  fi
+  if [[ -n "$(git -C "${worktree}" status --porcelain=v1 --untracked-files=all)" ]]; then
+    echo "[sorafs-fixtures] error: isolated fixture replay worktree is not clean" >&2
+    exit 1
+  fi
+}
+
+run_fixed_path_fixture_generators() {
+  local worktree="$1"
+  (
+    cd "${worktree}"
+    echo "[sorafs-fixtures] regenerating chunker fixtures + signatures in ${worktree##*/}"
+    CARGO_TARGET_DIR="${fixture_cargo_target_dir}" \
+      cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors
+    echo "[sorafs-fixtures] regenerating provider admission fixtures in ${worktree##*/}"
+    CARGO_TARGET_DIR="${fixture_cargo_target_dir}" \
+      NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked \
+        -p sorafs_car --features cli,dev-tools --bin provider_admission_fixtures
+    echo "[sorafs-fixtures] regenerating pin registry snapshot in ${worktree##*/}"
+    CARGO_TARGET_DIR="${fixture_cargo_target_dir}" \
+      cargo run --locked -p iroha_core --example gen_pin_snapshot
+  )
+  if [[ -n "$(git -C "${worktree}" status --porcelain=v1 --untracked-files=all)" ]]; then
+    echo "[sorafs-fixtures] error: fixed-path generators changed checked-in bytes or emitted an unexpected path" >&2
+    git -C "${worktree}" status --short --untracked-files=all >&2 || true
+    exit 1
+  fi
+}
+
+snapshot_fixed_path_fixture_roots() {
+  local source_root="$1"
+  local snapshot_prefix="$2"
+  local relative
+  for relative in "${fixed_fixture_roots[@]}"; do
+    snapshot_manifest_tree \
+      "${source_root}/${relative}" \
+      "${fixture_snapshot_root}/${snapshot_prefix}-${relative//\//_}.json"
+  done
+}
+
+compare_fixed_path_fixture_snapshots() {
+  local first_prefix="$1"
+  local second_prefix="$2"
+  local failure_message="$3"
+  local relative
+  local first
+  local second
+  for relative in "${fixed_fixture_roots[@]}"; do
+    first="${fixture_snapshot_root}/${first_prefix}-${relative//\//_}.json"
+    second="${fixture_snapshot_root}/${second_prefix}-${relative//\//_}.json"
+    if ! cmp -s "${first}" "${second}"; then
+      diff -u "${first}" "${second}" >&2 || true
+      echo "[sorafs-fixtures] error: ${failure_message}: ${relative}" >&2
+      exit 1
+    fi
+  done
+}
+
 cd "${repo_root}"
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"
 export CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}"
 
-echo "[sorafs-fixtures] verifying chunker fixtures + signatures"
-cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors
-
-if ! git diff --quiet -- fixtures/sorafs_chunker; then
-  echo "[sorafs-fixtures] error: chunker fixtures changed; regenerate with a council key before committing" >&2
-  git diff -- fixtures/sorafs_chunker >&2 || true
+require_clean_checkout
+if [[ ! -f Cargo.lock || -L Cargo.lock ]]; then
+  echo "[sorafs-fixtures] error: the pinned root Cargo.lock must be a regular file" >&2
   exit 1
 fi
-
-echo "[sorafs-fixtures] regenerating provider admission fixtures"
-NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked -p sorafs_car --features cli,dev-tools --bin provider_admission_fixtures
-
-if ! git diff --quiet -- fixtures/sorafs_manifest/provider_admission; then
-  echo "[sorafs-fixtures] error: provider admission fixtures changed; rerun generator with the council keys" >&2
-  git diff -- fixtures/sorafs_manifest/provider_admission >&2 || true
-  exit 1
-fi
-
-echo "[sorafs-fixtures] regenerating pin registry snapshot fixture"
-cargo run --locked -p iroha_core --example gen_pin_snapshot
-
-if ! git diff --quiet -- crates/iroha_core/tests/fixtures/sorafs_pin_registry; then
-  echo "[sorafs-fixtures] error: pin registry snapshot changed; run the generator and commit updated fixtures" >&2
-  git diff -- crates/iroha_core/tests/fixtures/sorafs_pin_registry >&2 || true
-  exit 1
-fi
-
-echo "[sorafs-fixtures] verifying closed reference-SDK inventory before regeneration"
-python3 scripts/check_sorafs_reference_sdk_fixtures.py
 
 fixture_snapshot_root="$(mktemp -d "${TMPDIR:-/tmp}/sorafs-fixture-snapshots.XXXXXX")"
 trap cleanup_fixture_snapshots EXIT
@@ -446,10 +485,45 @@ fixture_snapshot_root="$(
   cd -- "${fixture_snapshot_root}"
   pwd -P
 )"
+fixture_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+case "${CARGO_TARGET_DIR:-target/sorafs-fixture-gate}" in
+  /*) fixture_cargo_target_dir="${CARGO_TARGET_DIR:-target/sorafs-fixture-gate}" ;;
+  *) fixture_cargo_target_dir="${repo_root}/${CARGO_TARGET_DIR:-target/sorafs-fixture-gate}" ;;
+esac
+fixed_fixture_roots=(
+  "fixtures/sorafs_chunker"
+  "fuzz/sorafs_chunker"
+  "fixtures/sorafs_manifest/provider_admission"
+  "crates/iroha_core/tests/fixtures/sorafs_pin_registry"
+)
+
+snapshot_fixed_path_fixture_roots "${repo_root}" "fixed-checked-in"
+for fixed_fixture_pass in 1 2; do
+  pass_worktree="${fixture_snapshot_root}/fixed-pass-${fixed_fixture_pass}"
+  create_fixture_worktree "${pass_worktree}"
+  run_fixed_path_fixture_generators "${pass_worktree}"
+  snapshot_fixed_path_fixture_roots \
+    "${pass_worktree}" \
+    "fixed-pass-${fixed_fixture_pass}"
+done
+compare_fixed_path_fixture_snapshots \
+  "fixed-checked-in" \
+  "fixed-pass-1" \
+  "checked-in fixed-path fixture outputs are stale"
+compare_fixed_path_fixture_snapshots \
+  "fixed-pass-1" \
+  "fixed-pass-2" \
+  "two isolated fixed-path fixture regenerations produced different bytes"
+echo "[sorafs-fixtures] fixed-path fixture generators are clean and deterministic"
+
+echo "[sorafs-fixtures] verifying closed reference-SDK inventory before regeneration"
+python3 scripts/check_sorafs_reference_sdk_fixtures.py
+
 verify_manifest_tree_paths "fixtures/sorafs_manifest"
 snapshot_manifest_tree \
   "fixtures/sorafs_manifest" \
   "${fixture_snapshot_root}/manifest-checked-in.json"
+# Reference-SDK generators run in two isolated temporary copies.
 for fixture_regeneration_pass in 1 2; do
   echo "[sorafs-fixtures] reference-SDK regeneration pass ${fixture_regeneration_pass}/2"
   pass_root="${fixture_snapshot_root}/pass-${fixture_regeneration_pass}/sorafs_manifest"
@@ -559,39 +633,37 @@ backpressure = Path("fuzz/sorafs_chunker/sf1_profile_v1_backpressure.json")
 expect_aliases(backpressure)
 PY
 
-if fixture_tool_available node "SF1 vector parity"; then
-  echo "[sorafs-fixtures] running SF1 vector parity (Node)"
-  node scripts/check_sf1_vectors.mjs
-fi
+require_fixture_tool node "SF1 vector parity"
+echo "[sorafs-fixtures] running SF1 vector parity (Node)"
+node scripts/check_sf1_vectors.mjs
 
 echo "[sorafs-fixtures] running 1 GiB chunker regression (Rust)"
 cargo test --locked -p sorafs_chunker --test one_gib -- --ignored
 
-if fixture_tool_available go "1 GiB Go regression"; then
-  echo "[sorafs-fixtures] running 1 GiB chunker regression (Go)"
-  go_cache="${repo_root}/target/go-cache"
-  go_mod_cache="${repo_root}/target/go-mod-cache"
-  go_tmp="${repo_root}/target/go-tmp"
-  go_path="${repo_root}/target/go"
-  mkdir -p "${go_cache}" "${go_mod_cache}" "${go_tmp}" "${go_path}"
-  (
-    cd fixtures/sorafs_chunker
-    SORAFS_HEAVY=1 \
-    GOCACHE="${go_cache}" \
-    GOMODCACHE="${go_mod_cache}" \
-    GOPATH="${go_path}" \
-    TMPDIR="${go_tmp}" \
-    GOTMPDIR="${go_tmp}" \
-      go test ./...
-  )
-fi
+require_fixture_tool go "1 GiB Go regression"
+echo "[sorafs-fixtures] running 1 GiB chunker regression (Go)"
+go_cache="${repo_root}/target/go-cache"
+go_mod_cache="${repo_root}/target/go-mod-cache"
+go_tmp="${repo_root}/target/go-tmp"
+go_path="${repo_root}/target/go"
+mkdir -p "${go_cache}" "${go_mod_cache}" "${go_tmp}" "${go_path}"
+(
+  cd fixtures/sorafs_chunker
+  SORAFS_HEAVY=1 \
+  GOCACHE="${go_cache}" \
+  GOMODCACHE="${go_mod_cache}" \
+  GOPATH="${go_path}" \
+  TMPDIR="${go_tmp}" \
+  GOTMPDIR="${go_tmp}" \
+    go test ./...
+)
 
-if fixture_tool_available node "1 GiB Node regression"; then
-  echo "[sorafs-fixtures] running 1 GiB chunker regression (Node)"
-  (
-    cd javascript/iroha_js
-    SORAFS_HEAVY=1 node --test test/sorafsChunker.oneGib.test.js
-  )
-fi
+require_fixture_tool node "1 GiB Node regression"
+echo "[sorafs-fixtures] running 1 GiB chunker regression (Node)"
+(
+  cd javascript/iroha_js
+  node scripts/run-test-profile.mjs heavy
+)
 
+require_clean_checkout
 echo "[sorafs-fixtures] fixtures stable and signatures verified"

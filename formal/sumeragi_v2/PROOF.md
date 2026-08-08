@@ -305,7 +305,7 @@ work assumptions are the trusted contracts stated in the protocol document.
 The local-work contract is quantified only over validator hosts admitted by
 the first-release storage-platform gate. An unsupported-platform failure is
 not successful termination and cannot discharge application or
-successor-activation fairness. Revision 3 has no legacy decoder premise: a
+successor-activation fairness. Revision 4 has no legacy decoder premise: a
 Vote, QC, status record, or finality artifact without its canonical signed
 proposal origin is rejected.
 
@@ -1116,6 +1116,14 @@ receipt, exact artifact, and original reducer tag as a completion tombstone.
 An exact post-drain retry is absorbed; tag, subject, context, or CommitQC drift
 fails closed. This closes old-stage recreation in source but does not promote
 the application theorem or any cross-tool production-refinement obligation.
+At the enclosing adapter boundary, a zero-to-one semantic candidate publishes
+its immutable owner, while a one-to-one retry must present that exact owner.
+A different owner for the same semantic lifecycle is rejected before the
+effect-to-candidate trace projection is constructed. The separate physical
+Fetch/Store/Validate lineage may retain a stronger carrier only after its
+distinct phase/commitment identity passes the typed monotone authority gate and
+the adopted lineage is re-projected. These source and mutation checks do not
+promote the effect-to-candidate cross-tool obligation before its strict pass.
 Recovered publication requires absent
 process-visible predecessor ownership plus durable complete-tip authority. For
 a tip whose canonical block owns lane payloads, that authority additionally
@@ -1220,6 +1228,18 @@ rank counts every distinct target/leader owner at the frozen semantic rank,
 preventing one serviced owner from hiding another. Equal-count replacement
 and count-increasing replenishment remain explicit non-progress cases and
 require a prior finite or coalesced producer argument.
+
+The production queue closes the matching final-retirement race with a one-shot
+local handoff. The last owner in a frozen Serve batch arms
+`producer_episode_due` under the same mutex that retires it; fresh Serve
+admission is `Busy` while the handoff is due or while
+`producer_episode_active` owns its bounded outer turn. The runner atomically
+consumes due into active, and the local lease clears active before admission
+reopens. Rejected replenishment cannot mint either scheduler or logical
+lifecycle ordinals. Digest-refreshed mutations bind both Busy boundaries, the
+high-water marks, timeout-owner ordering, strict predecessor service, and the
+real timeout-certificate/EnterView suffix. This source refinement does not
+count replenishment as progress, add fairness, or promote a ledger row.
 
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
@@ -1403,7 +1423,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 826 tests across thirty-eight Rust
+The current pre-network release inventory names 837 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1502,10 +1522,14 @@ checkpoint. Five admission/coalescing, Busy pre-runtime ownership, and
 reconstructed-chunk terminality regressions yield the 818-test checkpoint.
 Thirteen exact admission, retry, tombstone, and high-water regressions yield the
 831-test checkpoint. Retiring five obsolete peer-genesis protocol regressions
-yields the current 826-test,
-38-module inventory. The complete source-sealed
+yields the 826-test checkpoint. Replacing one obsolete restart selector with
+its separate raw/coalesced crash boundaries and restoring two implemented
+certified-ingress regressions yields the 829-test checkpoint. Autonomous-
+lifecycle terminal-outcome and startup-recovery coverage plus the final source
+reconciliation yield the current 837-test,
+39-module inventory. The complete source-sealed
 pre-network corridor
-contains 81 legs. Six source-sealed command legs and the G-SCALE
+contains 86 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
 requester epoch, and per-stream semantic sequence coordinates. Canonical
@@ -1574,7 +1598,12 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc`.
+`7f808256b4793433d3217600ac4f7320c209b5d0ecb7630219649274c68bfbaf`.
+The separate source-sealed G-UNIT inventory contains 524 focused tests,
+including 318 `iroha_core` tests. Its 525-line canonical TSV has SHA-256
+`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`;
+the sealed Native rows cover exact per-route prevote-byte accounting,
+empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1610,13 +1639,14 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 81 legs, including separate exact data-model status and atomic
+now has 86 legs, including the autonomous lifecycle-recovery module, separate
+exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-eight-module, eighty-one-leg corridor. It
+tests are not claimed by the thirty-nine-module, eighty-six-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
@@ -1673,7 +1703,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 826-name tree still requires a clean committed, detached,
+names; the current 837-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

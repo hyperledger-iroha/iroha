@@ -1,5 +1,6 @@
 //! Docker Compose configuration generator for Iroha.
 
+mod base64_standard;
 mod path;
 mod peer;
 mod schema;
@@ -1760,7 +1761,9 @@ mod tests {
         assert!(!output.contains("container projection for peer 0"));
         assert_eq!(
             output
-                .matches(&BASE64_STANDARD.encode(b"# prepared shared rANS fixture\n"))
+                .matches(&base64_standard::encode(
+                    b"# prepared shared rANS fixture\n",
+                ))
                 .count(),
             1,
             "equal public runtime bytes must be interned once"

@@ -25,6 +25,7 @@ import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeA
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplicationState;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.util.HashLiteral;
+import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
 import org.junit.Test;
 
 /** Shared grouped Native AMX v2 fixture-consumption tests. */
@@ -128,8 +129,12 @@ public final class NativeAmxV2GroupedFixtureTests {
                 "coherent_stale_descriptor_hash",
                 "coherent_stale_proposal_hash",
                 "coherent_stale_settlement_hash",
+                "coherent_duplicate_validator_set",
+                "coherent_over_quorum_requirement",
                 "manifest_leaf_hash_tampering",
-                "non_canonical_validator_peer_id")));
+                "non_canonical_validator_peer_id",
+                "execution_commitment_merge_carrier_wrong_version",
+                "execution_commitment_missing_merge_carrier_field")));
     assertFalse(
         NativeAmxV2Models.isCanonicalBlsNormalPeerId(
             "ea0130"
@@ -226,6 +231,24 @@ public final class NativeAmxV2GroupedFixtureTests {
     final Map<String, Object> execution = object(evidence, "execution_commitment");
     final List<Object> artifacts = array(evidence, "manifest_artifacts");
     require(number(execution, "native_amx_application_manifest_version") == 1L);
+    require(execution.containsKey("merge_carrier"));
+    final Object rawMergeCarrier = execution.get("merge_carrier");
+    require(rawMergeCarrier instanceof Map);
+    final Map<String, Object> mergeCarrier = object(rawMergeCarrier);
+    require(
+        mergeCarrier
+            .keySet()
+            .equals(new HashSet<>(Arrays.asList("version", "entry_hash"))));
+    final Object mergeCarrierVersion = mergeCarrier.get("version");
+    require(
+        mergeCarrierVersion instanceof BigInteger
+            || mergeCarrierVersion instanceof Byte
+            || mergeCarrierVersion instanceof Short
+            || mergeCarrierVersion instanceof Integer
+            || mergeCarrierVersion instanceof Long);
+    require(new BigInteger(mergeCarrierVersion.toString()).equals(BigInteger.ONE));
+    require(mergeCarrier.get("entry_hash") instanceof String);
+    new NativeAmxV2.ConsensusHash(string(mergeCarrier, "entry_hash"));
     final long manifestCount = number(execution, "native_amx_application_manifest_count");
     require(
         manifestCount == artifacts.size() && artifacts.size() == 1);
@@ -245,6 +268,7 @@ public final class NativeAmxV2GroupedFixtureTests {
     require(
         Objects.equals(
             leaf.get("executed_block_wire_hash"), execution.get("executed_block_wire_hash")));
+    require(unsigned64(execution, "executed_block_wire_len").equals(BigInteger.valueOf(49)));
     require(number(leaf, "predecessor_height") + 1L == number(leaf, "participant_height"));
 
     final Map<String, Object> active =

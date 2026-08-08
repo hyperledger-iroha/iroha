@@ -1,3 +1,8 @@
+// Keep the canonical UTF-16 ordering primitive inside the audited browser graph.
+import { compareUtf16 } from "./ordering.js";
+
+void compareUtf16;
+
 export {
   AccountAddress,
   AccountAddressError,
@@ -44,12 +49,6 @@ export {
 } from "./ivmArtifact.js";
 
 export {
-  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
-  instantiateIvmArtifactAdmissionWasm,
-  verifyIvmContractArtifactAdmission,
-} from "./ivmArtifactAdmissionWasm.js";
-
-export {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
   browserTransactionCodec,
@@ -86,20 +85,14 @@ export {
   encodeQuantityNoritoValue,
   noritoDecodeBlockProofs,
   noritoDecodeInstruction,
-  noritoDecodePrivacyExact12FixtureBundleBase64V1,
-  noritoDecodePrivacyExact12FixtureBundleV1,
   inspectSubscriptionTriggerAction,
   noritoEncodeInstruction,
-  noritoEncodePrivacyExact12FixtureBundleV1,
   noritoEncodeMultisigContractCallApproveRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeSorafsBillingAcknowledgementProofV1,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1,
   SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
-  PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
-  PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1,
-  PRIVACY_EXACT12_PROTOCOL_IDS_V1,
   verifyBlockMerkleProof,
   verifyBlockProofs,
   validateSorafsReplicationOrderPayloadV1,
@@ -134,12 +127,10 @@ export {
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaAssetSelector,
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
   normalizeKagemushaOperationStatus,
   normalizeKagemushaRedeemRequestV4,
-  normalizeKagemushaReadinessV4,
   normalizeOfflineStatus,
   normalizeKagemushaTopUpRequestV4,
 } from "./kagemushaOffline.js";

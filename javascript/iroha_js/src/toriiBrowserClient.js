@@ -1,7 +1,17 @@
 import { Buffer } from "buffer";
 
 import { blake2b256 } from "./blake2b.js";
-import { NumericV1, NumericV1Error } from "./numericV1.js";
+import {
+  NumericV1,
+  NumericV1Error,
+  parseStrictLosslessIntegerJson,
+} from "./numericV1.js";
+import {
+  noritoDecodeBlockProofs,
+  noritoEncodeMultisigContractCallApproveRequest,
+  noritoEncodeMultisigContractCallProposeRequest,
+  noritoEncodeMultisigProposeRequest,
+} from "./norito.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
 import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
 import {
@@ -14,7 +24,6 @@ import {
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
 import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
-import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import {
   AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
@@ -110,15 +119,6 @@ const CONTRACT_EVENT_STREAM_OPTION_KEYS = new Set([
 ]);
 const LEDGER_HEADERS_OPTION_KEYS = new Set(["from", "limit", "signal"]);
 const LEDGER_READ_OPTION_KEYS = new Set(["signal"]);
-
-let noritoEncodersPromise;
-
-function loadNoritoEncoders() {
-  if (!noritoEncodersPromise) {
-    noritoEncodersPromise = import("./norito.js");
-  }
-  return noritoEncodersPromise;
-}
 
 function normalizeBaseUrl(baseUrl) {
   const raw = String(baseUrl ?? "").trim();
@@ -1354,11 +1354,6 @@ export class ToriiBrowserClient {
     }).then((payload) => normalizeOfflineStatus(payload));
   }
 
-  /** @deprecated Use getOfflineCapability(). The asset selector is ignored. */
-  getKagemushaReadinessV4(_assetDefinitionId, options = {}) {
-    return this.getOfflineCapability(options);
-  }
-
   submitKagemushaTopUpV4(request, options = {}) {
     return this._submitKagemushaCommandV4(
       "/v1/offline/top-up",
@@ -2355,7 +2350,6 @@ export class ToriiBrowserClient {
         maximumBodyBytes: AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
       },
     );
-    const { noritoDecodeBlockProofs } = await loadNoritoEncoders();
     return noritoDecodeBlockProofs(bytes);
   }
 
@@ -2483,7 +2477,6 @@ export class ToriiBrowserClient {
 
   async submitMultisigPropose(request, options = {}) {
     const opts = requireObject(options, "submitMultisigPropose options");
-    const { noritoEncodeMultisigProposeRequest } = await loadNoritoEncoders();
     return this._json("POST", "/v1/multisig/propose", {
       rawBody: noritoEncodeMultisigProposeRequest(requireObject(request, "submitMultisigPropose request")),
       contentType: "application/x-norito",
@@ -2495,7 +2488,6 @@ export class ToriiBrowserClient {
 
   async submitMultisigContractCallPropose(request, options = {}) {
     const opts = requireObject(options, "submitMultisigContractCallPropose options");
-    const { noritoEncodeMultisigContractCallProposeRequest } = await loadNoritoEncoders();
     return this._json("POST", "/v1/contracts/call/multisig/propose", {
       rawBody: noritoEncodeMultisigContractCallProposeRequest(
         requireObject(request, "submitMultisigContractCallPropose request"),
@@ -2509,7 +2501,6 @@ export class ToriiBrowserClient {
 
   async submitMultisigContractCallApprove(request, options = {}) {
     const opts = requireObject(options, "submitMultisigContractCallApprove options");
-    const { noritoEncodeMultisigContractCallApproveRequest } = await loadNoritoEncoders();
     return this._json("POST", "/v1/contracts/call/multisig/approve", {
       rawBody: noritoEncodeMultisigContractCallApproveRequest(
         requireObject(request, "submitMultisigContractCallApprove request"),

@@ -165,6 +165,10 @@ public sealed class CancelAssetLockInstructionTests
     [Fact]
     public void DecoderRejectsLegacyNoncanonicalAndTrailingNorito()
     {
+        Assert.Throws<ArgumentException>(() =>
+            CancelAssetLockInstruction.DecodeNorito(
+                Encoding.ASCII.GetBytes(AppealFinanceCanonicalNoritoHex)));
+
         var canonical = TransactionInstruction.CancelAssetLock(
             "merchant-lock-001",
             "20");
@@ -231,6 +235,18 @@ public sealed class CancelAssetLockInstructionTests
         var prefix =
             $$"""{"escrow_id":"{{MerchantEscrowId}}","expected_remaining_amount":""";
 
+        Assert.Throws<ArgumentException>(() =>
+            CancelAssetLockInstruction.DecodePayloadJson(
+                new byte[]
+                {
+                    (byte)'{',
+                    (byte)'"',
+                    0x80,
+                    (byte)'"',
+                    (byte)':',
+                    (byte)'1',
+                    (byte)'}',
+                }));
         Assert.Throws<ArgumentException>(() =>
             CancelAssetLockInstruction.DecodePayloadJson(
                 Encoding.UTF8.GetBytes(

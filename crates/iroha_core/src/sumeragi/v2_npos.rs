@@ -1544,10 +1544,11 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"parent-payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"parent-state"),
                 Hash::new(b"parent-post-state"),
                 Hash::new(b"parent-ordinary-writes"),
+                1,
                 Hash::new(b"parent-executed-block-wire"),
             ),
             signers: vec![0, 1, 2],

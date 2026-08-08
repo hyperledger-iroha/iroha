@@ -1,0 +1,48 @@
+[Unit]
+Description=Iroha V1 runtime-provider broker
+Documentation=https://github.com/hyperledger-iroha/iroha/tree/main/configs/sorafs/runtime_provider_broker
+After=network-online.target
+Wants=network-online.target
+Before=taira-irohad.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=iroha
+Group=iroha
+RuntimeDirectory=iroha-runtime-provider-broker-v1
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+UMask=0077
+ExecStartPre=/usr/bin/test -f /usr/local/libexec/iroha-runtime-provider-broker-v1
+ExecStartPre=/usr/bin/test ! -L /usr/local/libexec/iroha-runtime-provider-broker-v1
+ExecStartPre=/usr/bin/test -x /usr/local/libexec/iroha-runtime-provider-broker-v1
+ExecStartPre=/usr/bin/test -s /etc/iroha/runtime-provider-broker/catalog.norito
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/runtime-provider-broker/catalog.norito
+ExecStartPre=/usr/bin/test -r /etc/iroha/runtime-provider-broker/catalog.norito
+ExecStart=/usr/local/libexec/iroha-runtime-provider-broker-v1 --catalog /etc/iroha/runtime-provider-broker/catalog.norito
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=60
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadOnlyPaths=/etc/iroha/runtime-provider-broker/catalog.norito
+ReadWritePaths=/run/iroha-runtime-provider-broker-v1
+
+[Install]
+WantedBy=multi-user.target

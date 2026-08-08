@@ -123,6 +123,11 @@ if ((!NUMERIC_V1_ONLY)); then
     json_parse_string_ref
     json_skip_value
     json_from_json_equiv
+    aos_view_optstr_equiv
+    aos_view_optu32_equiv
+    aos_view_enum_equiv
+    aos_ncb_equiv_str_u32
+    aos_ncb_equiv_bytes_u32
   )
 
   for t in "${targets[@]}"; do

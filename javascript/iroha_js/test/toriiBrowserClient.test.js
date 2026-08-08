@@ -1036,12 +1036,17 @@ test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks",
   }
 });
 
-test("ToriiBrowserClient does not statically import Node-only Norito code", () => {
+test("ToriiBrowserClient statically imports only named browser-safe Norito APIs", () => {
   const source = readFileSync(
     new URL("../src/toriiBrowserClient.js", import.meta.url),
     "utf8",
   );
-  assert.doesNotMatch(source, /from\s+["']\.\/norito\.js["']/);
+  assert.match(
+    source,
+    /import\s*\{[^}]*noritoDecodeBlockProofs[^}]*noritoEncodeMultisigProposeRequest[^}]*\}\s*from\s*["']\.\/norito\.js["']/su,
+  );
+  assert.doesNotMatch(source, /import\s*\(\s*["']\.\/norito\.js["']\s*\)/u);
+  assert.doesNotMatch(source, /import\s+\*\s+as\s+\w+\s+from\s+["']\.\/norito\.js["']/u);
 });
 
 test("ToriiBrowserClient source and dist use only first-release multisig proposal routes", () => {

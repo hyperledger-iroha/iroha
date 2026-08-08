@@ -216,26 +216,32 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         let commitAPDU = try IrohaPeerNfcAPDUCodecV1.encode(commit)
         var commitCount = 0
         var durableRecord: IrohaPeerNfcDurableAcknowledgementV1?
-        let response = receiver.process(apdu: commitAPDU) { context in
-            commitCount += 1
-            XCTAssertEqual(context.payment, payment)
-            let record = try IrohaPeerNfcDurableAcknowledgementV1(
-                context: context,
-                acknowledgement: acknowledgement.encoded,
-                limits: limits
-            )
-            durableRecord = record
-            _ = record.encoded // the application persists these bytes here
-            return record
-        }
+        let response = receiver.process(
+            apdu: commitAPDU,
+            durableCommit: { context in
+                commitCount += 1
+                XCTAssertEqual(context.payment, payment)
+                let record = try IrohaPeerNfcDurableAcknowledgementV1(
+                    context: context,
+                    acknowledgement: acknowledgement.encoded,
+                    limits: limits
+                )
+                durableRecord = record
+                _ = record.encoded // the application persists these bytes here
+                return record
+            }
+        )
         XCTAssertEqual(response.statusWord, .success)
         XCTAssertEqual(receiver.phase, .acknowledgementReady)
         XCTAssertEqual(commitCount, 1)
 
-        let replay = receiver.process(apdu: commitAPDU) { _ in
-            XCTFail("an exact durable COMMIT replay must not ingest twice")
-            throw TestFailure.expected
-        }
+        let replay = receiver.process(
+            apdu: commitAPDU,
+            durableCommit: { _ in
+                XCTFail("an exact durable COMMIT replay must not ingest twice")
+                throw TestFailure.expected
+            }
+        )
         XCTAssertEqual(replay.statusWord, .success)
         XCTAssertEqual(commitCount, 1)
 
@@ -406,7 +412,7 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
         )
         let request = try message(kind: .receiveRequest, byte: 0x55, count: 260)
         let payment = try message(kind: .payment, byte: 0x56, count: 530)
-        var receiver = try IrohaPeerNfcReceiverSessionV1(
+        let receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: request.encoded,
             profilePolicy: .init(profile: .kagemusha),
@@ -449,20 +455,26 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
             requestCanonicalHash: request.canonicalHash,
             paymentWireHash: payment.wireHash
         ))
-        let failed = receiver.process(apdu: commit) { _ in
-            throw TestFailure.expected
-        }
+        let failed = receiver.process(
+            apdu: commit,
+            durableCommit: { _ in
+                throw TestFailure.expected
+            }
+        )
         XCTAssertEqual(failed.statusWord, .storageFailure)
         XCTAssertEqual(receiver.phase, .paymentReceiving)
         XCTAssertFalse(try receiver.status().flags.contains(.durableAcknowledgement))
 
-        let succeeded = receiver.process(apdu: commit) { context in
-            try IrohaPeerNfcDurableAcknowledgementV1(
-                context: context,
-                acknowledgement: acknowledgement.encoded,
-                limits: limits
-            )
-        }
+        let succeeded = receiver.process(
+            apdu: commit,
+            durableCommit: { context in
+                try IrohaPeerNfcDurableAcknowledgementV1(
+                    context: context,
+                    acknowledgement: acknowledgement.encoded,
+                    limits: limits
+                )
+            }
+        )
         XCTAssertEqual(succeeded.statusWord, .success)
         XCTAssertEqual(receiver.phase, .acknowledgementReady)
         XCTAssertTrue(try receiver.status().flags.contains(.durableAcknowledgement))

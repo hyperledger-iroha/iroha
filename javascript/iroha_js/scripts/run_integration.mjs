@@ -39,7 +39,7 @@ const { values, positionals } = parseArgs({
     "compose-bin": { type: "string" },
     start: { type: "boolean" },
     "no-start": { type: "boolean" },
-    "skip-install": { type: "boolean" },
+    qualification: { type: "boolean" },
     "enable-iso": { type: "boolean" },
     "iso-alias": { type: "string" },
     "iso-alias-index": { type: "string" },
@@ -63,7 +63,8 @@ const waitSeconds = values["wait-seconds"]
   ? Number.parseInt(values["wait-seconds"], 10)
   : DEFAULT_WAIT_SECONDS;
 const composeBin = values["compose-bin"] ?? process.env.JS_TORII_COMPOSE_BIN ?? process.env.COMPOSE_BIN;
-const skipInstall = values["skip-install"] ?? parseBooleanEnv(process.env.JS_TORII_SKIP_INSTALL ?? "0");
+const qualificationEnabled =
+  values.qualification ?? parseBooleanEnv(process.env.JS_TORII_QUALIFICATION ?? "0");
 const isoCliOptions = {
   enabled: values["enable-iso"],
   alias: values["iso-alias"],
@@ -88,9 +89,7 @@ async function main() {
   let composeRunning = false;
 
   try {
-    if (!skipInstall) {
-      await runProcess("npm", ["ci", "--no-audit", "--prefer-offline"], { cwd: JS_DIR });
-    }
+    await runProcess("npm", ["ci", "--no-audit", "--prefer-offline"], { cwd: JS_DIR });
 
     await runProcess("npm", ["run", "build:native"], { cwd: JS_DIR });
 
@@ -137,6 +136,10 @@ async function main() {
     }
     if (isoJsonOverrides.pacs009 && !testEnv.IROHA_TORII_INTEGRATION_ISO_PACS009) {
       testEnv.IROHA_TORII_INTEGRATION_ISO_PACS009 = isoJsonOverrides.pacs009;
+    }
+    if (qualificationEnabled) {
+      testEnv.IROHA_JS_RELEASE_INTEGRATION = "1";
+      validateQualificationEnvironment(testEnv);
     }
 
     await runProcess("node", ["--test", ...testArgs], {
@@ -202,6 +205,83 @@ export async function validateDefaultComposeGenesisArtifacts(env = process.env) 
     ) {
       throw new Error(`${name} must contain one canonical lowercase Iroha hash record`);
     }
+  }
+}
+
+export function validateQualificationEnvironment(env = process.env) {
+  const missing = [];
+  const requireText = (name) => {
+    if (typeof env[name] !== "string" || env[name].trim().length === 0) {
+      missing.push(name);
+    }
+  };
+  const requireEnabled = (name) => {
+    if (env[name] !== "1") {
+      missing.push(`${name}=1`);
+    }
+  };
+
+  for (const name of [
+    "IROHA_TORII_INTEGRATION_URL",
+    "IROHA_TORII_INTEGRATION_SORAFS_FETCH_MANIFEST",
+    "IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH",
+    "IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK",
+    "IROHA_TORII_INTEGRATION_UAID",
+    "IROHA_TORII_INTEGRATION_UAID_DATASPACE",
+    "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_MANIFEST",
+    "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH",
+    "IROHA_TORII_INTEGRATION_DA_TICKET",
+    "IROHA_TORII_INTEGRATION_DA_GATEWAYS",
+  ]) {
+    requireText(name);
+  }
+  for (const name of [
+    "IROHA_TORII_INTEGRATION_MUTATE",
+    "IROHA_TORII_INTEGRATION_SORAFS_ENABLED",
+    "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_ENABLED",
+    "IROHA_TORII_INTEGRATION_DA_ENABLED",
+  ]) {
+    requireEnabled(name);
+  }
+  if (missing.length !== 0) {
+    throw new Error(
+      `release qualification requires explicit live inputs: ${missing.join(", ")}`,
+    );
+  }
+
+  const fetchLength = Number(env.IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH);
+  if (!Number.isSafeInteger(fetchLength) || fetchLength <= 0) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_SORAFS_FETCH_LENGTH must be a positive safe integer for release qualification",
+    );
+  }
+  const dataspace = Number(env.IROHA_TORII_INTEGRATION_UAID_DATASPACE);
+  if (!Number.isSafeInteger(dataspace) || dataspace < 0) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_UAID_DATASPACE must be a non-negative safe integer for release qualification",
+    );
+  }
+  const revokeEpoch = Number(
+    env.IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH,
+  );
+  if (!Number.isSafeInteger(revokeEpoch) || revokeEpoch < 0) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH must be a non-negative safe integer for release qualification",
+    );
+  }
+  let gateways;
+  try {
+    gateways = JSON.parse(env.IROHA_TORII_INTEGRATION_DA_GATEWAYS);
+  } catch (error) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_DA_GATEWAYS must be valid JSON for release qualification",
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(gateways) || gateways.length < 2) {
+    throw new Error(
+      "IROHA_TORII_INTEGRATION_DA_GATEWAYS must describe at least two gateways for release qualification",
+    );
   }
 }
 

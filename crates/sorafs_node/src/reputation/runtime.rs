@@ -158,7 +158,7 @@ pub const REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1: u64 = 64 * 1024 *
 /// Maximum canonical framing overhead above the sealed checkpoint bytes.
 pub const REPUTATION_JOURNAL_SEALED_CHECKPOINT_MAX_OVERHEAD_BYTES_V1: u64 = 4 * 1024;
 /// Maximum fresh finalized source lookups after concurrent outbox mutation.
-const POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1: usize = 3;
+const NATIVE_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1: usize = 3;
 /// Maximum canonical publication-reconciler checkpoint bytes.
 pub const REPUTATION_PUBLICATION_MAX_CHECKPOINT_BYTES_V1: u64 = 32 * 1024 * 1024;
 /// Minimum accepted checkpoint ceiling for either runtime store.
@@ -579,7 +579,7 @@ impl ReputationJournalSourceFinalizedViewV1 {
     ) -> Result<(), ReputationRuntimeError> {
         if chain_id.as_str().is_empty()
             || maximum_height == 0
-            || query.source_id == ReputationJournalSourceIdV1::ZERO
+            || query.source_id() == ReputationJournalSourceIdV1::ZERO
         {
             return Err(ReputationRuntimeError::InvalidQueryPage);
         }
@@ -598,7 +598,7 @@ impl ReputationJournalSourceFinalizedViewV1 {
         finalized_cursor
             .validate()
             .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
-        if let Some(expected) = query.expected_finalized_cursor {
+        if let Some(expected) = query.expected_finalized_cursor() {
             expected
                 .validate()
                 .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
@@ -612,7 +612,7 @@ impl ReputationJournalSourceFinalizedViewV1 {
         event
             .validate(finalized_cursor)
             .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
-        if event.entry.source_id != query.source_id {
+        if event.entry.source_id != query.source_id() {
             return Err(ReputationRuntimeError::InvalidQueryPage);
         }
         Ok(())
@@ -1801,10 +1801,12 @@ pub enum ReputationJournalEnqueueOutcomeV1 {
     },
 }
 
-#[cfg(test)]
+/// Result of filtering and durably admitting one typed stream-token outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CountedStreamTokenProducerOutcomeV1 {
+pub enum StreamTokenReputationAdmissionOutcomeV1 {
+    /// A provider-attributable outcome entered the durable journal outbox.
     Enqueued(ReputationJournalEnqueueOutcomeV1),
+    /// The typed outcome is intentionally excluded from provider reputation.
     NotCounted,
 }
 
@@ -1990,11 +1992,12 @@ struct ReputationJournalCheckpointSealingContextV1 {
     runtime: Arc<dyn ReputationJournalCheckpointRuntimeV1>,
 }
 
-/// Durable native PoR journal outbox with a non-deployed token replay foundation.
+/// Durable native PoR and authenticated stream-token journal outbox.
 ///
-/// No production counted-token callback is exposed. The token admission state
-/// remains test-only scaffolding until its qualified gateway, sealed CAS,
-/// transactional quota, and efficient ordered-outbox dependencies exist.
+/// Production stream-token admission consumes an externally authenticated,
+/// already sequenced outcome. This outbox never allocates a gateway sequence;
+/// it only advances the bounded per-gateway high-water mark inside the same
+/// externally sealed checkpoint as the journal row.
 #[derive(Debug)]
 pub struct ReputationJournalProducerOutboxV1 {
     policy: ReputationJournalProducerPolicyV1,
@@ -3485,15 +3488,151 @@ impl PorReputationJournalProducerV1 {
         outcome: PorTerminalOutcomeV1,
     ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
         let source_time_unix_ms = outcome.decided_at_unix_ms;
-        let payload = ReputationJournalPayloadV1::PorTerminal(outcome);
+        enqueue_native_payload_with_finalized_replay(
+            self.outbox.as_ref(),
+            self.query.as_ref(),
+            &self.query_policy,
+            provider_id,
+            source_time_unix_ms,
+            ReputationJournalPayloadV1::PorTerminal(outcome),
+        )
+    }
+}
+
+/// Production adapter for authenticated, externally sequenced stream-token outcomes.
+///
+/// The gateway owner must verify the token result and allocate the non-zero
+/// monotonic sequence from its deployment-owned sealed state before invoking
+/// this adapter. This component never derives or rewrites a binding. It
+/// atomically enforces the retained gateway high-water mark with the journal
+/// row and consults the immutable finalized source index before admitting a
+/// source whose local replay tombstone may have compacted.
+#[derive(Debug, Clone)]
+pub struct StreamTokenReputationJournalProducerV1 {
+    outbox: Arc<ReputationJournalProducerOutboxV1>,
+    query: Arc<dyn ReputationFinalizedQueryV1>,
+    query_policy: ReputationJournalDeliveryPolicyV1,
+}
+
+impl StreamTokenReputationJournalProducerV1 {
+    /// Bind the adapter to the sealed durable outbox and immutable finalized query.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a chain mismatch or a missing, substituted, stale, test-marked,
+    /// or policy-mismatched finalized-query/checkpoint provider.
+    pub fn new(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<dyn ReputationFinalizedQueryV1>,
+        query_policy: ReputationJournalDeliveryPolicyV1,
+    ) -> Result<Self, ReputationRuntimeError> {
+        query_policy.validate()?;
+        if outbox.policy.chain_id != query_policy.chain_id {
+            return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+        }
+        outbox.ensure_sealing_binding()?;
+        qualify_runtime_provider(
+            &query_policy.finalized_query_handle,
+            query_policy.finalized_query_qualification,
+            query.as_ref(),
+        )?;
+        Ok(Self {
+            outbox,
+            query,
+            query_policy,
+        })
+    }
+
+    fn from_qualified_delivery_worker(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<dyn ReputationFinalizedQueryV1>,
+        query_policy: ReputationJournalDeliveryPolicyV1,
+    ) -> Self {
+        Self {
+            outbox,
+            query,
+            query_policy,
+        }
+    }
+
+    /// Admit one already authenticated and externally sequenced validation.
+    ///
+    /// Non-attributable outcomes are validated but intentionally do not enter
+    /// durable provider-reputation state. Provider-attributable outcomes use
+    /// the caller-supplied gateway sequence exactly; this method never owns an
+    /// allocator or accepts a request context from which it could invent one.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed outcomes, gateway-sequence rollback/equivocation,
+    /// finalized source conflicts, provider drift, or durable sealing failure.
+    pub fn enqueue_authenticated_validation(
+        &self,
+        provider_id: ProviderId,
+        outcome: StreamTokenValidationOutcomeV1,
+    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError> {
+        if !outcome.status.counts_for_provider() {
+            self.ensure_bindings()?;
+            let state = self.outbox.lock_durable_state()?;
+            journal_entry_for_payload(
+                &state.checkpoint,
+                provider_id,
+                outcome.validated_at_unix_ms,
+                ReputationJournalPayloadV1::StreamTokenValidation(outcome),
+            )?;
+            drop(state);
+            self.ensure_bindings()?;
+            return Ok(StreamTokenReputationAdmissionOutcomeV1::NotCounted);
+        }
+        let source_time_unix_ms = outcome.validated_at_unix_ms;
+        enqueue_native_payload_with_finalized_replay(
+            self.outbox.as_ref(),
+            self.query.as_ref(),
+            &self.query_policy,
+            provider_id,
+            source_time_unix_ms,
+            ReputationJournalPayloadV1::StreamTokenValidation(outcome),
+        )
+        .map(StreamTokenReputationAdmissionOutcomeV1::Enqueued)
+    }
+
+    fn ensure_bindings(&self) -> Result<(), ReputationRuntimeError> {
+        self.outbox.ensure_sealing_binding()?;
+        self.query_policy
+            .revalidate_query_provider(self.query.as_ref())
+    }
+
+    #[cfg(test)]
+    fn enqueue_validation(
+        &self,
+        gateway_id: [u8; 32],
+        context: &StreamTokenValidationRequestContextV1,
+        validation: StreamTokenCountedValidationV1,
+    ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+        self.outbox
+            .enqueue_counted_stream_token_validation(gateway_id, context, validation)
+    }
+}
+
+fn enqueue_native_payload_with_finalized_replay(
+    outbox: &ReputationJournalProducerOutboxV1,
+    query: &dyn ReputationFinalizedQueryV1,
+    query_policy: &ReputationJournalDeliveryPolicyV1,
+    provider_id: ProviderId,
+    source_time_unix_ms: u64,
+    payload: ReputationJournalPayloadV1,
+) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+    outbox.ensure_sealing_binding()?;
+    query_policy.revalidate_query_provider(query)?;
+    let result = (|| {
         let source_id = payload.source_id();
         let source_material_digest =
             journal_source_material_digest(provider_id, source_time_unix_ms, None, &payload)?;
         let source_query = FindSorafsReputationJournalEventBySourceId::new(source_id, None);
 
-        for _ in 0..POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1 {
+        for _ in 0..NATIVE_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1 {
             let (mutation_generation, evicted_committed_floor, observed_finalized) = {
-                let state = self.outbox.lock_durable_state()?;
+                let state = outbox.lock_durable_state()?;
                 if let Some(outcome) = retained_source_enqueue_outcome(
                     &state.checkpoint,
                     source_id,
@@ -3514,17 +3653,15 @@ impl PorReputationJournalProducerV1 {
                 )
             };
 
-            self.query_policy
-                .revalidate_query_provider(self.query.as_ref())?;
-            let view_result = self.query.reputation_journal_event_by_source_id(
-                &self.query_policy.chain_id,
+            query_policy.revalidate_query_provider(query)?;
+            let view_result = query.reputation_journal_event_by_source_id(
+                &query_policy.chain_id,
                 u64::MAX,
                 source_query,
             );
-            self.query_policy
-                .revalidate_query_provider(self.query.as_ref())?;
+            query_policy.revalidate_query_provider(query)?;
             let view = view_result?;
-            view.validate_for_request(&self.query_policy.chain_id, u64::MAX, source_query)?;
+            view.validate_for_request(&query_policy.chain_id, u64::MAX, source_query)?;
             validate_source_replay_anchor(
                 &view.anchor,
                 evicted_committed_floor,
@@ -3543,7 +3680,7 @@ impl PorReputationJournalProducerV1 {
                 })
                 .transpose()?;
 
-            let mut state = self.outbox.lock_durable_state()?;
+            let mut state = outbox.lock_durable_state()?;
             if state.mutation_generation != mutation_generation {
                 continue;
             }
@@ -3564,7 +3701,7 @@ impl PorReputationJournalProducerV1 {
                     Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id })
                 }
                 Some(_) => Err(ReputationRuntimeError::JournalSourceConflict),
-                None => self.outbox.enqueue_payload_locked(
+                None => outbox.enqueue_payload_locked(
                     &mut state,
                     provider_id,
                     source_time_unix_ms,
@@ -3573,49 +3710,10 @@ impl PorReputationJournalProducerV1 {
             };
         }
         Err(ReputationRuntimeError::JournalReplayRaceExhausted)
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct CountedStreamTokenReputationJournalProducerV1 {
-    outbox: Arc<ReputationJournalProducerOutboxV1>,
-}
-
-#[cfg(test)]
-impl CountedStreamTokenReputationJournalProducerV1 {
-    fn new(outbox: Arc<ReputationJournalProducerOutboxV1>) -> Self {
-        Self { outbox }
-    }
-
-    fn enqueue_counted(
-        &self,
-        provider_id: ProviderId,
-        outcome: StreamTokenValidationOutcomeV1,
-    ) -> Result<CountedStreamTokenProducerOutcomeV1, ReputationRuntimeError> {
-        let counts_for_provider = outcome.status.counts_for_provider();
-        if !counts_for_provider {
-            return Ok(CountedStreamTokenProducerOutcomeV1::NotCounted);
-        }
-        let source_time_unix_ms = outcome.validated_at_unix_ms;
-        self.outbox
-            .enqueue_payload(
-                provider_id,
-                source_time_unix_ms,
-                ReputationJournalPayloadV1::StreamTokenValidation(outcome),
-            )
-            .map(CountedStreamTokenProducerOutcomeV1::Enqueued)
-    }
-
-    fn enqueue_validation(
-        &self,
-        gateway_id: [u8; 32],
-        context: &StreamTokenValidationRequestContextV1,
-        validation: StreamTokenCountedValidationV1,
-    ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
-        self.outbox
-            .enqueue_counted_stream_token_validation(gateway_id, context, validation)
-    }
+    })();
+    query_policy.revalidate_query_provider(query)?;
+    outbox.ensure_sealing_binding()?;
+    result
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5637,6 +5735,16 @@ impl ReputationJournalDeliveryWorkerV1 {
         )
     }
 
+    /// Return the callback for authenticated, externally sequenced token outcomes.
+    #[must_use]
+    pub fn stream_token_producer(&self) -> StreamTokenReputationJournalProducerV1 {
+        StreamTokenReputationJournalProducerV1::from_qualified_delivery_worker(
+            Arc::clone(&self.outbox),
+            Arc::clone(&self.query),
+            self.policy.clone(),
+        )
+    }
+
     /// Execute one bounded scan, retry, and queue-submission tick.
     ///
     /// # Errors
@@ -6642,29 +6750,16 @@ pub trait ReputationCommittedReadApiV1: Send + Sync + fmt::Debug {
     fn committed_snapshot_by_id(
         &self,
         snapshot_id: [u8; 16],
-    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError> {
-        Ok(self
-            .committed_read_projection()?
-            .latest
-            .filter(|committed| committed.signed_result.snapshot.snapshot_id == snapshot_id)
-            .map(|committed| committed.signed_result.snapshot))
-    }
+    ) -> Result<Option<ReputationSnapshotV1>, ReputationRuntimeError>;
 
     /// Return the retained committed events strictly after `sequence`.
     ///
-    /// Implementations should override this method when they can clone the
-    /// small event suffix without cloning the full provider projection.
+    /// Implementations must query the retained committed-event archive rather
+    /// than deriving a suffix from a substituted or process-local projection.
     fn committed_events_after(
         &self,
         sequence: u64,
-    ) -> Result<Vec<ReputationSnapshotEventV1>, ReputationRuntimeError> {
-        Ok(self
-            .committed_read_projection()?
-            .events
-            .into_iter()
-            .filter(|event| event.sequence > sequence)
-            .collect())
-    }
+    ) -> Result<Vec<ReputationSnapshotEventV1>, ReputationRuntimeError>;
 }
 
 /// Activation state of the durable native-outcome admission runtime.
@@ -6708,6 +6803,23 @@ pub trait ReputationNativeOutcomeAdmissionApiV1: Send + Sync + fmt::Debug {
         provider_id: ProviderId,
         outcome: PorTerminalOutcomeV1,
     ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError>;
+
+    /// Durably admit one authenticated, externally sequenced stream-token outcome.
+    ///
+    /// The caller owns gateway authentication and sealed monotonic sequence
+    /// allocation. Implementations must use the supplied binding unchanged,
+    /// reject rollback/equivocation, and never allocate a sequence locally.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation, source-conflict, runtime-binding, finalized-query,
+    /// or durable checkpoint error. No success may be reported for best-effort
+    /// admission.
+    fn record_authenticated_stream_token_validation(
+        &self,
+        provider_id: ProviderId,
+        outcome: StreamTokenValidationOutcomeV1,
+    ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -7919,6 +8031,17 @@ impl ReputationRuntimeSupervisorV1 {
         self.journal_delivery
             .as_ref()
             .map(ReputationJournalDeliveryWorkerV1::por_producer)
+    }
+
+    /// Return the callback injected into an authenticated stream-token owner.
+    ///
+    /// The callback accepts only a complete externally sequenced typed outcome;
+    /// it does not expose the retired process-local sequence allocator.
+    #[must_use]
+    pub fn stream_token_journal_producer(&self) -> Option<StreamTokenReputationJournalProducerV1> {
+        self.journal_delivery
+            .as_ref()
+            .map(ReputationJournalDeliveryWorkerV1::stream_token_producer)
     }
 
     /// Revalidate every active deployment-owned dependency without advancing
@@ -9605,6 +9728,45 @@ mod tests {
         )
     }
 
+    fn stream_token_producer_with_query(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<ScriptedSourceQuery>,
+    ) -> StreamTokenReputationJournalProducerV1 {
+        let policy = ReputationJournalDeliveryPolicyV1::strict_v1(
+            outbox.policy.chain_id.clone(),
+            SOURCE_QUERY_HANDLE,
+            SOURCE_QUERY_QUALIFICATION,
+            "queue.reputation.journal",
+        )
+        .expect("source replay query policy");
+        let query: Arc<dyn ReputationFinalizedQueryV1> = query;
+        StreamTokenReputationJournalProducerV1::new(outbox, query, policy)
+            .expect("qualified stream-token journal producer")
+    }
+
+    fn stream_token_producer(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+    ) -> StreamTokenReputationJournalProducerV1 {
+        let view = outbox
+            .state
+            .lock()
+            .expect("producer state")
+            .checkpoint
+            .observed_finalized
+            .map_or_else(
+                || source_finalized_view(None),
+                |cursor| {
+                    source_finalized_view_at(
+                        cursor.height,
+                        cursor.block_hash,
+                        cursor.finalized_at_unix_ms,
+                        None,
+                    )
+                },
+            );
+        stream_token_producer_with_query(outbox, scripted_source_query(Ok(view)))
+    }
+
     fn insert_commit_and_compact_por_source(
         outbox: &ReputationJournalProducerOutboxV1,
         target_provider: ProviderId,
@@ -10642,7 +10804,7 @@ mod tests {
         assert_eq!(
             state.mutation_generation,
             initial_generation
-                + u64::try_from(POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1)
+                + u64::try_from(NATIVE_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1)
                     .expect("retry bound fits u64")
         );
         assert_eq!(state.checkpoint.pending.len(), 3);
@@ -11434,6 +11596,98 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_stream_token_replays_compacted_history_and_rejects_substitution() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let initial = stream_token_producer(Arc::clone(&outbox));
+        let first = counted_token(0x31, 0x41);
+        let first_event_id = match initial
+            .enqueue_authenticated_validation(provider(9), first)
+            .expect("first externally sequenced outcome")
+        {
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
+            ) => event_id,
+            other => panic!("unexpected first admission: {other:?}"),
+        };
+        let mut second = counted_token(0x31, 0x42);
+        second.binding.gateway_sequence = 2;
+        initial
+            .enqueue_authenticated_validation(provider(9), second)
+            .expect("new gateway head");
+
+        let first_entry = {
+            let mut state = outbox.state.lock().expect("producer state");
+            let position = state
+                .checkpoint
+                .pending
+                .iter()
+                .position(|delivery| delivery.entry.event_id == first_event_id)
+                .expect("first pending row");
+            let entry = state.checkpoint.pending.remove(position).entry;
+            state
+                .checkpoint
+                .stream_token_gateway_admissions
+                .retain(|admission| admission.event_id != first_event_id);
+            state.mutation_generation = state
+                .mutation_generation
+                .checked_add(1)
+                .expect("test mutation generation");
+            entry
+        };
+        let finalized = finalized_journal_event(1, 10, [0xB7; 32], 0, first_entry);
+        let query = scripted_source_query(Ok(source_finalized_view(Some(finalized))));
+        let producer = stream_token_producer_with_query(Arc::clone(&outbox), query);
+
+        assert_eq!(
+            producer
+                .enqueue_authenticated_validation(provider(9), first)
+                .expect("authoritative replay after local suffix compaction"),
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                    event_id: first_event_id,
+                },
+            )
+        );
+        let mut substituted = first;
+        substituted.binding.request_context_digest[0] ^= 1;
+        assert_eq!(
+            producer.enqueue_authenticated_validation(provider(9), substituted),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        );
+        let state = outbox.state.lock().expect("producer state after replay");
+        assert_eq!(state.checkpoint.pending.len(), 1);
+        assert_eq!(
+            state.checkpoint.stream_token_gateway_heads[0]
+                .binding
+                .gateway_sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn authenticated_stream_token_rejects_finalized_query_provider_drift_without_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let query = scripted_source_query(Ok(source_finalized_view(None)));
+        query.drift_after_lookup.store(true, Ordering::Release);
+        let producer = stream_token_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before drift");
+
+        assert_eq!(
+            producer.enqueue_authenticated_validation(provider(9), counted_token(0x32, 0x43)),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        );
+        assert_eq!(outbox.status().expect("status after drift"), before);
+    }
+
+    #[test]
     fn por_source_lookup_external_failure_does_not_mutate_outbox() {
         let temp = TempDir::new().expect("tempdir");
         let outbox = Arc::new(open_initialized_producer_outbox(
@@ -11487,27 +11741,27 @@ mod tests {
             temp.path(),
             producer_policy(),
         ));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(outbox.clone());
+        let producer = stream_token_producer(outbox.clone());
         assert_eq!(
             producer
-                .enqueue_counted(provider(9), excluded_token(1))
+                .enqueue_authenticated_validation(provider(9), excluded_token(1))
                 .expect("valid excluded token"),
-            CountedStreamTokenProducerOutcomeV1::NotCounted
+            StreamTokenReputationAdmissionOutcomeV1::NotCounted
         );
         assert!(outbox.pending(8).expect("pending").is_empty());
         assert_eq!(
             producer
-                .enqueue_counted(provider(8), excluded_token(1))
+                .enqueue_authenticated_validation(provider(8), excluded_token(1))
                 .expect("exact excluded replay ignores unattributable provider input"),
-            CountedStreamTokenProducerOutcomeV1::NotCounted
+            StreamTokenReputationAdmissionOutcomeV1::NotCounted
         );
         let mut substituted_excluded = excluded_token(1);
         substituted_excluded.binding.request_context_digest[0] ^= 1;
         assert_eq!(
             producer
-                .enqueue_counted(provider(9), substituted_excluded)
+                .enqueue_authenticated_validation(provider(9), substituted_excluded)
                 .expect("excluded material never enters durable sequence state"),
-            CountedStreamTokenProducerOutcomeV1::NotCounted
+            StreamTokenReputationAdmissionOutcomeV1::NotCounted
         );
         {
             let state = outbox.state.lock().expect("producer state");
@@ -11518,10 +11772,10 @@ mod tests {
         let token_source_time_unix_ms = FINALIZED_AT_MS - 125;
         let mut token = counted_token(2, 3);
         token.validated_at_unix_ms = token_source_time_unix_ms;
-        let CountedStreamTokenProducerOutcomeV1::Enqueued(
+        let StreamTokenReputationAdmissionOutcomeV1::Enqueued(
             ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
         ) = producer
-            .enqueue_counted(provider(9), token)
+            .enqueue_authenticated_validation(provider(9), token)
             .expect("counted token")
         else {
             panic!("counted token must enter the native outbox exactly once");
@@ -11734,7 +11988,7 @@ mod tests {
             temp.path(),
             policy.clone(),
         ));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let producer = stream_token_producer(Arc::clone(&outbox));
         let gateway_id = [0x91; 32];
 
         let mut workers = Vec::new();
@@ -11796,12 +12050,10 @@ mod tests {
                     else {
                         return None;
                     };
-                    (outcome.binding == latest.binding).then(|| {
-                        (
-                            latest.binding.request_context_digest,
-                            delivery.entry.event_id,
-                        )
-                    })
+                    (outcome.binding == latest.binding).then_some((
+                        latest.binding.request_context_digest,
+                        delivery.entry.event_id,
+                    ))
                 })
                 .expect("latest pending gateway event");
             let earlier = state
@@ -11921,7 +12173,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(temp.path(), policy)
                 .expect("restore producer checkpoint"),
         );
-        CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&restored))
+        stream_token_producer(Arc::clone(&restored))
             .enqueue_validation(
                 gateway_id,
                 &counted_request_context("restart-nonce-17"),
@@ -11951,7 +12203,7 @@ mod tests {
         let mut policy = producer_policy();
         policy.max_pending = 1;
         let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let producer = stream_token_producer(Arc::clone(&outbox));
         let gateway_id = [0x92; 32];
         producer
             .enqueue_validation(
@@ -11991,13 +12243,13 @@ mod tests {
         let mut policy = producer_policy();
         policy.max_completed = 2;
         let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let producer = stream_token_producer(Arc::clone(&outbox));
         let first = counted_token(0x93, 1);
         let first_event_id = match producer
-            .enqueue_counted(provider(9), first)
+            .enqueue_authenticated_validation(provider(9), first)
             .expect("first gateway row")
         {
-            CountedStreamTokenProducerOutcomeV1::Enqueued(
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                 ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
             ) => event_id,
             other => panic!("unexpected first admission: {other:?}"),
@@ -12006,7 +12258,7 @@ mod tests {
             let mut outcome = counted_token(0x93, u8::try_from(sequence).expect("small sequence"));
             outcome.binding.gateway_sequence = sequence;
             producer
-                .enqueue_counted(provider(9), outcome)
+                .enqueue_authenticated_validation(provider(9), outcome)
                 .expect("newer gateway row");
         }
         let state = outbox.state.lock().expect("producer state");
@@ -12074,16 +12326,16 @@ mod tests {
             temp.path(),
             producer_policy(),
         ));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let producer = stream_token_producer(Arc::clone(&outbox));
         for gateway_marker in [0x95, 0x96] {
             let first = counted_token(gateway_marker, 1);
             producer
-                .enqueue_counted(provider(9), first)
+                .enqueue_authenticated_validation(provider(9), first)
                 .expect("first gateway row");
             let mut second = counted_token(gateway_marker, 2);
             second.binding.gateway_sequence = 2;
             producer
-                .enqueue_counted(provider(9), second)
+                .enqueue_authenticated_validation(provider(9), second)
                 .expect("second gateway row");
         }
         let state = outbox.state.lock().expect("producer state");
@@ -12125,13 +12377,13 @@ mod tests {
             temp.path(),
             policy.clone(),
         ));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let producer = stream_token_producer(Arc::clone(&outbox));
         let first = counted_token(0x94, 1);
         let first_event_id = match producer
-            .enqueue_counted(provider(9), first)
+            .enqueue_authenticated_validation(provider(9), first)
             .expect("first admission")
         {
-            CountedStreamTokenProducerOutcomeV1::Enqueued(
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                 ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
             ) => event_id,
             other => panic!("unexpected first admission: {other:?}"),
@@ -12139,7 +12391,7 @@ mod tests {
         let mut second = counted_token(0x94, 2);
         second.binding.gateway_sequence = 2;
         producer
-            .enqueue_counted(provider(9), second)
+            .enqueue_authenticated_validation(provider(9), second)
             .expect("second admission");
         let checkpoint = outbox
             .state
@@ -12190,12 +12442,12 @@ mod tests {
             temp.path(),
             producer_policy(),
         ));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(outbox);
+        let producer = stream_token_producer(outbox);
         producer
-            .enqueue_counted(provider(9), counted_token(4, 5))
+            .enqueue_authenticated_validation(provider(9), counted_token(4, 5))
             .expect("first token");
         assert!(matches!(
-            producer.enqueue_counted(provider(9), counted_token(4, 6)),
+            producer.enqueue_authenticated_validation(provider(9), counted_token(4, 6)),
             Err(ReputationRuntimeError::JournalSourceConflict)
         ));
     }
@@ -12208,13 +12460,13 @@ mod tests {
             temp.path(),
             policy.clone(),
         ));
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(outbox.clone());
+        let producer = stream_token_producer(outbox.clone());
         let first = counted_token(4, 5);
         let first_event_id = match producer
-            .enqueue_counted(provider(9), first)
+            .enqueue_authenticated_validation(provider(9), first)
             .expect("first gateway sequence")
         {
-            CountedStreamTokenProducerOutcomeV1::Enqueued(
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                 ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
             ) => event_id,
             other => panic!("unexpected first admission: {other:?}"),
@@ -12222,10 +12474,10 @@ mod tests {
         let mut second = counted_token(4, 6);
         second.binding.gateway_sequence = 2;
         let second_event_id = match producer
-            .enqueue_counted(provider(9), second)
+            .enqueue_authenticated_validation(provider(9), second)
             .expect("strictly newer gateway sequence")
         {
-            CountedStreamTokenProducerOutcomeV1::Enqueued(
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                 ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
             ) => event_id,
             other => panic!("unexpected second admission: {other:?}"),
@@ -12272,12 +12524,12 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(temp.path(), policy.clone())
                 .expect("restore producer outbox"),
         );
-        let producer = CountedStreamTokenReputationJournalProducerV1::new(restored.clone());
+        let producer = stream_token_producer(restored.clone());
         assert_eq!(
             producer
-                .enqueue_counted(provider(9), second)
+                .enqueue_authenticated_validation(provider(9), second)
                 .expect("latest exact replay"),
-            CountedStreamTokenProducerOutcomeV1::Enqueued(
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                 ReputationJournalEnqueueOutcomeV1::ExactReplay {
                     event_id: second_event_id
                 }
@@ -12287,7 +12539,7 @@ mod tests {
         let mut substituted_context = second;
         substituted_context.binding.request_context_digest[0] ^= 1;
         assert!(matches!(
-            producer.enqueue_counted(provider(9), substituted_context),
+            producer.enqueue_authenticated_validation(provider(9), substituted_context),
             Err(ReputationRuntimeError::JournalSourceConflict)
         ));
         let mut substituted_outcome = second;
@@ -12295,18 +12547,18 @@ mod tests {
             iroha_data_model::sorafs::reputation::StreamTokenViolationKindV1::RequestQuotaExceeded,
         );
         assert!(matches!(
-            producer.enqueue_counted(provider(9), substituted_outcome),
+            producer.enqueue_authenticated_validation(provider(9), substituted_outcome),
             Err(ReputationRuntimeError::JournalSourceConflict)
         ));
         assert!(matches!(
-            producer.enqueue_counted(provider(8), second),
+            producer.enqueue_authenticated_validation(provider(8), second),
             Err(ReputationRuntimeError::JournalSourceConflict)
         ));
         assert_eq!(
             producer
-                .enqueue_counted(provider(9), first)
+                .enqueue_authenticated_validation(provider(9), first)
                 .expect("retained older exact replay"),
-            CountedStreamTokenProducerOutcomeV1::Enqueued(
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                 ReputationJournalEnqueueOutcomeV1::ExactReplay {
                     event_id: first_event_id
                 }
@@ -12317,7 +12569,7 @@ mod tests {
             iroha_data_model::sorafs::reputation::StreamTokenViolationKindV1::RequestQuotaExceeded,
         );
         assert!(matches!(
-            producer.enqueue_counted(provider(9), stale_substituted),
+            producer.enqueue_authenticated_validation(provider(9), stale_substituted),
             Err(ReputationRuntimeError::JournalSourceConflict)
         ));
 
@@ -12326,10 +12578,10 @@ mod tests {
         third.binding.request_context_digest = [0x77; 32];
         third.validated_at_unix_ms = FINALIZED_AT_MS.saturating_add(260);
         let third_pre_rotation_event_id = match producer
-            .enqueue_counted(provider(9), third)
+            .enqueue_authenticated_validation(provider(9), third)
             .expect("strictly increasing gateway sequence")
         {
-            CountedStreamTokenProducerOutcomeV1::Enqueued(
+            StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                 ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
             ) => event_id,
             other => panic!("unexpected third admission: {other:?}"),
@@ -13492,17 +13744,16 @@ mod tests {
             })
             .expect("retain observed tombstone");
 
-        let token_producer =
-            CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let token_producer = stream_token_producer(Arc::clone(&outbox));
         let mut head_event_id = ReputationJournalEventIdV1::ZERO;
         for sequence in 1_u8..=17 {
             let mut token = counted_token(0x97, sequence);
             token.binding.gateway_sequence = u64::from(sequence);
             head_event_id = match token_producer
-                .enqueue_counted(provider(9), token)
+                .enqueue_authenticated_validation(provider(9), token)
                 .expect("token admission")
             {
-                CountedStreamTokenProducerOutcomeV1::Enqueued(
+                StreamTokenReputationAdmissionOutcomeV1::Enqueued(
                     ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
                 ) => event_id,
                 other => panic!("unexpected token admission: {other:?}"),
@@ -13712,349 +13963,7 @@ mod tests {
         assert_eq!(original.observed, original_observed);
     }
 
-    #[test]
-    fn publication_construction_rejects_signer_handle_substitution() {
-        let projector_root = TempDir::new().expect("projector root");
-        let publication_root = TempDir::new().expect("publication root");
-        let trust = trust_policy();
-        let ingest = ingest_policy(&trust);
-        let projector = Arc::new(
-            ReputationIngestService::open(projector_root.path(), ingest).expect("projector"),
-        );
-        let policy = ReputationPublicationPolicyV1::try_new(
-            &trust,
-            "signer-a",
-            "dag-a",
-            b"peer-a".to_vec(),
-            SigningKey::from_bytes(&[0xB1; 32])
-                .verifying_key()
-                .to_bytes(),
-            REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1,
-        )
-        .expect("publication policy");
-        let signer_qualification = policy.threshold_signer_qualification();
-        let dag_qualification = policy.governance_dag_qualification();
-        let result = ReputationPublicationReconcilerV1::open(
-            publication_root.path(),
-            projector,
-            trust,
-            policy,
-            Arc::new(NullThresholdSigner {
-                handle: "signer-b".to_owned(),
-                qualification: signer_qualification,
-            }),
-            Arc::new(NullGovernanceDag {
-                handle: "dag-a".to_owned(),
-                qualification: dag_qualification,
-            }),
-        );
-        assert!(matches!(
-            result,
-            Err(ReputationRuntimeError::RuntimeBindingMismatch)
-        ));
-    }
-
-    #[test]
-    fn governance_dag_qualification_binds_peer_identity_and_ed25519_key() {
-        let first_key = SigningKey::from_bytes(&[0xB1; 32])
-            .verifying_key()
-            .to_bytes();
-        let second_key = SigningKey::from_bytes(&[0xB2; 32])
-            .verifying_key()
-            .to_bytes();
-        let expected = reputation_governance_dag_policy_digest_v1(b"peer-a", first_key)
-            .expect("policy digest");
-
-        assert_eq!(
-            expected,
-            reputation_governance_dag_policy_digest_v1(b"peer-a", first_key)
-                .expect("stable policy digest")
-        );
-        assert_ne!(
-            expected,
-            reputation_governance_dag_policy_digest_v1(b"peer-b", first_key)
-                .expect("peer-bound policy digest")
-        );
-        assert_ne!(
-            expected,
-            reputation_governance_dag_policy_digest_v1(b"peer-a", second_key)
-                .expect("key-bound policy digest")
-        );
-        assert!(matches!(
-            reputation_governance_dag_policy_digest_v1(b"", first_key),
-            Err(ReputationRuntimeError::InvalidRuntimePolicy)
-        ));
-        assert!(matches!(
-            reputation_governance_dag_policy_digest_v1(b"peer-a", [0; 32]),
-            Err(ReputationRuntimeError::InvalidRuntimePolicy)
-        ));
-    }
-
-    #[test]
-    fn publication_construction_rejects_same_key_different_peer_qualification() {
-        let projector_root = TempDir::new().expect("projector root");
-        let publication_root = TempDir::new().expect("publication root");
-        let trust = trust_policy();
-        let projector = Arc::new(
-            ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
-                .expect("projector"),
-        );
-        let publisher_key = SigningKey::from_bytes(&[0xB1; 32])
-            .verifying_key()
-            .to_bytes();
-        let policy = ReputationPublicationPolicyV1::try_new(
-            &trust,
-            "signer-a",
-            "dag-a",
-            b"peer-a".to_vec(),
-            publisher_key,
-            REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1,
-        )
-        .expect("publication policy");
-        let substituted_peer_qualification = ReputationRuntimeProviderQualificationV1::new(
-            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
-            reputation_governance_dag_policy_digest_v1(b"peer-b", publisher_key)
-                .expect("substituted peer policy digest"),
-        );
-        let result = ReputationPublicationReconcilerV1::open(
-            publication_root.path(),
-            projector,
-            trust,
-            policy.clone(),
-            Arc::new(NullThresholdSigner {
-                handle: "signer-a".to_owned(),
-                qualification: policy.threshold_signer_qualification(),
-            }),
-            Arc::new(NullGovernanceDag {
-                handle: "dag-a".to_owned(),
-                qualification: substituted_peer_qualification,
-            }),
-        );
-
-        assert!(matches!(
-            result,
-            Err(ReputationRuntimeError::RuntimeBindingMismatch)
-        ));
-        assert!(
-            !publication_root
-                .path()
-                .join(REPUTATION_PUBLICATION_CHECKPOINT_FILE_NAME_V1)
-                .exists(),
-            "peer substitution must fail before publication state opens"
-        );
-    }
-
-    #[test]
-    fn governance_readback_is_discarded_when_provider_qualification_drifts() {
-        let projector_root = TempDir::new().expect("projector root");
-        let publication_root = TempDir::new().expect("publication root");
-        let trust = trust_policy();
-        let projector = Arc::new(
-            ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
-                .expect("projector"),
-        );
-        let policy = publication_policy(&trust);
-        let signed = signed_snapshot(&trust, [0xD8; 16], None, FINALIZED_AT_MS / 1_000);
-        let block = governance_block_after(&signed, None);
-        let readback = ReputationGovernanceDagReadbackV1 {
-            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
-            head: governance_head(std::slice::from_ref(&block)),
-            inclusion_path: vec![block],
-        };
-        let pending = StoredReputationPublicationV1 {
-            sequence: 1,
-            material_digest: [0xD9; 32],
-            signed_result_digest: signed_result_digest(&signed).expect("signed result digest"),
-            signed_result: signed,
-            governance_acknowledgement: None,
-            governance_readback: None,
-        };
-        let request = governance_publication_request(&pending).expect("publication request");
-        let reconciler = ReputationPublicationReconcilerV1::open(
-            publication_root.path(),
-            projector,
-            trust,
-            policy.clone(),
-            Arc::new(NullThresholdSigner {
-                handle: "signer-a".to_owned(),
-                qualification: policy.threshold_signer_qualification(),
-            }),
-            Arc::new(DriftingGovernanceDag {
-                handle: "dag-a".to_owned(),
-                qualification: Mutex::new(policy.governance_dag_qualification()),
-                readback,
-            }),
-        )
-        .expect("open reconciler");
-
-        assert!(matches!(
-            reconciler.reconcile_governance_publication(&request),
-            Err(ReputationRuntimeError::RuntimeBindingChanged)
-        ));
-        assert!(
-            reconciler
-                .pending_publication()
-                .expect("read durable publication state")
-                .is_none(),
-            "a receipt returned during qualification drift must not become durable"
-        );
-    }
-
-    #[test]
-    fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict() {
-        let projector_root = TempDir::new().expect("projector root");
-        let publication_root = TempDir::new().expect("publication root");
-        let trust = trust_policy();
-        let projector = Arc::new(
-            ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
-                .expect("projector"),
-        );
-        let policy = publication_policy(&trust);
-        let reconciler = open_publication_reconciler(
-            publication_root.path(),
-            Arc::clone(&projector),
-            trust.clone(),
-            policy.clone(),
-        );
-        assert_eq!(
-            reconciler
-                .committed_read_projection()
-                .expect("empty projection"),
-            ReputationCommittedReadProjectionV1::empty(
-                policy.digest().expect("publication policy digest")
-            )
-        );
-
-        let signed = signed_snapshot(&trust, [0xE1; 16], None, FINALIZED_AT_MS / 1_000);
-        signed
-            .verify(&trust, FINALIZED_AT_MS / 1_000)
-            .expect("threshold-signed fixture");
-        let delivery = signing_delivery(&signed);
-        reconciler
-            .validate_signed_result(&delivery, &signed)
-            .expect("signed result binds exact delivery");
-        reconciler
-            .store_signed_result(&delivery, signed.clone())
-            .expect("stage signed result");
-        assert!(
-            reconciler
-                .committed_read_projection()
-                .expect("staged projection")
-                .latest
-                .is_none(),
-            "threshold signing alone must not enter the committed projection"
-        );
-
-        let digest = signed_result_digest(&signed).expect("signed result digest");
-        let (acknowledgement, governance_readback) = governance_readback(
-            &policy,
-            delivery.sequence,
-            delivery.material_digest,
-            digest,
-            &signed,
-        );
-        assert!(matches!(
-            reconciler.complete_publication(acknowledgement),
-            Err(ReputationRuntimeError::PublicationCheckpointConflict)
-        ));
-        assert!(
-            reconciler
-                .committed_read_projection()
-                .expect("pre-readback projection")
-                .latest
-                .is_none(),
-            "a structurally valid but unobserved acknowledgement must not publish"
-        );
-        reconciler
-            .store_governance_readback(acknowledgement, governance_readback)
-            .expect("store authoritative DAG readback");
-        assert!(
-            reconciler
-                .committed_read_projection()
-                .expect("DAG-staged projection")
-                .latest
-                .is_none(),
-            "DAG readback must remain hidden until projector acknowledgement"
-        );
-
-        reconciler
-            .complete_publication(acknowledgement)
-            .expect("commit authoritative projection");
-        let committed = reconciler
-            .committed_read_projection()
-            .expect("committed projection");
-        assert_eq!(committed.events.len(), 1);
-        assert_eq!(
-            reconciler
-                .committed_snapshot_by_id(signed.snapshot.snapshot_id)
-                .expect("committed snapshot lookup"),
-            Some(signed.snapshot.clone())
-        );
-        assert_eq!(
-            committed
-                .latest
-                .as_ref()
-                .expect("latest committed snapshot")
-                .signed_result,
-            signed
-        );
-        assert_eq!(committed.events[0].snapshot_id, signed.snapshot.snapshot_id);
-
-        reconciler
-            .complete_publication(acknowledgement)
-            .expect("exact completion replay");
-        assert_eq!(
-            reconciler
-                .committed_read_projection()
-                .expect("idempotent projection"),
-            committed,
-            "an exact replay must not duplicate committed history"
-        );
-        drop(reconciler);
-
-        let restored = open_publication_reconciler(
-            publication_root.path(),
-            Arc::clone(&projector),
-            trust.clone(),
-            policy.clone(),
-        );
-        assert_eq!(
-            restored
-                .committed_read_projection()
-                .expect("restored projection"),
-            committed
-        );
-        drop(restored);
-
-        fs::write(
-            publication_root
-                .path()
-                .join(REPUTATION_PUBLICATION_CHECKPOINT_FILE_NAME_V1),
-            [0xFF, 0x00, 0x01],
-        )
-        .expect("write corrupt publication checkpoint");
-        let signer_qualification = policy.threshold_signer_qualification();
-        let dag_qualification = policy.governance_dag_qualification();
-        assert!(matches!(
-            ReputationPublicationReconcilerV1::open(
-                publication_root.path(),
-                projector,
-                trust,
-                policy,
-                Arc::new(NullThresholdSigner {
-                    handle: "signer-a".to_owned(),
-                    qualification: signer_qualification,
-                }),
-                Arc::new(NullGovernanceDag {
-                    handle: "dag-a".to_owned(),
-                    qualification: dag_qualification,
-                }),
-            ),
-            Err(ReputationRuntimeError::InvalidCheckpoint)
-                | Err(ReputationRuntimeError::CheckpointIo)
-        ));
-    }
-
+    mod publication_admission;
     #[test]
     fn publication_reconciler_retains_exact_successor_snapshots_across_restart() {
         let projector_root = TempDir::new().expect("projector root");
@@ -14811,43 +14720,5 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn operation_keys_bind_phase_material_and_signed_result() {
-        let signing = publication_idempotency_key(
-            b"sorafs-reputation-threshold-signing-operation-v1",
-            1,
-            [0xC1; 32],
-            None,
-        )
-        .expect("signing key");
-        let governance = publication_idempotency_key(
-            b"sorafs-reputation-governance-publication-operation-v1",
-            1,
-            [0xC1; 32],
-            Some([0xC2; 32]),
-        )
-        .expect("governance key");
-        let substituted = publication_idempotency_key(
-            b"sorafs-reputation-governance-publication-operation-v1",
-            1,
-            [0xC1; 32],
-            Some([0xC3; 32]),
-        )
-        .expect("substituted key");
-        assert_ne!(signing, governance);
-        assert_ne!(governance, substituted);
-    }
-
-    #[test]
-    fn governance_publisher_key_rejects_weak_and_noncanonical_points() {
-        let mut weak_identity = [0_u8; 32];
-        weak_identity[0] = 1;
-        assert!(!valid_ed25519_verifying_key(weak_identity));
-        assert!(!valid_ed25519_verifying_key([0xFF; 32]));
-        assert!(valid_ed25519_verifying_key(
-            SigningKey::from_bytes(&[0xD1; 32])
-                .verifying_key()
-                .to_bytes()
-        ));
-    }
+    include!("runtime_operation_binding_tests.rs");
 }

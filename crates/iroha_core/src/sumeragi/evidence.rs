@@ -1676,10 +1676,11 @@ mod tests {
         }
 
         fn execution_commitment(&self) -> wire_v2::ExecutionCommitment {
-            wire_v2::ExecutionCommitment::without_topups(
+            wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
+                1,
                 Hash::new(b"v2 evidence executed block wire"),
             )
         }
@@ -1813,10 +1814,12 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment = wire_v2::ExecutionCommitment::without_topups(
+        let execution_commitment = wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"v2 evidence finality parent state"),
             Hash::new(b"v2 evidence finality post state"),
             Hash::new(b"v2 evidence finality ordinary writes"),
+            u64::try_from(block.encode_wire().expect("v2 evidence block wire").len())
+                .expect("v2 evidence block wire length fits u64"),
             block
                 .executed_block_wire_hash()
                 .expect("canonical executed block wire"),
@@ -2170,15 +2173,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn v2_aggregate_verification_rejects_missing_signer_pop_without_panicking() {
-        let fixture = V2EvidenceFixture::new();
-        let error =
-            verify_v2_aggregate_signature(&fixture.context, &fixture.proofs[..1], &[2], &[], &[])
-                .expect_err("a signer without a matching proof of possession must fail closed");
-
-        assert_eq!(error, EvidenceValidationError::V2SignerMismatch);
-    }
+    include!("evidence/missing_signer_pop_test.rs");
 
     #[test]
     fn sumeragi_v2_equivocation_persistence_deduplicates_swaps_and_restart_replay() {
@@ -5079,20 +5074,7 @@ mod tests {
         assert_eq!(view.iter().count(), 0);
     }
 
-    #[test]
-    fn persist_record_rejects_missing_signature_mutation() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let evidence = double_vote_with_unchecked(&ctx, |v1, v2| {
-            v1.bls_sig.clear();
-            v2.bls_sig.clear();
-        });
-        assert_invalid_evidence_rejected(
-            &context,
-            &evidence,
-            EvidenceValidationError::SignatureMissing,
-        );
-    }
+    include!("evidence/signature_missing_test.rs");
 
     #[test]
     fn persist_record_rejects_truncated_signature_mutation() {
@@ -6087,45 +6069,5 @@ mod tests {
         assert_eq!(view.iter().count(), 0);
     }
 
-    #[test]
-    fn roadmap_invalid_evidence_roundtrip_cases() {
-        let ctx = test_context();
-        let context = ctx.validation_context();
-        let cases: &[EvidenceRoundtripCase] = &[
-            (
-                "duplicate signer",
-                EvidenceValidationError::SignerMismatch,
-                roundtrip_case_duplicate_signer,
-            ),
-            (
-                "conflicting height",
-                EvidenceValidationError::HeightMismatch,
-                roundtrip_case_conflicting_height,
-            ),
-            (
-                "conflicting view",
-                EvidenceValidationError::ViewMismatch,
-                roundtrip_case_conflicting_view,
-            ),
-            (
-                "forged signature length",
-                EvidenceValidationError::SignatureTruncated,
-                roundtrip_case_signature_truncated,
-            ),
-            (
-                "mixed manifest payload",
-                EvidenceValidationError::KindPayloadMismatch,
-                roundtrip_case_mixed_manifest_payload,
-            ),
-        ];
-
-        for (label, expected, build) in cases {
-            let evidence = build(&ctx);
-            assert_invalid_evidence_rejected(&context, &evidence, *expected);
-            assert!(
-                validate_evidence(&evidence, &context).is_err(),
-                "{label}: expected structural validation to fail"
-            );
-        }
-    }
+    include!("evidence/roundtrip_matrix_test.rs");
 }

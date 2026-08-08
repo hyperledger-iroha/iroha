@@ -274,7 +274,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
         plan = self.load_plan()
         plan["bootle_lantern_issuer"]["runtime_provider"]["slot_wire_id"] = 53
         self.write_plan(plan)
-        self.assert_rejected("slot-54")
+        self.assert_rejected("slot-56")
 
     def test_custom_launcher_transport_is_rejected(self) -> None:
         plan = self.load_plan()

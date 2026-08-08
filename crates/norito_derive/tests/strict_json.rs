@@ -1,6 +1,7 @@
 //! Runtime coverage for strict Norito JSON derives.
 
-use norito::json::{self, Error};
+use norito::json::JsonDeserialize as _;
+use norito::json::{self, Arena, Error, FastFromJson, TapeWalker};
 use norito_derive::{JsonDeserialize, JsonSerialize};
 
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
@@ -28,6 +29,12 @@ struct StrictOptional {
 }
 
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+struct RequiredOptional {
+    #[norito(required)]
+    optional: Option<u32>,
+}
+
+#[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 struct FlattenedFields {
     label: String,
 }
@@ -41,10 +48,64 @@ struct StrictFlattened {
 }
 
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+struct RequiredWithFlatten {
+    #[norito(required)]
+    optional: Option<u32>,
+    #[norito(flatten)]
+    fields: FlattenedFields,
+}
+
+#[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
+struct FastRequiredOptional {
+    #[norito(required)]
+    optional: Option<u32>,
+}
+
+#[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
+struct FastRequiredWithFlatten {
+    #[norito(required)]
+    optional: Option<u32>,
+    #[norito(flatten)]
+    fields: FlattenedFields,
+}
+
+#[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "kind", content = "payload", deny_unknown_fields)]
 enum StrictEvent {
     Unit,
     Record { id: u32 },
+}
+
+#[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(tag = "kind", content = "payload")]
+enum RequiredEvent {
+    Record {
+        #[norito(required)]
+        optional: Option<u32>,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
+#[norito(tag = "kind", content = "payload")]
+enum FastRequiredEvent {
+    Record {
+        #[norito(required)]
+        optional: Option<u32>,
+    },
+}
+
+fn decode_fast<'a, T: FastFromJson<'a>>(input: &'a str) -> Result<T, norito::Error> {
+    let mut walker = TapeWalker::new(input);
+    let mut arena = Arena::new();
+    T::parse(&mut walker, &mut arena)
+}
+
+fn assert_missing_field(error: impl core::fmt::Display, field: &str) {
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("missing field `{field}`")),
+        "unexpected error: {message}"
+    );
 }
 
 fn assert_unknown_field(error: Error, expected: &str) {
@@ -93,6 +154,96 @@ fn strict_struct_keeps_optional_absence_and_explicit_null_semantics() {
     assert_eq!(
         json::from_slice::<StrictOptional>(br#"{"optional":null}"#).expect("explicit null option"),
         StrictOptional { optional: None }
+    );
+}
+
+#[test]
+fn required_option_distinguishes_omission_from_explicit_null_on_normal_and_fallback_paths() {
+    let expected = RequiredOptional { optional: None };
+    assert_eq!(
+        json::from_slice::<RequiredOptional>(br#"{"optional":null}"#)
+            .expect("explicit null on normal path"),
+        expected
+    );
+    assert_missing_field(
+        json::from_slice::<RequiredOptional>(br#"{}"#).expect_err("omission must reject"),
+        "optional",
+    );
+    assert_eq!(
+        json::from_json_fast::<RequiredOptional>(r#"{"optional":null}"#)
+            .expect("explicit null on fallback fast path"),
+        expected
+    );
+    assert_missing_field(
+        json::from_json_fast::<RequiredOptional>(r#"{}"#)
+            .expect_err("fallback omission must reject"),
+        "optional",
+    );
+}
+
+#[test]
+fn required_option_is_enforced_by_direct_fast_and_flatten_paths() {
+    assert_eq!(
+        decode_fast::<FastRequiredOptional>(r#"{"optional":null}"#)
+            .expect("explicit null on direct fast path"),
+        FastRequiredOptional { optional: None }
+    );
+    assert_missing_field(
+        decode_fast::<FastRequiredOptional>(r#"{}"#).expect_err("fast omission must reject"),
+        "optional",
+    );
+
+    let normal = r#"{"optional":null,"label":"known"}"#;
+    assert_eq!(
+        json::from_str::<RequiredWithFlatten>(normal).expect("normal flatten path"),
+        RequiredWithFlatten {
+            optional: None,
+            fields: FlattenedFields {
+                label: "known".to_owned(),
+            },
+        }
+    );
+    assert_missing_field(
+        json::from_str::<RequiredWithFlatten>(r#"{"label":"known"}"#)
+            .expect_err("normal flatten omission must reject"),
+        "optional",
+    );
+    assert_eq!(
+        decode_fast::<FastRequiredWithFlatten>(normal).expect("fast flatten path"),
+        FastRequiredWithFlatten {
+            optional: None,
+            fields: FlattenedFields {
+                label: "known".to_owned(),
+            },
+        }
+    );
+    assert_missing_field(
+        decode_fast::<FastRequiredWithFlatten>(r#"{"label":"known"}"#)
+            .expect_err("fast flatten omission must reject"),
+        "optional",
+    );
+}
+
+#[test]
+fn required_option_is_enforced_in_tagged_enum_named_fields() {
+    let explicit = r#"{"kind":"Record","payload":{"optional":null}}"#;
+    assert_eq!(
+        json::from_str::<RequiredEvent>(explicit).expect("normal enum explicit null"),
+        RequiredEvent::Record { optional: None }
+    );
+    assert_missing_field(
+        json::from_str::<RequiredEvent>(r#"{"kind":"Record","payload":{}}"#)
+            .expect_err("normal enum omission must reject"),
+        "optional",
+    );
+    assert_eq!(
+        decode_fast::<FastRequiredEvent>(explicit).expect("fast enum explicit null"),
+        FastRequiredEvent::Record { optional: None }
+    );
+    assert_missing_field(
+        decode_fast::<FastRequiredEvent>(r#"{"kind":"Record","payload":{}}"#)
+            .expect_err("fast enum omission must reject"),
+        "optional",
     );
 }
 

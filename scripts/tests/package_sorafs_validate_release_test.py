@@ -21,10 +21,25 @@ TEST_EPOCH = 1_234_567_890
 def write_fake_validator(path: Path, body: str = "") -> Path:
     path.write_text(
         "#!/usr/bin/env python3\n"
-        "import sys\n"
+        "import json, sys\n"
         f"{body}\n"
         "if '--help' in sys.argv:\n"
-        "    print('deterministic fake validator help')\n",
+        "    print('deterministic fake validator help')\n"
+        "else:\n"
+        "    command = sys.argv[1]\n"
+        "    code = 'SFS-OK-000' if command == 'advert' else 'SFS-PDP-DIAG-000'\n"
+        "    family = 'advert' if command == 'advert' else 'bundle'\n"
+        "    tags = [f'sorafs.reference.{family}', f'sorafs.reference.code.{code}']\n"
+        "    if command == 'bundle':\n"
+        "        tags.insert(1, 'sorafs.reference.pdp')\n"
+        "    print(json.dumps({\n"
+        "        'status': 'Ok', 'code': code, 'category': 'validation',\n"
+        "        'message': 'deterministic fake validation accepted',\n"
+        "        'action': None, 'docs_url': 'https://docs.iroha.tech/',\n"
+        "        'telemetry_tags': tags, 'context': [],\n"
+        "        'inputs': [{'kind': family, 'path': 'fixture.to'}],\n"
+        "        'version': 1, 'generated_at': 123,\n"
+        "    }, separators=(',', ':')))\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -59,7 +74,6 @@ def run_packager(
     for option, value in option_pairs:
         if option not in omitted:
             command.extend([option, value])
-    command.append("--skip-smoke")
     command.extend(extra_args or [])
     environment = os.environ.copy()
     environment["SOURCE_DATE_EPOCH"] = str(TEST_EPOCH)
@@ -100,7 +114,11 @@ def test_release_packager_emits_unsigned_closed_outputs(tmp_path: Path) -> None:
         text=True,
     ).strip()
     assert manifest["archive"] == f"{PACKAGE_NAME}.tar.gz"
-    assert manifest["smoke_checks"] is False
+    assert manifest["smoke_checks"] is True
+    assert [item["output"] for item in manifest["smoke_outputs"]] == [
+        "smoke.advert.json",
+        "smoke.bundle.json",
+    ]
     assert manifest["source_date_epoch"] == TEST_EPOCH
     assert manifest["built_at"] == "2009-02-13T23:31:30Z"
     assert "signature" not in json.dumps(manifest).casefold()
@@ -133,6 +151,7 @@ def test_release_packager_requires_reviewed_identity_before_outputs(
         "--manifest-public-key",
         "--manifest-public-key-fingerprint",
         "--manifest-signature-out",
+        "--skip-smoke",
     ),
 )
 def test_release_packager_rejects_retired_signing_options_before_outputs(
@@ -189,11 +208,24 @@ def test_release_packager_builds_locked_target_binary_path(tmp_path: Path) -> No
         "args = sys.argv[1:]\n"
         "Path(os.environ['FAKE_CARGO_LOG']).write_text(json.dumps(args))\n"
         "root = Path(args[args.index('--target-dir') + 1])\n"
-        "target = args[args.index('--target') + 1]\n"
-        "binary = root / target / 'release' / 'sorafs-validate'\n"
-        "binary.parent.mkdir(parents=True, exist_ok=True)\n"
-        "binary.write_text('#!/bin/sh\\nprintf \"deterministic help\\\\n\"\\n')\n"
-        "binary.chmod(0o755)\n",
+            "target = args[args.index('--target') + 1]\n"
+            "binary = root / target / 'release' / 'sorafs-validate'\n"
+            "binary.parent.mkdir(parents=True, exist_ok=True)\n"
+            "validator = (\n"
+            "    '#!/usr/bin/env python3\\n'\n"
+            "    'import json, sys\\n'\n"
+            "    \"if '--help' in sys.argv:\\n\"\n"
+            "    \"    print('deterministic help')\\n\"\n"
+            "    'else:\\n'\n"
+            "    \"    command = sys.argv[1]\\n\"\n"
+            "    \"    code = 'SFS-OK-000' if command == 'advert' else 'SFS-PDP-DIAG-000'\\n\"\n"
+            "    \"    family = 'advert' if command == 'advert' else 'bundle'\\n\"\n"
+            "    \"    tags = [f'sorafs.reference.{family}', f'sorafs.reference.code.{code}']\\n\"\n"
+            "    \"    tags.insert(1, 'sorafs.reference.pdp') if command == 'bundle' else None\\n\"\n"
+            "    \"    print(json.dumps({'status': 'Ok', 'code': code, 'category': 'validation', 'message': 'accepted', 'action': None, 'docs_url': 'https://docs.iroha.tech/', 'telemetry_tags': tags, 'context': [], 'inputs': [{'kind': family, 'path': 'fixture.to'}], 'version': 1, 'generated_at': 123}, separators=(',', ':')))\\n\"\n"
+            ")\n"
+            "binary.write_text(validator)\n"
+            "binary.chmod(0o755)\n",
         encoding="utf-8",
     )
     fake_cargo.chmod(0o755)
@@ -225,7 +257,6 @@ def test_release_packager_builds_locked_target_binary_path(tmp_path: Path) -> No
             commit,
             "--source-date-epoch",
             str(TEST_EPOCH),
-            "--skip-smoke",
         ],
         cwd=REPO_ROOT,
         capture_output=True,

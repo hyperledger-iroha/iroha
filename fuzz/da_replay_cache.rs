@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 enum Action {
     Insert {
         sequence: u64,
-        fingerprint: [u8; blake3::OUT_LEN],
+        fingerprint: [u8; 32],
         advance_micros: u32,
     },
     Clear {

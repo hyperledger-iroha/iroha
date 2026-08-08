@@ -193,6 +193,13 @@ from ._privacy_backends import (
 )
 from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
 from .connect import ConnectSessionInfo
+from .connect_models import (
+    ConnectAdmissionManifest,
+    ConnectAdmissionManifestEntry,
+    ConnectAppPolicyControls,
+    ConnectAppRecord,
+    ConnectAppRegistryPage,
+)
 from .dataspaces import (
     DataspacePlan,
     DataspaceSpec,
@@ -233,6 +240,9 @@ from .sorafs import (
 from .sorafs_hedging_billing import (
     encode_sorafs_billing_acknowledgement_proof_v1,
 )
+from .sorafs_por import normalize_cursor as _normalize_sorafs_por_cursor
+from .stream_events import EventCursor, SseEvent, SseStreamError, WebSocketEvent
+from .torii_client_streaming_query import create_torii_client_streaming_query_mixin
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
@@ -1656,7 +1666,6 @@ _SORAFS_REPUTATION_U64_MAX = (1 << 64) - 1
 _SORAFS_POR_PAGE_DEFAULT_LIMIT = 100
 _SORAFS_POR_PAGE_MAX_LIMIT = 1_000
 _SORAFS_POR_PAGE_MAX_BYTES = 4_194_304
-_SORAFS_POR_CURSOR_MAX_LENGTH = 256
 _SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES = 1_048_576
 _SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES = 23_068_672
 _SORAFS_REPUTATION_SNAPSHOT_FIELDS = frozenset(
@@ -3562,26 +3571,6 @@ def _build_sorafs_por_export_params(
             cursor, "sorafs_por_export.cursor"
         )
     return params
-
-
-def _normalize_sorafs_por_cursor(value: Any, context: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{context} must be a canonical base64url string")
-    if not value or len(value) > _SORAFS_POR_CURSOR_MAX_LENGTH:
-        raise ValueError(
-            f"{context} must be 1..={_SORAFS_POR_CURSOR_MAX_LENGTH} characters"
-        )
-    if len(value) % 4 == 1 or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
-        raise ValueError(f"{context} must be canonical base64url without padding")
-    padding = "=" * ((4 - len(value) % 4) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode(value + padding)
-    except (binascii.Error, ValueError) as exc:
-        raise ValueError(f"{context} must be canonical base64url without padding") from exc
-    canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
-    if canonical != value:
-        raise ValueError(f"{context} must be canonical base64url without padding")
-    return value
 
 
 _CRYPTO_MODULE: Optional[ModuleType] = None
@@ -6837,131 +6826,6 @@ class PeerTelemetryInfo:
             else None,
             connected_peers=connected_peers,
         )
-
-
-@dataclass(frozen=True)
-class SseEvent:
-    """Structured Server-Sent Event returned by Torii SSE endpoints."""
-
-    event: Optional[str]
-    data: Any
-    id: Optional[str]
-    retry: Optional[int]
-    raw: str
-
-
-@dataclass(frozen=True)
-class WebSocketEvent:
-    """Structured JSON event returned by Torii WebSocket event streams."""
-
-    event: Optional[str]
-    data: Any
-    raw: str
-
-
-class SseStreamError(RuntimeError):
-    """Terminal error reported after an SSE response has been established.
-
-    Canonical Torii live streams cannot change their HTTP status after sending
-    the response headers, so they report a terminal ``event: stream_error``
-    frame instead.  The exception keeps the stable server error code and the
-    loss/replay metadata available to callers.
-    """
-
-    MALFORMED_CODE = "malformed_stream_error"
-
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        dropped_messages: Optional[int],
-        replay_available: Optional[bool],
-        payload: Any,
-        raw: str,
-        malformed_reason: Optional[str] = None,
-    ) -> None:
-        self.code = code
-        self.message = message
-        self.dropped_messages = dropped_messages
-        self.replay_available = replay_available
-        self.payload = payload
-        self.raw = raw
-        self.malformed_reason = malformed_reason
-        detail = f"{code}: {message}"
-        if dropped_messages is not None:
-            detail = f"{detail} (dropped_messages={dropped_messages})"
-        super().__init__(detail)
-
-    @classmethod
-    def from_event(cls, event: SseEvent) -> "SseStreamError":
-        """Validate and convert a terminal ``stream_error`` SSE frame."""
-
-        payload = event.data
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except json.JSONDecodeError:
-                return cls._malformed(event, "data must be a JSON object")
-        if not isinstance(payload, Mapping):
-            return cls._malformed(event, "data must be a JSON object")
-
-        code = payload.get("code")
-        if not isinstance(code, str) or not code.strip():
-            return cls._malformed(event, "code must be a non-empty string")
-        message = payload.get("message")
-        if not isinstance(message, str) or not message.strip():
-            return cls._malformed(event, "message must be a non-empty string")
-        if "dropped_messages" not in payload:
-            return cls._malformed(event, "dropped_messages is required")
-        dropped_messages = payload["dropped_messages"]
-        if dropped_messages is not None and (
-            isinstance(dropped_messages, bool)
-            or not isinstance(dropped_messages, int)
-            or dropped_messages < 0
-        ):
-            return cls._malformed(
-                event,
-                "dropped_messages must be a non-negative integer or null",
-            )
-        if "replay_available" not in payload:
-            return cls._malformed(event, "replay_available is required")
-        replay_available = payload["replay_available"]
-        if not isinstance(replay_available, bool):
-            return cls._malformed(event, "replay_available must be a boolean")
-        return cls(
-            code,
-            message,
-            dropped_messages=dropped_messages,
-            replay_available=replay_available,
-            payload=dict(payload),
-            raw=event.raw,
-        )
-
-    @classmethod
-    def _malformed(cls, event: SseEvent, reason: str) -> "SseStreamError":
-        return cls(
-            cls.MALFORMED_CODE,
-            f"Torii emitted a malformed stream_error event: {reason}",
-            dropped_messages=None,
-            replay_available=None,
-            payload=event.data,
-            raw=event.raw,
-            malformed_reason=reason,
-        )
-
-
-@dataclass
-class EventCursor:
-    """Track the last event id for an SSE endpoint with a replay log."""
-
-    last_event_id: Optional[str] = None
-
-    def advance(self, event: SseEvent) -> None:
-        """Record the latest event id if present."""
-
-        if event.id is not None:
-            self.last_event_id = event.id
 
 
 @dataclass(frozen=True)
@@ -10437,6 +10301,7 @@ class SumeragiV2GlobalPhase(str, Enum):
 
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES = 1024
+_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION = 1
 _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )
@@ -10450,10 +10315,16 @@ def _sumeragi_v2_exact_fields(
         raise TypeError(f"{context} contains unsupported fields: {', '.join(unknown)}")
 
 
-def _sumeragi_v2_uint(value: Any, context: str, maximum: int = (1 << 64) - 1) -> int:
+def _sumeragi_v2_uint(
+    value: Any,
+    context: str,
+    maximum: int = (1 << 64) - 1,
+    *,
+    positive: bool = False,
+) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{context} must be an unsigned integer")
-    if value < 0 or value > maximum:
+    if value < 0 or (positive and value == 0) or value > maximum:
         raise ValueError(f"{context} is outside its unsigned integer range")
     return value
 
@@ -10541,6 +10412,37 @@ class SumeragiV2BlockSubject:
 
 
 @dataclass(frozen=True)
+class SumeragiV2MergeCarrierCommitment:
+    """Exact merge-ledger entry identity authenticated by a v2 QC."""
+
+    version: int
+    entry_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Any, context: str
+    ) -> "SumeragiV2MergeCarrierCommitment":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(payload, ("version", "entry_hash"), context)
+        if "version" not in payload or "entry_hash" not in payload:
+            missing = "version" if "version" not in payload else "entry_hash"
+            raise TypeError(f"{context}.{missing} is required")
+        version = _sumeragi_v2_uint(
+            payload["version"], f"{context}.version", maximum=(1 << 16) - 1
+        )
+        if version != _SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION:
+            raise ValueError(
+                f"{context}.version must equal "
+                f"{_SUMERAGI_MERGE_CARRIER_COMMITMENT_VERSION}"
+            )
+        return cls(
+            version=version,
+            entry_hash=_strict_hash_literal(payload, "entry_hash", context),
+        )
+
+
+@dataclass(frozen=True)
 class SumeragiV2ExecutionCommitment:
     """Exact deterministic execution result authenticated by a v2 QC."""
 
@@ -10552,6 +10454,8 @@ class SumeragiV2ExecutionCommitment:
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
+    merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
+    executed_block_wire_len: int
     executed_block_wire_hash: str
 
     @classmethod
@@ -10569,10 +10473,14 @@ class SumeragiV2ExecutionCommitment:
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
+                "merge_carrier",
+                "executed_block_wire_len",
                 "executed_block_wire_hash",
             ),
             context,
         )
+        if "merge_carrier" not in payload:
+            raise TypeError(f"{context}.merge_carrier is required")
         topup_anchor_count = _sumeragi_v2_uint(
             payload.get("topup_anchor_count"),
             f"{context}.topup_anchor_count",
@@ -10616,6 +10524,14 @@ class SumeragiV2ExecutionCommitment:
                 f"{context}.native_amx_application_manifest_count must be zero "
                 "exactly for the canonical empty root"
             )
+        merge_carrier_payload = payload["merge_carrier"]
+        merge_carrier = (
+            None
+            if merge_carrier_payload is None
+            else SumeragiV2MergeCarrierCommitment.from_payload(
+                merge_carrier_payload, f"{context}.merge_carrier"
+            )
+        )
         return cls(
             parent_state_root=_sumeragi_v2_string(
                 payload.get("parent_state_root"), f"{context}.parent_state_root"
@@ -10632,6 +10548,12 @@ class SumeragiV2ExecutionCommitment:
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
+            merge_carrier=merge_carrier,
+            executed_block_wire_len=_sumeragi_v2_uint(
+                payload.get("executed_block_wire_len"),
+                f"{context}.executed_block_wire_len",
+                positive=True,
+            ),
             executed_block_wire_hash=_sumeragi_v2_string(
                 payload.get("executed_block_wire_hash"),
                 f"{context}.executed_block_wire_hash",
@@ -10772,6 +10694,15 @@ class SumeragiStatusSnapshot:
             native_amx_application_manifest_count=(
                 execution_commitment.native_amx_application_manifest_count
             ),
+            merge_carrier=(
+                None
+                if execution_commitment.merge_carrier is None
+                else SumeragiV2MergeCarrierCommitment(
+                    version=execution_commitment.merge_carrier.version,
+                    entry_hash=execution_commitment.merge_carrier.entry_hash,
+                )
+            ),
+            executed_block_wire_len=execution_commitment.executed_block_wire_len,
             executed_block_wire_hash=execution_commitment.executed_block_wire_hash,
         )
 
@@ -13058,6 +12989,7 @@ __all__ = [
     "SumeragiV2HeightContextId",
     "SumeragiV2ConsensusRound",
     "SumeragiV2BlockSubject",
+    "SumeragiV2MergeCarrierCommitment",
     "SumeragiV2ExecutionCommitment",
     "SumeragiV2QuorumCertificateRef",
     "SumeragiV2TimeoutCertificateRef",
@@ -13111,6 +13043,11 @@ __all__ = [
     "VpnSession",
     "VpnReceipt",
     "VpnReceiptListResponse",
+    "ConnectAppRecord",
+    "ConnectAppRegistryPage",
+    "ConnectAdmissionManifestEntry",
+    "ConnectAdmissionManifest",
+    "ConnectAppPolicyControls",
 ]
 
 
@@ -13168,7 +13105,15 @@ class DataModelMismatchError(RuntimeError):
         self.actual = actual
 
 
-class ToriiClient(_BaseToriiClient):
+_ToriiClientStreamingQueryMixin = create_torii_client_streaming_query_mixin(
+    require_crypto=_require_crypto,
+    expect_sorafs_reputation_status=_expect_sorafs_reputation_status,
+    normalize_count_mode_arg=_normalize_count_mode_arg,
+    normalize_optional_string=_normalize_optional_string,
+)
+
+
+class ToriiClient(_ToriiClientStreamingQueryMixin, _BaseToriiClient):
     """Convenience wrapper that exposes Torii attachment/prover APIs under `iroha_python`.
 
     The implementation delegates to :class:`iroha_torii_client.client.ToriiClient`
@@ -22217,369 +22162,6 @@ class ToriiClient(_BaseToriiClient):
         )
         return TriggerListPage.from_payload(payload)
 
-    @staticmethod
-    def _maybe_json(response: requests.Response) -> Optional[Any]:
-        if not hasattr(response, "content"):
-            try:
-                return response.json()
-            except ValueError:
-                return getattr(response, "text", "") or None
-        if not response.content:
-            return None
-        try:
-            return response.json()
-        except ValueError:
-            return response.text or None
-
-    @staticmethod
-    def _maybe_transaction_receipt(response: requests.Response) -> Optional[Any]:
-        content_type = response.headers.get("Content-Type", "")
-        if "application/x-norito" not in content_type.lower():
-            return None
-        if not response.content:
-            return None
-        try:
-            crypto = _require_crypto()
-        except RuntimeError:
-            return None
-        if not hasattr(crypto, "decode_transaction_receipt_json"):
-            return None
-        try:
-            receipt_json = crypto.decode_transaction_receipt_json(response.content)
-        except Exception:
-            return None
-        try:
-            return json.loads(receipt_json)
-        except json.JSONDecodeError:
-            return None
-
-    @staticmethod
-    def _parse_sse_event(
-        lines: Iterable[str],
-        *,
-        decode_json: bool = True,
-        json_loader: Optional[Callable[[str], Any]] = None,
-    ) -> Optional[SseEvent]:
-        raw_lines = list(lines)
-        data_chunks: List[str] = []
-        event_name: Optional[str] = None
-        event_id: Optional[str] = None
-        retry_value: Optional[int] = None
-        for entry in raw_lines:
-            if entry.startswith(":"):
-                continue
-            field, sep, value = entry.partition(":")
-            value = value.lstrip() if sep else ""
-            if field == "data":
-                data_chunks.append(value)
-            elif field == "id":
-                event_id = value or None
-            elif field == "event":
-                event_name = value or None
-            elif field == "retry":
-                try:
-                    retry_value = int(value)
-                except ValueError:
-                    retry_value = None
-        if not data_chunks and event_name is None and event_id is None and retry_value is None:
-            return None
-        payload: Any
-        if data_chunks:
-            joined = "\n".join(data_chunks)
-            if decode_json:
-                if json_loader is not None:
-                    payload = json_loader(joined)
-                else:
-                    try:
-                        payload = json.loads(joined)
-                    except json.JSONDecodeError:
-                        payload = joined
-            else:
-                payload = joined
-        else:
-            payload = None
-        return SseEvent(
-            event=event_name,
-            data=payload,
-            id=event_id,
-            retry=retry_value,
-            raw="\n".join(raw_lines),
-        )
-
-    def _stream_sse(
-        self,
-        path: str,
-        *,
-        params: Optional[Mapping[str, Any]] = None,
-        headers: Optional[Mapping[str, str]] = None,
-        headers_factory: Optional[Callable[[], Mapping[str, str]]] = None,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = 3,
-        backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
-        decode_json: bool = True,
-        cursor: Optional[EventCursor] = None,
-        allow_resume: bool = False,
-        allow_redirects: bool = True,
-        strict_utf8: bool = False,
-        maximum_event_bytes: Optional[int] = None,
-        json_loader: Optional[Callable[[str], Any]] = None,
-        on_event: Optional[Callable[[SseEvent], None]] = None,
-        expected_content_type: Optional[str] = None,
-        require_identity_encoding: bool = False,
-        payload_free_errors: bool = False,
-    ):
-        url = f"{self._base_url}{path}"
-        if headers is not None and headers_factory is not None:
-            raise ValueError("_stream_sse accepts only one of headers or headers_factory")
-        if not allow_resume and (last_event_id is not None or resume or cursor is not None):
-            raise ValueError(f"{path} does not support SSE replay")
-        active_last_id = (
-            last_event_id
-            if last_event_id is not None
-            else (cursor.last_event_id if cursor is not None else None)
-        )
-        should_resume = allow_resume and (resume or last_event_id is not None or cursor is not None)
-
-        def iterator():
-            nonlocal active_last_id
-
-            def process_event(event: SseEvent) -> SseEvent:
-                nonlocal active_last_id
-                if event.event == "stream_error":
-                    raise SseStreamError.from_event(event)
-                if event.id is not None and allow_resume:
-                    active_last_id = event.id
-                    if cursor is not None:
-                        cursor.advance(event)
-                if on_event is not None:
-                    on_event(event)
-                return event
-
-            attempt = 0
-            backoff = max(backoff_base, 0.0)
-            while True:
-                try:
-                    final_headers: Dict[str, str] = dict(self._default_headers)
-                    final_headers.pop("Accept", None)
-                    attempt_headers = headers_factory() if headers_factory is not None else headers
-                    if attempt_headers:
-                        final_headers.update(attempt_headers)
-                    if not allow_resume:
-                        for name in tuple(final_headers):
-                            if name.lower() == "last-event-id":
-                                final_headers.pop(name)
-                    final_headers.setdefault("Accept", "text/event-stream")
-                    if should_resume and active_last_id:
-                        final_headers["Last-Event-ID"] = active_last_id
-                    with self._session.get(
-                        url,
-                        params=params,
-                        headers=final_headers or None,
-                        stream=True,
-                        timeout=timeout,
-                        allow_redirects=allow_redirects,
-                    ) as response:
-                        if payload_free_errors:
-                            _expect_sorafs_reputation_status(
-                                response,
-                                {200},
-                                path,
-                            )
-                        else:
-                            self._expect_status(response, {200})
-                        if require_identity_encoding:
-                            content_encoding = response.headers.get("Content-Encoding")
-                            if (
-                                content_encoding is not None
-                                and content_encoding.lower() != "identity"
-                            ):
-                                raise ValueError(
-                                    f"{path} Content-Encoding must be identity"
-                                )
-                        if expected_content_type is not None:
-                            content_type = response.headers.get("Content-Type")
-                            if (
-                                content_type is None
-                                or content_type.split(";", 1)[0].strip().lower()
-                                != expected_content_type
-                            ):
-                                raise ValueError(
-                                    f"{path} Content-Type must be "
-                                    f"{expected_content_type}"
-                                )
-                        attempt = 0
-                        backoff = max(backoff_base, 0.0)
-                        buffer: list[str] = []
-                        buffered_bytes = 0
-                        first_line = True
-                        for raw_line in response.iter_lines(decode_unicode=not strict_utf8):
-                            if raw_line is None:
-                                continue
-                            if strict_utf8:
-                                if not isinstance(raw_line, (bytes, bytearray, memoryview)):
-                                    raise ValueError(
-                                        f"{path} SSE body yielded a non-byte line"
-                                    )
-                                raw_bytes = bytes(raw_line)
-                                if first_line and raw_bytes.startswith(b"\xef\xbb\xbf"):
-                                    raise ValueError(
-                                        f"{path} SSE body must not contain a UTF-8 BOM"
-                                    )
-                                try:
-                                    decoded_line = raw_bytes.decode("utf-8", "strict")
-                                except UnicodeDecodeError as exc:
-                                    raise ValueError(
-                                        f"{path} SSE body must be strict UTF-8"
-                                    ) from exc
-                                line_bytes = len(raw_bytes) + 1
-                            else:
-                                decoded_line = raw_line
-                                line_bytes = len(str(raw_line).encode("utf-8")) + 1
-                            first_line = False
-                            buffered_bytes += line_bytes
-                            if (
-                                maximum_event_bytes is not None
-                                and buffered_bytes > maximum_event_bytes
-                            ):
-                                raise ValueError(
-                                    f"{path} SSE event exceeds its "
-                                    f"{maximum_event_bytes}-byte size bound"
-                                )
-                            line = decoded_line if strict_utf8 else decoded_line.strip()
-                            if not line:
-                                if buffer:
-                                    event = self._parse_sse_event(
-                                        buffer,
-                                        decode_json=decode_json,
-                                        json_loader=json_loader,
-                                    )
-                                    buffer.clear()
-                                    if event is None:
-                                        buffered_bytes = 0
-                                        continue
-                                    yield process_event(event)
-                                buffered_bytes = 0
-                                continue
-                            buffer.append(line)
-                        if buffer:
-                            event = self._parse_sse_event(
-                                buffer,
-                                decode_json=decode_json,
-                                json_loader=json_loader,
-                            )
-                            buffer.clear()
-                            if event is not None:
-                                yield process_event(event)
-                        break
-                except requests.RequestException:
-                    attempt += 1
-                    if max_retries is not None and attempt > max_retries:
-                        raise
-                    if backoff > 0.0:
-                        time.sleep(backoff)
-                        backoff *= 2
-                    continue
-
-        return iterator()
-
-    @staticmethod
-    def _build_query_envelope(
-        *,
-        filter: Optional[Mapping[str, Any]] = None,
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
-        sort: Optional[Any] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fetch_size: Optional[int] = None,
-        count_mode: Optional[str] = None,
-        query_name: Optional[str] = None,
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        body: Dict[str, Any] = {}
-        if filter is not None:
-            body["filter"] = dict(filter)
-        normalized_select = ToriiClient._normalize_query_select(select)
-        if normalized_select is not None:
-            body["select"] = normalized_select
-        if sort is not None:
-            body["sort"] = sort
-        pagination: Dict[str, int] = {}
-        if limit is not None:
-            pagination["limit"] = int(limit)
-        if offset is not None:
-            pagination["offset"] = int(offset)
-        if pagination:
-            body["pagination"] = pagination
-        if fetch_size is not None:
-            body["fetch_size"] = int(fetch_size)
-        if count_mode is not None:
-            body["count_mode"] = _normalize_count_mode_arg(count_mode)
-        query_name_value = _normalize_optional_string(query_name, "query_name")
-        if query_name_value is not None:
-            body["query"] = query_name_value
-        aggregate_value = ensure_aggregate(aggregate)
-        if aggregate_value is not None:
-            if normalized_select is not None:
-                raise ValueError("select and aggregate are mutually exclusive")
-            body["aggregate"] = aggregate_value
-        return body
-
-    @staticmethod
-    def _normalize_query_select(
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
-    ) -> Optional[List[Union[str, Dict[str, Any]]]]:
-        if select is None:
-            return None
-        if isinstance(select, (str, bytes, bytearray)):
-            raise TypeError("select must be a sequence of field paths or objects")
-        normalized: List[Union[str, Dict[str, Any]]] = []
-        for index, entry in enumerate(select):
-            if isinstance(entry, str):
-                field_path = entry.strip()
-                if not field_path:
-                    raise ValueError(f"select[{index}] must be a non-empty field path")
-                normalized.append(field_path)
-            elif isinstance(entry, Mapping):
-                normalized.append(dict(entry))
-            else:
-                raise TypeError(f"select[{index}] must be a field-path string or mapping")
-        return normalized
-
-    @staticmethod
-    def _ensure_no_query_args(
-        *,
-        envelope: Mapping[str, Any],
-        filter: Optional[Mapping[str, Any]],
-        select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
-        sort: Optional[Any],
-        limit: Optional[int],
-        offset: Optional[int],
-        fetch_size: Optional[int],
-        count_mode: Optional[str],
-        query_name: Optional[str],
-        aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]],
-    ) -> None:
-        if any(
-            value is not None
-            for value in (
-                filter,
-                select,
-                sort,
-                limit,
-                offset,
-                fetch_size,
-                count_mode,
-                query_name,
-                aggregate,
-            )
-        ):
-            raise ValueError(
-                "provide either `envelope` or builder arguments "
-                "(filter/select/sort/limit/offset/fetch_size/count_mode/query_name/aggregate), "
-                "not both"
-            )
 
 
 def create_torii_client(
@@ -22666,360 +22248,3 @@ def create_torii_client(
         sorafs_alias_warning=sorafs_alias_warning,
         sorafs_alias_logger=sorafs_alias_logger,
     )
-
-
-@dataclass(frozen=True)
-class ConnectAppRecord:
-    """Registered Connect application metadata."""
-
-    app_id: str
-    display_name: Optional[str]
-    description: Optional[str]
-    icon_url: Optional[str]
-    namespaces: Sequence[str]
-    metadata: Mapping[str, Any]
-    policy: Mapping[str, Any]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app entry must be an object")
-        data = dict(payload)
-        app_id = data.get("app_id")
-        if not isinstance(app_id, str) or not app_id:
-            raise TypeError("connect app entry requires string `app_id` field")
-
-        def _coerce_optional_str(name: str) -> Optional[str]:
-            value = data.get(name)
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return value
-            raise TypeError(f"connect app entry `{name}` must be a string when present")
-
-        namespaces_raw = data.get("namespaces") or []
-        if namespaces_raw is None:
-            namespaces_raw = []
-        if not isinstance(namespaces_raw, list):
-            raise TypeError("connect app entry `namespaces` must be a list")
-        namespaces: List[str] = []
-        for item in namespaces_raw:
-            if not isinstance(item, str):
-                raise TypeError("connect app entry `namespaces` must contain strings")
-            namespaces.append(item)
-
-        metadata_raw = data.get("metadata") or {}
-        if metadata_raw is None:
-            metadata_raw = {}
-        if not isinstance(metadata_raw, Mapping):
-            raise TypeError("connect app entry `metadata` must be an object")
-
-        policy_raw = data.get("policy") or {}
-        if policy_raw is None:
-            policy_raw = {}
-        if not isinstance(policy_raw, Mapping):
-            raise TypeError("connect app entry `policy` must be an object")
-
-        recognized = {
-            "app_id",
-            "display_name",
-            "description",
-            "icon_url",
-            "namespaces",
-            "metadata",
-            "policy",
-        }
-
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            app_id=app_id,
-            display_name=_coerce_optional_str("display_name"),
-            description=_coerce_optional_str("description"),
-            icon_url=_coerce_optional_str("icon_url"),
-            namespaces=tuple(namespaces),
-            metadata=dict(metadata_raw),
-            policy=dict(policy_raw),
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the record back into a JSON-friendly mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        payload["app_id"] = self.app_id
-        if self.display_name is not None:
-            payload["display_name"] = self.display_name
-        if self.description is not None:
-            payload["description"] = self.description
-        if self.icon_url is not None:
-            payload["icon_url"] = self.icon_url
-        payload["namespaces"] = list(self.namespaces)
-        payload["metadata"] = dict(self.metadata)
-        payload["policy"] = dict(self.policy)
-        return payload
-
-
-@dataclass(frozen=True)
-class ConnectAppRegistryPage:
-    """Paginated Connect application registry results."""
-
-    items: Sequence[ConnectAppRecord]
-    total: Optional[int]
-    next_cursor: Optional[str]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppRegistryPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app registry payload must be an object")
-        data = dict(payload)
-        items_raw = data.get("items") or []
-        if items_raw is None:
-            items_raw = []
-        if not isinstance(items_raw, list):
-            raise TypeError("connect app registry `items` must be a list")
-        items = [ConnectAppRecord.from_payload(entry) for entry in items_raw]
-
-        total_raw = data.get("total")
-        total: Optional[int]
-        if total_raw is None:
-            total = None
-        else:
-            try:
-                total = int(total_raw)
-            except (TypeError, ValueError) as exc:
-                raise TypeError(
-                    "connect app registry `total` must be numeric when present"
-                ) from exc
-
-        cursor_raw = data.get("next_cursor")
-        if cursor_raw is not None and not isinstance(cursor_raw, str):
-            raise TypeError("connect app registry cursor must be a string when present")
-
-        recognized = {"items", "total", "next_cursor"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(items=tuple(items), total=total, next_cursor=cursor_raw, extra=extra)
-
-
-@dataclass(frozen=True)
-class ConnectAdmissionManifestEntry:
-    """Admission control record for a Connect application."""
-
-    app_id: str
-    namespaces: Sequence[str]
-    metadata: Mapping[str, Any]
-    policy: Mapping[str, Any]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifestEntry":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect admission entry must be an object")
-        data = dict(payload)
-        app_id = data.get("app_id")
-        if not isinstance(app_id, str) or not app_id:
-            raise TypeError("connect admission entry requires string `app_id` field")
-
-        namespaces_raw = data.get("namespaces") or []
-        if namespaces_raw is None:
-            namespaces_raw = []
-        if not isinstance(namespaces_raw, list):
-            raise TypeError("connect admission entry `namespaces` must be a list")
-        namespaces: List[str] = []
-        for item in namespaces_raw:
-            if not isinstance(item, str):
-                raise TypeError("connect admission entry `namespaces` values must be strings")
-            namespaces.append(item)
-
-        metadata_raw = data.get("metadata") or {}
-        if metadata_raw is None:
-            metadata_raw = {}
-        if not isinstance(metadata_raw, Mapping):
-            raise TypeError("connect admission entry `metadata` must be an object")
-
-        policy_raw = data.get("policy") or {}
-        if policy_raw is None:
-            policy_raw = {}
-        if not isinstance(policy_raw, Mapping):
-            raise TypeError("connect admission entry `policy` must be an object")
-
-        recognized = {"app_id", "namespaces", "metadata", "policy"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            app_id=app_id,
-            namespaces=tuple(namespaces),
-            metadata=dict(metadata_raw),
-            policy=dict(policy_raw),
-            extra=extra,
-        )
-
-
-@dataclass(frozen=True)
-class ConnectAdmissionManifest:
-    """Connect admission manifest describing allowed applications."""
-
-    version: Optional[int]
-    entries: Sequence[ConnectAdmissionManifestEntry]
-    manifest_hash: Optional[str]
-    updated_at: Optional[str]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAdmissionManifest":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect admission manifest payload must be an object")
-        data = dict(payload)
-        entries_raw = data.get("entries") or []
-        if entries_raw is None:
-            entries_raw = []
-        if not isinstance(entries_raw, list):
-            raise TypeError("connect admission manifest `entries` must be a list")
-        entries = [ConnectAdmissionManifestEntry.from_payload(item) for item in entries_raw]
-
-        version_raw = data.get("version")
-        if version_raw is None:
-            version: Optional[int] = None
-        else:
-            try:
-                version = int(version_raw)
-            except (TypeError, ValueError) as exc:
-                raise TypeError("connect admission manifest `version` must be numeric") from exc
-
-        manifest_hash = data.get("manifest_hash")
-        if manifest_hash is not None and not isinstance(manifest_hash, str):
-            raise TypeError(
-                "connect admission manifest `manifest_hash` must be a string when present"
-            )
-        updated_at = data.get("updated_at")
-        if updated_at is not None and not isinstance(updated_at, str):
-            raise TypeError("connect admission manifest `updated_at` must be a string when present")
-
-        recognized = {"entries", "version", "manifest_hash", "updated_at"}
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            version=version,
-            entries=tuple(entries),
-            manifest_hash=manifest_hash,
-            updated_at=updated_at,
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the manifest to a JSON-serializable mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        payload["entries"] = [
-            {
-                "app_id": entry.app_id,
-                "namespaces": list(entry.namespaces),
-                "metadata": dict(entry.metadata),
-                "policy": dict(entry.policy),
-                **dict(entry.extra),
-            }
-            for entry in self.entries
-        ]
-        if self.version is not None:
-            payload["version"] = self.version
-        if self.manifest_hash is not None:
-            payload["manifest_hash"] = self.manifest_hash
-        if self.updated_at is not None:
-            payload["updated_at"] = self.updated_at
-        return payload
-
-    # ------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ConnectAppPolicyControls:
-    """Runtime-configurable Connect policy toggles."""
-
-    relay_enabled: Optional[bool]
-    ws_max_sessions: Optional[int]
-    ws_per_ip_max_sessions: Optional[int]
-    ws_rate_per_ip_per_min: Optional[int]
-    session_ttl_ms: Optional[int]
-    frame_max_bytes: Optional[int]
-    session_buffer_max_bytes: Optional[int]
-    ping_interval_ms: Optional[int]
-    ping_miss_tolerance: Optional[int]
-    ping_min_interval_ms: Optional[int]
-    extra: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectAppPolicyControls":
-        if not isinstance(payload, Mapping):
-            raise TypeError("connect app policy payload must be an object")
-        data = dict(payload)
-
-        def _coerce_optional_int(name: str) -> Optional[int]:
-            value = data.get(name)
-            if value is None:
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError) as exc:
-                raise TypeError(f"connect app policy field `{name}` must be numeric") from exc
-
-        relay_enabled_raw = data.get("relay_enabled")
-        relay_enabled: Optional[bool]
-        if relay_enabled_raw is None:
-            relay_enabled = None
-        elif isinstance(relay_enabled_raw, bool):
-            relay_enabled = relay_enabled_raw
-        else:
-            raise TypeError("connect app policy `relay_enabled` must be boolean when present")
-
-        recognized = {
-            "relay_enabled",
-            "ws_max_sessions",
-            "ws_per_ip_max_sessions",
-            "ws_rate_per_ip_per_min",
-            "session_ttl_ms",
-            "frame_max_bytes",
-            "session_buffer_max_bytes",
-            "ping_interval_ms",
-            "ping_miss_tolerance",
-            "ping_min_interval_ms",
-        }
-
-        extra = {k: v for k, v in data.items() if k not in recognized}
-        return cls(
-            relay_enabled=relay_enabled,
-            ws_max_sessions=_coerce_optional_int("ws_max_sessions"),
-            ws_per_ip_max_sessions=_coerce_optional_int("ws_per_ip_max_sessions"),
-            ws_rate_per_ip_per_min=_coerce_optional_int("ws_rate_per_ip_per_min"),
-            session_ttl_ms=_coerce_optional_int("session_ttl_ms"),
-            frame_max_bytes=_coerce_optional_int("frame_max_bytes"),
-            session_buffer_max_bytes=_coerce_optional_int("session_buffer_max_bytes"),
-            ping_interval_ms=_coerce_optional_int("ping_interval_ms"),
-            ping_miss_tolerance=_coerce_optional_int("ping_miss_tolerance"),
-            ping_min_interval_ms=_coerce_optional_int("ping_min_interval_ms"),
-            extra=extra,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Serialize the policy controls back to a JSON-serializable mapping."""
-
-        payload: Dict[str, Any] = dict(self.extra)
-        if self.relay_enabled is not None:
-            payload["relay_enabled"] = self.relay_enabled
-        if self.ws_max_sessions is not None:
-            payload["ws_max_sessions"] = self.ws_max_sessions
-        if self.ws_per_ip_max_sessions is not None:
-            payload["ws_per_ip_max_sessions"] = self.ws_per_ip_max_sessions
-        if self.ws_rate_per_ip_per_min is not None:
-            payload["ws_rate_per_ip_per_min"] = self.ws_rate_per_ip_per_min
-        if self.session_ttl_ms is not None:
-            payload["session_ttl_ms"] = self.session_ttl_ms
-        if self.frame_max_bytes is not None:
-            payload["frame_max_bytes"] = self.frame_max_bytes
-        if self.session_buffer_max_bytes is not None:
-            payload["session_buffer_max_bytes"] = self.session_buffer_max_bytes
-        if self.ping_interval_ms is not None:
-            payload["ping_interval_ms"] = self.ping_interval_ms
-        if self.ping_miss_tolerance is not None:
-            payload["ping_miss_tolerance"] = self.ping_miss_tolerance
-        if self.ping_min_interval_ms is not None:
-            payload["ping_min_interval_ms"] = self.ping_min_interval_ms
-        return payload

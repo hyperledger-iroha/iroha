@@ -4,43 +4,60 @@
 //! concrete curves, generator derivation domains, and entropy providers remain
 //! explicit adapters so a protocol can freeze its own consensus bytes.
 
-#![allow(missing_docs)]
-
 use std::{
     fmt::Debug,
     ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use thiserror::Error;
 
 /// Stable failure classes emitted by the generalized-Bulletproof backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum GeneralizedBulletproofErrorV1 {
+    /// A checked scalar, point, vector, or circuit invariant did not hold.
     #[error("generalized-Bulletproof arithmetic invariant failed")]
     ArithmeticInvariant,
+    /// Canonical scalar sampling exhausted its public retry limit.
     #[error("generalized-Bulletproof prover randomness exhausted its retry bound")]
     ProverRandomnessExhausted,
+    /// The configured entropy source could not fill a requested buffer.
     #[error("generalized-Bulletproof randomness source is unavailable")]
     RandomnessUnavailable,
+    /// Transcript challenge derivation exhausted its public retry limit.
     #[error("generalized-Bulletproof transcript challenge exhausted its retry bound")]
     TranscriptChallengeExhausted,
+    /// A compressed point failed the suite's canonical decoder.
     #[error("generalized-Bulletproof point encoding is invalid")]
     PointEncoding,
+    /// A protocol point was the identity where a non-identity point is required.
     #[error("generalized-Bulletproof point must be non-identity")]
     PointIdentity,
+    /// A scalar byte string was not a canonical field encoding.
     #[error("generalized-Bulletproof scalar encoding is non-canonical")]
     ScalarEncoding,
+    /// A prover-generated circuit commitment was the identity.
     #[error("generalized-Bulletproof prover commitment was the identity")]
     CircuitProverCommitmentIdentity,
+    /// An inner-product round produced an inadmissible identity point.
     #[error("generalized-Bulletproof inner-product round produced an identity")]
     InnerProductRoundIdentity,
+    /// A verifier equation did not evaluate to the group identity.
     #[error("generalized-Bulletproof verification equation failed")]
     CircuitEquation,
+    /// A proof payload did not contain the exact number of bytes required.
     #[error("generalized-Bulletproof proof length {actual} does not equal {expected}")]
-    ProofLength { actual: usize, expected: usize },
+    ProofLength {
+        /// Number of proof bytes supplied by the caller.
+        actual: usize,
+        /// Number of proof bytes required by the statement.
+        expected: usize,
+    },
+    /// A checked resource-size computation overflowed.
     #[error("generalized-Bulletproof resource bound overflowed")]
     ResourceOverflow,
+    /// Verification left unread transcript data or requested data past its end.
     #[error("generalized-Bulletproof transcript was not consumed exactly")]
     TranscriptConsumption,
 }
@@ -123,20 +140,32 @@ pub trait ProofScalar:
     + MulAssign
     + 'static
 {
+    /// Additive identity of the scalar field.
     const ZERO: Self;
+    /// Multiplicative identity of the scalar field.
     const ONE: Self;
     /// Number of significant little-endian scalar bits used by MSM.
     const SCALAR_BITS: usize;
 
+    /// Convert a small unsigned integer into this scalar field.
     fn from_u64(value: u64) -> Self;
+    /// Decode a canonical 32-byte scalar, rejecting non-canonical encodings.
     fn decode(bytes: [u8; 32]) -> Option<Self>;
+    /// Encode this scalar canonically as 32 bytes.
     fn encode(self) -> [u8; 32];
+    /// Reduce a 64-byte little-endian integer into this scalar field.
     fn reduce_wide(bytes: [u8; 64]) -> Self;
+    /// Return the multiplicative inverse, or `None` for zero.
     fn invert(self) -> Option<Self>;
+    /// Return a square root when one exists in the scalar field.
     fn sqrt(self) -> Option<Self>;
+    /// Square this scalar.
     fn square(self) -> Self;
+    /// Double this scalar.
     fn double(self) -> Self;
+    /// Return whether this scalar is zero.
     fn is_zero(self) -> bool;
+    /// Return the canonical parity bit of this scalar.
     fn is_odd(self) -> bool;
     /// Clear the complete scalar value without panicking.
     ///
@@ -148,10 +177,12 @@ pub trait ProofScalar:
     /// erased, and no destructor runs if the process aborts.
     fn clear_secret(&mut self);
 
+    /// Return the canonical little-endian bytes consumed by MSM bit extraction.
     fn bits_le(self) -> [u8; 32] {
         self.encode()
     }
 
+    /// Sample one canonical scalar from the supplied entropy source.
     fn random(
         rng: &mut impl ProofRandomSource,
     ) -> Result<Option<Self>, GeneralizedBulletproofErrorV1> {
@@ -208,13 +239,20 @@ pub trait ProofPoint:
     + SubAssign
     + 'static
 {
+    /// Scalar field used to multiply points in this group.
     type Scalar: ProofScalar;
+    /// Canonical fixed-width compressed point encoding.
     type Encoded: AsRef<[u8]> + Copy + Clone + Debug + Eq + Send + Sync + 'static;
+    /// Exact number of bytes in one canonical point encoding.
     const POINT_BYTES: usize;
 
+    /// Return the group identity.
     fn identity() -> Self;
+    /// Return whether this point is the group identity.
     fn is_identity(self) -> bool;
+    /// Double this point.
     fn double(self) -> Self;
+    /// Multiply this point by a scalar.
     fn scale(self, scalar: Self::Scalar) -> Self;
     /// Select `a` for `choice == 0` and `b` for `choice == 1` in constant time.
     ///
@@ -227,7 +265,9 @@ pub trait ProofPoint:
     /// named value, must be idempotent, must not allocate or panic, cannot
     /// erase compiler-created copies, and is not run after an abort.
     fn clear_secret(&mut self);
+    /// Encode this point canonically.
     fn encode(self) -> Self::Encoded;
+    /// Decode one canonical point, optionally permitting the identity.
     fn decode(
         bytes: impl AsRef<[u8]>,
         allow_identity: bool,
@@ -236,33 +276,47 @@ pub trait ProofPoint:
 
 /// Curve suite binding one scalar field, one group, and one generator basis.
 pub trait ProofSuite: Copy + Clone + Debug + Eq + Send + Sync + 'static {
+    /// Scalar field used by the suite.
     type Scalar: ProofScalar;
+    /// Prime-order group used by the suite.
     type Point: ProofPoint<Scalar = Self::Scalar>;
 
+    /// Return the suite's immutable generator basis.
     fn generators() -> &'static ProofGenerators<Self>;
 }
 
 /// Transcript writes required by the prover.
 pub trait ProverTranscript<S: ProofSuite> {
+    /// Append one canonical scalar to the proof transcript.
     fn push_scalar(&mut self, scalar: S::Scalar) -> Result<(), GeneralizedBulletproofErrorV1>;
+    /// Append one canonical non-identity point to the proof transcript.
     fn push_point(&mut self, point: S::Point) -> Result<(), GeneralizedBulletproofErrorV1>;
+    /// Derive the next non-zero Fiat-Shamir challenge.
     fn challenge(&mut self) -> Result<S::Scalar, GeneralizedBulletproofErrorV1>;
 }
 
 /// Transcript reads required by the verifier.
 pub trait VerifierTranscript<S: ProofSuite> {
+    /// Read the next canonical scalar from the proof transcript.
     fn read_scalar(&mut self) -> Result<S::Scalar, GeneralizedBulletproofErrorV1>;
+    /// Read the next canonical non-identity point from the proof transcript.
     fn read_point(&mut self) -> Result<S::Point, GeneralizedBulletproofErrorV1>;
+    /// Derive the next non-zero Fiat-Shamir challenge.
     fn challenge(&mut self) -> Result<S::Scalar, GeneralizedBulletproofErrorV1>;
 }
 
 /// Full generator basis for one proof suite.
 #[derive(Clone, Debug)]
 pub struct ProofGenerators<S: ProofSuite> {
+    /// Base generator used for value and inner-product terms.
     pub g: S::Point,
+    /// Blinding generator used by Pedersen commitments.
     pub h: S::Point,
+    /// Left generator vector at the suite's maximum supported width.
     pub g_bold: Vec<S::Point>,
+    /// Right generator vector at the suite's maximum supported width.
     pub h_bold: Vec<S::Point>,
+    /// Power-of-two prefix sums of `h_bold` used by batched verification.
     pub h_sum: Vec<S::Point>,
 }
 
@@ -308,6 +362,7 @@ impl<S: ProofSuite> ProofGenerators<S> {
         })
     }
 
+    /// Borrow a checked power-of-two prefix of this generator basis.
     pub fn reduce(
         &self,
         count: usize,
@@ -331,9 +386,13 @@ impl<S: ProofSuite> ProofGenerators<S> {
 /// Borrowed power-of-two generator prefix used by one proof.
 #[derive(Clone, Copy, Debug)]
 pub struct ProofGeneratorView<'a, S: ProofSuite> {
+    /// Base generator used for value and inner-product terms.
     pub g: S::Point,
+    /// Blinding generator used by Pedersen commitments.
     pub h: S::Point,
+    /// Borrowed left-generator prefix.
     pub g_bold: &'a [S::Point],
+    /// Borrowed right-generator prefix.
     pub h_bold: &'a [S::Point],
 }
 
@@ -362,12 +421,13 @@ impl<S: ProofSuite> Drop for SecretMsmTerm<S> {
 /// clears all owned scalar and point copies on success, error, or unwind.
 ///
 /// The fixed four-bit Straus evaluator has secret-independent control flow and
-/// memory access. It processes independent 256-point chunks in parallel, scans
-/// every one of the 16 precomputed table entries for every digit, and always
-/// executes 64 windows. Chunk results are collected into a preallocated public-
-/// size buffer and folded in input order, so Rayon thread count cannot affect
-/// the result. This owner cannot erase copies retained by its caller or
-/// generated by the compiler, and destructors do not run after process abort.
+/// memory access. It processes independent 256-point chunks in parallel when
+/// the `parallel` feature is enabled and sequentially otherwise, scans every
+/// one of the 16 precomputed table entries for every digit, and always executes
+/// 64 windows. Chunk results are collected into a preallocated public-size
+/// buffer and folded in input order, so scheduling cannot affect the result.
+/// This owner cannot erase copies retained by its caller or generated by the
+/// compiler, and destructors do not run after process abort.
 pub struct SecretMultiexpBuilder<S: ProofSuite> {
     terms: Vec<SecretMsmTerm<S>>,
     exact_capacity: usize,
@@ -444,11 +504,11 @@ impl<S: ProofSuite> SecretMultiexpBuilder<S> {
 
 /// Exact-capacity collection of independently evaluated secret MSM chunks.
 ///
-/// Storing `Result` as the item deliberately avoids Rayon short-circuiting on
-/// the first error: every successful `SecretPoint` is then owned by this vector
-/// and cleared if any peer chunk fails. Rayon also drops initialized items when
-/// collection unwinds, so worker panics cannot strand completed secret-derived
-/// points.
+/// Storing `Result` as the item deliberately avoids short-circuiting on the
+/// first error: every successful `SecretPoint` is then owned by this vector and
+/// cleared if any peer chunk fails. Parallel collection also drops initialized
+/// items when collection unwinds, so worker panics cannot strand completed
+/// secret-derived points.
 struct SecretMsmChunkResults<S: ProofSuite> {
     values: Vec<Result<SecretPoint<S::Point>, GeneralizedBulletproofErrorV1>>,
     exact_len: usize,
@@ -479,10 +539,17 @@ impl<S: ProofSuite> SecretMsmChunkResults<S> {
             return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);
         }
         let allocation = self.values.as_ptr();
+        #[cfg(feature = "parallel")]
         terms
             .par_chunks(SECRET_MSM_CHUNK_TERMS_V1)
             .map(secret_straus_chunk::<S>)
             .collect_into_vec(&mut self.values);
+        #[cfg(not(feature = "parallel"))]
+        self.values.extend(
+            terms
+                .chunks(SECRET_MSM_CHUNK_TERMS_V1)
+                .map(secret_straus_chunk::<S>),
+        );
         debug_assert_eq!(self.values.len(), self.exact_len);
         debug_assert_eq!(self.values.capacity(), self.allocation_capacity);
         debug_assert_eq!(self.values.as_ptr(), allocation);
@@ -842,8 +909,12 @@ impl<S: ProofSuite> BatchVerifier<S> {
     }
 }
 
+/// Owned scalar vector whose elements are cleared when the vector is dropped.
 #[derive(Clone, PartialEq, Eq)]
-pub struct ScalarVector<F: ProofScalar>(pub Vec<F>);
+pub struct ScalarVector<F: ProofScalar>(
+    /// Scalar elements in deterministic protocol order.
+    pub Vec<F>,
+);
 
 type ScalarVectorPair<F> = (ScalarVector<F>, ScalarVector<F>);
 
@@ -932,10 +1003,16 @@ impl<F: ProofScalar> Mul<&Self> for ScalarVector<F> {
 }
 
 impl<F: ProofScalar> ScalarVector<F> {
+    /// Construct a vector containing `len` zero scalars.
     pub fn zero(len: usize) -> Self {
         Self(vec![F::ZERO; len])
     }
 
+    /// Construct the first `len` powers of `value`, beginning with one.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `len` is zero.
     pub fn powers(value: F, len: usize) -> Self {
         assert!(len != 0);
         let mut result = Vec::with_capacity(len);
@@ -949,6 +1026,7 @@ impl<F: ProofScalar> ScalarVector<F> {
         Self(result)
     }
 
+    /// Return the number of scalar elements.
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -958,6 +1036,11 @@ impl<F: ProofScalar> ScalarVector<F> {
         self.0.is_empty()
     }
 
+    /// Compute an inner product with the corresponding prefix of an iterator.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the iterator yields fewer elements than this vector.
     pub fn inner_product(&self, vector: impl Iterator<Item = F>) -> F {
         let mut count = 0;
         let mut result = SecretScalar::new(F::ZERO);
@@ -1022,7 +1105,9 @@ where
 
 /// Opening of one Pedersen vector commitment used by the FCMP circuit.
 pub struct VectorCommitmentOpening<F: ProofScalar> {
+    /// Committed vector values in generator order.
     pub values: ScalarVector<F>,
+    /// Pedersen blinding scalar for the commitment.
     pub mask: F,
 }
 
@@ -1036,6 +1121,7 @@ impl<F: ProofScalar> Drop for VectorCommitmentOpening<F> {
 }
 
 impl<F: ProofScalar> VectorCommitmentOpening<F> {
+    /// Construct an opening from committed values and its blinding scalar.
     pub fn new(values: Vec<F>, mask: F) -> Self {
         Self {
             values: ScalarVector(values),
@@ -1053,6 +1139,10 @@ pub struct ArithmeticCircuitWitness<S: ProofSuite> {
 }
 
 impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
+    /// Construct a witness and derive each multiplication-gate output.
+    ///
+    /// Returns an error unless the left and right gate vectors have equal
+    /// lengths.
     pub fn new(
         a_l: Vec<S::Scalar>,
         a_r: Vec<S::Scalar>,
@@ -1077,28 +1167,56 @@ impl<S: ProofSuite> ArithmeticCircuitWitness<S> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum Variable {
-    aL(usize),
-    aR(usize),
-    aO(usize),
+    /// Left input wire at the contained multiplication-gate index.
+    aL(
+        /// Multiplication-gate index containing the wire.
+        usize,
+    ),
+    /// Right input wire at the contained multiplication-gate index.
+    aR(
+        /// Multiplication-gate index containing the wire.
+        usize,
+    ),
+    /// Output wire at the contained multiplication-gate index.
+    aO(
+        /// Multiplication-gate index containing the wire.
+        usize,
+    ),
+    /// Vector-commitment coordinate addressed by commitment and element index.
     CG {
+        /// Index of the vector commitment in the statement.
         commitment: usize,
+        /// Index of the scalar within that vector commitment.
         index: usize,
     },
+    /// Scalar commitment at the contained statement index.
     #[cfg_attr(not(test), allow(dead_code))]
-    V(usize),
+    V(
+        /// Scalar-commitment index in the statement.
+        usize,
+    ),
 }
 
 /// Sparse generalized-Bulletproof linear combination.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinComb<F: ProofScalar> {
+    /// Highest multiplication-gate index referenced by any wire term.
     pub highest_a_index: Option<usize>,
+    /// Highest vector-commitment index referenced by any coordinate term.
     pub highest_c_index: Option<usize>,
+    /// Highest scalar-commitment index referenced by any value term.
     pub highest_v_index: Option<usize>,
+    /// Coefficients for left multiplication-gate wires.
     pub wl: Vec<(usize, F)>,
+    /// Coefficients for right multiplication-gate wires.
     pub wr: Vec<(usize, F)>,
+    /// Coefficients for multiplication-gate output wires.
     pub wo: Vec<(usize, F)>,
+    /// Per-commitment coefficients for vector coordinates.
     pub wcg: Vec<Vec<(usize, F)>>,
+    /// Coefficients for scalar commitments.
     pub wv: Vec<(usize, F)>,
+    /// Constant term of the linear combination.
     pub c: F,
 }
 
@@ -1178,6 +1296,7 @@ impl<F: ProofScalar> Mul<F> for LinComb<F> {
 }
 
 impl<F: ProofScalar> LinComb<F> {
+    /// Construct an empty linear combination equal to zero.
     pub fn empty() -> Self {
         Self {
             highest_a_index: None,
@@ -1192,6 +1311,7 @@ impl<F: ProofScalar> LinComb<F> {
         }
     }
 
+    /// Append one weighted variable term.
     pub fn term(mut self, scalar: F, variable: Variable) -> Self {
         match variable {
             Variable::aL(index) => {
@@ -1222,6 +1342,7 @@ impl<F: ProofScalar> LinComb<F> {
         self
     }
 
+    /// Add a constant scalar term.
     pub fn constant(mut self, scalar: F) -> Self {
         self.c += scalar;
         self
@@ -1234,6 +1355,7 @@ fn accumulate<F: ProofScalar>(accumulator: &mut ScalarVector<F>, values: &[(usiz
     }
 }
 
+/// Public circuit statement, constraints, and commitment points to verify.
 #[derive(Clone, Debug)]
 pub struct ArithmeticCircuitStatement<'a, S: ProofSuite> {
     generators: ProofGeneratorView<'a, S>,
@@ -1243,6 +1365,10 @@ pub struct ArithmeticCircuitStatement<'a, S: ProofSuite> {
 }
 
 impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
+    /// Construct and validate a statement against its suite-bound generators.
+    ///
+    /// Returns an error for malformed generator views, out-of-range constraint
+    /// references, or inconsistent cached highest-index metadata.
     pub fn new(
         generators: ProofGeneratorView<'a, S>,
         constraints: Vec<LinComb<S::Scalar>>,
@@ -1342,6 +1468,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         Ok((y_inverse, ScalarVector(z)))
     }
 
+    /// Create a proof for this statement and witness in `transcript`.
     pub fn prove<R, T>(
         self,
         rng: &mut R,
@@ -1650,6 +1777,7 @@ impl<'a, S: ProofSuite> ArithmeticCircuitStatement<'a, S> {
         )
     }
 
+    /// Consume and verify one proof transcript for this statement.
     pub fn verify<T>(self, transcript: &mut T) -> Result<(), GeneralizedBulletproofErrorV1>
     where
         T: VerifierTranscript<S>,
@@ -1927,31 +2055,60 @@ where
     let inverse = challenge
         .invert()
         .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
-    let (mut g_bold, mut h_bold): (Vec<S::Point>, Vec<S::Point>) = rayon::join(
-        || {
-            g_left
-                .par_iter()
-                .copied()
-                .zip(g_right.par_iter().copied())
-                .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
-                .collect()
-        },
-        || {
-            h_left
-                .par_iter()
-                .copied()
-                .zip(h_right.par_iter().copied())
-                .zip(h_weight_left.par_iter().copied())
-                .zip(h_weight_right.par_iter().copied())
-                .map(|(((left, right), left_weight), right_weight)| {
-                    multiexp::<S>(&[
-                        (challenge * left_weight, left),
-                        (inverse * right_weight, right),
-                    ])
-                })
-                .collect()
-        },
-    );
+    let (mut g_bold, mut h_bold): (Vec<S::Point>, Vec<S::Point>) = {
+        #[cfg(feature = "parallel")]
+        {
+            rayon::join(
+                || {
+                    g_left
+                        .par_iter()
+                        .copied()
+                        .zip(g_right.par_iter().copied())
+                        .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
+                        .collect()
+                },
+                || {
+                    h_left
+                        .par_iter()
+                        .copied()
+                        .zip(h_right.par_iter().copied())
+                        .zip(h_weight_left.par_iter().copied())
+                        .zip(h_weight_right.par_iter().copied())
+                        .map(|(((left, right), left_weight), right_weight)| {
+                            multiexp::<S>(&[
+                                (challenge * left_weight, left),
+                                (inverse * right_weight, right),
+                            ])
+                        })
+                        .collect()
+                },
+            )
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            (
+                g_left
+                    .iter()
+                    .copied()
+                    .zip(g_right.iter().copied())
+                    .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
+                    .collect(),
+                h_left
+                    .iter()
+                    .copied()
+                    .zip(h_right.iter().copied())
+                    .zip(h_weight_left.iter().copied())
+                    .zip(h_weight_right.iter().copied())
+                    .map(|(((left, right), left_weight), right_weight)| {
+                        multiexp::<S>(&[
+                            (challenge * left_weight, left),
+                            (inverse * right_weight, right),
+                        ])
+                    })
+                    .collect(),
+            )
+        }
+    };
     p = left.scale(challenge.square()) + p + right.scale(inverse.square());
     a = (a_left * challenge) + &(a_right * inverse);
     b = (b_left * inverse) + &(b_right * challenge);
@@ -2013,25 +2170,50 @@ where
             .ok_or(GeneralizedBulletproofErrorV1::ArithmeticInvariant)?;
 
         // Every fold scalar is transcript-public. Evaluate the independent G
-        // and H halves in the ambient deterministic Rayon pool, preserving
-        // indexed order and falling back naturally to one worker. The two-term
-        // specialization avoids a fresh Pippenger bucket arena per pair.
-        (g_bold, h_bold) = rayon::join(
-            || {
-                g_left
-                    .into_par_iter()
-                    .zip(g_right.into_par_iter())
-                    .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
-                    .collect()
-            },
-            || {
-                h_left
-                    .into_par_iter()
-                    .zip(h_right.into_par_iter())
-                    .map(|(left, right)| multiexp::<S>(&[(challenge, left), (inverse, right)]))
-                    .collect()
-            },
-        );
+        // and H halves in indexed order. The `parallel` feature uses the
+        // ambient deterministic Rayon pool; the fallback performs the same
+        // ordered maps sequentially. The two-term specialization avoids a
+        // fresh Pippenger bucket arena per pair.
+        (g_bold, h_bold) = {
+            #[cfg(feature = "parallel")]
+            {
+                rayon::join(
+                    || {
+                        g_left
+                            .into_par_iter()
+                            .zip(g_right.into_par_iter())
+                            .map(|(left, right)| {
+                                multiexp::<S>(&[(inverse, left), (challenge, right)])
+                            })
+                            .collect()
+                    },
+                    || {
+                        h_left
+                            .into_par_iter()
+                            .zip(h_right.into_par_iter())
+                            .map(|(left, right)| {
+                                multiexp::<S>(&[(challenge, left), (inverse, right)])
+                            })
+                            .collect()
+                    },
+                )
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                (
+                    g_left
+                        .into_iter()
+                        .zip(g_right)
+                        .map(|(left, right)| multiexp::<S>(&[(inverse, left), (challenge, right)]))
+                        .collect(),
+                    h_left
+                        .into_iter()
+                        .zip(h_right)
+                        .map(|(left, right)| multiexp::<S>(&[(challenge, left), (inverse, right)]))
+                        .collect(),
+                )
+            }
+        };
         p = left.scale(challenge.square()) + p + right.scale(inverse.square());
         a = (a_left * challenge) + &(a_right * inverse);
         b = (b_left * inverse) + &(b_right * challenge);
@@ -2479,19 +2661,25 @@ mod secret_cleanup_tests {
             }
             secret.evaluate().expect("complete secret MSM")
         };
+        #[cfg(feature = "parallel")]
         let single_thread = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
             .expect("single-thread Rayon pool")
             .install(&evaluate_secret);
-        let four_threads = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .expect("four-thread Rayon pool")
-            .install(&evaluate_secret);
+        #[cfg(not(feature = "parallel"))]
+        let single_thread = evaluate_secret();
         assert_eq!(single_thread, expected);
-        assert_eq!(four_threads, expected);
-        assert_eq!(single_thread.encode(), four_threads.encode());
+        #[cfg(feature = "parallel")]
+        {
+            let four_threads = rayon::ThreadPoolBuilder::new()
+                .num_threads(4)
+                .build()
+                .expect("four-thread Rayon pool")
+                .install(&evaluate_secret);
+            assert_eq!(four_threads, expected);
+            assert_eq!(single_thread.encode(), four_threads.encode());
+        }
     }
 
     #[test]
@@ -2781,18 +2969,24 @@ mod secret_cleanup_tests {
             .expect("symbolic-H tracking proof");
             transcript.0
         };
+        #[cfg(feature = "parallel")]
         let single_thread = rayon::ThreadPoolBuilder::new()
             .num_threads(1)
             .build()
             .expect("single-thread Rayon pool")
             .install(&prove);
-        let four_threads = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .expect("four-thread Rayon pool")
-            .install(&prove);
+        #[cfg(not(feature = "parallel"))]
+        let single_thread = prove();
         assert!(!single_thread.is_empty());
-        assert_eq!(single_thread, four_threads);
+        #[cfg(feature = "parallel")]
+        {
+            let four_threads = rayon::ThreadPoolBuilder::new()
+                .num_threads(4)
+                .build()
+                .expect("four-thread Rayon pool")
+                .install(&prove);
+            assert_eq!(single_thread, four_threads);
+        }
     }
 
     #[test]

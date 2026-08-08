@@ -34,8 +34,10 @@ fixtures and emits the following files under `fixtures/sorafs_chunker/`:
 - `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
 - `manifest_signatures.json` — Council signatures (Ed25519) over the manifest
   digest.
-- `sf1_profile_v1_backpressure.json` and raw corpora inside `fuzz/` —
-  deterministic streaming scenarios used by chunker back-pressure tests.
+- `fuzz/sorafs_chunker/sf1_profile_v1_{input.bin,backpressure.json}` —
+  deterministic generated input/scenario fixtures consumed by
+  `crates/sorafs_chunker/tests/backpressure.rs`; they are not evidence that a
+  libFuzzer target ran.
 
 ### Signing Policy
 

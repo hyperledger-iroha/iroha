@@ -243,7 +243,7 @@ Python tooling and tests can produce deterministic, interoperable payloads.
 - Maps and tuples built from composable adapters
 - Schema hash helpers (type-name and structural) matching Rust's canonical JSON hashing
 - Columnar (NCB) helpers and adaptive AoS/NCB selection for string, optional
-  string/u32, raw-bytes, and enum row layouts
+  string/u32, raw byte, and enum row layouts
 
 ## Rust trait parity
 The Python adapters track the Rust core traits `NoritoSerialize` and
@@ -255,7 +255,8 @@ sees the same semantics that the refreshed `norito.md` documents.
 ### Current scope
 - Columnar helpers cover `(u64, value, bool)` rows whose value is a string,
   optional string, optional u32, raw bytes, or an enum name/code.
-- Zstandard compression is optional and raises a clear error when the backend is missing.
+- Zstandard compression is optional and raises a clear error when the backend
+  is missing.
 
 ## Installation
 Install directly from the workspace root:

@@ -1,8 +1,6 @@
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
-#if canImport(CryptoKit)
-import CryptoKit
-#endif
 
 final class ConnectQueueJournalTests: XCTestCase {
     func testAppendAndReadRecords() throws {
@@ -315,7 +313,6 @@ final class ConnectQueueJournalTests: XCTestCase {
     }
 
     func testSessionDirectoryUsesSha256Component() throws {
-        #if canImport(CryptoKit)
         try requireBlake3()
         let tmp = makeTemporaryDirectory()
         let sessionID = Data("session-5".utf8)
@@ -335,9 +332,6 @@ final class ConnectQueueJournalTests: XCTestCase {
             .appendingPathComponent(hex, isDirectory: true)
             .appendingPathComponent("app_to_wallet.queue", isDirectory: false)
         XCTAssertTrue(FileManager.default.fileExists(atPath: queueURL.path))
-        #else
-        throw XCTSkip("CryptoKit unavailable")
-        #endif
     }
 
     private func makeTemporaryDirectory() -> URL {

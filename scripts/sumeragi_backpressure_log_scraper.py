@@ -565,7 +565,7 @@ def run_self_tests() -> bool:
                     load_status_metrics(Path(handle.name))
 
             status["restart_required"] = False
-            status["protocol_version"] = 1
+            status["protocol_version"] = 3
             with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
                 json.dump(status, handle)
                 handle.flush()

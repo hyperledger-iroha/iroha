@@ -45,9 +45,12 @@ and socket. Adjust group mappings as needed for your environment.
 
 ## Canonical Iroha artefacts
 
-The first-release workspace emits one canonical client/daemon pair: `iroha` and
-`irohad`. Run `make build`, or set a deployment profile explicitly with
-`BUILD_PROFILE=deploy bash scripts/build_line.sh`.
+The first-release workspace emits the canonical `iroha` client, `irohad`
+validator daemon, and standalone `sorafs_governance_dag` service. Run
+`make build`, or set a deployment profile explicitly with
+`BUILD_PROFILE=deploy bash scripts/build_line.sh`. Deterministic release bundles
+and generic runtime images include all three; the Governance service still
+requires its exact deployment-owned runtime-provider broker and public config.
 
 Generators, probes, fixture refreshers, and evidence programs are excluded from
 ordinary workspace builds. Invoke those targets explicitly with their documented

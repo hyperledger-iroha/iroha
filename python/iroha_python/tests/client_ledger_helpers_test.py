@@ -14,16 +14,13 @@ import requests
 import iroha_python.client as client_module
 
 from iroha_python import (
-    CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
     AccountAsset,
     AccountAssetsPage,
     AssetHolderRecord,
     ContractCallIntent,
     DataEventFilter,
     Ed25519KeyPair,
-    ExplorerCursorMeta,
     ExplorerRwaRecord,
-    ExplorerRwasPage,
     Instruction,
     KotodamaQuantity,
     LocalSigningContext,
@@ -33,7 +30,6 @@ from iroha_python import (
     TransactionDraft,
     UaidPortfolioAsset,
     authority_fee_payment,
-    decode_cancel_asset_lock_v1,
 )
 from iroha_python._privacy_backends import (
     _VERIFIER_BACKEND_REGISTRY_LABELS_V1,
@@ -802,118 +798,6 @@ def test_typed_quantity_readback_rejects_oversized_alternate_before_bigint_parsi
                 "quantity": "1." + "0" * 10_000,
             }
         )
-
-
-@pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, None])
-def test_asset_balance_rejects_noncanonical_or_untyped_quantities(quantity: object) -> None:
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "items": [
-                        {
-                            "asset_id": "canonical-ds-id#adult@is",
-                            "asset_alias": "ds#wonderland.is",
-                            "quantity": quantity,
-                        }
-                    ],
-                    "total": 1,
-                },
-            )
-        ]
-    )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    with pytest.raises((TypeError, ValueError)):
-        client.asset_balance("adult@is", "ds#wonderland.is")
-
-
-def test_explorer_rwa_list_uses_strict_cursor_contract() -> None:
-    cursor = base64.urlsafe_b64encode(b"canonical explorer cursor").rstrip(b"=").decode()
-    payload = {
-        "pagination": {"limit": 2, "next_cursor": cursor, "has_more": True},
-        "items": [
-            {
-                "id": "lot-001$commodities",
-                "owned_by": "account",
-                "quantity": "10",
-                "held_quantity": "2",
-                "primary_reference": "warehouse-1",
-                "status": None,
-                "is_frozen": False,
-                "metadata": {},
-            }
-        ],
-    }
-    session = FakeSession([response(200, payload)])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    page = client.list_explorer_rwas_typed(
-        cursor=cursor,
-        limit=2,
-        owned_by="account",
-        domain="commodities",
-    )
-
-    assert page.pagination == ExplorerCursorMeta(
-        limit=2,
-        next_cursor=cursor,
-        has_more=True,
-    )
-    assert [item.id for item in page.items] == ["lot-001$commodities"]
-    assert session.calls[0]["params"] == {
-        "cursor": cursor,
-        "limit": 2,
-        "owned_by": "account",
-        "domain": "commodities",
-    }
-
-
-@pytest.mark.parametrize("limit", [0, 101, True, 1.5])
-def test_explorer_rwa_list_rejects_invalid_limit_before_dispatch(limit: object) -> None:
-    session = FakeSession([])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    with pytest.raises((TypeError, ValueError)):
-        client.list_explorer_rwas(limit=limit)  # type: ignore[arg-type]
-    assert session.calls == []
-
-
-@pytest.mark.parametrize("cursor", ["", "padded=", "a", "contains space"])
-def test_explorer_rwa_list_rejects_noncanonical_cursor_before_dispatch(cursor: str) -> None:
-    session = FakeSession([])
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    with pytest.raises(ValueError, match="cursor"):
-        client.list_explorer_rwas(cursor=cursor)
-    assert session.calls == []
-
-
-def test_explorer_cursor_response_rejects_retired_or_inconsistent_fields() -> None:
-    with pytest.raises(TypeError, match="exactly"):
-        ExplorerCursorMeta.from_payload(
-            {"page": 1, "per_page": 25, "total_pages": 1, "total_items": 0}
-        )
-    with pytest.raises(ValueError, match="next_cursor"):
-        ExplorerCursorMeta.from_payload(
-            {"limit": 25, "next_cursor": None, "has_more": True}
-        )
-    with pytest.raises(TypeError, match="unknown"):
-        ExplorerRwasPage.from_payload(
-            {
-                "pagination": {"limit": 25, "next_cursor": None, "has_more": False},
-                "items": [],
-                "total_items": 0,
-            }
-        )
-
-
-def test_explorer_rwa_list_hard_cuts_retired_page_arguments() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
-
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        client.list_explorer_rwas(page=1, per_page=25)  # type: ignore[call-arg]
 
 
 def test_get_asset_definition_returns_none_for_missing_definition() -> None:

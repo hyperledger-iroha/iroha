@@ -307,6 +307,7 @@ impl NoritoFieldAttrs {
     fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
         let mut parsed = Self::default();
         let mut skip = false;
+        let mut required = false;
         let mut default = false;
         let mut skip_serializing_if = false;
         let mut with = false;
@@ -332,6 +333,14 @@ impl NoritoFieldAttrs {
                         return Err(meta.error("duplicate `skip` attribute"));
                     }
                     skip = true;
+                } else if meta.path.is_ident("required") {
+                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+                        return Err(meta.error("`required` does not take a value"));
+                    }
+                    if required {
+                        return Err(meta.error("duplicate `required` attribute"));
+                    }
+                    required = true;
                 } else if meta.path.is_ident("default") {
                     if default {
                         return Err(meta.error("duplicate `default` attribute"));
@@ -1010,6 +1019,24 @@ mod tests {
                 .to_string()
                 .contains("duplicate reuse_archived attribute")
         );
+    }
+
+    #[test]
+    fn required_json_field_marker_is_accepted_and_validated() {
+        let field: syn::Field = parse_quote! {
+            #[norito(required)]
+            value: Option<u32>
+        };
+        NoritoFieldAttrs::from_attributes(&field.attrs)
+            .expect("schema derive accepts the JSON-only required marker");
+
+        let duplicate: syn::Field = parse_quote! {
+            #[norito(required, required)]
+            value: Option<u32>
+        };
+        let error = NoritoFieldAttrs::from_attributes(&duplicate.attrs)
+            .expect_err("duplicate required marker must reject");
+        assert!(error.to_string().contains("duplicate `required` attribute"));
     }
 }
 

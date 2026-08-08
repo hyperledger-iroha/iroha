@@ -75,7 +75,11 @@ Roadmap note: the SoraNet Anonymity Overlay items called out above map directly 
 Perform these steps for every release candidate and attach the resulting artefacts
 to the approval record:
 
-1. **Fixture smoke:** Run `ci/sdk_sorafs_orchestrator.sh`. It replays the shared `multi_peer_parity_v1` fixture through the Rust, JS (Node), Python (native module), and Swift harnesses to ensure all SDKs ship the orchestrator bindings.
+1. **Fixture smoke:** Run `ci/sdk_sorafs_orchestrator.sh`. It replays the
+   shared `multi_peer_parity_v1` fixture through the Rust, JS (Node), Python
+   (native module), and Swift harnesses to verify those four orchestrator
+   lanes. It does not cover Kotlin/JVM, mirrored Java Android, or C#, and it is
+   not live provider-ingest or deployment-qualification evidence.
    - The script now writes a parity matrix (`artifacts/sorafs_orchestrator_sdk/<timestamp>/matrix.md`) alongside the machine-readable summary (`summary.json`) and snapshots the fixture JSONs used for the run. Include both artefacts (and the `fixture/` copy) in the release evidence so reviewers can see which SDKs passed, how long each run took, and which commands/tests were executed.
    - CI option: trigger or reference the `sorafs-orchestrator-sdk` GitHub Actions workflow (`.github/workflows/sorafs-orchestrator-sdk.yml`) for the release candidate; download the uploaded artefact bundle in lieu of running the script locally.
 2. **CLI adoption evidence:** Execute `ci/check_sorafs_orchestrator_adoption.sh`. The helper replays the canonical fixture with `sorafs_fetch`, captures `scoreboard.json`/`summary.json`/`provider_metrics.json` under `artifacts/sorafs_orchestrator/<stamp>/`, and then runs `cargo xtask sorafs-adoption-check --require-telemetry --require-telemetry-region --scoreboard <...>/scoreboard.json --summary <...>/summary.json --report <...>/adoption_report.json` so the gate fails whenever captures drift from multi-source expectations. Use the following checklist for every run:

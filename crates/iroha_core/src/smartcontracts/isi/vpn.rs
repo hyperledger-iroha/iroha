@@ -280,28 +280,22 @@ fn ensure_canonical_quote_policy(
     ensure_relay_trust_covers_lease(&policy.relay_id, policy, body.expires_at_ms)
 }
 
-fn vpn_quote_operator_is_authorized(
+fn vpn_quote_operator_is_authorized<W: WorldReadOnly>(
     operator_account_id: &AccountId,
-    state_transaction: &StateTransaction<'_, '_>,
+    world: &W,
 ) -> Result<bool, Error> {
     let required_permission: Permission = CanIssueSoranetVpnQuote.into();
-    Ok(state_transaction
-        .world
+    Ok(world
         .account_permissions_iter(operator_account_id)?
         .into_iter()
         .any(|permission| permission == &required_permission)
-        || state_transaction
-            .world
+        || world
             .account_roles_iter(operator_account_id)
             .any(|role_id| {
-                state_transaction
-                    .world
-                    .roles
-                    .get(role_id)
-                    .is_some_and(|role| {
-                        role.permissions()
-                            .any(|permission| permission == &required_permission)
-                    })
+                world.roles().get(role_id).is_some_and(|role| {
+                    role.permissions()
+                        .any(|permission| permission == &required_permission)
+                })
             }))
 }
 
@@ -320,7 +314,7 @@ fn verify_operator_quote(
         )));
     }
     let body = &quote.body;
-    if !vpn_quote_operator_is_authorized(&body.operator_account_id, state_transaction)? {
+    if !vpn_quote_operator_is_authorized(&body.operator_account_id, &state_transaction.world)? {
         return Err(validation_err(
             "vpn quote signer does not hold CanIssueSoranetVpnQuote",
         ));
@@ -481,13 +475,9 @@ fn client_asset(record: &VpnLeaseRecordV1) -> AssetId {
 ///
 /// Rekeying or unregistering such an account would invalidate the signed
 /// client binding and make the eventual escrow refund undeliverable.
-pub(crate) fn is_active_vpn_client(
-    state_transaction: &StateTransaction<'_, '_>,
-    account_id: &AccountId,
-) -> bool {
-    state_transaction
-        .world
-        .vpn_active_lease_by_account
+pub(crate) fn is_active_vpn_client<W: WorldReadOnly>(world: &W, account_id: &AccountId) -> bool {
+    world
+        .vpn_active_lease_by_account()
         .get(account_id)
         .is_some()
 }
@@ -1209,7 +1199,7 @@ mod tests {
         transaction.world.accounts.insert(id, value);
 
         assert!(
-            !vpn_quote_operator_is_authorized(&operator, &transaction)
+            !vpn_quote_operator_is_authorized(&operator, &transaction.world)
                 .expect("registered operator lookup")
         );
 
@@ -1219,7 +1209,7 @@ mod tests {
             std::collections::BTreeSet::from([required.clone()]),
         );
         assert!(
-            vpn_quote_operator_is_authorized(&operator, &transaction)
+            vpn_quote_operator_is_authorized(&operator, &transaction.world)
                 .expect("direct issuer lookup")
         );
 
@@ -1237,7 +1227,8 @@ mod tests {
             (),
         );
         assert!(
-            vpn_quote_operator_is_authorized(&operator, &transaction).expect("role issuer lookup")
+            vpn_quote_operator_is_authorized(&operator, &transaction.world)
+                .expect("role issuer lookup")
         );
     }
 
@@ -1301,7 +1292,7 @@ mod tests {
             .put_vpn_lease(active.clone())
             .expect("active lease is indexed");
         assert!(is_active_vpn_client(
-            &transaction,
+            &transaction.world,
             &active.client_account_id
         ));
         assert_eq!(
@@ -1330,7 +1321,7 @@ mod tests {
                 .is_none()
         );
         assert!(!is_active_vpn_client(
-            &transaction,
+            &transaction.world,
             &active.client_account_id
         ));
         let error = transaction

@@ -3222,7 +3222,7 @@ impl ServicedCandidateCapacityGeometry {
 // Standalone adapter fixtures are paired with the existing 1024-command and
 // 1024-effect test defaults. Production construction always supplies the
 // validated height configuration explicitly through the runner.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 const DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY: ServicedCandidateCapacityGeometry =
     ServicedCandidateCapacityGeometry::new(MAX_DEFERRED_INPUTS, MAX_DEFERRED_INPUTS);
 
@@ -3253,7 +3253,7 @@ const fn candidate_lifecycle_capacity(
 /// dormant durable replay, and the disjoint timeout clock. Multiplying by the
 /// exact eleven-class reducer-event projection also covers a retained service
 /// marker while the same causal lifecycle remains active.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 const fn serviced_candidate_capacity_with_geometry(
     roster_len: usize,
     geometry: ServicedCandidateCapacityGeometry,
@@ -3806,7 +3806,7 @@ impl SumeragiV2Adapter {
     /// Network ingress is never exposed before replay has completed.  The
     /// returned startup effects may re-sign an already durable intent or fetch
     /// and apply an already durable decision.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         wal_path: impl Into<PathBuf>,
@@ -3866,7 +3866,7 @@ impl SumeragiV2Adapter {
     /// a `Running` successor handoff. It must publish a status snapshot after
     /// every remaining startup constructor succeeds, live clocks are armed,
     /// and authenticated ingress is open. All ordinary callers use [`Self::open`].
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status(
         wal_path: impl Into<PathBuf>,
@@ -3916,7 +3916,7 @@ impl SumeragiV2Adapter {
         )
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator(
         wal_path: impl Into<PathBuf>,
@@ -3941,7 +3941,7 @@ impl SumeragiV2Adapter {
         )
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator_and_publication(
         wal_path: impl Into<PathBuf>,
@@ -9917,7 +9917,7 @@ impl SumeragiV2Adapter {
     /// `None` means no owner was serviceable. Production runtime code treats a
     /// `None` after observing [`Self::deferred_work_is_serviceable`] as a
     /// fail-closed source-fidelity violation.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn drain_deferred_with_evidence(
         &mut self,
     ) -> Result<Option<(Vec<AdapterEffect>, DeferredServiceEvidence)>, AdapterError> {
@@ -9933,7 +9933,7 @@ impl SumeragiV2Adapter {
     /// class rotation only within the resulting exact set, so a later
     /// Completion, Progress, or Normal occurrence cannot overtake a frozen
     /// causal owner merely because it occupies the cursor's next class.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn drain_deferred_with_evidence_for_ordinals(
         &mut self,
         eligible: &BTreeSet<u128>,
@@ -12219,140 +12219,7 @@ mod tests {
         VerifiedHeightContext::genesis(context, proofs).expect("verified genesis context")
     }
 
-    #[test]
-    fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
-        let _guard = crate::sumeragi::status::rbc_status_test_guard();
-        crate::sumeragi::status::clear_v2_status();
-        let directory = TempDir::new().expect("temporary directory");
-        let context = context();
-        let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
-            directory.path().join("deferred-status.wal"),
-            verified_genesis(context.clone()),
-            None,
-            reducer::Generation::new(context.height),
-            [0xA6; 32],
-            AdapterFingerprints {
-                node: Hash::new(b"deferred node"),
-                build: Hash::new(b"deferred build"),
-                config: Hash::new(b"deferred config"),
-            },
-            DeferredAdmissionOrdinalSource::new(1),
-        )
-        .expect("open replayed adapter without status publication");
-
-        assert!(startup.is_empty());
-        assert!(
-            crate::sumeragi::status::v2_status().is_none(),
-            "successor replay must remain invisible while its remaining constructors are fallible"
-        );
-        let prepared = adapter
-            .successor_activation_status()
-            .expect("prepare reducer-owned activation snapshot");
-        assert_eq!(prepared.height, context.height);
-        assert!(matches!(
-            prepared.liveness.last_progress,
-            Some(wire::SumeragiV2ProgressTransitionStatus {
-                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-                ..
-            })
-        ));
-        assert!(
-            crate::sumeragi::status::v2_status().is_none(),
-            "preparing a snapshot is not publication"
-        );
-        crate::sumeragi::status::set_v2_status(prepared);
-
-        let stale_tag = reducer::EventTag::new(
-            context.height,
-            0,
-            reducer::Generation::new(context.height.saturating_sub(1)),
-        );
-        let ignored = adapter
-            .retransmit_elapsed(stale_tag)
-            .expect("publish an ignored post-activation retransmission");
-        assert_eq!(
-            ignored.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::StaleGeneration)
-        );
-        let republished = crate::sumeragi::status::v2_status().expect("republished status");
-        assert!(matches!(
-            republished.liveness.last_progress,
-            Some(wire::SumeragiV2ProgressTransitionStatus {
-                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-                ..
-            })
-        ));
-        crate::sumeragi::status::clear_v2_status();
-    }
-
-    #[test]
-    fn executable_leader_rotation_matches_the_canonical_wire_context() {
-        let wire_context = context();
-        let mut registry = WireRegistry::new(&wire_context).expect("wire registry");
-        let core_context = registry
-            .core_context(&wire_context)
-            .expect("executable context");
-
-        for view in 0..=100 {
-            let wire_leader = wire_context.leader(view);
-            assert_eq!(
-                registry
-                    .validator_index(core_context.leader(view))
-                    .expect("core leader maps to wire roster"),
-                wire_leader,
-                "leader mismatch in view {view}"
-            );
-        }
-    }
-
-    #[test]
-    fn successor_core_context_preserves_the_parent_certificate_binding() {
-        let parent_context = context();
-        let parent_round = wire::ConsensusRound {
-            context_id: parent_context.id(),
-            height: parent_context.height,
-            view: 3,
-        };
-        let parent_qc = wire::QuorumCertificate {
-            round: parent_round,
-            proposal_round: parent_round,
-            phase: wire::GlobalPhase::Commit,
-            subject: subject(0x6d),
-            execution_commitment: execution_commitment(0x6d),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0x6d; 48],
-        };
-        let mut successor = parent_context.clone();
-        successor.height += 1;
-        successor.parent_commit_qc = Some(parent_qc);
-        successor.validate().expect("structural successor context");
-        let successor_id = successor.id();
-
-        let mut registry = WireRegistry::new(&successor).expect("successor wire registry");
-        let core_context = registry
-            .core_context(&successor)
-            .expect("parent-bound successor context");
-        let core_parent = core_context
-            .parent_commit()
-            .expect("successor retains its parent CommitQC");
-
-        assert_eq!(core_parent.context_id(), context_id(parent_context.id()));
-        assert_ne!(core_parent.context_id(), context_id(successor_id));
-        assert_eq!(core_parent.round().height(), parent_context.height);
-        assert_eq!(core_parent.proposal_round().view(), parent_round.view);
-
-        let parent_reference = successor
-            .parent_commit_qc
-            .as_ref()
-            .expect("successor parent CommitQC")
-            .as_ref();
-        assert!(matches!(
-            registry.qc_reference_to_core(&parent_reference),
-            Err(AdapterError::WireValidation(
-                wire::ValidationError::WrongHeightContext
-            ))
-        ));
-    }
+    include!("tests/v2_adapter_activation_context.rs");
 
     #[cfg(feature = "bls")]
     fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) {
@@ -12890,10 +12757,11 @@ mod tests {
     }
 
     fn execution_commitment(byte: u8) -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_topups(
+        wire::ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new([byte, 3]),
             Hash::new([byte, 4]),
             Hash::new([byte, 5]),
+            1,
             Hash::new([byte, 6]),
         )
     }
@@ -14063,10 +13931,11 @@ mod tests {
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: body_subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"coalescence parent state"),
                 Hash::new(b"coalescence post state"),
                 Hash::new(b"coalescence writes"),
+                1,
                 Hash::new(b"coalescence executed block"),
             ),
             signers: vec![0, 1, 2],
@@ -14250,10 +14119,11 @@ mod tests {
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: body_subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new(b"stage-seven parent state"),
                 Hash::new(b"stage-seven post state"),
                 Hash::new(b"stage-seven writes"),
+                1,
                 Hash::new(b"stage-seven executed block"),
             ),
             signers: vec![0, 1, 2],
@@ -14435,10 +14305,11 @@ mod tests {
             proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject: body_subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
                 Hash::new([marker, 3]),
                 Hash::new([marker, 4]),
                 Hash::new([marker, 5]),
+                1,
                 Hash::new([marker, 6]),
             ),
             signers: vec![0, 1, 2],

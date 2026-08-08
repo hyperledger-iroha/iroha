@@ -18,6 +18,7 @@ CONTRACT_FIXTURE_PATHS = (
     "crates/iroha_torii/src/sorafs/gateway/acme.rs",
     "crates/iroha_torii/src/lib.rs",
     "crates/irohad/src/main.rs",
+    "crates/irohad/src/main/runtime_deps.rs",
     "xtask/src/sorafs.rs",
     "specs/sorafs_gateway_tls_automation.md",
 )
@@ -103,12 +104,26 @@ def test_guard_rejects_missing_daemon_runtime_forwarding(tmp_path: Path) -> None
         "runtime_deps",
         1,
     )
+    text = text.replace(
+        'include!("main/runtime_deps.rs");',
+        '// runtime dependency module omitted',
+        1,
+    )
     irohad.write_text(text, encoding="utf-8")
 
-    assert (
-        "irohad:missing-compliance-transport-forwarding"
-        in MODULE.check_contract(root)
+    runtime_deps = root / "crates/irohad/src/main/runtime_deps.rs"
+    text = runtime_deps.read_text(encoding="utf-8")
+    text = text.replace(
+        "pub fn with_sorafs_gateway_acme_client(",
+        "pub fn without_sorafs_gateway_acme_client(",
+        1,
     )
+    runtime_deps.write_text(text, encoding="utf-8")
+
+    failures = MODULE.check_contract(root)
+    assert "irohad:missing-runtime-deps-module" in failures
+    assert "irohad:missing-runtime-acme-injection" in failures
+    assert "irohad:missing-compliance-transport-forwarding" in failures
 
 
 def test_guard_rejects_missing_acme_identity_fences(tmp_path: Path) -> None:

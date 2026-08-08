@@ -1812,14 +1812,15 @@ fn query_event_by_source_id(
     query: &FindSorafsReputationJournalEventBySourceId,
     state_ro: &impl StateReadOnly,
 ) -> Result<ReputationJournalFinalizedEventV1, QueryExecutionFail> {
-    if query.source_id == ReputationJournalSourceIdV1::ZERO {
+    let source_id = query.source_id();
+    if source_id == ReputationJournalSourceIdV1::ZERO {
         return Err(QueryExecutionFail::Conversion(
             "reputation source identifier must be non-zero".to_owned(),
         ));
     }
     let actual_finalized_cursor = finalized_cursor(state_ro)?;
     if query
-        .expected_finalized_cursor
+        .expected_finalized_cursor()
         .is_some_and(|expected| expected != actual_finalized_cursor)
     {
         return Err(QueryExecutionFail::Expired);
@@ -1829,10 +1830,10 @@ fn query_event_by_source_id(
     if let Some(journal_head) = journal_head {
         validate_finalized_journal_terminal(state_ro, journal_head, actual_finalized_cursor)?;
     }
-    let source_head = read_source_head(state_ro.world(), query.source_id).map_err(query_failure)?;
+    let source_head = read_source_head(state_ro.world(), source_id).map_err(query_failure)?;
     let Some(source_head) = source_head else {
         return Err(QueryExecutionFail::Find(
-            FindError::SorafsReputationJournalEvent(query.source_id),
+            FindError::SorafsReputationJournalEvent(source_id),
         ));
     };
     let journal_head = journal_head.ok_or_else(|| {
@@ -1847,7 +1848,7 @@ fn query_event_by_source_id(
                 "reputation source head points to a missing event".to_owned(),
             )
         })?;
-    if record.entry.source_id != query.source_id
+    if record.entry.source_id != source_id
         || record.entry.source_kind() != source_head.source_kind
         || record.entry.source_revision != source_head.source_revision
         || record.entry.event_id != source_head.event_id

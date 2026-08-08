@@ -484,11 +484,11 @@ def _validate_plan(plan: dict[str, Any], matrix: MatrixContract, *, release: boo
     )
     if (
         provider["transport"] != "stock-local-runtime-provider-broker-v1"
-        or not _exact_integer(provider["slot_wire_id"], 54)
+        or not _exact_integer(provider["slot_wire_id"], 56)
         or provider["handle"] != EXPECTED_PROVIDER_HANDLE
         or not _exact_integer(provider["revision"], 1)
     ):
-        _fail("Bootle/Lantern must use the exact stock broker slot-54 public binding")
+        _fail("Bootle/Lantern must use the exact stock broker slot-56 public binding")
     _fixed_sha256(
         provider["qualification_policy_digest_hex"],
         "Bootle/Lantern provider qualification digest",

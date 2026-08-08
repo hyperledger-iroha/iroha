@@ -360,29 +360,53 @@ impl EpochBloom {
 
 #[cfg(test)]
 mod tests {
-    use sorafs_car::PorMerkleTree;
-    use sorafs_node::store::{StoredManifestParts, StoredPorTree};
+    use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
+    use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
+    use sorafs_node::{config::StorageConfig, store::StorageBackend};
 
     use super::*;
 
-    fn manifest_with_cid(cid: &[u8], id_hex: &str) -> StoredManifest {
-        StoredManifest::from_parts(StoredManifestParts {
-            manifest_id: id_hex.to_string(),
-            manifest_cid: cid.to_vec(),
-            manifest_digest: [0u8; 32],
-            payload_digest: [0u8; 32],
-            content_length: 0,
-            chunk_profile_handle: "sorafs.test@1.0.0".to_string(),
-            stripe_layout: None,
-            stored_at_unix_secs: 0,
-            retention_epoch: 0,
-            retention_source: None,
-            last_access: 0,
-            files: Vec::new(),
-            chunk_files: Vec::new(),
-            por_tree: StoredPorTree::from(&PorMerkleTree::empty()),
-            manifest_path: PathBuf::from("/tmp/manifest"),
-        })
+    fn storage_backend(temp_dir: &tempfile::TempDir) -> StorageBackend {
+        StorageBackend::new(
+            StorageConfig::builder()
+                .enabled(true)
+                .data_dir(temp_dir.path().join("storage"))
+                .build(),
+        )
+        .expect("open canonical test storage")
+    }
+
+    fn ingest_test_manifest(backend: &StorageBackend, payload: &[u8]) -> StoredManifest {
+        let plan = CarBuildPlan::single_file(payload).expect("build canonical manifest plan");
+        let car_stats = CarWriter::new(&plan, payload)
+            .expect("construct canonical CAR writer")
+            .write_to(std::io::sink())
+            .expect("derive canonical CAR metadata");
+        let manifest = ManifestBuilder::new()
+            .root_cid(
+                car_stats
+                    .root_cids
+                    .first()
+                    .cloned()
+                    .expect("canonical CAR root"),
+            )
+            .dag_codec(DagCodecId(car_stats.dag_codec))
+            .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(compute_por_root(payload, &plan).expect("derive canonical PoR root"))
+            .content_length(plan.content_length)
+            .car_digest(*car_stats.car_archive_digest.as_bytes())
+            .car_size(car_stats.car_size)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("build canonical manifest");
+        let mut reader = payload;
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest canonical manifest");
+        backend
+            .manifest(&manifest_id)
+            .expect("read back canonical stored manifest")
     }
 
     #[test]
@@ -420,11 +444,13 @@ mod tests {
 
         let schedule = Arc::new(SaltSchedule::load_from_dir(dir.path()).expect("schedule"));
         let resolver = BlindedCidResolver::new(schedule);
+        let backend = storage_backend(&dir);
 
         let manifests = vec![
-            manifest_with_cid(b"cid-alpha", "cafebabe"),
-            manifest_with_cid(b"cid-beta", "deadbeef"),
+            ingest_test_manifest(&backend, b"cid-alpha"),
+            ingest_test_manifest(&backend, b"cid-beta"),
         ];
+        let expected_manifest_id = manifests[1].manifest_id().to_owned();
 
         let salt = resolver.schedule.salt(42).expect("salt");
         let canonical = canonical_cache_key(&salt, manifests[1].manifest_cid());
@@ -434,13 +460,13 @@ mod tests {
         let hit = resolver
             .resolve_manifest_id(&manifests, 42, &blinded)
             .expect("resolution");
-        assert_eq!(hit.as_deref(), Some("deadbeef"));
+        assert_eq!(hit.as_deref(), Some(expected_manifest_id.as_str()));
 
         // Cached lookups should not require manifest iteration.
         let cached = resolver
             .resolve_manifest_id(&[], 42, &blinded)
             .expect("cached resolution");
-        assert_eq!(cached.as_deref(), Some("deadbeef"));
+        assert_eq!(cached.as_deref(), Some(expected_manifest_id.as_str()));
     }
 
     #[test]
@@ -457,10 +483,11 @@ mod tests {
 
         let schedule = Arc::new(SaltSchedule::load_from_dir(dir.path()).expect("schedule"));
         let resolver = BlindedCidResolver::new(schedule);
+        let backend = storage_backend(&dir);
 
-        let manifests = vec![
-            manifest_with_cid(b"cid-alpha", "aaaabbbb"),
-            manifest_with_cid(b"cid-beta", "ccccdddd"),
+        let mut manifests = vec![
+            ingest_test_manifest(&backend, b"cid-alpha"),
+            ingest_test_manifest(&backend, b"cid-beta"),
         ];
 
         // Prime the bloom filter.
@@ -475,18 +502,21 @@ mod tests {
         }
 
         // Add a new manifest and ensure resolver still returns it.
-        let new_manifest = manifest_with_cid(b"cid-gamma", "eeeeffff");
-        let mut manifests_growth = manifests.clone();
-        manifests_growth.push(new_manifest.clone());
+        let new_manifest = ingest_test_manifest(&backend, b"cid-gamma");
+        let expected_manifest_id = new_manifest.manifest_id().to_owned();
 
         let salt = resolver.schedule.salt(100).expect("salt");
         let canonical_new = canonical_cache_key(&salt, new_manifest.manifest_cid());
         let mut blinded_new = [0u8; BLINDED_CID_LEN];
         blinded_new.copy_from_slice(canonical_new.as_bytes());
+        manifests.push(new_manifest);
 
         let resolved_manifest = resolver
-            .resolve_manifest_id(&manifests_growth, 100, &blinded_new)
+            .resolve_manifest_id(&manifests, 100, &blinded_new)
             .expect("resolution");
-        assert_eq!(resolved_manifest.as_deref(), Some("eeeeffff"));
+        assert_eq!(
+            resolved_manifest.as_deref(),
+            Some(expected_manifest_id.as_str())
+        );
     }
 }

@@ -1265,7 +1265,10 @@ PROOF
       BY <2>2, IsaT(120)
          DEF typedRolloverVars, TypedRolloverSafetyInvariant
     <2> QED BY <2>1, <2>2
-  <1> QED BY <1>1, <1>2, PTL DEF TypedRolloverSpec
+  <1>3. TypedRolloverSafetyInvariant /\ [][Next]_typedRolloverVars
+         => []TypedRolloverSafetyInvariant
+    BY <1>2
+  <1> QED BY <1>1, <1>3, PTL DEF TypedRolloverSpec
 
 (***************************************************************************
 Responsive durable-output corridor.
@@ -1412,7 +1415,7 @@ LOCAL DurableOutputPending10 ==
 LOCAL DurableOutputPending11 ==
   DurableOutputStage11 /\ ~DurableOutputGoal
 
-LOCAL THEOREM ResponsiveDurableOutputInitEstablishesCorridorBase ==
+THEOREM ResponsiveDurableOutputInitEstablishesCorridorBase ==
   ResponsiveDurableExactOutputInit => DurableOutputCorridorBase
 BY TypedRolloverInitEstablishesSafetyObligation, IsaT(600)
    DEF ResponsiveDurableExactOutputInit,
@@ -1433,7 +1436,7 @@ BY TypedRolloverInitEstablishesSafetyObligation, IsaT(600)
        LifecycleRootV3, LifecycleSnapshotDigest,
        LifecycleStateSlot, NoLifecycleSnapshot
 
-LOCAL THEOREM ResponsiveDurableOutputStepPreservesCorridorBase ==
+THEOREM ResponsiveDurableOutputStepPreservesCorridorBase ==
   /\ DurableOutputCorridorBase
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => DurableOutputCorridorBase'
@@ -1478,7 +1481,7 @@ PROOF
        DEF typedRolloverVars, DurableOutputCorridorBase
   <1> QED BY <1>1, <1>2
 
-LOCAL THEOREM ResponsiveDurableOutputAlwaysCorridorBase ==
+THEOREM ResponsiveDurableOutputAlwaysCorridorBase ==
   ResponsiveDurableExactOutputSpec => []DurableOutputCorridorBase
 PROOF
   <1>1. ResponsiveDurableExactOutputInit =>
@@ -1488,10 +1491,14 @@ PROOF
          /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
          => DurableOutputCorridorBase'
     BY ResponsiveDurableOutputStepPreservesCorridorBase
-  <1> QED BY <1>1, <1>2, PTL
+  <1>3. DurableOutputCorridorBase
+         /\ [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+         => []DurableOutputCorridorBase
+    BY <1>2
+  <1> QED BY <1>1, <1>3, PTL
        DEF ResponsiveDurableExactOutputSpec
 
-LOCAL THEOREM DurableOutputPending0IsNotOrphaned ==
+THEOREM DurableOutputPending0IsNotOrphaned ==
   /\ DurableOutputPending0
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending0'
@@ -1513,7 +1520,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending0EnablesCreate ==
+THEOREM DurableOutputPending0EnablesCreate ==
   DurableOutputPending0 =>
     ENABLED <<CreateServiceTransportOwnerPair>>_typedRolloverVars
 BY ExpandENABLED, IsaT(300)
@@ -1528,7 +1535,7 @@ BY ExpandENABLED, IsaT(300)
        PredecessorTransportOwnershipOpen,
        CreateServiceTransportOwnerPair, typedRolloverVars
 
-LOCAL THEOREM DurableOutputCreateExitsPending0 ==
+THEOREM DurableOutputCreateExitsPending0 ==
   /\ DurableOutputPending0
   /\ <<CreateServiceTransportOwnerPair>>_typedRolloverVars
   => DurableOutputStage1'
@@ -1538,7 +1545,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(300)
        CreateServiceTransportOwnerPair, typedRolloverVars,
        ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage0LeadsToStage1 ==
+THEOREM DurableOutputStage0LeadsToStage1 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage0 ~> DurableOutputStage1)
 PROOF
@@ -1579,7 +1586,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending0
 
-LOCAL THEOREM DurableOutputPending1IsNotOrphaned ==
+THEOREM DurableOutputPending1IsNotOrphaned ==
   /\ DurableOutputPending1
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending1'
@@ -1601,7 +1608,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending1EnablesClose ==
+THEOREM DurableOutputPending1EnablesClose ==
   DurableOutputPending1 =>
     ENABLED <<CloseWorkerIngress>>_typedRolloverVars
 BY ExpandENABLED, IsaT(180)
@@ -1611,7 +1618,7 @@ BY ExpandENABLED, IsaT(180)
        DurableExactOutputSuccessorActiveWithoutRestart,
        NoRolloverFailure, CloseWorkerIngress, typedRolloverVars
 
-LOCAL THEOREM DurableOutputCloseExitsPending1 ==
+THEOREM DurableOutputCloseExitsPending1 ==
   /\ DurableOutputPending1
   /\ <<CloseWorkerIngress>>_typedRolloverVars
   => DurableOutputStage2'
@@ -1621,7 +1628,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(180)
        CloseWorkerIngress, typedRolloverVars,
        ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage1LeadsToStage2 ==
+THEOREM DurableOutputStage1LeadsToStage2 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage1 ~> DurableOutputStage2)
 PROOF
@@ -1661,7 +1668,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending1
 
-LOCAL THEOREM DurableOutputPending2IsExactlyFirstClear ==
+THEOREM DurableOutputPending2IsExactlyFirstClear ==
   DurableOutputPending2 => state.workerOutstanding = 2
 BY IsaT(120)
    DEF DurableOutputPending2, DurableOutputStage2,
@@ -1669,7 +1676,7 @@ BY IsaT(120)
        DurableOutputGoal, TypedRolloverSafetyInvariant,
        TypedRolloverTypeInvariant
 
-LOCAL THEOREM DurableOutputPending2IsNotOrphaned ==
+THEOREM DurableOutputPending2IsNotOrphaned ==
   /\ DurableOutputPending2
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending2'
@@ -1692,7 +1699,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase,
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending2EnablesFirstClear ==
+THEOREM DurableOutputPending2EnablesFirstClear ==
   DurableOutputPending2 =>
     ENABLED <<ClearOneWorkerExactOutput>>_typedRolloverVars
 BY DurableOutputPending2IsExactlyFirstClear,
@@ -1703,7 +1710,7 @@ BY DurableOutputPending2IsExactlyFirstClear,
        NoRolloverFailure, ClearOneWorkerExactOutput,
        typedRolloverVars
 
-LOCAL THEOREM DurableOutputFirstClearExitsPending2 ==
+THEOREM DurableOutputFirstClearExitsPending2 ==
   /\ DurableOutputPending2
   /\ <<ClearOneWorkerExactOutput>>_typedRolloverVars
   => /\ state'.workerOutstanding = 1
@@ -1715,7 +1722,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase,
        ClearOneWorkerExactOutput, typedRolloverVars,
        ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage2LeadsToStage3 ==
+THEOREM DurableOutputStage2LeadsToStage3 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage2 ~> DurableOutputStage3)
 PROOF
@@ -1755,7 +1762,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending2
 
-LOCAL THEOREM DurableOutputPending3IsExactlySecondClear ==
+THEOREM DurableOutputPending3IsExactlySecondClear ==
   DurableOutputPending3 => state.workerOutstanding = 1
 BY IsaT(120)
    DEF DurableOutputPending3, DurableOutputStage3,
@@ -1763,7 +1770,7 @@ BY IsaT(120)
        DurableOutputGoal, TypedRolloverSafetyInvariant,
        TypedRolloverTypeInvariant
 
-LOCAL THEOREM DurableOutputPending3IsNotOrphaned ==
+THEOREM DurableOutputPending3IsNotOrphaned ==
   /\ DurableOutputPending3
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending3'
@@ -1786,7 +1793,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase,
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending3EnablesSecondClear ==
+THEOREM DurableOutputPending3EnablesSecondClear ==
   DurableOutputPending3 =>
     ENABLED <<ClearOneWorkerExactOutput>>_typedRolloverVars
 BY DurableOutputPending3IsExactlySecondClear,
@@ -1797,7 +1804,7 @@ BY DurableOutputPending3IsExactlySecondClear,
        NoRolloverFailure, ClearOneWorkerExactOutput,
        typedRolloverVars
 
-LOCAL THEOREM DurableOutputSecondClearExitsPending3 ==
+THEOREM DurableOutputSecondClearExitsPending3 ==
   /\ DurableOutputPending3
   /\ <<ClearOneWorkerExactOutput>>_typedRolloverVars
   => /\ state'.workerOutstanding = 0
@@ -1809,7 +1816,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase,
        ClearOneWorkerExactOutput, typedRolloverVars,
        ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage3LeadsToStage4 ==
+THEOREM DurableOutputStage3LeadsToStage4 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage3 ~> DurableOutputStage4)
 PROOF
@@ -1849,7 +1856,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending3
 
-LOCAL THEOREM DurableOutputPending4IsNotOrphaned ==
+THEOREM DurableOutputPending4IsNotOrphaned ==
   /\ DurableOutputPending4
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending4'
@@ -1870,7 +1877,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending4EnablesBuild ==
+THEOREM DurableOutputPending4EnablesBuild ==
   DurableOutputPending4 =>
     ENABLED <<BuildImmediateSuccessor>>_typedRolloverVars
 BY ExpandENABLED, IsaT(240)
@@ -1880,7 +1887,7 @@ BY ExpandENABLED, IsaT(240)
        NoRolloverFailure, BuildImmediateSuccessor,
        typedRolloverVars
 
-LOCAL THEOREM DurableOutputBuildExitsPending4 ==
+THEOREM DurableOutputBuildExitsPending4 ==
   /\ DurableOutputPending4
   /\ <<BuildImmediateSuccessor>>_typedRolloverVars
   => DurableOutputStage5'
@@ -1890,7 +1897,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(240)
        ExactSuccessorConstruction, BuildImmediateSuccessor,
        typedRolloverVars, ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage4LeadsToStage5 ==
+THEOREM DurableOutputStage4LeadsToStage5 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage4 ~> DurableOutputStage5)
 PROOF
@@ -1930,7 +1937,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending4
 
-LOCAL THEOREM DurableOutputPending5IsNotOrphaned ==
+THEOREM DurableOutputPending5IsNotOrphaned ==
   /\ DurableOutputPending5
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending5'
@@ -1951,7 +1958,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending5EnablesSeal ==
+THEOREM DurableOutputPending5EnablesSeal ==
   DurableOutputPending5 =>
     ENABLED <<SealAppliedHeightOutputHandoff>>_typedRolloverVars
 BY ExpandENABLED, IsaT(300)
@@ -1962,7 +1969,7 @@ BY ExpandENABLED, IsaT(300)
        NoRolloverFailure, SealAppliedHeightOutputHandoff,
        PredecessorTransportOwnershipOpen, typedRolloverVars
 
-LOCAL THEOREM DurableOutputSealExitsPending5 ==
+THEOREM DurableOutputSealExitsPending5 ==
   /\ DurableOutputPending5
   /\ <<SealAppliedHeightOutputHandoff>>_typedRolloverVars
   => DurableOutputStage6'
@@ -1973,7 +1980,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(240)
        SealAppliedHeightOutputHandoff, typedRolloverVars,
        ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage5LeadsToStage6 ==
+THEOREM DurableOutputStage5LeadsToStage6 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage5 ~> DurableOutputStage6)
 PROOF
@@ -2014,7 +2021,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending5
 
-LOCAL THEOREM DurableOutputPending6IsNotOrphaned ==
+THEOREM DurableOutputPending6IsNotOrphaned ==
   /\ DurableOutputPending6
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending6'
@@ -2037,7 +2044,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending6EnablesRetain ==
+THEOREM DurableOutputPending6EnablesRetain ==
   DurableOutputPending6 =>
     ENABLED <<RetainExactHandoffReceipt>>_typedRolloverVars
 BY ExpandENABLED, IsaT(300)
@@ -2048,7 +2055,7 @@ BY ExpandENABLED, IsaT(300)
        NoRolloverFailure, RetainExactHandoffReceipt,
        typedRolloverVars
 
-LOCAL THEOREM DurableOutputRetainExitsPending6 ==
+THEOREM DurableOutputRetainExitsPending6 ==
   /\ DurableOutputPending6
   /\ <<RetainExactHandoffReceipt>>_typedRolloverVars
   => DurableOutputStage7'
@@ -2060,7 +2067,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(300)
        RetainExactHandoffReceipt, typedRolloverVars,
        ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage6LeadsToStage7 ==
+THEOREM DurableOutputStage6LeadsToStage7 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage6 ~> DurableOutputStage7)
 PROOF
@@ -2100,7 +2107,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending6
 
-LOCAL THEOREM DurableOutputPending7IsNotOrphaned ==
+THEOREM DurableOutputPending7IsNotOrphaned ==
   /\ DurableOutputPending7
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending7'
@@ -2121,7 +2128,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending7EnablesStateSlotPublish ==
+THEOREM DurableOutputPending7EnablesStateSlotPublish ==
   DurableOutputPending7 =>
     ENABLED
       <<PublishDurableExactOutputSuccessorLifecycleStateSlotV3>>_
@@ -2136,7 +2143,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleJournalReady, LifecycleMemoryMatchesDurableSnapshotV3,
        typedRolloverVars
 
-LOCAL THEOREM DurableOutputStateSlotPublishExitsPending7 ==
+THEOREM DurableOutputStateSlotPublishExitsPending7 ==
   /\ DurableOutputPending7
   /\ <<PublishDurableExactOutputSuccessorLifecycleStateSlotV3>>_
        typedRolloverVars
@@ -2149,7 +2156,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        LifecycleSnapshotV3, typedRolloverVars,
        ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage7LeadsToStage8 ==
+THEOREM DurableOutputStage7LeadsToStage8 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage7 ~> DurableOutputStage8)
 PROOF
@@ -2196,7 +2203,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending7
 
-LOCAL THEOREM DurableOutputPending8IsNotOrphaned ==
+THEOREM DurableOutputPending8IsNotOrphaned ==
   /\ DurableOutputPending8
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending8'
@@ -2216,7 +2223,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending8EnablesStateDirectorySync ==
+THEOREM DurableOutputPending8EnablesStateDirectorySync ==
   DurableOutputPending8 =>
     ENABLED <<SyncSuccessorLifecycleStateDirectoryV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -2229,7 +2236,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleStateDirectoryIsSynced,
        SyncSuccessorLifecycleStateDirectoryV3, typedRolloverVars
 
-LOCAL THEOREM DurableOutputStateDirectorySyncExitsPending8 ==
+THEOREM DurableOutputStateDirectorySyncExitsPending8 ==
   /\ DurableOutputPending8
   /\ <<SyncSuccessorLifecycleStateDirectoryV3>>_typedRolloverVars
   => DurableOutputStage9'
@@ -2239,7 +2246,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        SyncSuccessorLifecycleStateDirectoryV3,
        typedRolloverVars, ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage8LeadsToStage9 ==
+THEOREM DurableOutputStage8LeadsToStage9 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage8 ~> DurableOutputStage9)
 PROOF
@@ -2283,7 +2290,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending8
 
-LOCAL THEOREM DurableOutputPending9IsNotOrphaned ==
+THEOREM DurableOutputPending9IsNotOrphaned ==
   /\ DurableOutputPending9
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending9'
@@ -2303,7 +2310,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending9EnablesRootReplacement ==
+THEOREM DurableOutputPending9EnablesRootReplacement ==
   DurableOutputPending9 =>
     ENABLED <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -2316,7 +2323,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleRootDirectoryIsSynced,
        ReplaceSuccessorLifecycleRootV3, typedRolloverVars
 
-LOCAL THEOREM DurableOutputRootReplacementExitsPending9 ==
+THEOREM DurableOutputRootReplacementExitsPending9 ==
   /\ DurableOutputPending9
   /\ <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars
   => DurableOutputStage10'
@@ -2326,7 +2333,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        ReplaceSuccessorLifecycleRootV3,
        typedRolloverVars, ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage9LeadsToStage10 ==
+THEOREM DurableOutputStage9LeadsToStage10 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage9 ~> DurableOutputStage10)
 PROOF
@@ -2367,7 +2374,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending9
 
-LOCAL THEOREM DurableOutputPending10IsNotOrphaned ==
+THEOREM DurableOutputPending10IsNotOrphaned ==
   /\ DurableOutputPending10
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending10'
@@ -2387,7 +2394,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending10EnablesRootCommit ==
+THEOREM DurableOutputPending10EnablesRootCommit ==
   DurableOutputPending10 =>
     ENABLED <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -2402,7 +2409,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleRootDirectoryIsSynced,
        CommitSuccessorLifecycleRootV3, typedRolloverVars
 
-LOCAL THEOREM DurableOutputRootCommitExitsPending10 ==
+THEOREM DurableOutputRootCommitExitsPending10 ==
   /\ DurableOutputPending10
   /\ <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars
   => DurableOutputStage11'
@@ -2412,7 +2419,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        typedRolloverVars, ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage10LeadsToStage11 ==
+THEOREM DurableOutputStage10LeadsToStage11 ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage10 ~> DurableOutputStage11)
 PROOF
@@ -2453,7 +2460,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending10
 
-LOCAL THEOREM DurableOutputPending11IsNotOrphaned ==
+THEOREM DurableOutputPending11IsNotOrphaned ==
   /\ DurableOutputPending11
   /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
   => \/ DurableOutputPending11'
@@ -2474,7 +2481,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM DurableOutputPending11EnablesMemoryPublication ==
+THEOREM DurableOutputPending11EnablesMemoryPublication ==
   DurableOutputPending11 =>
     ENABLED <<PublishCommittedLifecycleV3ToMemory>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -2484,7 +2491,7 @@ BY ExpandENABLED, IsaT(600)
        RootCommittedSuccessorAheadOfMemory,
        PublishCommittedLifecycleV3ToMemory, typedRolloverVars
 
-LOCAL THEOREM DurableOutputMemoryPublicationExitsPending11 ==
+THEOREM DurableOutputMemoryPublicationExitsPending11 ==
   /\ DurableOutputPending11
   /\ <<PublishCommittedLifecycleV3ToMemory>>_typedRolloverVars
   => DurableOutputGoal'
@@ -2495,7 +2502,7 @@ BY ResponsiveDurableOutputStepPreservesCorridorBase, IsaT(600)
        PublishCommittedLifecycleV3ToMemory,
        typedRolloverVars, ResponsiveDurableExactOutputNext
 
-LOCAL THEOREM DurableOutputStage11LeadsToGoal ==
+THEOREM DurableOutputStage11LeadsToGoal ==
   ResponsiveDurableExactOutputSpec =>
     (DurableOutputStage11 ~> DurableOutputGoal)
 PROOF
@@ -2544,7 +2551,8 @@ receipt and requires validated restart, ordered resynchronization, cleanup,
 and the distinct RestartRestore authority.
 ***************************************************************************)
 THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==
-  ResponsiveDurableExactOutputRolloverLiveness
+  ResponsiveDurableExactOutputSpec =>
+    ResponsiveDurableExactOutputRolloverLiveness
 PROOF
   <1>1. ASSUME ResponsiveDurableExactOutputSpec
          PROVE state.finalityValidated ~> DurableOutputGoal
@@ -2716,7 +2724,7 @@ LOCAL RestartRestorePending8 ==
 LOCAL RestartRestorePending9 ==
   RestartRestoreStage9 /\ ~RestartRestoreGoal
 
-LOCAL THEOREM ResponsiveRestartRestoreInitEstablishesCorridorBase ==
+THEOREM ResponsiveRestartRestoreInitEstablishesCorridorBase ==
   ResponsiveRestartRestoreInit => RestartRestoreCorridorBase
 BY TypedRolloverInitEstablishesSafetyObligation, IsaT(600)
    DEF ResponsiveRestartRestoreInit, RestartRestoreCorridorBase,
@@ -2736,7 +2744,7 @@ BY TypedRolloverInitEstablishesSafetyObligation, IsaT(600)
        LifecycleRootV3, LifecycleSnapshotDigest,
        LifecycleStateSlot, NoLifecycleSnapshot
 
-LOCAL THEOREM ResponsiveRestartRestoreStepPreservesCorridorBase ==
+THEOREM ResponsiveRestartRestoreStepPreservesCorridorBase ==
   /\ RestartRestoreCorridorBase
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => RestartRestoreCorridorBase'
@@ -2780,7 +2788,7 @@ PROOF
        DEF typedRolloverVars, RestartRestoreCorridorBase
   <1> QED BY <1>1, <1>2
 
-LOCAL THEOREM ResponsiveRestartRestoreAlwaysCorridorBase ==
+THEOREM ResponsiveRestartRestoreAlwaysCorridorBase ==
   ResponsiveRestartRestoreSpec => []RestartRestoreCorridorBase
 PROOF
   <1>1. ResponsiveRestartRestoreInit => RestartRestoreCorridorBase
@@ -2789,10 +2797,14 @@ PROOF
          /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
          => RestartRestoreCorridorBase'
     BY ResponsiveRestartRestoreStepPreservesCorridorBase
-  <1> QED BY <1>1, <1>2, PTL
+  <1>3. RestartRestoreCorridorBase
+         /\ [][ResponsiveRestartRestoreNext]_typedRolloverVars
+         => []RestartRestoreCorridorBase
+    BY <1>2
+  <1> QED BY <1>1, <1>3, PTL
        DEF ResponsiveRestartRestoreSpec
 
-LOCAL THEOREM RestartRestorePending0IsNotOrphaned ==
+THEOREM RestartRestorePending0IsNotOrphaned ==
   /\ RestartRestorePending0
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending0'
@@ -2813,7 +2825,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending0EnablesValidation ==
+THEOREM RestartRestorePending0EnablesValidation ==
   RestartRestorePending0 =>
     ENABLED <<ValidateRootSelectedLifecycleV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -2826,7 +2838,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleRootShapeIsValid,
        ValidateRootSelectedLifecycleV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreValidationExitsPending0 ==
+THEOREM RestartRestoreValidationExitsPending0 ==
   /\ RestartRestorePending0
   /\ <<ValidateRootSelectedLifecycleV3>>_typedRolloverVars
   => RestartRestoreStage1'
@@ -2836,7 +2848,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(300)
        ValidateRootSelectedLifecycleV3, typedRolloverVars,
        ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage0LeadsToStage1 ==
+THEOREM RestartRestoreStage0LeadsToStage1 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage0 ~> RestartRestoreStage1)
 PROOF
@@ -2877,7 +2889,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending0
 
-LOCAL THEOREM RestartRestorePending1IsNotOrphaned ==
+THEOREM RestartRestorePending1IsNotOrphaned ==
   /\ RestartRestorePending1
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending1'
@@ -2898,7 +2910,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending1EnablesStateResync ==
+THEOREM RestartRestorePending1EnablesStateResync ==
   RestartRestorePending1 =>
     ENABLED
       <<ResyncValidatedLifecycleStateDirectoryV3>>_typedRolloverVars
@@ -2908,7 +2920,7 @@ BY ExpandENABLED, IsaT(300)
        RestartRestoreGoal,
        ResyncValidatedLifecycleStateDirectoryV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreStateResyncExitsPending1 ==
+THEOREM RestartRestoreStateResyncExitsPending1 ==
   /\ RestartRestorePending1
   /\ <<ResyncValidatedLifecycleStateDirectoryV3>>_typedRolloverVars
   => RestartRestoreStage2'
@@ -2918,7 +2930,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(300)
        ResyncValidatedLifecycleStateDirectoryV3,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage1LeadsToStage2 ==
+THEOREM RestartRestoreStage1LeadsToStage2 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage1 ~> RestartRestoreStage2)
 PROOF
@@ -2963,7 +2975,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending1
 
-LOCAL THEOREM RestartRestorePending2IsNotOrphaned ==
+THEOREM RestartRestorePending2IsNotOrphaned ==
   /\ RestartRestorePending2
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending2'
@@ -2984,7 +2996,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending2EnablesRootResync ==
+THEOREM RestartRestorePending2EnablesRootResync ==
   RestartRestorePending2 =>
     ENABLED <<ResyncValidatedLifecycleRootDirectoryV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(300)
@@ -2993,7 +3005,7 @@ BY ExpandENABLED, IsaT(300)
        RestartRestoreGoal,
        ResyncValidatedLifecycleRootDirectoryV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreRootResyncExitsPending2 ==
+THEOREM RestartRestoreRootResyncExitsPending2 ==
   /\ RestartRestorePending2
   /\ <<ResyncValidatedLifecycleRootDirectoryV3>>_typedRolloverVars
   => RestartRestoreStage3'
@@ -3003,7 +3015,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(300)
        ResyncValidatedLifecycleRootDirectoryV3,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage2LeadsToStage3 ==
+THEOREM RestartRestoreStage2LeadsToStage3 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage2 ~> RestartRestoreStage3)
 PROOF
@@ -3048,7 +3060,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending2
 
-LOCAL THEOREM RestartRestorePending3IsNotOrphaned ==
+THEOREM RestartRestorePending3IsNotOrphaned ==
   /\ RestartRestorePending3
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending3'
@@ -3069,7 +3081,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending3EnablesCleanup ==
+THEOREM RestartRestorePending3EnablesCleanup ==
   RestartRestorePending3 =>
     ENABLED <<CleanupValidatedLifecycleArtifactsV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -3083,7 +3095,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleRootDirectoryIsSynced,
        CleanupValidatedLifecycleArtifactsV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreCleanupExitsPending3 ==
+THEOREM RestartRestoreCleanupExitsPending3 ==
   /\ RestartRestorePending3
   /\ <<CleanupValidatedLifecycleArtifactsV3>>_typedRolloverVars
   => RestartRestoreStage4'
@@ -3093,7 +3105,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CleanupValidatedLifecycleArtifactsV3,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage3LeadsToStage4 ==
+THEOREM RestartRestoreStage3LeadsToStage4 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage3 ~> RestartRestoreStage4)
 PROOF
@@ -3136,7 +3148,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending3
 
-LOCAL THEOREM RestartRestorePending4IsNotOrphaned ==
+THEOREM RestartRestorePending4IsNotOrphaned ==
   /\ RestartRestorePending4
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending4'
@@ -3157,7 +3169,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending4EnablesRecovery ==
+THEOREM RestartRestorePending4EnablesRecovery ==
   RestartRestorePending4 =>
     ENABLED <<RecoverPredecessorLifecycleV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -3170,7 +3182,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleMemoryMatchesDurableSnapshotV3,
        RecoverPredecessorLifecycleV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreRecoveryExitsPending4 ==
+THEOREM RestartRestoreRecoveryExitsPending4 ==
   /\ RestartRestorePending4
   /\ <<RecoverPredecessorLifecycleV3>>_typedRolloverVars
   => RestartRestoreStage5'
@@ -3180,7 +3192,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        RecoverPredecessorLifecycleV3,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage4LeadsToStage5 ==
+THEOREM RestartRestoreStage4LeadsToStage5 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage4 ~> RestartRestoreStage5)
 PROOF
@@ -3221,7 +3233,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending4
 
-LOCAL THEOREM RestartRestorePending5IsNotOrphaned ==
+THEOREM RestartRestorePending5IsNotOrphaned ==
   /\ RestartRestorePending5
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending5'
@@ -3242,7 +3254,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending5EnablesStateSlotPublish ==
+THEOREM RestartRestorePending5EnablesStateSlotPublish ==
   RestartRestorePending5 =>
     ENABLED
       <<PublishRestartRestoreSuccessorLifecycleStateSlotV3>>_
@@ -3257,7 +3269,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleJournalReady, LifecycleMemoryMatchesDurableSnapshotV3,
        typedRolloverVars
 
-LOCAL THEOREM RestartRestoreStateSlotPublishExitsPending5 ==
+THEOREM RestartRestoreStateSlotPublishExitsPending5 ==
   /\ RestartRestorePending5
   /\ <<PublishRestartRestoreSuccessorLifecycleStateSlotV3>>_
        typedRolloverVars
@@ -3270,7 +3282,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        LifecycleSnapshotV3, typedRolloverVars,
        ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage5LeadsToStage6 ==
+THEOREM RestartRestoreStage5LeadsToStage6 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage5 ~> RestartRestoreStage6)
 PROOF
@@ -3317,7 +3329,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending5
 
-LOCAL THEOREM RestartRestorePending6IsNotOrphaned ==
+THEOREM RestartRestorePending6IsNotOrphaned ==
   /\ RestartRestorePending6
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending6'
@@ -3338,7 +3350,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending6EnablesStateDirectorySync ==
+THEOREM RestartRestorePending6EnablesStateDirectorySync ==
   RestartRestorePending6 =>
     ENABLED <<SyncSuccessorLifecycleStateDirectoryV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -3351,7 +3363,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleStateDirectoryIsSynced,
        SyncSuccessorLifecycleStateDirectoryV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreStateDirectorySyncExitsPending6 ==
+THEOREM RestartRestoreStateDirectorySyncExitsPending6 ==
   /\ RestartRestorePending6
   /\ <<SyncSuccessorLifecycleStateDirectoryV3>>_typedRolloverVars
   => RestartRestoreStage7'
@@ -3361,7 +3373,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        SyncSuccessorLifecycleStateDirectoryV3,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage6LeadsToStage7 ==
+THEOREM RestartRestoreStage6LeadsToStage7 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage6 ~> RestartRestoreStage7)
 PROOF
@@ -3405,7 +3417,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending6
 
-LOCAL THEOREM RestartRestorePending7IsNotOrphaned ==
+THEOREM RestartRestorePending7IsNotOrphaned ==
   /\ RestartRestorePending7
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending7'
@@ -3426,7 +3438,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending7EnablesRootReplacement ==
+THEOREM RestartRestorePending7EnablesRootReplacement ==
   RestartRestorePending7 =>
     ENABLED <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -3439,7 +3451,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleRootDirectoryIsSynced,
        ReplaceSuccessorLifecycleRootV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreRootReplacementExitsPending7 ==
+THEOREM RestartRestoreRootReplacementExitsPending7 ==
   /\ RestartRestorePending7
   /\ <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars
   => RestartRestoreStage8'
@@ -3449,7 +3461,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        ReplaceSuccessorLifecycleRootV3,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage7LeadsToStage8 ==
+THEOREM RestartRestoreStage7LeadsToStage8 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage7 ~> RestartRestoreStage8)
 PROOF
@@ -3490,7 +3502,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending7
 
-LOCAL THEOREM RestartRestorePending8IsNotOrphaned ==
+THEOREM RestartRestorePending8IsNotOrphaned ==
   /\ RestartRestorePending8
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending8'
@@ -3511,7 +3523,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending8EnablesRootCommit ==
+THEOREM RestartRestorePending8EnablesRootCommit ==
   RestartRestorePending8 =>
     ENABLED <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -3526,7 +3538,7 @@ BY ExpandENABLED, IsaT(600)
        LifecycleRootDirectoryIsSynced,
        CommitSuccessorLifecycleRootV3, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreRootCommitExitsPending8 ==
+THEOREM RestartRestoreRootCommitExitsPending8 ==
   /\ RestartRestorePending8
   /\ <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars
   => RestartRestoreStage9'
@@ -3536,7 +3548,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage8LeadsToStage9 ==
+THEOREM RestartRestoreStage8LeadsToStage9 ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage8 ~> RestartRestoreStage9)
 PROOF
@@ -3577,7 +3589,7 @@ PROOF
   <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending8
 
-LOCAL THEOREM RestartRestorePending9IsNotOrphaned ==
+THEOREM RestartRestorePending9IsNotOrphaned ==
   /\ RestartRestorePending9
   /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
   => \/ RestartRestorePending9'
@@ -3599,7 +3611,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        CommitSuccessorLifecycleRootV3,
        PublishCommittedLifecycleV3ToMemory
 
-LOCAL THEOREM RestartRestorePending9EnablesMemoryPublication ==
+THEOREM RestartRestorePending9EnablesMemoryPublication ==
   RestartRestorePending9 =>
     ENABLED <<PublishCommittedLifecycleV3ToMemory>>_typedRolloverVars
 BY ExpandENABLED, IsaT(600)
@@ -3609,7 +3621,7 @@ BY ExpandENABLED, IsaT(600)
        RootCommittedSuccessorAheadOfMemory,
        PublishCommittedLifecycleV3ToMemory, typedRolloverVars
 
-LOCAL THEOREM RestartRestoreMemoryPublicationExitsPending9 ==
+THEOREM RestartRestoreMemoryPublicationExitsPending9 ==
   /\ RestartRestorePending9
   /\ <<PublishCommittedLifecycleV3ToMemory>>_typedRolloverVars
   => RestartRestoreGoal'
@@ -3620,7 +3632,7 @@ BY ResponsiveRestartRestoreStepPreservesCorridorBase, IsaT(600)
        PublishCommittedLifecycleV3ToMemory,
        typedRolloverVars, ResponsiveRestartRestoreNext
 
-LOCAL THEOREM RestartRestoreStage9LeadsToGoal ==
+THEOREM RestartRestoreStage9LeadsToGoal ==
   ResponsiveRestartRestoreSpec =>
     (RestartRestoreStage9 ~> RestartRestoreGoal)
 PROOF
@@ -3663,7 +3675,8 @@ PROOF
        DEF RestartRestorePending9
 
 THEOREM ResponsiveRestartRestoreRolloverLivenessObligation ==
-  ResponsiveRestartRestoreRolloverLiveness
+  ResponsiveRestartRestoreSpec =>
+    ResponsiveRestartRestoreRolloverLiveness
 PROOF
   <1>1. ASSUME ResponsiveRestartRestoreSpec
          PROVE state.restartRequired ~> RestartRestoreGoal

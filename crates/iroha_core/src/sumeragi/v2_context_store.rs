@@ -20,7 +20,7 @@ use thiserror::Error;
 use super::v2::VerifiedHeightContext;
 
 const FILE_MAGIC: &[u8; 8] = b"SUMV2CTX";
-const FRAME_VERSION: u16 = 2;
+const FRAME_VERSION: u16 = 3;
 const HASH_LEN: usize = 32;
 // Sumeragi v2 admits only BLS-normal validators. Its PoP is one canonical G2
 // signature, not an arbitrary consensus-signature-sized blob.
@@ -1164,6 +1164,26 @@ mod tests {
         store.persist(&record).expect("persist record");
         store.persist(&record).expect("repeat exact record");
         assert_eq!(store.load(1).expect("load record"), Some(record));
+    }
+
+    #[test]
+    fn legacy_v2_frame_is_rejected() {
+        const LEGACY_VERSION: u16 = 2;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let store = V2ContextStore::open(root.path()).expect("open store");
+        let record = record();
+        store.persist(&record).expect("persist current record");
+        let path = store.path(record.context().height);
+        let mut frame = fs::read(&path).expect("read context frame");
+        frame[FILE_MAGIC.len()..FILE_MAGIC.len() + std::mem::size_of::<u16>()]
+            .copy_from_slice(&LEGACY_VERSION.to_le_bytes());
+        fs::write(&path, frame).expect("write legacy context frame");
+
+        assert!(matches!(
+            store.load(record.context().height),
+            Err(V2ContextStoreError::UnsupportedVersion(LEGACY_VERSION))
+        ));
     }
 
     #[test]

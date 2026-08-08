@@ -345,7 +345,7 @@ class AndroidArtifactStagerTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     stage,
-                    "validate_kagemusha_candidate_stage_manifest_v1",
+                    "validate_kagemusha_candidate_stage_manifest_v2",
                     return_value={"entries": []},
                 ),
                 mock.patch.object(stage, "_artifact_inventory", return_value=inventory),

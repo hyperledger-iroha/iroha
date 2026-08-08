@@ -7701,9 +7701,10 @@ mod tests {
         require_exact_retention_readback(&binding, &authority, &second.key.chain_id, &approval)
             .expect("approval remains authoritative");
         let mut index = archive.write_index().expect("lock approved compaction");
-        let _ = archive
+        let outcome = archive
             .publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})
             .expect("publish only after exact approval");
+        assert_eq!(outcome.retention_floor(), &second.key);
         drop(index);
         assert_eq!(
             archive

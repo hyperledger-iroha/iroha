@@ -142,7 +142,13 @@ variantTest("verifyNativeBinding succeeds when checksum matches manifest entry",
 variantTest("getNativeBinding rejects a checksum-valid dirty-source artifact", async () => {
   __resetNativeStateForTests();
   const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
+  const originalBufferToJson = Buffer.prototype.toJSON;
+  let serializedVerifiedBytes = false;
   try {
+    Buffer.prototype.toJSON = function toJSON() {
+      serializedVerifiedBytes = true;
+      return originalBufferToJson.call(this);
+    };
     await withTempDir(async (dir) => {
       const bindingPath = path.join(dir, "iroha_js_host.node");
       const manifestPath = path.join(dir, "iroha_js_host.checksums.json");
@@ -169,7 +175,13 @@ variantTest("getNativeBinding rejects a checksum-valid dirty-source artifact", a
         },
       );
     });
+    assert.equal(
+      serializedVerifiedBytes,
+      false,
+      "dirty-source verification must not serialize retained native bytes",
+    );
   } finally {
+    Buffer.prototype.toJSON = originalBufferToJson;
     if (previousNativeDir === undefined) {
       delete process.env.IROHA_JS_NATIVE_DIR;
     } else {

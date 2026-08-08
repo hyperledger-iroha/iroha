@@ -150,7 +150,11 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             + "\n".join(
                 f'        "{key}": "{hashes[key]}"{"," if index < 2 else ""}'
                 for index, key in enumerate(
-                    ("macos-arm64", "ios-arm64", "ios-arm64_x86_64-simulator")
+                    (
+                        "macos-arm64_x86_64",
+                        "ios-arm64",
+                        "ios-arm64_x86_64-simulator",
+                    )
                 )
             )
             + "\n    ]\n",

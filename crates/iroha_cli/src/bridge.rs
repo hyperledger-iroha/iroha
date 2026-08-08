@@ -602,66 +602,52 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
             .native_message_submit_path
             .as_deref()
             .unwrap_or("disabled"),
-        capabilities.registry_limits.max_governed_lanes,
-        capabilities.registry_limits.max_live_governed_routes,
-        capabilities.registry_limits.max_live_routes_per_lane,
-        capabilities.registry_limits.max_retained_routes_per_lane,
+        capabilities.registry_limits.governed_lanes,
+        capabilities.registry_limits.live_governed_routes,
+        capabilities.registry_limits.live_routes_per_lane,
+        capabilities.registry_limits.retained_routes_per_lane,
         capabilities
             .registry_limits
-            .max_retained_native_trust_anchors_per_lane,
-        capabilities.resource_limits.max_outbound_messages_per_block,
+            .retained_native_trust_anchors_per_lane,
+        capabilities.resource_limits.outbound_messages_per_block,
+        capabilities.resource_limits.outbound_message_payload_bytes,
+        capabilities.resource_limits.pending_outbound_messages,
+        capabilities.resource_limits.pending_outbound_payload_bytes,
+        capabilities.resource_limits.proofs_per_transaction,
+        capabilities.resource_limits.proofs_per_block,
+        capabilities.resource_limits.proof_bytes_per_proof,
+        capabilities.resource_limits.proof_bytes_per_transaction,
+        capabilities.resource_limits.proof_bytes_per_block,
+        capabilities.resource_limits.native_headers_per_transaction,
+        capabilities.resource_limits.native_headers_per_block,
         capabilities
             .resource_limits
-            .max_outbound_message_payload_bytes,
-        capabilities.resource_limits.max_pending_outbound_messages,
+            .ethereum_light_client_updates_per_transaction,
         capabilities
             .resource_limits
-            .max_pending_outbound_payload_bytes,
-        capabilities.resource_limits.max_proofs_per_transaction,
-        capabilities.resource_limits.max_proofs_per_block,
-        capabilities.resource_limits.max_proof_bytes_per_proof,
-        capabilities.resource_limits.max_proof_bytes_per_transaction,
-        capabilities.resource_limits.max_proof_bytes_per_block,
+            .ethereum_light_client_updates_per_block,
         capabilities
             .resource_limits
-            .max_native_headers_per_transaction,
-        capabilities.resource_limits.max_native_headers_per_block,
+            .native_header_bytes_per_transaction,
+        capabilities.resource_limits.native_header_bytes_per_block,
         capabilities
             .resource_limits
-            .max_ethereum_light_client_updates_per_transaction,
+            .secp256k1_recoveries_per_transaction,
+        capabilities.resource_limits.secp256k1_recoveries_per_block,
         capabilities
             .resource_limits
-            .max_ethereum_light_client_updates_per_block,
+            .bls_aggregate_checks_per_transaction,
+        capabilities.resource_limits.bls_aggregate_checks_per_block,
         capabilities
             .resource_limits
-            .max_native_header_bytes_per_transaction,
+            .bls_signer_contributions_per_transaction,
         capabilities
             .resource_limits
-            .max_native_header_bytes_per_block,
+            .bls_signer_contributions_per_block,
         capabilities
             .resource_limits
-            .max_secp256k1_recoveries_per_transaction,
-        capabilities
-            .resource_limits
-            .max_secp256k1_recoveries_per_block,
-        capabilities
-            .resource_limits
-            .max_bls_aggregate_checks_per_transaction,
-        capabilities
-            .resource_limits
-            .max_bls_aggregate_checks_per_block,
-        capabilities
-            .resource_limits
-            .max_bls_signer_contributions_per_transaction,
-        capabilities
-            .resource_limits
-            .max_bls_signer_contributions_per_block,
-        capabilities
-            .resource_limits
-            .max_bn254_pairing_checks_per_transaction,
-        capabilities
-            .resource_limits
-            .max_bn254_pairing_checks_per_block,
+            .bn254_pairing_checks_per_transaction,
+        capabilities.resource_limits.bn254_pairing_checks_per_block,
     )
 }
 
@@ -1171,36 +1157,36 @@ mod tests {
             proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
             recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
             registry_limits: SccpRegistryLimits {
-                max_governed_lanes: 16,
-                max_live_governed_routes: 64,
-                max_live_routes_per_lane: 8,
-                max_retained_routes_per_lane: 64,
-                max_retained_native_trust_anchors_per_lane: 4_096,
+                governed_lanes: 16,
+                live_governed_routes: 64,
+                live_routes_per_lane: 8,
+                retained_routes_per_lane: 64,
+                retained_native_trust_anchors_per_lane: 4_096,
             },
             resource_limits: SccpResourceLimits {
-                max_outbound_messages_per_block: 512,
-                max_outbound_message_payload_bytes: 4_096,
-                max_pending_outbound_messages: 65_536,
-                max_pending_outbound_payload_bytes: 256 * 1024 * 1024,
-                max_proofs_per_transaction: 1,
-                max_proofs_per_block: 4,
-                max_proof_bytes_per_proof: 8 * 1024 * 1024,
-                max_proof_bytes_per_transaction: 8 * 1024 * 1024,
-                max_proof_bytes_per_block: 32 * 1024 * 1024,
-                max_native_headers_per_transaction: 1_004,
-                max_native_headers_per_block: 4_016,
-                max_ethereum_light_client_updates_per_transaction: 128,
-                max_ethereum_light_client_updates_per_block: 512,
-                max_native_header_bytes_per_transaction: 8 * 1024 * 1024,
-                max_native_header_bytes_per_block: 32 * 1024 * 1024,
-                max_secp256k1_recoveries_per_transaction: 1_005,
-                max_secp256k1_recoveries_per_block: 4_020,
-                max_bls_aggregate_checks_per_transaction: 1_004,
-                max_bls_aggregate_checks_per_block: 4_016,
-                max_bls_signer_contributions_per_transaction: 131_713,
-                max_bls_signer_contributions_per_block: 526_852,
-                max_bn254_pairing_checks_per_transaction: 1,
-                max_bn254_pairing_checks_per_block: 4,
+                outbound_messages_per_block: 512,
+                outbound_message_payload_bytes: 4_096,
+                pending_outbound_messages: 65_536,
+                pending_outbound_payload_bytes: 256 * 1024 * 1024,
+                proofs_per_transaction: 1,
+                proofs_per_block: 4,
+                proof_bytes_per_proof: 8 * 1024 * 1024,
+                proof_bytes_per_transaction: 8 * 1024 * 1024,
+                proof_bytes_per_block: 32 * 1024 * 1024,
+                native_headers_per_transaction: 1_004,
+                native_headers_per_block: 4_016,
+                ethereum_light_client_updates_per_transaction: 128,
+                ethereum_light_client_updates_per_block: 512,
+                native_header_bytes_per_transaction: 8 * 1024 * 1024,
+                native_header_bytes_per_block: 32 * 1024 * 1024,
+                secp256k1_recoveries_per_transaction: 1_005,
+                secp256k1_recoveries_per_block: 4_020,
+                bls_aggregate_checks_per_transaction: 1_004,
+                bls_aggregate_checks_per_block: 4_016,
+                bls_signer_contributions_per_transaction: 131_713,
+                bls_signer_contributions_per_block: 526_852,
+                bn254_pairing_checks_per_transaction: 1,
+                bn254_pairing_checks_per_block: 4,
             },
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             native_message_submit_path: Some("/v1/bridge/messages".to_owned()),

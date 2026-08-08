@@ -1,7 +1,9 @@
 //! Authenticated, projection-only SoraFS hedging and billing HTTP boundary.
 //!
-//! Every read is served by the supervised finalized-ledger projector. Statement
-//! ownership comes exclusively from Torii's canonical account-signature
+//! Every data read is served only while the supervised finalized-ledger
+//! projector passes its live head and freshness fence; payload-free health
+//! remains observable while unready. Statement ownership comes exclusively from
+//! Torii's canonical account-signature
 //! authentication; callers cannot supply an account identifier in a query or
 //! body. The only mutation is an owner acknowledgement carrying one bounded
 //! external-authority proof. Pricing feeds, policy changes, signer material,

@@ -32,7 +32,7 @@ object ConnectErrors {
         val overrideStatus = options.httpStatus != null
         if (!overrideFatal && !overrideStatus) return base
         return base.toBuilder()
-            .fatal(if (overrideFatal) options.fatal!! else base.fatal)
+            .fatal(if (overrideFatal) options.fatal else base.fatal)
             .httpStatus(if (overrideStatus) options.httpStatus else base.httpStatus().orElse(null))
             .build()
     }

@@ -191,7 +191,7 @@ fixtureBundleNativeTest("validateFixtureBundle accepts linked replication and Po
       },
       {
         kind: SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS.POR_PROOF,
-        payload: fixture("por/proof_v1.to"),
+        bytes: fixture("por/proof_v1.to"),
         label: "por-proof.to",
       },
     ],
@@ -266,7 +266,7 @@ fixtureBundleNativeTest("validateFixtureBundle returns canonical negative outcom
       },
       { kind: "por-proof", bytes: Buffer.alloc(8) },
     ],
-    { now_unix: 1_700_000_001, generated_at: 1_700_001_239 },
+    { nowUnix: 1_700_000_001, generatedAtUnix: 1_700_001_239 },
   );
 
   assert.equal(outcome.status, "Error");
@@ -282,6 +282,29 @@ test("validateFixtureBundle rejects aliases and unbounded input before native di
       ]),
     /unsupported.*payload kind/i,
   );
+  for (const aliasedPayload of [
+    { kind: "por-proof", payload: Buffer.from([0]) },
+    { kind: "por-proof", noritoBytes: Buffer.from([0]) },
+    { kind: "por-proof", norito_bytes: Buffer.from([0]) },
+  ]) {
+    assert.throws(
+      () => validateFixtureBundle([aliasedPayload]),
+      /unsupported fields/i,
+    );
+  }
+  for (const aliasedOptions of [
+    { now_unix: 1 },
+    { generated_at: 1 },
+  ]) {
+    assert.throws(
+      () =>
+        validateFixtureBundle(
+          [{ kind: "por-proof", bytes: Buffer.from([0]) }],
+          aliasedOptions,
+        ),
+      /unsupported fields/i,
+    );
+  }
   assert.throws(() => validateFixtureBundle([]), /1\.\.=64 entries/i);
   assert.throws(
     () =>

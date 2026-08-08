@@ -5,15 +5,15 @@ import XCTest
 
 final class NativeBridgeLoaderTests: XCTestCase {
     func testExpectedBridgeAbiVersionIsTwentyOneForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 21)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 21)
         XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 21)
         XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 21)
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(21, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64"))
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(21, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64_x86_64"))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_recursive_spend_artifact_begin_v4"
         ))
@@ -21,6 +21,12 @@ final class NativeBridgeLoaderTests: XCTestCase {
             "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4"
         ))
     }
+
+    #if os(macOS)
+    func testMacOSLoaderSelectsTheUniversalSlice() {
+        XCTAssertEqual(NoritoBridgeLoader.currentIdentifier(), "macos-arm64_x86_64")
+    }
+    #endif
 
     func testMissingBridgeIsReported() {
         let status = NoritoBridgeLoader.validateForTests(at: "/tmp/does/not/exist", allowUntrustedLocation: true)
@@ -158,6 +164,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "native_bridge_abi_version": 21,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -167,6 +174,40 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
         let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
         XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
+    }
+
+    func testArtifactManifestRejectsStaleAbiNineteenBeforeHashAcceptance() throws {
+        let identifier = NoritoBridgeLoader.currentIdentifier()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: identifier)
+        try FileManager.default.createDirectory(
+            at: bridgeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let bytes = Data("stale-abi-19-bridge".utf8)
+        try bytes.write(to: bridgeURL, options: .atomic)
+        let hashHex = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let manifestURL = tempDir.appendingPathComponent("NoritoBridge.artifacts.json")
+        let manifest = """
+        {
+          "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "native_bridge_abi_version": 19,
+          "hashes": {
+            "\(identifier)": "\(hashHex)"
+          }
+        }
+        """
+        try manifest.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        let status = NoritoBridgeLoader.validateForTests(
+            at: bridgeURL.path,
+            allowUntrustedLocation: true
+        )
+        XCTAssertEqual(
+            status,
+            .abiMismatch(path: bridgeURL.path, expected: 21, actual: 19)
+        )
     }
 
     func testArtifactManifestAtDistRootOverridesPinnedHashForXcframeworkLayout() throws {
@@ -193,6 +234,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
+          "native_bridge_abi_version": 21,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -228,7 +270,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
     private func bundledBridgeBinary() throws -> (url: URL, identifier: String) {
         #if os(macOS)
-        let identifier = "macos-arm64"
+        let identifier = "macos-arm64_x86_64"
         #else
         #if targetEnvironment(simulator)
         let identifier = "ios-arm64_x86_64-simulator"
@@ -265,13 +307,9 @@ final class BridgePolicyHintTests: XCTestCase {
     }
 }
 
+#if canImport(Darwin)
 final class BridgeAvailabilitySurfaceTests: XCTestCase {
     func testTransferEncodingFailsWhenBridgeUnavailable() throws {
-        #if canImport(Darwin)
-        guard #available(macOS 10.15, iOS 13.0, *) else {
-            throw XCTSkip("CryptoKit is unavailable on this platform.")
-        }
-
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
         defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
 
@@ -295,13 +333,9 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
             }
             XCTAssertTrue(error.localizedDescription.contains("NoritoBridge.xcframework"))
         }
-        #else
-        throw XCTSkip("Bridge availability is only meaningful on Darwin targets.")
-        #endif
     }
 
     func testConnectCodecUnavailableWhenBridgeDisabled() throws {
-        #if canImport(Darwin)
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
         NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(false)
         defer {
@@ -323,8 +357,6 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
             }
             XCTAssertTrue(error.localizedDescription.contains("NoritoBridge.xcframework"))
         }
-        #else
-        throw XCTSkip("Bridge availability is only meaningful on Darwin targets.")
-        #endif
     }
 }
+#endif

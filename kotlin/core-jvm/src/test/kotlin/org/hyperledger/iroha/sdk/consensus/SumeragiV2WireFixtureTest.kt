@@ -14,6 +14,44 @@ import kotlin.test.assertFailsWith
 
 class SumeragiV2WireFixtureTest {
     @Test
+    fun `execution commitments carry an exact mandatory merge carrier option`() {
+        fun hash(seed: Int) =
+            SumeragiV2Wire.Hash32(
+                ByteArray(32) { seed.toByte() }.also {
+                    it[31] = (it[31].toInt() or 1).toByte()
+                },
+            )
+        val base = SumeragiV2Wire.ExecutionCommitment.withoutTopups(
+            hash(0x21), hash(0x23), hash(0x25), 123, hash(0x27),
+        )
+        val carrier = SumeragiV2Wire.MergeCarrierCommitment(1, hash(0x29))
+        val carried = SumeragiV2Wire.ExecutionCommitment(
+            base.parentStateRoot,
+            base.postStateRoot,
+            base.ordinaryWritesRoot,
+            base.topupAnchorRoot,
+            base.topupAnchorCount,
+            base.nativeAmxApplicationManifestVersion,
+            base.nativeAmxApplicationManifestRoot,
+            base.nativeAmxApplicationManifestCount,
+            carrier,
+            base.executedBlockWireLen,
+            base.executedBlockWireHash,
+        )
+
+        val decodedBase = SumeragiV2Wire.ExecutionCommitment.decode(base.encode())
+        assertEquals(null, decodedBase.mergeCarrier)
+        assertEquals(123L, decodedBase.executedBlockWireLen)
+        assertEquals(
+            carrier,
+            SumeragiV2Wire.ExecutionCommitment.decode(carried.encode()).mergeCarrier,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.MergeCarrierCommitment(2, hash(0x29))
+        }
+    }
+
+    @Test
     fun `unsafe proposal ignore reason decodes wire discriminant eleven`() {
         assertEquals(
             SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL,
@@ -71,6 +109,32 @@ class SumeragiV2WireFixtureTest {
             val encoded = row.hex.hexBytes()
             val decoded = SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(encoded)
             assertContentEquals(encoded, decoded.encode(), row.name)
+        }
+    }
+
+    @Test
+    fun `Rust merge carrier fixture pins the current v4 shape`() {
+        val rows = fixtureRows()
+        val carried = SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+            rows.single {
+                it.kind == "message" && it.name == "quorum_certificate_merge_carrier"
+            }.hex.hexBytes(),
+        )
+        val certificate = (
+            carried.payload as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
+            ).value
+        val carrier = requireNotNull(certificate.executionCommitment.mergeCarrier)
+        assertEquals(1, carrier.version)
+        assertEquals(32, carrier.entryHash.bytes().size)
+
+        setOf(
+            "execution_commitment_merge_carrier_wrong_version",
+            "execution_commitment_missing_merge_carrier_field",
+        ).forEach { name ->
+            val row = rows.single { it.kind == "negative_message" && it.name == name }
+            assertFailsWith<IllegalArgumentException>(name) {
+                SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(row.hex.hexBytes())
+            }
         }
     }
 
@@ -424,6 +488,7 @@ class SumeragiV2WireFixtureTest {
             SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
             response.certificate.executionCommitment.ordinaryWritesRoot,
+            response.certificate.executionCommitment.executedBlockWireLen,
             response.certificate.executionCommitment.executedBlockWireHash,
         )
         val changedExecutionCertificate = SumeragiV2Wire.QuorumCertificate(
@@ -469,6 +534,8 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash,
             )
         }
@@ -482,6 +549,8 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash,
             )
         }
@@ -495,6 +564,8 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash,
             )
         }
@@ -508,6 +579,8 @@ class SumeragiV2WireFixtureTest {
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
+                null,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash,
             )
         }
@@ -526,6 +599,8 @@ class SumeragiV2WireFixtureTest {
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
+            null,
+            base.executedBlockWireLen,
             base.executedBlockWireHash,
         )
         assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash)
@@ -561,6 +636,8 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
                 base.nativeAmxApplicationManifestRoot,
                 0,
+                null,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash,
             )
         }
@@ -574,6 +651,8 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 0,
+                null,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash,
             )
         }
@@ -587,6 +666,8 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 base.nativeAmxApplicationManifestRoot,
                 1,
+                null,
+                base.executedBlockWireLen,
                 base.executedBlockWireHash,
             )
         }
@@ -600,6 +681,23 @@ class SumeragiV2WireFixtureTest {
                 SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 nonEmptyRoot,
                 SumeragiV2Wire.MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                null,
+                base.executedBlockWireLen,
+                base.executedBlockWireHash,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                base.topupAnchorRoot,
+                base.topupAnchorCount,
+                base.nativeAmxApplicationManifestVersion,
+                base.nativeAmxApplicationManifestRoot,
+                base.nativeAmxApplicationManifestCount,
+                base.mergeCarrier,
+                0,
                 base.executedBlockWireHash,
             )
         }
@@ -732,6 +830,7 @@ class SumeragiV2WireFixtureTest {
             "proposal",
             "vote",
             "quorum_certificate",
+            "quorum_certificate_merge_carrier",
             "commit_vote_reproposal",
             "commit_quorum_certificate_reproposal",
             "timeout_vote",

@@ -1313,6 +1313,7 @@ ensure_swift_bridge_artifact() {
     aarch64-apple-ios-sim
     x86_64-apple-ios
     aarch64-apple-darwin
+    x86_64-apple-darwin
   )
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -1882,7 +1883,7 @@ phase_core_admission() {
 }
 
 phase_runtime_api() {
-  # Durable wire-revision-3 finality is part of SCCP's trust boundary. Keep the
+  # Durable wire-revision-4 finality is part of SCCP's trust boundary. Keep the
   # mutation/restart adversaries explicit so a broad name-filter change cannot
   # silently stop exercising finalized Kura recovery.
   run_cmd \

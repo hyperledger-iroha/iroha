@@ -54,10 +54,9 @@ use crate::{
 
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
-// The valid v2 timeout-vote envelope is bounded by a 128-entry signer vector
-// and two individually bounded BLS signatures. Keep this conservative wire
-// ceiling aligned with the formal ingress refinement and the maximal fixture
-// below; the production byte reserve is intentionally much larger.
+// The valid v2 timeout-vote envelope has at most 128 signers and two bounded BLS signatures.
+// Keep this conservative ceiling aligned with the formal refinement and maximal fixture below;
+// the production byte reserve is intentionally much larger.
 const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
 // Lane-owned completions fit the independently reviewed source bundle from
 // which they are reconstructed. Canonical historical-body recovery is instead
@@ -642,6 +641,7 @@ pub use v2_core::{
 };
 pub(crate) mod v2_effects;
 pub(crate) mod v2_lane_work;
+pub(crate) mod v2_lifecycle_recovery;
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{
@@ -1138,12 +1138,6 @@ impl FairV2IngressLeaderWireToken {
         self.scheduler_ordinal
     }
 
-    /// Closed productive source class.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const fn source_class(&self) -> FairV2IngressLeaderWireSourceClass {
-        self.source_class
-    }
-
     /// Proposal view retained by this exact productive wire.
     pub(crate) const fn view(&self) -> iroha_data_model::block::consensus_v2::View {
         self.identity.view
@@ -1359,6 +1353,7 @@ enum FairV2IngressMessageKind {
     V2CommitCertificateResponse,
     V2VrfCommit,
     V2VrfReveal,
+    KuraReplicaAdvert,
     LaneBlockProposal,
     LaneExecutablePayload,
     LaneBlockNewViewVote,
@@ -1972,6 +1967,7 @@ impl FairV2IngressMessageKind {
             BlockMessage::LaneHistoricalRecoveryResponse(_) => {
                 Some(Self::LaneHistoricalRecoveryResponse)
             }
+            BlockMessage::KuraReplicaAdvert(_) => Some(Self::KuraReplicaAdvert),
             _ => None,
         }
     }
@@ -2451,7 +2447,7 @@ impl FairV2IngressOwnershipEvidence {
     pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
         let encoded = match message {
             BlockMessage::V2(message) => message.encode(),
-            message if message.is_lane_local() => message.encode(),
+            message if message.is_lane_local() || message.is_live_auxiliary() => message.encode(),
             _ => return false,
         };
         self.first.encoded_bytes.as_ref() == encoded.as_slice()
@@ -4613,7 +4609,8 @@ impl FairV2Ingress {
             fair_v2_ingress_required_lane_p2p_frame_bytes(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES);
         let required_consensus_frame_bytes =
             fair_v2_ingress_required_p2p_frame_bytes(required_recovery_request_bytes)
-                .max(required_lane_progress_frame_bytes);
+                .max(required_lane_progress_frame_bytes)
+                .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES);
         let required_control_frame_bytes =
             fair_v2_ingress_required_p2p_frame_bytes(required_control_message_bytes);
         let required_block_sync_frame_bytes =
@@ -4635,7 +4632,8 @@ impl FairV2Ingress {
             BODY_ENVELOPE_HEADROOM_BYTES
                 .max(required_control_message_bytes)
                 .max(required_recovery_request_bytes)
-                .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES),
+                .max(MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES)
+                .max(crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES),
             required_certified_fence_escape_bytes,
             required_transport_completion_bytes,
             required_consensus_frame_bytes,
@@ -5640,6 +5638,25 @@ impl FairV2Ingress {
                     _ => MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
                 };
                 if encoded_len > lane_limit {
+                    return Err(FairV2IngressPushError::rejected(
+                        inbound,
+                        FairV2IngressRejectReason::MessageTooLarge,
+                    ));
+                }
+                encoded
+            }
+            BlockMessage::KuraReplicaAdvert(advert) => {
+                if inbound.sender() != Some(&advert.keeper)
+                    || inbound.via() != Some(&advert.keeper)
+                    || advert.verify_keeper_signature().is_err()
+                {
+                    return Err(FairV2IngressPushError::rejected(
+                        inbound,
+                        FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+                    ));
+                }
+                let encoded = Arc::<[u8]>::from(inbound.message().encode());
+                if encoded.len() > crate::MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
                     return Err(FairV2IngressPushError::rejected(
                         inbound,
                         FairV2IngressRejectReason::MessageTooLarge,
@@ -6741,7 +6758,7 @@ impl FairV2Ingress {
                     })
             });
             let leader_wire_control_barrier = leader_wire_barrier.as_ref().is_some_and(|owner| {
-                owner.token.source_class() == FairV2IngressLeaderWireSourceClass::Control
+                owner.token.source_class == FairV2IngressLeaderWireSourceClass::Control
             });
             let ready_sources = state.ready.iter().cloned().collect::<Vec<_>>();
             let candidates = ready_sources
@@ -7306,6 +7323,8 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
 ///
 /// Global v1 frames are decode-only and are rejected before any queue handoff.
+/// Fixed-small live auxiliary messages share the exact fair-ingress ownership
+/// path but are terminalized before either consensus reducer.
 /// All accepted queues are bounded and non-blocking. Reducer- and lane-owned
 /// durable intents reconstruct their own retransmissions; live transport
 /// callers additionally retain the exact item returned by [`SumeragiIngressDisposition::Retry`]
@@ -7374,7 +7393,10 @@ impl SumeragiHandle {
             return SumeragiIngressDisposition::Retry(inbound);
         }
 
-        if matches!(inbound.message(), BlockMessage::V2(_)) || inbound.message().is_lane_local() {
+        if matches!(inbound.message(), BlockMessage::V2(_))
+            || inbound.message().is_lane_local()
+            || inbound.message().is_live_auxiliary()
+        {
             let queue = status::WorkerQueueKind::Blocks;
             return match self.block.try_push(inbound) {
                 Ok(FairV2IngressPushDisposition::Enqueued) => {
@@ -7439,7 +7461,7 @@ impl SumeragiHandle {
         self.try_incoming_block_message_owned(InboundBlockMessage::new(message, Some(sender)))
     }
 
-    /// Enqueue a canonical v2 or retained lane-local message without blocking.
+    /// Enqueue a canonical v2, live auxiliary, or retained lane-local message without blocking.
     pub fn incoming_block_message(&self, message: BlockMessage) -> bool {
         self.try_incoming_block_message_owned(InboundBlockMessage::new(message, None))
             .accepted_or_coalesced()
@@ -8186,7 +8208,6 @@ struct SumeragiWorker {
 mod authoritative_runtime_gate_tests {
     include!("tests/mod_authoritative_runtime_gate_01_support.rs");
     include!("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs");
-
     #[test]
     fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
