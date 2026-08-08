@@ -8262,9 +8262,7 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/reputation/events/ws".to_owned(),
         Value::Object(reputation_websocket_operation()),
     );
-    paths.insert(
-        "/v1/sorafs/pin".to_owned(),
-        Value::Object(json_get_operation(
+    let mut sorafs_pin_list = json_get_operation(
             "SoraFS",
             "Fetch a finalized pin-manifest page.",
             "Return `PinManifestPageV1`: bounded summaries in canonical digest order, an exclusive keyset cursor, O(1) consensus-maintained live count/byte totals, and the finalized height/hash shared by every page. `limit` and `max_bytes` are hard ceilings; `after_digest_hex` is exclusive. A supplied finalized anchor must contain both fields and returns 409 when stale. Offset pagination, full-record materialization, alias proofs, and lineage expansion are retired; use the bounded detail route for one exact manifest.",
@@ -8305,7 +8303,19 @@ fn sorafs_paths() -> Map {
                     &["pending", "approved", "retired"],
                 ),
             ],
+        );
+    let Some(Value::Object(operation)) = sorafs_pin_list.get_mut("get") else {
+        unreachable!("JSON GET helper always returns one GET operation");
+    };
+    operation.insert(
+        "responses".into(),
+        Value::Object(single_dual_format_response(
+            "#/components/schemas/PinManifestPageV1",
         )),
+    );
+    paths.insert(
+        "/v1/sorafs/pin".to_owned(),
+        Value::Object(sorafs_pin_list),
     );
     paths.insert(
         "/v1/sorafs/pin/register".to_owned(),

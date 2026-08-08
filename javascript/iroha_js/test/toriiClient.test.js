@@ -4373,87 +4373,73 @@ test("listSorafsAliases normalizes response and applies filters", async () => {
   assert.equal(result.attestation?.block_height, 1);
 });
 
-test("listSorafsPinManifests normalizes manifest payloads and guards filters", async () => {
+test("listSorafsPinManifests enforces the finalized bounded keyset contract", async () => {
   let capturedUrl;
-  const manifestHex = "e".repeat(64);
-  const parentHex = "f".repeat(64);
-  const councilHex = "1".repeat(64);
-  const aliasProof = Buffer.from("pin-alias").toString("base64");
-  const manifestRecord = {
-    digest_hex: manifestHex,
-    chunker: {
-      profile_id: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihash_code: 0,
-    },
-    chunk_digest_sha3_256_hex: "2".repeat(64),
-    pin_policy: { min_replicas: 3 },
+  const manifestDigest = Array(32).fill(0xee);
+  const parentDigest = Array(32).fill(0xdd);
+  const blockHash = Array(32).fill(0x99);
+  const summary = {
+    digest: manifestDigest,
     submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
-    status: { state: "approved", epoch: 45 },
-    metadata: { note: "demo" },
-    alias: { namespace: "docs", name: "main", proof_b64: aliasProof },
-    successor_of_hex: parentHex,
-    status_timestamp_unix: 123,
-    governance_refs: [
-      {
-        cid: "cid-1",
-        kind: "AliasRotate",
-        effective_at: "2025-01-01T00:00:00Z",
-        effective_at_unix: 1_700_000_000,
-        targets: { alias: "docs/main", pin_digest_hex: manifestHex },
-        signers: [FIXTURE_CAROL_ID],
-      },
-    ],
-    council_envelope_digest_hex: councilHex,
-    lineage: {
-      successor_of_hex: parentHex,
-      head_hex: manifestHex,
-      depth_to_head: 0,
-      is_head: true,
-      superseded_by: null,
-      immediate_successor: null,
-      anomalies: [],
-    },
+    content_length: 4096,
+    retention_epoch: 900,
+    status: { status: "Approved", value: 45 },
+    successor_of: parentDigest,
   };
   const fetchImpl = async (url) => {
     capturedUrl = url;
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: { block_hash: "abc" },
-        total_count: 1,
-        returned_count: 1,
-        offset: 0,
-        limit: 10,
-        manifests: [manifestRecord],
+        finalized_cursor: { height: 7, block_hash: blockHash },
+        charged_usage: { manifest_count: 3, content_bytes: 8192 },
+        manifests: [summary],
+        has_more: false,
+        next_after_digest: null,
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.listSorafsPinManifests({
-    status: "APPROVED",
+    status: "approved",
     limit: "10",
-    offset: 0n,
+    maxBytes: 2048,
+    afterDigestHex: "0".repeat(63) + "1",
+    expectedFinalizedHeight: 7,
+    expectedFinalizedBlockHashHex: "99".repeat(32),
   });
   assert.ok(capturedUrl?.startsWith(`${BASE_URL}/v1/sorafs/pin`));
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.searchParams.get("status"), "approved");
   assert.equal(parsed.searchParams.get("limit"), "10");
-  assert.equal(parsed.searchParams.get("offset"), "0");
+  assert.equal(parsed.searchParams.get("max_bytes"), "2048");
+  assert.equal(parsed.searchParams.get("after_digest_hex"), "0".repeat(63) + "1");
+  assert.equal(parsed.searchParams.get("expected_finalized_height"), "7");
+  assert.equal(
+    parsed.searchParams.get("expected_finalized_block_hash_hex"),
+    "99".repeat(32),
+  );
+  assert.equal(parsed.searchParams.has("offset"), false);
+  assert.equal(result.finalized_cursor.height, 7);
+  assert.deepEqual([...result.finalized_cursor.block_hash], blockHash);
+  assert.deepEqual(result.charged_usage, {
+    manifest_count: 3,
+    content_bytes: 8192,
+  });
   assert.equal(result.manifests.length, 1);
   const manifest = result.manifests[0];
-  assert.equal(manifest.digest_hex, manifestHex);
-  assert.equal(manifest.chunker.name, "sf1");
-  assert.equal(manifest.status.state, "approved");
-  assert.equal(manifest.alias?.proof_b64, aliasProof);
-  assert.equal(manifest.lineage?.is_head, true);
-  assert.equal(manifest.governance_refs[0]?.targets.alias, "docs/main");
+  assert.deepEqual([...manifest.digest], manifestDigest);
+  assert.deepEqual(manifest.status, { status: "Approved", value: 45 });
+  assert.deepEqual([...manifest.successor_of], parentDigest);
+  assert.equal("alias" in manifest, false);
+  assert.equal("metadata" in manifest, false);
+  assert.equal("lineage" in manifest, false);
+  assert.equal(result.has_more, false);
+  assert.equal(result.next_after_digest, null);
   await assert.rejects(
-    () => client.listSorafsPinManifests({ status: "invalid" }),
+    () => client.listSorafsPinManifests({ status: "APPROVED" }),
     (error) => {
       assert(error instanceof ValidationError);
       assert.equal(error.code, ValidationErrorCode.INVALID_STRING);
@@ -4461,6 +4447,80 @@ test("listSorafsPinManifests normalizes manifest payloads and guards filters", a
       assert.match(error.message, /sorafsPinList\.status/);
       return true;
     },
+  );
+  await assert.rejects(
+    () => client.listSorafsPinManifests({ expectedFinalizedHeight: 7 }),
+    /must be supplied together/,
+  );
+  await assert.rejects(
+    () => client.listSorafsPinManifests({ offset: 0 }),
+    /unsupported fields: offset/,
+  );
+  await assert.rejects(
+    () => client.listSorafsPinManifests({ limit: 257 }),
+    /at most 256/,
+  );
+  await assert.rejects(
+    () => client.listSorafsPinManifests({ maxBytes: 1023 }),
+    /at least 1024/,
+  );
+});
+
+test("listSorafsPinManifests rejects retired shapes and forged page cursors", async () => {
+  const digest = Array(32).fill(0x44);
+  const basePage = {
+    finalized_cursor: { height: 9, block_hash: Array(32).fill(0x55) },
+    charged_usage: { manifest_count: 1, content_bytes: 7 },
+    manifests: [
+      {
+        digest,
+        submitted_by: FIXTURE_CAROL_ID,
+        submitted_epoch: 1,
+        content_length: 7,
+        retention_epoch: 10,
+        status: { status: "Pending", value: null },
+        successor_of: null,
+      },
+    ],
+    has_more: true,
+    next_after_digest: digest,
+  };
+  let payload = basePage;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  payload = { ...basePage, attestation: { block_height: 9 } };
+  await assert.rejects(
+    () => client.listSorafsPinManifests(),
+    /contains unknown field attestation/,
+  );
+  payload = { ...basePage, next_after_digest: Array(32).fill(0x45) };
+  await assert.rejects(
+    () => client.listSorafsPinManifests(),
+    /must equal the last returned digest/,
+  );
+  payload = { ...basePage, has_more: false, next_after_digest: digest };
+  await assert.rejects(
+    () => client.listSorafsPinManifests(),
+    /has_more must agree/,
+  );
+  payload = {
+    ...basePage,
+    manifests: [
+      { ...basePage.manifests[0], digest: Array(32).fill(0x45) },
+      basePage.manifests[0],
+    ],
+    next_after_digest: digest,
+  };
+  await assert.rejects(
+    () => client.listSorafsPinManifests(),
+    /strictly digest-ordered/,
   );
 });
 
