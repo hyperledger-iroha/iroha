@@ -59,8 +59,7 @@ DEFAULT_REPORT_DIR = (
 )
 DEFAULT_TRACKED_FIXTURE = (
     REPO_ROOT
-    / "docs"
-    / "source"
+    / "specs"
     / "sdk"
     / "android"
     / "generated"
@@ -395,7 +394,6 @@ def build_fixture_example(
     timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
         "manifest_payload_base64": manifest_payload_base64,
-        "submitted_epoch": fixture_meta["now_unix_secs"],
         "alias": None,
         "successor_of": None,
     }

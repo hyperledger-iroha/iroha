@@ -26,6 +26,7 @@ test("call posts Norito payload with default headers", async () => {
   assert.equal(calls[0].init.headers.Authorization, "Bearer token");
   assert.equal(calls[0].init.headers["Content-Type"], "application/x-norito");
   assert.equal(calls[0].init.headers.Accept, "application/x-norito");
+  assert.equal(calls[0].init.redirect, "error");
 });
 
 test("call merges params, headers, and method overrides", async () => {
@@ -68,16 +69,20 @@ test("call attaches apiToken as X-API-Token only", async () => {
   assert.equal(initCapture.headers["X-Iroha-API-Token"], undefined);
 });
 
-test("call throws NoritoRpcError on non-2xx status", async () => {
+test("call does not retry a signed query on a retryable HTTP status", async () => {
+  let attempts = 0;
   const client = new NoritoRpcClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      assert.equal(init.redirect, "error");
+      return createResponse({
         status: 503,
         textBody: "backend unavailable",
-      }),
+      });
+    },
   });
   await assert.rejects(
-    () => client.call("/v1/pipeline/submit", new Uint8Array([0])),
+    () => client.call("/query", new Uint8Array([0])),
     (error) => {
       assert.ok(error instanceof NoritoRpcError);
       assert.equal(error.status, 503);
@@ -85,7 +90,49 @@ test("call throws NoritoRpcError on non-2xx status", async () => {
       return true;
     },
   );
+  assert.equal(attempts, 1);
 });
+
+test("call does not retry a signed query after a network failure", async () => {
+  let attempts = 0;
+  const networkError = new TypeError("socket closed after dispatch");
+  const client = new NoritoRpcClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      assert.equal(init.redirect, "error");
+      throw networkError;
+    },
+  });
+
+  await assert.rejects(
+    () => client.call("/query", new Uint8Array([0x01])),
+    (error) => error === networkError,
+  );
+  assert.equal(attempts, 1);
+});
+
+for (const redirectStatus of [307, 308]) {
+  test(`call rejects signed-query ${redirectStatus} without redirecting or retrying`, async () => {
+    let attempts = 0;
+    const client = new NoritoRpcClient(BASE_URL, {
+      fetchImpl: async (_url, init) => {
+        attempts += 1;
+        assert.equal(init.redirect, "error");
+        return createResponse({
+          status: redirectStatus,
+          headers: { location: "https://redirect.example/replayed-query" },
+        });
+      },
+    });
+
+    await assert.rejects(
+      () => client.call("/query", new Uint8Array([0x02])),
+      (error) =>
+        error instanceof NoritoRpcError && error.status === redirectStatus,
+    );
+    assert.equal(attempts, 1);
+  });
+}
 
 test("call enforces timeout via AbortController", async () => {
   const client = new NoritoRpcClient(BASE_URL, {

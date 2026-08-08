@@ -57,6 +57,16 @@ use zk_x509::{
     ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1, zk_x509_release_public_statement_material_v1,
 };
 
+fn release_network_id_from_genesis_hash(
+    hash: [u8; 32],
+) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(hash),
+        ),
+    )
+}
+
 use core::{
     fmt,
     mem::size_of,
@@ -3895,6 +3905,7 @@ fn zk_ams_release_transaction_context_v1(
     nonce: u32,
 ) -> Result<ZkAmsPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
     Ok(ZkAmsPrivacyActionTransactionContextV1 {
+        network_id: release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1),
         chain_id: ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1),
         authority: privacy_release_account_v1(39)?,
         creation_time: Duration::from_millis(creation_time_ms),
@@ -4147,6 +4158,7 @@ fn run_jindo_stage_v1(
     let witness = JindoPrivacyActionWitnessV1::try_new(polynomials, jindo_field_v1(13))
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let context = JindoPrivacyActionTransactionContextV1 {
+        network_id: release_network_id_from_genesis_hash(JINDO_RELEASE_GENESIS_HASH_V1),
         chain_id: ChainId::from(JINDO_RELEASE_CHAIN_ID_V1),
         authority: AccountId::new(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -4507,7 +4519,7 @@ fn orchard_release_transaction_payload_v1(
 ) -> Result<TransactionPayload, PrivacyReleaseEvidenceErrorClassV1> {
     let authority = privacy_release_account_v1(0x4d)?;
     let mut builder = TransactionBuilder::new(
-        ChainId::from(ORCHARD_RELEASE_CHAIN_ID_V1),
+        release_network_id_from_genesis_hash(ORCHARD_RELEASE_GENESIS_HASH_V1),
         authority,
         FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000_000)),
     )

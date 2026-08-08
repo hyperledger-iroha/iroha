@@ -222,14 +222,14 @@ fn seed_committed_height(state: &mut State, height: u64) {
 }
 
 fn build_tx(
-    chain_id: &ChainId,
+    network_id: NetworkId,
     authority: &AccountId,
     keypair: &KeyPair,
     instructions: Vec<InstructionBox>,
 ) -> AcceptedTransaction<'static> {
     let time_source = TimeSource::new_system();
     let tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        network_id,
         authority.clone(),
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -247,8 +247,14 @@ fn build_tx(
         default_limits.max_metadata_depth(),
     );
     let crypto_cfg = Crypto::default();
-    AcceptedTransaction::accept(tx, chain_id, Duration::from_secs(30), params, &crypto_cfg)
-        .expect("transaction should be accepted")
+    AcceptedTransaction::accept(
+        tx,
+        &network_id,
+        Duration::from_secs(30),
+        params,
+        &crypto_cfg,
+    )
+    .expect("transaction should be accepted")
 }
 
 #[test]
@@ -320,10 +326,10 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         lane_catalog,
     ));
     let (authority, keypair) = gen_account_in("nexus");
-    let chain_id = ChainId::from("nexus-multilane");
+    let network_id = *state.network_id_ref();
 
     let governance_tx = build_tx(
-        &chain_id,
+        network_id,
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::domain(Domain::new(
@@ -331,7 +337,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         )))],
     );
     let zk_tx = build_tx(
-        &chain_id,
+        network_id,
         &authority,
         &keypair,
         vec![InstructionBox::from(Mint::asset_quantity(
@@ -346,7 +352,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         ))],
     );
     let default_tx = build_tx(
-        &chain_id,
+        network_id,
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::asset_definition(
@@ -395,10 +401,10 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     seed_committed_height(&mut state, 7);
 
     let (authority, keypair) = gen_account_in("nexus");
-    let chain_id = ChainId::from("nexus-multilane-autoscale");
+    let network_id = *state.network_id_ref();
 
     let governance_tx = build_tx(
-        &chain_id,
+        network_id,
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::domain(Domain::new(
@@ -410,7 +416,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
     assert_eq!(governance.dataspace_id, DataSpaceId::new(1));
 
     let zk_tx = build_tx(
-        &chain_id,
+        network_id,
         &authority,
         &keypair,
         vec![InstructionBox::from(Mint::asset_quantity(
@@ -436,7 +442,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
                 .expect("valid role name"),
         };
         let default_tx = build_tx(
-            &chain_id,
+            network_id,
             &authority,
             &keypair,
             vec![InstructionBox::from(Register::role(
@@ -528,8 +534,7 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
         seed_committed_height(&mut state, 7);
 
         let (authority, keypair) = gen_account_in("nexus");
-        let chain_id = ChainId::try_from(format!("nexus-multilane-corrupt-{}", case.name))
-            .expect("canonical multilane test chain id");
+        let network_id = *state.network_id_ref();
         let mut lanes_seen = std::collections::BTreeSet::new();
 
         for idx in 0..128 {
@@ -539,7 +544,7 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
                     .expect("valid role name"),
             };
             let default_tx = build_tx(
-                &chain_id,
+                network_id,
                 &authority,
                 &keypair,
                 vec![InstructionBox::from(Register::role(
@@ -580,7 +585,7 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
     state.nexus.write().autoscale.enabled = false;
 
     let (authority, keypair) = gen_account_in("nexus");
-    let chain_id = ChainId::from("nexus-multilane-autoscale-disabled");
+    let network_id = *state.network_id_ref();
     let mut lanes_seen = std::collections::BTreeSet::new();
 
     for idx in 0..128 {
@@ -590,7 +595,7 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
                 .expect("valid role name"),
         };
         let default_tx = build_tx(
-            &chain_id,
+            network_id,
             &authority,
             &keypair,
             vec![InstructionBox::from(Register::role(
@@ -629,7 +634,7 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
     state.nexus.write().enabled = false;
 
     let (authority, keypair) = gen_account_in("nexus");
-    let chain_id = ChainId::from("nexus-multilane-nexus-disabled");
+    let network_id = *state.network_id_ref();
     let mut lanes_seen = std::collections::BTreeSet::new();
 
     for idx in 0..128 {
@@ -639,7 +644,7 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
                 .expect("valid role name"),
         };
         let default_tx = build_tx(
-            &chain_id,
+            network_id,
             &authority,
             &keypair,
             vec![InstructionBox::from(Register::role(

@@ -32,7 +32,8 @@ fields:
 The durable artifact is the single source of consensus truth in the proof. It
 contains its format and protocol versions, height, complete immutable
 `HeightContext`, exact `BlockSubject`, block hash, Commit quorum certificate,
-and roster-aligned validator PoPs. The height context freezes the chain id,
+and roster-aligned validator PoPs. The height context freezes the exact
+genesis-derived network id,
 epoch bounds, consensus mode, parent CommitQC, ordered `ValidatorPower` roster,
 canonical `DualQuorum`, Nexus/AMX context commitment, data-availability layout,
 and leader seed. At an epoch-ending boundary parent it also embeds the optional
@@ -42,7 +43,7 @@ roster. The `FinalizedNextEpochSnapshot` binds its `epoch_end_height` and the
 next roster's aligned `validator_set_pops` as well as the next epoch parameters.
 The subject binds the parent block hash, block hash, and canonical payload hash.
 
-There are deliberately no duplicate proof-level height, chain, block hash,
+There are deliberately no duplicate proof-level height, network, block hash,
 roster hash, or certificate fields. A malformed sidecar therefore cannot ask a
 verifier to choose between competing copies of the same consensus fact.
 
@@ -105,7 +106,7 @@ structural and cryptographic checks:
    rounds; Commit permits only a proposal view at or before its finality view.
    A `next_epoch_snapshot` in the height context is mandatory for an
    epoch-ending boundary parent and forbidden elsewhere.
-4. Require the artifact chain id to equal the caller's expected chain id.
+4. Require the artifact network id to equal the caller's expected network id.
 5. Recompute the block-header height, hash, predecessor, and view-change index
    and require them to match the artifact's height, block hash, subject parent,
    and CommitQC `proposal_round.view` respectively. The CommitQC's own
@@ -163,18 +164,18 @@ build; structural validity alone is never finality.
 
 A standalone proof can establish that its header, artifact, powered roster,
 PoPs, and aggregate signature are internally consistent. It cannot establish
-that a proof-carried roster is the canonical roster for the intended chain.
+that a proof-carried roster is the canonical roster for the intended network.
 Callers must supply trust independently.
 
 `BridgeFinalityVerifier` therefore requires an explicitly trusted
 `HeightContextId` before accepting its first proof; it never learns trust from
-that proof. It also binds every proof to the configured chain id. After the
+that proof. It also binds every proof to the configured network id. After the
 first proof it accepts only the immediate next height and verifies that:
 
 - the child context carries a valid parent CommitQC for the previously accepted
   committed decision;
 - that parent certificate verifies under the previous frozen roster and PoPs;
-- chain, consensus mode, and DA layout obey the v2 transition rules; and
+- network, consensus mode, and DA layout obey the v2 transition rules; and
 - within an epoch, the child copies the previous artifact's roster-aligned PoPs;
   at an epoch boundary, its epoch, roster, dual quorum, leader seed, and PoPs
   match the previous height context's CommitQC-authenticated
@@ -215,10 +216,10 @@ roster supplied by the message would not establish Taira finality.
 
 `BridgeFinalityBundle` has exactly two fields:
 
-- `commitment`: `{ chain_id, height_context_id, block_height, block_hash }`;
+- `commitment`: `{ network_id, height_context_id, block_height, block_hash }`;
 - `finality_proof`: the complete proof described above.
 
-The compact commitment duplicates only the exact chain, height context, block
+The compact commitment duplicates only the exact network, height context, block
 height, and block hash needed to reject bundle drift before verifying the
 embedded proof. SCCP inclusion uses its own typed message Merkle branch and
 governed finality anchor.

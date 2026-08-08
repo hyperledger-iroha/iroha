@@ -690,7 +690,7 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
 {
     use iroha::{client::Client, config::Config};
     use iroha_data_model::{
-        ChainId, NetworkId, account::AccountId, isi::Log, transaction::TransactionBuilder,
+        ChainId, account::AccountId, isi::Log, transaction::TransactionBuilder,
     };
     use iroha_logger::Level;
     use tokio::net::TcpListener;
@@ -711,9 +711,10 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     let chain: ChainId = harness.cfg.common.chain.clone();
     let key_pair = checked_norito_ingress_client_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
+    let network_id = harness.network_id;
     let client = Client::new(Config {
         chain: chain.clone(),
-        network_id: NetworkId::from_genesis_hash(harness.cfg.genesis.expected_hash),
+        network_id,
         account: account.clone(),
         account_chain_discriminant: iroha_config::parameters::defaults::common::chain_discriminant(
         ),
@@ -732,7 +733,7 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     });
 
     let tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

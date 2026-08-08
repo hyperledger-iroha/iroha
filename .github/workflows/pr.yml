@@ -137,7 +137,9 @@ jobs:
       - name: Verify canonical numeric fixtures and consensus behavior
         run: |
           cargo test --locked -p ivm --test ivm_group_06 numeric_
+          cargo test --locked -p ivm --test ivm_group_01 abi_hash_versions::
           cargo test --locked -p ivm --test ivm_group_03 gas_schedule_hash
+          cargo run --locked -p ivm --features dev-tools --bin gen_abi_hash_doc -- --check
           cargo test --locked -p ivm --test ivm_group_05 kotodama_checked_arithmetic::
           cargo test --locked -p iroha_primitives randomized_decimal_arithmetic_matches_independent_rational_reference
 
@@ -190,11 +192,13 @@ jobs:
             scripts/tests/profile_build_test.py \
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
-            scripts/tests/check_generated_artifacts_test.py
+            scripts/tests/check_generated_artifacts_test.py \
+            scripts/tests/check_nexus_provisioning_templates_test.py
           python3 scripts/check_cargo_feature_hygiene.py
           python3 scripts/check_workspace_target_inventory.py
           python3 scripts/check_source_file_budget.py
           python3 scripts/check_generated_artifacts.py
+          python3 scripts/check_nexus_provisioning_templates.py
       - name: Classify the PR reverse-dependency closure
         id: classify
         env:

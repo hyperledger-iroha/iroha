@@ -172,8 +172,15 @@ fn build_faucet_test_context_with_registration(
             block.commit();
         }
     }
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let chain_id = iroha_data_model::ChainId::from("test-chain");
+    let network_id = iroha_torii::test_utils::signed_query_network_id();
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        query,
+        chain_id.clone(),
+        network_id,
+    ));
 
     {
         let mut seed_instructions: Vec<InstructionBox> = vec![
@@ -194,7 +201,7 @@ fn build_faucet_test_context_with_registration(
         }
 
         let seed_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -272,7 +279,7 @@ fn build_faucet_test_context_with_registration(
         {
             Torii::new(
                 chain_id.clone(),
-                iroha_torii::test_utils::signed_query_network_id(),
+                network_id,
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -290,7 +297,7 @@ fn build_faucet_test_context_with_registration(
         {
             Torii::new(
                 chain_id.clone(),
-                iroha_torii::test_utils::signed_query_network_id(),
+                network_id,
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),

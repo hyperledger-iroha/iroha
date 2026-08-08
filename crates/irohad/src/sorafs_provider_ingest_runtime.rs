@@ -19,7 +19,10 @@ use std::{
 
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{
-    actual::SorafsProviderIngestRuntime,
+    actual::{
+        SorafsProviderAttestationJournal, SorafsProviderAttestationRuntimeBinding,
+        SorafsProviderIngestRuntime,
+    },
     defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
     is_production_runtime_handle,
 };
@@ -34,7 +37,10 @@ use iroha_data_model::{
     account::AccountId,
     block::BlockHeader,
     isi::sorafs::CompleteReplicationOrder,
-    musubi::MusubiArchiveCommitmentV1,
+    musubi::{
+        MusubiArchiveCommitmentV1, MusubiProviderBundleAttestationKeyV1,
+        MusubiProviderBundleVerificationAttestationV1, MusubiProviderBundleVerificationPayloadV1,
+    },
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -68,8 +74,16 @@ use sorafs_node::provider_ingest_runtime::{
     ProviderIngestRuntimeProviderQualificationV1, ProviderIngestVerifiedMusubiBundleReceiptV1,
 };
 use sorafs_node::{
-    AdmittedPayloadReadLeaseErrorV1, FinalizedProviderIngestAuthorizationV1, NodeHandle,
-    NodeStorageError, ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClaimOwnerV1,
+    AdmittedPayloadReadLeaseErrorV1, FinalizedProviderIngestAuthorizationV1,
+    MusubiProviderAttestationInventoryErrorV1, MusubiProviderAttestationInventoryItemV1,
+    MusubiProviderAttestationInventoryQualificationV1,
+    MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
+    MusubiProviderAttestationInventoryRuntimeErrorV1, MusubiProviderAttestationInventoryRuntimeV1,
+    MusubiProviderAttestationInventoryScopeV1, MusubiProviderAttestationInventorySinkV1,
+    MusubiProviderAttestationInventoryV1, MusubiProviderAttestationJournalPolicyV1,
+    MusubiProviderAttestationSignerErrorV1, MusubiProviderAttestationSignerQualificationV1,
+    MusubiProviderAttestationSignerV1, NodeHandle, NodeStorageError,
+    ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClaimOwnerV1,
     ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
     ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
     ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolutionContextV1,
@@ -85,7 +99,9 @@ use sorafs_node::{
     ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
     ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
     ProviderIngestTransactionObservationV1,
+    musubi_provider_attestation_controller_policy_digest_v1,
     store::{StorageError, StoredManifest},
+    validate_musubi_provider_attestation_inventory_binding_v1,
 };
 
 use crate::sorafs_provider_ingest_finalized_query::ArchivedProviderIngestFinalizedLedgerV1;
@@ -614,6 +630,559 @@ impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
             .provider_owners()
             .get(&provider_id)
             == Some(expected_owner)
+    }
+}
+
+// TODO: instantiate this adapter only after the provider-attestation archive,
+// checkpoint-head seal, and supervised journal activation gates are complete.
+// Keeping the adapter private prevents an unqualified signer from entering the
+// journal through a public construction surface in the meantime.
+#[derive(Clone)]
+#[allow(dead_code)]
+struct GovernedMusubiProviderAttestationSignerV1 {
+    signer: Arc<dyn MusubiProviderAttestationSignerV1>,
+    configured_binding: SorafsProviderAttestationRuntimeBinding,
+    owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+    expected_chain_id: ChainId,
+    expected_genesis_block_hash: [u8; 32],
+    expected_provider_id: ProviderId,
+}
+
+#[derive(Clone, Copy)]
+struct MusubiProviderAttestationRequestBindingV1<'a> {
+    payload: &'a MusubiProviderBundleVerificationPayloadV1,
+    completion_claim_digest: [u8; 32],
+    observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    signer_policy: ProviderIngestCompletionSignerPolicyV1,
+}
+
+type MusubiProviderAttestationApprovalFutureV1<'a> = ProviderIngestFutureV1<
+    'a,
+    Result<MusubiProviderBundleVerificationAttestationV1, MusubiProviderAttestationSignerErrorV1>,
+>;
+
+impl<'a> From<&'a ProviderIngestMusubiAttestationApprovalRequestV1>
+    for MusubiProviderAttestationRequestBindingV1<'a>
+{
+    fn from(request: &'a ProviderIngestMusubiAttestationApprovalRequestV1) -> Self {
+        Self {
+            payload: request.payload(),
+            completion_claim_digest: request.completion_claim_digest(),
+            observed_finalized_cursor: request.observed_finalized_cursor(),
+            signer_policy: request.signer_policy(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl GovernedMusubiProviderAttestationSignerV1 {
+    fn new(
+        signer: Arc<dyn MusubiProviderAttestationSignerV1>,
+        configured_binding: SorafsProviderAttestationRuntimeBinding,
+        owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
+        expected_chain_id: ChainId,
+        expected_genesis_block_hash: [u8; 32],
+        expected_provider_id: ProviderId,
+    ) -> Self {
+        Self {
+            signer,
+            configured_binding,
+            owner_authority,
+            expected_chain_id,
+            expected_genesis_block_hash,
+            expected_provider_id,
+        }
+    }
+
+    fn validate_configured_binding(&self) -> Result<(), MusubiProviderAttestationSignerErrorV1> {
+        if !is_production_runtime_handle(&self.configured_binding.handle)
+            || self.configured_binding.revision == 0
+            || self.configured_binding.policy_digest == [0; 32]
+            || self.expected_chain_id.as_str().is_empty()
+            || self.expected_chain_id.as_str().len()
+                > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            || self.expected_genesis_block_hash == [0; 32]
+            || *self.expected_provider_id.as_bytes() == [0; 32]
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn qualified_snapshot(
+        &self,
+    ) -> Result<
+        MusubiProviderAttestationSignerQualificationV1,
+        MusubiProviderAttestationSignerErrorV1,
+    > {
+        self.validate_configured_binding()?;
+        let handle_before = self.signer.runtime_handle().to_owned();
+        if !is_production_runtime_handle(&handle_before)
+            || handle_before != self.configured_binding.handle
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        let qualification = self.signer.qualification()?;
+        let expected_controller_policy_digest =
+            musubi_provider_attestation_controller_policy_digest_v1(&qualification.authority)
+                .map_err(|_| MusubiProviderAttestationSignerErrorV1::Rejected)?;
+        if self.signer.runtime_handle() != handle_before
+            || qualification.validate().is_err()
+            || qualification.adapter_revision() != self.configured_binding.revision
+            || qualification.adapter_policy_digest() != self.configured_binding.policy_digest
+            || self.signer.authority() != &qualification.authority
+            || self.signer.signer_policy() != qualification.signer_policy
+            || qualification.controller_policy_digest != expected_controller_policy_digest
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(qualification)
+    }
+
+    fn request_snapshot(
+        &self,
+        request: MusubiProviderAttestationRequestBindingV1<'_>,
+    ) -> Result<
+        MusubiProviderAttestationSignerQualificationV1,
+        MusubiProviderAttestationSignerErrorV1,
+    > {
+        let binding = &request.payload.binding;
+        let finalized_cursor = request.observed_finalized_cursor;
+        let finalized_anchor = binding.finalized_anchor;
+        if request.payload.validate().is_err()
+            || binding.chain_id != self.expected_chain_id
+            || binding.genesis_block_hash != self.expected_genesis_block_hash
+            || binding.provider_id != self.expected_provider_id
+            || request.completion_claim_digest == [0; 32]
+            || finalized_cursor.height == 0
+            || finalized_cursor.block_hash == [0; 32]
+            || !request.signer_policy.is_valid()
+            || binding.completed_by != binding.completion_authority.provider_owner
+            || request.signer_policy != binding.completion_authority.signer_policy
+            || finalized_anchor.height > finalized_cursor.height
+            || finalized_anchor.height == finalized_cursor.height
+                && finalized_anchor.block_hash != finalized_cursor.block_hash
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        let qualification = self.qualification()?;
+        let eligibility = self.current_eligibility()?;
+        let expected_controller_policy_digest =
+            musubi_provider_attestation_controller_policy_digest_v1(&binding.completed_by)
+                .map_err(|_| MusubiProviderAttestationSignerErrorV1::Rejected)?;
+        if qualification.authority != binding.completed_by
+            || qualification.signer_policy != request.signer_policy
+            || qualification.controller_policy_digest != expected_controller_policy_digest
+            || self.signer.authority() != &binding.completed_by
+            || self.signer.signer_policy() != request.signer_policy
+            || eligibility != request.signer_policy
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(qualification)
+    }
+
+    async fn approve_bound<'a, Approve>(
+        &'a self,
+        request: MusubiProviderAttestationRequestBindingV1<'a>,
+        approve: Approve,
+    ) -> Result<MusubiProviderBundleVerificationAttestationV1, MusubiProviderAttestationSignerErrorV1>
+    where
+        Approve: FnOnce() -> MusubiProviderAttestationApprovalFutureV1<'a> + Send + 'a,
+    {
+        self.validate_configured_binding()?;
+        let binding = &request.payload.binding;
+        if request.payload.validate().is_err()
+            || binding.chain_id != self.expected_chain_id
+            || binding.genesis_block_hash != self.expected_genesis_block_hash
+            || binding.provider_id != self.expected_provider_id
+            || request.completion_claim_digest == [0; 32]
+            || !request.signer_policy.is_valid()
+            || binding.completed_by != binding.completion_authority.provider_owner
+            || request.signer_policy != binding.completion_authority.signer_policy
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        let expected_owner = binding.completed_by.clone();
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        let qualification_before = self.request_snapshot(request)?;
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+
+        let approval = approve().await;
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        let qualification_after = self.request_snapshot(request);
+        if !self
+            .owner_authority
+            .owner_matches(self.expected_provider_id, &expected_owner)
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        let qualification_after = qualification_after?;
+        if qualification_after != qualification_before {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+
+        let attestation = approval?;
+        if &attestation.payload != request.payload
+            || attestation.verify(&request.payload.binding).is_err()
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Rejected);
+        }
+        Ok(attestation)
+    }
+}
+
+impl MusubiProviderAttestationSignerV1 for GovernedMusubiProviderAttestationSignerV1 {
+    fn runtime_handle(&self) -> &str {
+        &self.configured_binding.handle
+    }
+
+    fn authority(&self) -> &AccountId {
+        self.signer.authority()
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<
+        MusubiProviderAttestationSignerQualificationV1,
+        MusubiProviderAttestationSignerErrorV1,
+    > {
+        let before = self.qualified_snapshot()?;
+        let after = self.qualified_snapshot()?;
+        if before != after {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        Ok(after)
+    }
+
+    fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
+        self.signer.signer_policy()
+    }
+
+    fn current_eligibility(
+        &self,
+    ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>
+    {
+        let qualification_before = self.qualified_snapshot()?;
+        let eligibility = self.signer.current_eligibility()?;
+        let qualification_after = self.qualified_snapshot()?;
+        if qualification_before != qualification_after
+            || eligibility != qualification_before.signer_policy
+            || self.signer.signer_policy() != qualification_before.signer_policy
+        {
+            return Err(MusubiProviderAttestationSignerErrorV1::Unavailable);
+        }
+        Ok(eligibility)
+    }
+
+    fn approve<'a>(
+        &'a self,
+        request: &'a ProviderIngestMusubiAttestationApprovalRequestV1,
+    ) -> MusubiProviderAttestationApprovalFutureV1<'a> {
+        Box::pin(self.approve_bound(request.into(), || self.signer.approve(request)))
+    }
+}
+
+// TODO: instantiate this adapter only after the provider-attestation archive,
+// checkpoint-head seal, and supervised journal activation gates are complete.
+// Keeping the adapter private prevents an inventory implementation from
+// bypassing the daemon-owned deployment binding in the meantime.
+#[derive(Clone)]
+#[allow(dead_code)]
+struct GovernedMusubiProviderAttestationInventoryV1 {
+    inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
+    configured_binding: SorafsProviderAttestationRuntimeBinding,
+    expected_chain_id: ChainId,
+    expected_genesis_block_hash: [u8; 32],
+    expected_provider_id: ProviderId,
+}
+
+#[allow(dead_code)]
+impl GovernedMusubiProviderAttestationInventoryV1 {
+    fn new(
+        inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1>,
+        configured_binding: SorafsProviderAttestationRuntimeBinding,
+        expected_chain_id: ChainId,
+        expected_genesis_block_hash: [u8; 32],
+        expected_provider_id: ProviderId,
+    ) -> Self {
+        Self {
+            inventory,
+            configured_binding,
+            expected_chain_id,
+            expected_genesis_block_hash,
+            expected_provider_id,
+        }
+    }
+
+    fn validate_configured_binding(
+        &self,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1> {
+        if !is_production_runtime_handle(&self.configured_binding.handle)
+            || self.configured_binding.revision == 0
+            || self.configured_binding.policy_digest == [0; 32]
+            || self.expected_chain_id.as_str().is_empty()
+            || self.expected_chain_id.as_str().len()
+                > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
+            || self.expected_genesis_block_hash == [0; 32]
+            || *self.expected_provider_id.as_bytes() == [0; 32]
+        {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn qualified_snapshot(
+        &self,
+    ) -> std::result::Result<
+        MusubiProviderAttestationInventoryQualificationV1,
+        MusubiProviderAttestationInventoryRuntimeErrorV1,
+    > {
+        self.validate_configured_binding()?;
+        let handle_before = self.inventory.runtime_handle().to_owned();
+        if !is_production_runtime_handle(&handle_before)
+            || handle_before != self.configured_binding.handle
+        {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        let qualification = self.inventory.qualification()?;
+        if self.inventory.runtime_handle() != handle_before
+            || validate_musubi_provider_attestation_inventory_binding_v1(
+                &handle_before,
+                &qualification,
+            )
+            .is_err()
+            || qualification.adapter_revision() != self.configured_binding.revision
+            || qualification.policy_digest() != self.configured_binding.policy_digest
+        {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        Ok(qualification)
+    }
+
+    fn validate_scope(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        if scope.validate().is_err()
+            || scope.chain_id != self.expected_chain_id
+            || scope.genesis_block_hash != self.expected_genesis_block_hash
+        {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_key(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        self.validate_scope(scope)?;
+        if key.validate().is_err()
+            || key.archive_id != scope.archive_id
+            || key.replication_order != scope.replication_order
+            || key.provider_id != self.expected_provider_id
+        {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_item(
+        &self,
+        item: &MusubiProviderAttestationInventoryItemV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        if item.validate().is_err() {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        self.validate_key(item.scope(), item.key())
+    }
+
+    fn validate_readback(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+        readback: &MusubiProviderAttestationInventoryReadbackV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        self.validate_key(scope, key)?;
+        if readback.inventory_revision() == 0
+            || readback.item().validate().is_err()
+            || readback.item().scope() != scope
+            || readback.item().key() != key
+        {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_inventory(
+        &self,
+        scope: &MusubiProviderAttestationInventoryScopeV1,
+        inventory: &MusubiProviderAttestationInventoryV1,
+    ) -> std::result::Result<(), MusubiProviderAttestationInventoryErrorV1> {
+        self.validate_scope(scope)?;
+        if inventory.scope() != scope || inventory.validate().is_err() {
+            return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+        }
+        Ok(())
+    }
+}
+
+fn map_musubi_inventory_runtime_error(
+    error: MusubiProviderAttestationInventoryRuntimeErrorV1,
+) -> MusubiProviderAttestationInventoryErrorV1 {
+    match error {
+        MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable => {
+            MusubiProviderAttestationInventoryErrorV1::Unavailable
+        }
+        MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected => {
+            MusubiProviderAttestationInventoryErrorV1::Rejected
+        }
+    }
+}
+
+impl MusubiProviderAttestationInventoryRuntimeV1 for GovernedMusubiProviderAttestationInventoryV1 {
+    fn runtime_handle(&self) -> &str {
+        &self.configured_binding.handle
+    }
+
+    fn qualification(
+        &self,
+    ) -> std::result::Result<
+        MusubiProviderAttestationInventoryQualificationV1,
+        MusubiProviderAttestationInventoryRuntimeErrorV1,
+    > {
+        let before = self.qualified_snapshot()?;
+        let after = self.qualified_snapshot()?;
+        if before != after {
+            return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+        }
+        Ok(after)
+    }
+
+    fn check_readiness<'a>(
+        &'a self,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>,
+    > {
+        Box::pin(async move {
+            let before = self.qualified_snapshot()?;
+            let readiness = self.inventory.check_readiness().await;
+            let after = self.qualified_snapshot()?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected);
+            }
+            readiness
+        })
+    }
+}
+
+impl MusubiProviderAttestationInventorySinkV1 for GovernedMusubiProviderAttestationInventoryV1 {
+    fn put<'a>(
+        &'a self,
+        item: MusubiProviderAttestationInventoryItemV1,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<u64, MusubiProviderAttestationInventoryErrorV1>,
+    > {
+        Box::pin(async move {
+            self.validate_item(&item)?;
+            let before = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            let result = self.inventory.put(item).await;
+            let after = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            let revision = result?;
+            if revision == 0 {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            Ok(revision)
+        })
+    }
+}
+
+impl MusubiProviderAttestationInventoryReaderV1 for GovernedMusubiProviderAttestationInventoryV1 {
+    fn get<'a>(
+        &'a self,
+        scope: &'a MusubiProviderAttestationInventoryScopeV1,
+        key: MusubiProviderBundleAttestationKeyV1,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<
+            Option<MusubiProviderAttestationInventoryReadbackV1>,
+            MusubiProviderAttestationInventoryErrorV1,
+        >,
+    > {
+        Box::pin(async move {
+            self.validate_key(scope, key)?;
+            let before = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            let result = self.inventory.get(scope, key).await;
+            let after = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            let readback = result?;
+            if let Some(readback) = readback.as_ref() {
+                self.validate_readback(scope, key, readback)?;
+            }
+            Ok(readback)
+        })
+    }
+
+    fn inventory<'a>(
+        &'a self,
+        scope: &'a MusubiProviderAttestationInventoryScopeV1,
+    ) -> ProviderIngestFutureV1<
+        'a,
+        std::result::Result<
+            Option<MusubiProviderAttestationInventoryV1>,
+            MusubiProviderAttestationInventoryErrorV1,
+        >,
+    > {
+        Box::pin(async move {
+            self.validate_scope(scope)?;
+            let before = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            let result = self.inventory.inventory(scope).await;
+            let after = self
+                .qualified_snapshot()
+                .map_err(map_musubi_inventory_runtime_error)?;
+            if before != after {
+                return Err(MusubiProviderAttestationInventoryErrorV1::Rejected);
+            }
+            let inventory = result?;
+            if let Some(inventory) = inventory.as_ref() {
+                self.validate_inventory(scope, inventory)?;
+            }
+            Ok(inventory)
+        })
     }
 }
 
@@ -1377,7 +1946,7 @@ impl NativeCompletionPayloadBuilderV1 {
             },
         );
         let mut builder = TransactionBuilder::new(
-            self.chain_id.clone(),
+            *self.state.network_id_ref(),
             request.provider_owner,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1495,7 +2064,6 @@ impl ProviderIngestCompletionPayloadBuilderV1 for NativeCompletionPayloadBuilder
 
 #[derive(Clone)]
 struct NativeTransactionIngressV1 {
-    chain_id: ChainId,
     state: Arc<State>,
     queue: Arc<Queue>,
 }
@@ -1509,7 +2077,7 @@ impl NativeTransactionIngressV1 {
         let (max_clock_drift, transaction_parameters) = self.state.transaction_admission_limits();
         AcceptedTransaction::accept(
             transaction,
-            &self.chain_id,
+            self.state.network_id_ref(),
             max_clock_drift,
             transaction_parameters,
             self.state.crypto().as_ref(),
@@ -2343,6 +2911,45 @@ fn provider_ingest_runtime_policy(
     }
 }
 
+fn provider_attestation_journal_policy(
+    config: &SorafsProviderAttestationJournal,
+) -> Result<MusubiProviderAttestationJournalPolicyV1> {
+    for (role, binding) in [
+        ("clock seal", &config.clock_seal),
+        ("approval signer", &config.approval_signer),
+        ("inventory", &config.inventory),
+    ] {
+        validate_provider_attestation_runtime_binding(role, binding)?;
+    }
+    let policy = MusubiProviderAttestationJournalPolicyV1 {
+        max_entries: config.max_entries,
+        max_attempts: config.max_attempts,
+        lease_ttl_ms: config.lease_ttl_ms,
+        approval_timeout_ms: config.approval_timeout_ms,
+        handoff_timeout_ms: config.handoff_timeout_ms,
+        retry_delay_ms: config.retry_delay_ms,
+        checkpoint_max_bytes: config.checkpoint_max_bytes,
+        max_cas_retries: config.max_cas_retries,
+    };
+    policy
+        .validate()
+        .wrap_err("validate provider-attestation durable journal policy")?;
+    Ok(policy)
+}
+
+fn validate_provider_attestation_runtime_binding(
+    role: &str,
+    binding: &SorafsProviderAttestationRuntimeBinding,
+) -> Result<()> {
+    if !is_production_runtime_handle(&binding.handle)
+        || binding.revision == 0
+        || binding.policy_digest == [0; 32]
+    {
+        bail!("provider-attestation {role} runtime binding is invalid");
+    }
+    Ok(())
+}
+
 fn assemble_native_provider_ingest_runtime(
     config: &SorafsProviderIngestRuntime,
     context: &ProviderIngestStartContextV1,
@@ -2380,7 +2987,6 @@ fn assemble_native_provider_ingest_runtime(
         expected_signer_binding: qualification.expected_signer_binding.clone(),
     });
     let ingress = Arc::new(NativeTransactionIngressV1 {
-        chain_id: context.chain_id.clone(),
         state: Arc::clone(&context.state),
         queue: Arc::clone(&context.queue),
     });
@@ -2902,6 +3508,9 @@ fn validate_config(config: &SorafsProviderIngestRuntime) -> Result<()> {
     policy
         .validate()
         .wrap_err("validate provider-ingest durable outbox policy")?;
+    if let Some(journal) = config.provider_attestation_journal.as_ref() {
+        provider_attestation_journal_policy(journal)?;
+    }
     Ok(())
 }
 
@@ -2935,10 +3544,15 @@ fn validate_authenticated_source_inventory(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
     use iroha_data_model::{
+        NetworkId,
         isi::InstructionBox,
-        musubi::MusubiContentDigestV1,
+        musubi::{
+            ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiContentDigestV1,
+            MusubiProviderBundleVerificationApprovalV1, MusubiProviderBundleVerificationBindingV1,
+            MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
+        },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
         },
@@ -3071,6 +3685,453 @@ mod tests {
         fn owner_matches(&self, _provider_id: ProviderId, expected_owner: &AccountId) -> bool {
             self.owner.lock().expect("owner authority lock").as_ref() == Some(expected_owner)
         }
+    }
+
+    enum TestMusubiSignerMutationV1 {
+        Owner(AccountId),
+        AdapterRevision(u64),
+    }
+
+    struct TestMusubiAttestationSignerV1 {
+        handle: String,
+        key: KeyPair,
+        authority: AccountId,
+        policy: ProviderIngestCompletionSignerPolicyV1,
+        adapter_revision: AtomicU64,
+        adapter_policy_digest: [u8; 32],
+        controller_policy_digest: [u8; 32],
+        owner_authority: TestOwnerAuthorityV1,
+        mutation: Mutex<Option<TestMusubiSignerMutationV1>>,
+        qualification_calls: AtomicU64,
+        eligibility_calls: AtomicU64,
+        approval_calls: AtomicU64,
+    }
+
+    impl TestMusubiAttestationSignerV1 {
+        fn new(key: KeyPair, owner_authority: TestOwnerAuthorityV1) -> Self {
+            let authority = AccountId::new(key.public_key().clone());
+            Self {
+                handle: "hsm://sorafs/musubi/provider-attestation/primary".to_owned(),
+                controller_policy_digest: musubi_provider_attestation_controller_policy_digest_v1(
+                    &authority,
+                )
+                .expect("test controller digest"),
+                key,
+                authority,
+                policy: test_signer_policy(1),
+                adapter_revision: AtomicU64::new(7),
+                adapter_policy_digest: [0xA7; 32],
+                owner_authority,
+                mutation: Mutex::new(None),
+                qualification_calls: AtomicU64::new(0),
+                eligibility_calls: AtomicU64::new(0),
+                approval_calls: AtomicU64::new(0),
+            }
+        }
+
+        fn approve_payload<'a>(
+            &'a self,
+            payload: &'a MusubiProviderBundleVerificationPayloadV1,
+        ) -> MusubiProviderAttestationApprovalFutureV1<'a> {
+            Box::pin(async move {
+                self.approval_calls.fetch_add(1, Ordering::SeqCst);
+                let attestation = MusubiProviderBundleVerificationAttestationV1 {
+                    payload: payload.clone(),
+                    approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+                        public_key: self.key.public_key().clone(),
+                        signature: SignatureOf::try_from_hash(
+                            self.key.private_key(),
+                            payload.signing_hash(),
+                        )
+                        .map_err(|_| MusubiProviderAttestationSignerErrorV1::Rejected)?,
+                    }],
+                };
+                match self
+                    .mutation
+                    .lock()
+                    .expect("Musubi signer mutation lock")
+                    .take()
+                {
+                    Some(TestMusubiSignerMutationV1::Owner(owner)) => {
+                        self.owner_authority.replace(owner);
+                    }
+                    Some(TestMusubiSignerMutationV1::AdapterRevision(revision)) => {
+                        self.adapter_revision.store(revision, Ordering::SeqCst);
+                    }
+                    None => {}
+                }
+                Ok(attestation)
+            })
+        }
+    }
+
+    impl MusubiProviderAttestationSignerV1 for TestMusubiAttestationSignerV1 {
+        fn runtime_handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn authority(&self) -> &AccountId {
+            &self.authority
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            MusubiProviderAttestationSignerQualificationV1,
+            MusubiProviderAttestationSignerErrorV1,
+        > {
+            self.qualification_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(MusubiProviderAttestationSignerQualificationV1::new(
+                self.adapter_revision.load(Ordering::SeqCst),
+                self.adapter_policy_digest,
+                self.policy,
+                self.authority.clone(),
+                self.controller_policy_digest,
+            ))
+        }
+
+        fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
+            self.policy
+        }
+
+        fn current_eligibility(
+            &self,
+        ) -> Result<ProviderIngestCompletionSignerPolicyV1, MusubiProviderAttestationSignerErrorV1>
+        {
+            self.eligibility_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.policy)
+        }
+
+        fn approve<'a>(
+            &'a self,
+            _request: &'a ProviderIngestMusubiAttestationApprovalRequestV1,
+        ) -> MusubiProviderAttestationApprovalFutureV1<'a> {
+            Box::pin(async { Err(MusubiProviderAttestationSignerErrorV1::Rejected) })
+        }
+    }
+
+    fn test_musubi_attestation_payload(
+        owner_key: &KeyPair,
+    ) -> MusubiProviderBundleVerificationPayloadV1 {
+        let owner = AccountId::new(owner_key.public_key().clone());
+        let policy = test_signer_policy(1);
+        let payload = MusubiProviderBundleVerificationPayloadV1 {
+            version: MUSUBI_REGISTRY_VERSION_V1,
+            binding: MusubiProviderBundleVerificationBindingV1 {
+                chain_id: ChainId::from("musubi-governed-signer-test"),
+                genesis_block_hash: [0x21; 32],
+                provider_id: ProviderId::new([0x22; 32]),
+                completed_by: owner.clone(),
+                completion_authority: ProviderIngestCompletionAuthorityV1::new(owner, policy),
+                replication_order: ReplicationOrderId::new([0x23; 32]),
+                assignment_revision: 3,
+                completion_epoch: 9,
+                finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                    height: 77,
+                    block_hash: [0x24; 32],
+                },
+                archive_id: ArchiveId::new([0x25; 32]),
+                bundle_digest: MusubiContentDigestV1::new([0x26; 32]),
+                descriptor_digest: MusubiContentDigestV1::new([0x27; 32]),
+                semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1::new([0x28; 32]),
+                verification_lock_digest: MusubiVerificationLockDigestV1::new([0x29; 32]),
+                source_tree_digest: MusubiContentDigestV1::new([0x2A; 32]),
+            },
+        };
+        payload
+            .validate()
+            .expect("valid Musubi attestation payload");
+        payload
+    }
+
+    fn test_musubi_request_binding(
+        payload: &MusubiProviderBundleVerificationPayloadV1,
+    ) -> MusubiProviderAttestationRequestBindingV1<'_> {
+        MusubiProviderAttestationRequestBindingV1 {
+            payload,
+            completion_claim_digest: [0x2B; 32],
+            observed_finalized_cursor: ProviderIngestFinalizedCursorV1 {
+                height: 80,
+                block_hash: [0x2C; 32],
+            },
+            signer_policy: payload.binding.completion_authority.signer_policy,
+        }
+    }
+
+    fn test_musubi_signer_binding() -> SorafsProviderAttestationRuntimeBinding {
+        SorafsProviderAttestationRuntimeBinding {
+            handle: "hsm://sorafs/musubi/provider-attestation/primary".to_owned(),
+            revision: 7,
+            policy_digest: [0xA7; 32],
+        }
+    }
+
+    fn test_musubi_signer_fixture() -> (
+        Arc<TestMusubiAttestationSignerV1>,
+        TestOwnerAuthorityV1,
+        MusubiProviderBundleVerificationPayloadV1,
+    ) {
+        let owner_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("derive Musubi provider owner");
+        let owner = AccountId::new(owner_key.public_key().clone());
+        let owner_authority = TestOwnerAuthorityV1::new(owner);
+        let payload = test_musubi_attestation_payload(&owner_key);
+        let signer = Arc::new(TestMusubiAttestationSignerV1::new(
+            owner_key,
+            owner_authority.clone(),
+        ));
+        (signer, owner_authority, payload)
+    }
+
+    fn test_governed_musubi_signer(
+        signer: Arc<TestMusubiAttestationSignerV1>,
+        configured_binding: SorafsProviderAttestationRuntimeBinding,
+        owner_authority: TestOwnerAuthorityV1,
+        payload: &MusubiProviderBundleVerificationPayloadV1,
+    ) -> GovernedMusubiProviderAttestationSignerV1 {
+        let signer: Arc<dyn MusubiProviderAttestationSignerV1> = signer;
+        let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> =
+            Arc::new(owner_authority);
+        GovernedMusubiProviderAttestationSignerV1::new(
+            signer,
+            configured_binding,
+            owner_authority,
+            payload.binding.chain_id.clone(),
+            payload.binding.genesis_block_hash,
+            payload.binding.provider_id,
+        )
+    }
+
+    struct TestMusubiAttestationInventoryV1 {
+        handle: String,
+        adapter_revision: AtomicU64,
+        policy_digest: [u8; 32],
+        readiness_result:
+            Mutex<std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>>,
+        put_result: Mutex<std::result::Result<u64, MusubiProviderAttestationInventoryErrorV1>>,
+        get_result: Mutex<
+            std::result::Result<
+                Option<MusubiProviderAttestationInventoryReadbackV1>,
+                MusubiProviderAttestationInventoryErrorV1,
+            >,
+        >,
+        inventory_result: Mutex<
+            std::result::Result<
+                Option<MusubiProviderAttestationInventoryV1>,
+                MusubiProviderAttestationInventoryErrorV1,
+            >,
+        >,
+        drift_after_readiness: AtomicBool,
+        drift_after_put: AtomicBool,
+        handle_calls: AtomicU64,
+        qualification_calls: AtomicU64,
+        readiness_calls: AtomicU64,
+        put_calls: AtomicU64,
+        get_calls: AtomicU64,
+        inventory_calls: AtomicU64,
+    }
+
+    impl TestMusubiAttestationInventoryV1 {
+        fn new(item: MusubiProviderAttestationInventoryItemV1) -> Self {
+            let scope = item.scope().clone();
+            Self {
+                handle: "inventory://sorafs/musubi/provider-attestation/primary".to_owned(),
+                adapter_revision: AtomicU64::new(13),
+                policy_digest: [0xD1; 32],
+                readiness_result: Mutex::new(Ok(())),
+                put_result: Mutex::new(Ok(29)),
+                get_result: Mutex::new(Ok(Some(
+                    MusubiProviderAttestationInventoryReadbackV1::try_new(item.clone(), 29)
+                        .expect("valid test inventory readback"),
+                ))),
+                inventory_result: Mutex::new(Ok(Some(
+                    MusubiProviderAttestationInventoryV1::new(scope, vec![item])
+                        .expect("valid test inventory"),
+                ))),
+                drift_after_readiness: AtomicBool::new(false),
+                drift_after_put: AtomicBool::new(false),
+                handle_calls: AtomicU64::new(0),
+                qualification_calls: AtomicU64::new(0),
+                readiness_calls: AtomicU64::new(0),
+                put_calls: AtomicU64::new(0),
+                get_calls: AtomicU64::new(0),
+                inventory_calls: AtomicU64::new(0),
+            }
+        }
+
+        fn maybe_drift(&self, configured: &AtomicBool) {
+            if configured.swap(false, Ordering::SeqCst) {
+                self.adapter_revision.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn external_call_count(&self) -> u64 {
+            self.handle_calls.load(Ordering::SeqCst)
+                + self.qualification_calls.load(Ordering::SeqCst)
+                + self.readiness_calls.load(Ordering::SeqCst)
+                + self.put_calls.load(Ordering::SeqCst)
+                + self.get_calls.load(Ordering::SeqCst)
+                + self.inventory_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl MusubiProviderAttestationInventoryRuntimeV1 for TestMusubiAttestationInventoryV1 {
+        fn runtime_handle(&self) -> &str {
+            self.handle_calls.fetch_add(1, Ordering::SeqCst);
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> std::result::Result<
+            MusubiProviderAttestationInventoryQualificationV1,
+            MusubiProviderAttestationInventoryRuntimeErrorV1,
+        > {
+            self.qualification_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(MusubiProviderAttestationInventoryQualificationV1::new(
+                self.adapter_revision.load(Ordering::SeqCst),
+                self.policy_digest,
+            ))
+        }
+
+        fn check_readiness<'a>(
+            &'a self,
+        ) -> ProviderIngestFutureV1<
+            'a,
+            std::result::Result<(), MusubiProviderAttestationInventoryRuntimeErrorV1>,
+        > {
+            Box::pin(async move {
+                self.readiness_calls.fetch_add(1, Ordering::SeqCst);
+                let result = *self
+                    .readiness_result
+                    .lock()
+                    .expect("test inventory readiness lock");
+                self.maybe_drift(&self.drift_after_readiness);
+                result
+            })
+        }
+    }
+
+    impl MusubiProviderAttestationInventorySinkV1 for TestMusubiAttestationInventoryV1 {
+        fn put<'a>(
+            &'a self,
+            _item: MusubiProviderAttestationInventoryItemV1,
+        ) -> ProviderIngestFutureV1<
+            'a,
+            std::result::Result<u64, MusubiProviderAttestationInventoryErrorV1>,
+        > {
+            Box::pin(async move {
+                self.put_calls.fetch_add(1, Ordering::SeqCst);
+                let result = *self.put_result.lock().expect("test inventory put lock");
+                self.maybe_drift(&self.drift_after_put);
+                result
+            })
+        }
+    }
+
+    impl MusubiProviderAttestationInventoryReaderV1 for TestMusubiAttestationInventoryV1 {
+        fn get<'a>(
+            &'a self,
+            _scope: &'a MusubiProviderAttestationInventoryScopeV1,
+            _key: MusubiProviderBundleAttestationKeyV1,
+        ) -> ProviderIngestFutureV1<
+            'a,
+            std::result::Result<
+                Option<MusubiProviderAttestationInventoryReadbackV1>,
+                MusubiProviderAttestationInventoryErrorV1,
+            >,
+        > {
+            Box::pin(async move {
+                self.get_calls.fetch_add(1, Ordering::SeqCst);
+                self.get_result
+                    .lock()
+                    .expect("test inventory get lock")
+                    .clone()
+            })
+        }
+
+        fn inventory<'a>(
+            &'a self,
+            _scope: &'a MusubiProviderAttestationInventoryScopeV1,
+        ) -> ProviderIngestFutureV1<
+            'a,
+            std::result::Result<
+                Option<MusubiProviderAttestationInventoryV1>,
+                MusubiProviderAttestationInventoryErrorV1,
+            >,
+        > {
+            Box::pin(async move {
+                self.inventory_calls.fetch_add(1, Ordering::SeqCst);
+                self.inventory_result
+                    .lock()
+                    .expect("test inventory list lock")
+                    .clone()
+            })
+        }
+    }
+
+    fn test_musubi_inventory_item(
+        chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
+        provider_id: ProviderId,
+        archive_id: ArchiveId,
+        replication_order: ReplicationOrderId,
+    ) -> MusubiProviderAttestationInventoryItemV1 {
+        let owner_key = KeyPair::try_from_seed(vec![0x79; 32], Algorithm::Ed25519)
+            .expect("derive Musubi inventory owner");
+        let mut payload = test_musubi_attestation_payload(&owner_key);
+        payload.binding.chain_id = chain_id;
+        payload.binding.genesis_block_hash = genesis_block_hash;
+        payload.binding.provider_id = provider_id;
+        payload.binding.archive_id = archive_id;
+        payload.binding.replication_order = replication_order;
+        payload.validate().expect("valid Musubi inventory payload");
+        let attestation = MusubiProviderBundleVerificationAttestationV1 {
+            approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+                public_key: owner_key.public_key().clone(),
+                signature: SignatureOf::try_from_hash(
+                    owner_key.private_key(),
+                    payload.signing_hash(),
+                )
+                .expect("sign Musubi inventory payload"),
+            }],
+            payload,
+        };
+        MusubiProviderAttestationInventoryItemV1::new(attestation)
+            .expect("valid Musubi inventory item")
+    }
+
+    fn exact_test_musubi_inventory_item() -> MusubiProviderAttestationInventoryItemV1 {
+        test_musubi_inventory_item(
+            ChainId::from("musubi-governed-inventory"),
+            [0xC1; 32],
+            ProviderId::new([0xC2; 32]),
+            ArchiveId::new([0xC3; 32]),
+            ReplicationOrderId::new([0xC4; 32]),
+        )
+    }
+
+    fn test_musubi_inventory_binding() -> SorafsProviderAttestationRuntimeBinding {
+        SorafsProviderAttestationRuntimeBinding {
+            handle: "inventory://sorafs/musubi/provider-attestation/primary".to_owned(),
+            revision: 13,
+            policy_digest: [0xD1; 32],
+        }
+    }
+
+    fn test_governed_musubi_inventory(
+        inventory: Arc<TestMusubiAttestationInventoryV1>,
+        configured_binding: SorafsProviderAttestationRuntimeBinding,
+        item: &MusubiProviderAttestationInventoryItemV1,
+    ) -> GovernedMusubiProviderAttestationInventoryV1 {
+        let inventory: Arc<dyn MusubiProviderAttestationInventoryRuntimeV1> = inventory;
+        GovernedMusubiProviderAttestationInventoryV1::new(
+            inventory,
+            configured_binding,
+            item.scope().chain_id.clone(),
+            item.scope().genesis_block_hash,
+            item.key().provider_id,
+        )
     }
 
     enum TestSignerMutationV1 {
@@ -3287,7 +4348,9 @@ mod tests {
         let provider_owner = AccountId::new(key.public_key().clone());
         let signer_policy = test_signer_policy(1);
         let mut builder = TransactionBuilder::new(
-            ChainId::from("provider-ingest-governed-signer-test"),
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0x15; Hash::LENGTH]),
+            )),
             provider_owner.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3719,6 +4782,491 @@ mod tests {
             governed.sign(payload).await,
             Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
         );
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_signer_rejects_each_configured_binding_mismatch() {
+        let mut mismatches = Vec::new();
+        let mut handle = test_musubi_signer_binding();
+        handle.handle = "hsm://sorafs/musubi/provider-attestation/secondary".to_owned();
+        mismatches.push(handle);
+        let mut revision = test_musubi_signer_binding();
+        revision.revision += 1;
+        mismatches.push(revision);
+        let mut policy_digest = test_musubi_signer_binding();
+        policy_digest.policy_digest = [0xA8; 32];
+        mismatches.push(policy_digest);
+
+        for configured_binding in mismatches {
+            let (signer, owner_authority, payload) = test_musubi_signer_fixture();
+            let governed = test_governed_musubi_signer(
+                Arc::clone(&signer),
+                configured_binding,
+                owner_authority,
+                &payload,
+            );
+            assert_eq!(
+                governed.qualification(),
+                Err(MusubiProviderAttestationSignerErrorV1::Rejected)
+            );
+            assert!(
+                governed
+                    .approve_bound(test_musubi_request_binding(&payload), || {
+                        signer.approve_payload(&payload)
+                    })
+                    .await
+                    .is_err()
+            );
+            assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_signer_rejects_foreign_deployment_context_before_approval() {
+        let (signer, owner_authority, payload) = test_musubi_signer_fixture();
+        let governed = test_governed_musubi_signer(
+            Arc::clone(&signer),
+            test_musubi_signer_binding(),
+            owner_authority,
+            &payload,
+        );
+        let mut foreign_chain = payload.clone();
+        foreign_chain.binding.chain_id = ChainId::from("musubi-foreign-chain");
+        let mut foreign_genesis = payload.clone();
+        foreign_genesis.binding.genesis_block_hash = [0xB1; 32];
+        let mut foreign_provider = payload.clone();
+        foreign_provider.binding.provider_id = ProviderId::new([0xB2; 32]);
+
+        for foreign in [foreign_chain, foreign_genesis, foreign_provider] {
+            foreign
+                .validate()
+                .expect("foreign deployment payload remains structurally valid");
+            assert_eq!(
+                governed
+                    .approve_bound(test_musubi_request_binding(&foreign), || {
+                        signer.approve_payload(&foreign)
+                    })
+                    .await,
+                Err(MusubiProviderAttestationSignerErrorV1::Rejected)
+            );
+        }
+        assert_eq!(signer.qualification_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(signer.eligibility_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_signer_rejects_revoked_owner_before_any_signer_effect() {
+        let (signer, owner_authority, payload) = test_musubi_signer_fixture();
+        let replacement_key = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
+            .expect("derive replacement owner");
+        owner_authority.replace(AccountId::new(replacement_key.public_key().clone()));
+        let governed = test_governed_musubi_signer(
+            Arc::clone(&signer),
+            test_musubi_signer_binding(),
+            owner_authority,
+            &payload,
+        );
+        let request = test_musubi_request_binding(&payload);
+
+        assert_eq!(
+            governed
+                .approve_bound(request, || signer.approve_payload(&payload))
+                .await,
+            Err(MusubiProviderAttestationSignerErrorV1::Unavailable)
+        );
+        assert_eq!(signer.qualification_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(signer.eligibility_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_signer_rejects_owner_rotation_after_external_approval() {
+        let (signer, owner_authority, payload) = test_musubi_signer_fixture();
+        let replacement_key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
+            .expect("derive replacement owner");
+        *signer.mutation.lock().expect("Musubi signer mutation lock") = Some(
+            TestMusubiSignerMutationV1::Owner(AccountId::new(replacement_key.public_key().clone())),
+        );
+        let governed = test_governed_musubi_signer(
+            Arc::clone(&signer),
+            test_musubi_signer_binding(),
+            owner_authority,
+            &payload,
+        );
+
+        assert_eq!(
+            governed
+                .approve_bound(test_musubi_request_binding(&payload), || {
+                    signer.approve_payload(&payload)
+                })
+                .await,
+            Err(MusubiProviderAttestationSignerErrorV1::Unavailable)
+        );
+        assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_signer_rejects_adapter_drift_after_external_approval() {
+        let (signer, owner_authority, payload) = test_musubi_signer_fixture();
+        *signer.mutation.lock().expect("Musubi signer mutation lock") =
+            Some(TestMusubiSignerMutationV1::AdapterRevision(8));
+        let governed = test_governed_musubi_signer(
+            Arc::clone(&signer),
+            test_musubi_signer_binding(),
+            owner_authority,
+            &payload,
+        );
+
+        assert!(
+            governed
+                .approve_bound(test_musubi_request_binding(&payload), || {
+                    signer.approve_payload(&payload)
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_signer_rejects_substituted_attestation() {
+        let (signer, owner_authority, payload) = test_musubi_signer_fixture();
+        let governed = test_governed_musubi_signer(
+            Arc::clone(&signer),
+            test_musubi_signer_binding(),
+            owner_authority,
+            &payload,
+        );
+        let mut substituted = payload.clone();
+        substituted.binding.source_tree_digest = MusubiContentDigestV1::new([0xAA; 32]);
+        substituted
+            .validate()
+            .expect("substituted payload remains structurally valid");
+
+        assert_eq!(
+            governed
+                .approve_bound(test_musubi_request_binding(&payload), || {
+                    signer.approve_payload(&substituted)
+                })
+                .await,
+            Err(MusubiProviderAttestationSignerErrorV1::Rejected)
+        );
+        assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_signer_accepts_exact_binding_and_preserves_replay() {
+        let (signer, owner_authority, payload) = test_musubi_signer_fixture();
+        let governed = test_governed_musubi_signer(
+            Arc::clone(&signer),
+            test_musubi_signer_binding(),
+            owner_authority,
+            &payload,
+        );
+        let request = test_musubi_request_binding(&payload);
+
+        let first = governed
+            .approve_bound(request, || signer.approve_payload(&payload))
+            .await
+            .expect("approve exact Musubi attestation binding");
+        let replay = governed
+            .approve_bound(request, || signer.approve_payload(&payload))
+            .await
+            .expect("replay exact Musubi attestation binding");
+
+        assert_eq!(first, replay);
+        assert_eq!(&first.payload, request.payload);
+        first
+            .verify(&request.payload.binding)
+            .expect("exact governed attestation verifies");
+        assert_eq!(signer.approval_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn governed_musubi_inventory_rejects_each_configured_binding_mismatch() {
+        let item = exact_test_musubi_inventory_item();
+        let mut mismatches = Vec::new();
+        let mut handle = test_musubi_inventory_binding();
+        handle.handle = "inventory://sorafs/musubi/provider-attestation/secondary".to_owned();
+        mismatches.push(handle);
+        let mut revision = test_musubi_inventory_binding();
+        revision.revision += 1;
+        mismatches.push(revision);
+        let mut policy_digest = test_musubi_inventory_binding();
+        policy_digest.policy_digest = [0xD2; 32];
+        mismatches.push(policy_digest);
+
+        for configured_binding in mismatches {
+            let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+            let governed =
+                test_governed_musubi_inventory(Arc::clone(&inventory), configured_binding, &item);
+
+            assert_eq!(
+                governed.qualification(),
+                Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected)
+            );
+            assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_inventory_rejects_foreign_context_before_adapter_calls() {
+        let item = exact_test_musubi_inventory_item();
+        let scope = item.scope().clone();
+        let key = item.key();
+        let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+        let governed = test_governed_musubi_inventory(
+            Arc::clone(&inventory),
+            test_musubi_inventory_binding(),
+            &item,
+        );
+        let foreign_chain_item = test_musubi_inventory_item(
+            ChainId::from("musubi-foreign-inventory"),
+            scope.genesis_block_hash,
+            key.provider_id,
+            scope.archive_id,
+            scope.replication_order,
+        );
+        let foreign_genesis_item = test_musubi_inventory_item(
+            scope.chain_id.clone(),
+            [0xE1; 32],
+            key.provider_id,
+            scope.archive_id,
+            scope.replication_order,
+        );
+        let foreign_provider_item = test_musubi_inventory_item(
+            scope.chain_id.clone(),
+            scope.genesis_block_hash,
+            ProviderId::new([0xE2; 32]),
+            scope.archive_id,
+            scope.replication_order,
+        );
+
+        for foreign in [
+            foreign_chain_item,
+            foreign_genesis_item,
+            foreign_provider_item,
+        ] {
+            assert_eq!(
+                governed.put(foreign).await,
+                Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
+            );
+        }
+
+        let mut foreign_chain_scope = scope.clone();
+        foreign_chain_scope.chain_id = ChainId::from("musubi-foreign-inventory");
+        assert_eq!(
+            governed.get(&foreign_chain_scope, key).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
+        );
+        let mut foreign_genesis_scope = scope.clone();
+        foreign_genesis_scope.genesis_block_hash = [0xE3; 32];
+        assert_eq!(
+            governed.inventory(&foreign_genesis_scope).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
+        );
+        let mut foreign_provider_key = key;
+        foreign_provider_key.provider_id = ProviderId::new([0xE4; 32]);
+        assert_eq!(
+            governed.get(&scope, foreign_provider_key).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
+        );
+
+        assert_eq!(inventory.external_call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_inventory_rejects_qualification_drift_after_put() {
+        let item = exact_test_musubi_inventory_item();
+        let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+        inventory.drift_after_put.store(true, Ordering::SeqCst);
+        let governed = test_governed_musubi_inventory(
+            Arc::clone(&inventory),
+            test_musubi_inventory_binding(),
+            &item,
+        );
+
+        assert_eq!(
+            governed.put(item).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
+        );
+        assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_inventory_rejects_substituted_get_and_inventory_outputs() {
+        let item = exact_test_musubi_inventory_item();
+        let scope = item.scope().clone();
+        let key = item.key();
+        let substituted_provider_item = test_musubi_inventory_item(
+            scope.chain_id.clone(),
+            scope.genesis_block_hash,
+            ProviderId::new([0xE5; 32]),
+            scope.archive_id,
+            scope.replication_order,
+        );
+        let substituted_scope_item = test_musubi_inventory_item(
+            scope.chain_id.clone(),
+            scope.genesis_block_hash,
+            key.provider_id,
+            ArchiveId::new([0xE6; 32]),
+            ReplicationOrderId::new([0xE7; 32]),
+        );
+        let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+        *inventory
+            .get_result
+            .lock()
+            .expect("test inventory get lock") = Ok(Some(
+            MusubiProviderAttestationInventoryReadbackV1::try_new(substituted_provider_item, 29)
+                .expect("structurally valid substituted readback"),
+        ));
+        *inventory
+            .inventory_result
+            .lock()
+            .expect("test inventory list lock") = Ok(Some(
+            MusubiProviderAttestationInventoryV1::new(
+                substituted_scope_item.scope().clone(),
+                vec![substituted_scope_item],
+            )
+            .expect("structurally valid substituted inventory"),
+        ));
+        let governed = test_governed_musubi_inventory(
+            Arc::clone(&inventory),
+            test_musubi_inventory_binding(),
+            &item,
+        );
+
+        assert_eq!(
+            governed.get(&scope, key).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
+        );
+        assert_eq!(
+            governed.inventory(&scope).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Rejected)
+        );
+        assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_inventory_fences_and_preserves_readiness_errors() {
+        let item = exact_test_musubi_inventory_item();
+        for expected in [
+            MusubiProviderAttestationInventoryRuntimeErrorV1::Unavailable,
+            MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected,
+        ] {
+            let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+            *inventory
+                .readiness_result
+                .lock()
+                .expect("test inventory readiness lock") = Err(expected);
+            let governed = test_governed_musubi_inventory(
+                Arc::clone(&inventory),
+                test_musubi_inventory_binding(),
+                &item,
+            );
+
+            assert_eq!(governed.check_readiness().await, Err(expected));
+            assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 1);
+        }
+
+        let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+        inventory
+            .drift_after_readiness
+            .store(true, Ordering::SeqCst);
+        let governed = test_governed_musubi_inventory(
+            Arc::clone(&inventory),
+            test_musubi_inventory_binding(),
+            &item,
+        );
+        assert_eq!(
+            governed.check_readiness().await,
+            Err(MusubiProviderAttestationInventoryRuntimeErrorV1::Rejected)
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_inventory_preserves_stable_transient_operation_failures() {
+        let item = exact_test_musubi_inventory_item();
+        let scope = item.scope().clone();
+        let key = item.key();
+        let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+        *inventory
+            .put_result
+            .lock()
+            .expect("test inventory put lock") =
+            Err(MusubiProviderAttestationInventoryErrorV1::Unavailable);
+        *inventory
+            .get_result
+            .lock()
+            .expect("test inventory get lock") =
+            Err(MusubiProviderAttestationInventoryErrorV1::Unavailable);
+        *inventory
+            .inventory_result
+            .lock()
+            .expect("test inventory list lock") =
+            Err(MusubiProviderAttestationInventoryErrorV1::Unavailable);
+        let governed = test_governed_musubi_inventory(
+            Arc::clone(&inventory),
+            test_musubi_inventory_binding(),
+            &item,
+        );
+
+        assert_eq!(
+            governed.put(item).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Unavailable)
+        );
+        assert_eq!(
+            governed.get(&scope, key).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Unavailable)
+        );
+        assert_eq!(
+            governed.inventory(&scope).await,
+            Err(MusubiProviderAttestationInventoryErrorV1::Unavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_musubi_inventory_accepts_exact_qualified_operations() {
+        let item = exact_test_musubi_inventory_item();
+        let scope = item.scope().clone();
+        let key = item.key();
+        let inventory = Arc::new(TestMusubiAttestationInventoryV1::new(item.clone()));
+        let governed = test_governed_musubi_inventory(
+            Arc::clone(&inventory),
+            test_musubi_inventory_binding(),
+            &item,
+        );
+
+        assert_eq!(
+            governed.qualification(),
+            Ok(MusubiProviderAttestationInventoryQualificationV1::new(
+                13, [0xD1; 32]
+            ))
+        );
+        assert_eq!(governed.check_readiness().await, Ok(()));
+        assert_eq!(governed.put(item.clone()).await, Ok(29));
+        let readback = governed
+            .get(&scope, key)
+            .await
+            .expect("read exact inventory item")
+            .expect("exact inventory item exists");
+        assert_eq!(readback.item(), &item);
+        assert_eq!(readback.inventory_revision(), 29);
+        let listed = governed
+            .inventory(&scope)
+            .await
+            .expect("read exact inventory")
+            .expect("exact inventory exists");
+        assert_eq!(listed.scope(), &scope);
+        assert_eq!(listed.items(), &[item]);
+        assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(inventory.inventory_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -4489,6 +6037,64 @@ mod tests {
         })
         .await;
         assert_eq!(result, RuntimeDependencyProbeV1::Panicked);
+    }
+
+    #[test]
+    fn provider_attestation_journal_policy_maps_exactly_and_revalidates_actual_config() {
+        let configured = SorafsProviderAttestationJournal {
+            clock_seal: SorafsProviderAttestationRuntimeBinding {
+                handle: "hsm://musubi/provider-attestation/clock-seal".to_owned(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
+            },
+            approval_signer: SorafsProviderAttestationRuntimeBinding {
+                handle: "hsm://musubi/provider-attestation/approval-signer".to_owned(),
+                revision: 2,
+                policy_digest: [0xA2; 32],
+            },
+            inventory: SorafsProviderAttestationRuntimeBinding {
+                handle: "service://musubi/provider-attestation/inventory".to_owned(),
+                revision: 3,
+                policy_digest: [0xA3; 32],
+            },
+            max_entries: 8,
+            max_attempts: 3,
+            lease_ttl_ms: 30_000,
+            approval_timeout_ms: 5_000,
+            handoff_timeout_ms: 6_000,
+            retry_delay_ms: 1_000,
+            checkpoint_max_bytes: 4 * 1024 * 1024,
+            max_cas_retries: 5,
+        };
+        let policy = provider_attestation_journal_policy(&configured)
+            .expect("valid direct actual policy must map");
+        assert_eq!(
+            policy,
+            MusubiProviderAttestationJournalPolicyV1 {
+                max_entries: configured.max_entries,
+                max_attempts: configured.max_attempts,
+                lease_ttl_ms: configured.lease_ttl_ms,
+                approval_timeout_ms: configured.approval_timeout_ms,
+                handoff_timeout_ms: configured.handoff_timeout_ms,
+                retry_delay_ms: configured.retry_delay_ms,
+                checkpoint_max_bytes: configured.checkpoint_max_bytes,
+                max_cas_retries: configured.max_cas_retries,
+            }
+        );
+
+        let mut invalid = configured;
+        invalid.max_entries = 0;
+        assert!(
+            provider_attestation_journal_policy(&invalid).is_err(),
+            "programmatically constructed actual config must not bypass policy validation"
+        );
+
+        invalid.max_entries = 8;
+        invalid.inventory.policy_digest = [0; 32];
+        assert!(
+            provider_attestation_journal_policy(&invalid).is_err(),
+            "programmatically constructed actual config must not bypass binding validation"
+        );
     }
 
     #[test]

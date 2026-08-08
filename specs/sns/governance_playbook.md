@@ -74,7 +74,8 @@ Submit the canonical signed request to `POST /v1/aliases/setup/plan`, normally
 through the alias CLI or an SDK. Planning is read-only. The returned
 `AliasTransactionPlanV1` must include:
 
-- transaction authority, chain/anchor, expiry, and canonical body hash;
+- transaction authority, exact genesis-derived `NetworkId`, anchor, expiry,
+  and canonical body hash;
 - canonical resolved intents and ordered dataspace → domain → account frames;
 - per-resource `NoOp`, `Repair`, or `Create` disposition;
 - exact quote, payment asset, policy version, cap, and totals by asset; and

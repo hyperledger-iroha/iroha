@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, fmt};
 
 use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::{
         BlockHeader, SignedBlock,
         consensus_v2::SumeragiV2Status,
@@ -99,8 +99,8 @@ impl VerifiedV2FinalityArtifact {
 ///
 /// This keeps bridge-proof construction independent from full `StateView` snapshots.
 pub trait BridgeStateReadOnly {
-    /// Chain identifier bound to the state snapshot.
-    fn bridge_chain_id(&self) -> &ChainId;
+    /// Exact genesis-derived network identity bound to the state snapshot.
+    fn bridge_network_id(&self) -> &NetworkId;
     /// Load an exact durable Sumeragi-v2 finality artifact whose structure,
     /// roster PoPs, and CommitQC cryptography have already been verified by the
     /// storage boundary.
@@ -125,8 +125,8 @@ pub trait BridgeStateReadOnly {
 }
 
 impl<T: StateReadOnly> BridgeStateReadOnly for T {
-    fn bridge_chain_id(&self) -> &ChainId {
-        self.chain_id()
+    fn bridge_network_id(&self) -> &NetworkId {
+        self.network_id()
     }
 
     fn bridge_verified_v2_finality_artifact(
@@ -168,8 +168,8 @@ impl<T: StateReadOnly> BridgeStateReadOnly for T {
 }
 
 impl BridgeStateReadOnly for CoreState {
-    fn bridge_chain_id(&self) -> &ChainId {
-        self.chain_id_ref()
+    fn bridge_network_id(&self) -> &NetworkId {
+        self.network_id_ref()
     }
 
     fn bridge_verified_v2_finality_artifact(
@@ -1349,11 +1349,11 @@ pub fn build_finality_proof(
         .bridge_verified_v2_finality_artifact(height)
         .map_err(|reason| BridgeFinalityError::FinalityArtifactRead { height, reason })?
         .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?;
-    build_finality_proof_from_verified(state.bridge_chain_id(), height, &verified_finality)
+    build_finality_proof_from_verified(state.bridge_network_id(), height, &verified_finality)
 }
 
 fn build_finality_proof_from_verified(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     height: u64,
     verified_finality: &VerifiedV2FinalityArtifact,
 ) -> Result<BridgeFinalityProof, BridgeFinalityError> {
@@ -1361,7 +1361,7 @@ fn build_finality_proof_from_verified(
     let finality_artifact = verified_finality.artifact().clone();
     if finality_artifact.height != height
         || block_header.height().get() != height
-        || finality_artifact.height_context.chain_id != *chain_id
+        || finality_artifact.height_context.network_id != *network_id
         || finality_artifact
             .validate_for_header(&block_header)
             .is_err()
@@ -1430,7 +1430,7 @@ pub fn build_finality_attestation(
     let body = BridgeFinalityAttestationBodyV1 {
         version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
         challenge,
-        chain_id: state.chain_id().clone(),
+        network_id: *state.network_id(),
         node_id,
         node_fingerprint,
         genesis_block_hash,
@@ -1612,7 +1612,7 @@ pub fn validated_sccp_finalized_messages_at_height(
         .bridge_verified_v2_finality_with_sccp_archive(height)?
         .ok_or_else(|| BridgeFinalityError::FinalityArtifactNotFound(height).to_string())?;
     let finality_proof =
-        build_finality_proof_from_verified(state.bridge_chain_id(), height, &verified_finality)
+        build_finality_proof_from_verified(state.bridge_network_id(), height, &verified_finality)
             .map_err(|error| error.to_string())?;
     let Some((commitment_root, messages)) = validate_sccp_outbound_projection_against_root(
         height,
@@ -1711,7 +1711,7 @@ pub fn build_finality_bundle(
 ) -> Result<BridgeFinalityBundle, BridgeFinalityError> {
     let proof = build_finality_proof(state, height)?;
     let commitment = BridgeCommitment {
-        chain_id: proof.finality_artifact.height_context.chain_id.clone(),
+        network_id: proof.finality_artifact.height_context.network_id,
         height_context_id: proof.finality_artifact.context_id(),
         block_height: proof.finality_artifact.height,
         block_hash: proof.finality_artifact.block_hash,
@@ -1724,7 +1724,7 @@ pub fn build_finality_bundle(
 
 /// Verification errors raised when checking a BridgeFinalityProof.
 #[allow(variant_size_differences)]
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeFinalityVerificationError {
     /// The caller expected a different finalized height.
     #[error("finality proof height mismatch: expected {expected}, actual {actual}")]
@@ -1740,17 +1740,17 @@ pub enum BridgeFinalityVerificationError {
 }
 
 /// Verification knobs for verify_finality_proof.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct FinalityProofVerificationConfig<'a> {
-    /// Chain identifier expected by the verifier.
-    pub expected_chain_id: &'a ChainId,
+    /// Exact genesis-derived network identity expected by the verifier.
+    pub expected_network_id: &'a NetworkId,
     /// Optional expected height to bind the proof to a specific block.
     pub expected_height: Option<u64>,
     /// Trusted context id for the exact height being verified.
     pub trusted_context_id: iroha_data_model::block::consensus_v2::HeightContextId,
 }
 
-/// Verify a BridgeFinalityProof against chain, height, context, powered quorum,
+/// Verify a BridgeFinalityProof against network, height, context, powered quorum,
 /// PoP, and aggregate-signature expectations.
 ///
 /// # Errors
@@ -1772,7 +1772,7 @@ pub fn verify_finality_proof(
     }
 
     let mut verifier = iroha_data_model::bridge::BridgeFinalityVerifier::with_context(
-        config.expected_chain_id.clone(),
+        *config.expected_network_id,
         config.trusted_context_id,
     );
     verifier.verify(proof)?;
@@ -1863,8 +1863,8 @@ fn verify_structural_sccp_finality_proof_against_local_state(
 ) -> Result<BridgeFinalityProof, String> {
     let artifact = &finality.finality_artifact;
     let height = artifact.height;
-    if artifact.height_context.chain_id != *state.bridge_chain_id() {
-        return Err("SCCP finality proof chain id does not match local state".to_owned());
+    if artifact.height_context.network_id != *state.bridge_network_id() {
+        return Err("SCCP finality proof network id does not match local state".to_owned());
     }
 
     let local = validated_sccp_finalized_messages_at_height(state, height)?
@@ -1891,7 +1891,6 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::{BlockSignature, SignedBlock},
         isi::InstructionBox,
@@ -1916,6 +1915,12 @@ mod tests {
     fn checked_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("bridge BLS fixture key generation should succeed")
+    }
+
+    fn bridge_test_network_id(seed: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(seed),
+        ))
     }
 
     #[test]
@@ -2016,7 +2021,7 @@ mod tests {
 
     #[derive(Clone)]
     struct TestSccpFinalityState {
-        chain_id: ChainId,
+        network_id: NetworkId,
         retained_header: Option<BlockHeader>,
         messages: Vec<ValidatedSccpOutboundMessageProjectionV1>,
         artifact: Option<V2FinalityArtifact>,
@@ -2024,8 +2029,8 @@ mod tests {
     }
 
     impl BridgeStateReadOnly for TestSccpFinalityState {
-        fn bridge_chain_id(&self) -> &ChainId {
-            &self.chain_id
+        fn bridge_network_id(&self) -> &NetworkId {
+            &self.network_id
         }
 
         fn bridge_verified_v2_finality_artifact(
@@ -2423,10 +2428,9 @@ mod tests {
 
     fn signed_transaction_with_executable(executable: Executable) -> SignedTransaction {
         let keypair = checked_keypair();
-        let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         TransactionBuilder::new(
-            chain,
+            bridge_test_network_id(b"bridge SCCP transaction genesis"),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2443,20 +2447,23 @@ mod tests {
 
     fn sealed_commitment_entrypoint() -> TransactionEntrypoint {
         let keypair = checked_keypair();
-        let chain_id: ChainId = "bridge-sccp-sealed-index".parse().expect("chain id");
+        let network_id = bridge_test_network_id(b"bridge SCCP sealed-index genesis");
         let authority = AccountId::new(keypair.public_key().clone());
         let inner_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(keypair.private_key());
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
-                &chain_id, &inner_tx, [0x57; 32], 5,
+                &network_id,
+                &inner_tx,
+                [0x57; 32],
+                5,
             );
         let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
-            chain_id,
+            network_id,
             authority,
             commitment,
             reveal_after_height: 2,
@@ -2473,10 +2480,10 @@ mod tests {
 
     fn sealed_sccp_record_entrypoints(payload: Vec<u8>) -> [TransactionEntrypoint; 2] {
         let keypair = checked_keypair();
-        let chain_id: ChainId = "bridge-sccp-sealed-record".parse().expect("chain id");
+        let network_id = bridge_test_network_id(b"bridge SCCP sealed-record genesis");
         let authority = AccountId::new(keypair.public_key().clone());
         let signed = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2488,14 +2495,14 @@ mod tests {
         let reveal_deadline_height = 8;
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
-                &chain_id,
+                &network_id,
                 &signed,
                 salt,
                 reveal_deadline_height,
             );
         let commitment_payload =
             iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
-                chain_id,
+                network_id,
                 authority,
                 commitment,
                 reveal_after_height: 4,
@@ -2604,7 +2611,6 @@ mod tests {
         height: u64,
     ) -> (SignedBlock, Vec<SccpPayloadV1>) {
         let keypair = checked_keypair();
-        let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let decoded_payloads: Vec<_> = payloads
             .iter()
@@ -2617,7 +2623,7 @@ mod tests {
             .map(InstructionBox::from)
             .collect();
         let tx = TransactionBuilder::new(
-            chain,
+            bridge_test_network_id(b"bridge SCCP block transaction genesis"),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2726,7 +2732,7 @@ mod tests {
 
         let messages = test_sccp_projections_from_block(&block);
         let state = TestSccpFinalityState {
-            chain_id: finality.finality_artifact.height_context.chain_id.clone(),
+            network_id: finality.finality_artifact.height_context.network_id,
             retained_header: Some(block.header()),
             messages,
             artifact: Some(finality.finality_artifact),
@@ -2774,7 +2780,7 @@ mod tests {
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
                 .expect("exact fixture finality proof");
         let state = TestSccpFinalityState {
-            chain_id: finality.finality_artifact.height_context.chain_id.clone(),
+            network_id: finality.finality_artifact.height_context.network_id,
             retained_header: None,
             messages: Vec::new(),
             artifact: None,
@@ -2817,8 +2823,12 @@ mod tests {
         };
 
         let mut attack = base.clone();
-        attack.chain_id = "attacker-chain".into();
-        assert_rejected(&attack, "chain id");
+        attack.network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"attacker bridge finality network",
+            )),
+        );
+        assert_rejected(&attack, "network id");
 
         let mut attack = base.clone();
         attack.artifact = None;

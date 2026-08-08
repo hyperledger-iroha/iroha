@@ -54,13 +54,12 @@ pub mod isi {
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
             CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
-        nexus::{
-            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
-        },
+        nexus::{CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram},
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         peer::CanManageLaneRelayEmergency,
-        sccp::{CanManageSccpGovernance, CanProposeSccpRouteGovernance},
+        sccp::CanProposeSccpRouteGovernance,
         smart_contract::CanRegisterSmartContractCode,
+        sorafs::{CanRegisterSorafsProviderOwner, CanUnregisterSorafsProviderOwner},
     };
     // Governance ISIs
     use iroha_data_model::isi::confidential;
@@ -95,8 +94,8 @@ pub mod isi {
         governance::types::{
             AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             GovernanceFinalizationEvidence, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
-            SccpRouteGovernanceProposal, ValidationFeePayoutLifecycleProposal,
-            ValidationFeePolicyProposal,
+            SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
+            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -1692,47 +1691,6 @@ pub mod isi {
         Some(format!("{backend}:{trimmed}"))
     }
 
-    fn validate_inline_verifying_key_material(
-        id_backend: &str,
-        circuit_id: &str,
-        backend: BackendTag,
-        vk: &VerifyingKeyBox,
-    ) -> Result<(), Error> {
-        match backend {
-            BackendTag::Halo2IpaPasta => {
-                crate::zk::validate_builtin_halo2_ipa_verifying_key_v1(id_backend, circuit_id, vk)
-                    .map_err(|err| {
-                        invalid_smart_contract_parameter(format!(
-                            "invalid canonical Halo2 IPA verifying key: {err}"
-                        ))
-                    })
-            }
-            BackendTag::Stark => {
-                #[cfg(not(feature = "zk-stark"))]
-                {
-                    let _ = (id_backend, circuit_id, vk);
-                    Err(invalid_smart_contract_parameter(
-                        "verifying key backend Stark is not enabled",
-                    ))
-                }
-                #[cfg(feature = "zk-stark")]
-                {
-                    crate::zk::validate_stark_fri_verifying_key_v1(
-                        id_backend,
-                        circuit_id,
-                        vk.bytes.as_slice(),
-                    )
-                    .map(|_| ())
-                    .map_err(|err| {
-                        invalid_smart_contract_parameter(format!(
-                            "invalid STARK verifying key payload: {err}"
-                        ))
-                    })
-                }
-            }
-        }
-    }
-
     fn validate_open_verify_envelope_metadata(
         label: &str,
         backend: &str,
@@ -2841,13 +2799,6 @@ pub mod isi {
         Ok(code_bytes)
     }
 
-    #[cfg(feature = "telemetry")]
-    fn root_evictions_since(before_len: usize, appended: usize, after_len: usize) -> u64 {
-        let expected = before_len.saturating_add(appended);
-        let evicted = expected.saturating_sub(after_len);
-        u64::try_from(evicted).unwrap_or(u64::MAX)
-    }
-
     impl Execute for verifying_keys::RegisterVerifyingKey {
         #[allow(clippy::too_many_lines)]
         #[allow(clippy::too_many_lines)]
@@ -2978,14 +2929,13 @@ pub mod isi {
                     ),
                 ));
             }
-            if let Some(vk) = &record.key {
-                validate_inline_verifying_key_material(
-                    id_backend,
-                    &record.circuit_id,
-                    record.backend,
-                    vk,
-                )?;
-            }
+            crate::zk::validate_and_prepare_verifying_key_record_v1(&id, &record).map_err(
+                |err| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid canonical verifying-key record: {err}"
+                    ))
+                },
+            )?;
             validate_soracloud_fhe_stark_verifying_key_records(&id, &record)?;
             state_transaction
                 .world
@@ -3315,12 +3265,12 @@ pub mod isi {
     }
 
     fn compute_sccp_route_governance_proposal_id(
-        action: &bridge::SccpRouteGovernanceActionV1,
+        anchor: &bridge::SccpRouteGovernanceAnchorV1,
     ) -> Result<[u8; 32], Error> {
-        let canonical = norito::codec::Encode::encode(action);
-        let action_len: u32 = canonical.len().try_into().map_err(|_| {
+        let canonical = norito::codec::Encode::encode(anchor);
+        let anchor_len: u32 = canonical.len().try_into().map_err(|_| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                "SCCP route governance action length exceeds 2^32 bytes".into(),
+                "SCCP route governance anchor length exceeds 2^32 bytes".into(),
             ))
         })?;
         let mut input = Vec::with_capacity(
@@ -3329,7 +3279,7 @@ pub mod isi {
                 + canonical.len(),
         );
         input.extend_from_slice(b"iroha:gov:sccp-route-governance:proposal:v1|");
-        input.extend_from_slice(&action_len.to_le_bytes());
+        input.extend_from_slice(&anchor_len.to_le_bytes());
         input.extend_from_slice(&canonical);
         let digest = Blake2b512::digest(&input);
         let mut out = [0u8; 32];
@@ -3355,6 +3305,40 @@ pub mod isi {
 
         Err(InstructionExecutionError::InvariantViolation(
             "not permitted: registered citizen or CanProposeSccpRouteGovernance required".into(),
+        ))
+    }
+
+    fn ensure_sorafs_provider_governance_proposer(
+        authority: &AccountId,
+        action: &iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let required_permission: Permission = match action {
+            iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Establish(_)
+            | iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Rebind(_) => {
+                CanRegisterSorafsProviderOwner.into()
+            }
+            iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Remove(_) => {
+                CanUnregisterSorafsProviderOwner.into()
+            }
+        };
+        if has_exact_permission(&state_transaction.world, authority, &required_permission) {
+            return Ok(());
+        }
+
+        let required = &state_transaction.gov.citizenship_bond_amount;
+        if state_transaction
+            .world
+            .citizens
+            .get(authority)
+            .is_some_and(|record| &record.amount >= required)
+        {
+            return Ok(());
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            "not permitted: a bonded citizen or legacy SoraFS provider-governance proposal permission is required"
+                .into(),
         ))
     }
 
@@ -3526,13 +3510,21 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             ensure_sccp_route_governance_proposer(authority, state_transaction)?;
-            self.action.validate_static().map_err(|error| {
+            if self.anchor.network_id != state_transaction.network_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route governance anchor belongs to a different exact NetworkId"
+                            .into(),
+                    ),
+                ));
+            }
+            self.anchor.action.validate_static().map_err(|error| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     error.to_string(),
                 ))
             })?;
 
-            let id = compute_sccp_route_governance_proposal_id(&self.action)?;
+            let id = compute_sccp_route_governance_proposal_id(&self.anchor)?;
             let rid = hex::encode(id);
             let desired_mode = match self.mode {
                 Some(iroha_data_model::isi::governance::VotingMode::Plain) => {
@@ -3574,7 +3566,7 @@ pub mod isi {
             }
 
             let payload = SccpRouteGovernanceProposal {
-                action: Box::new(self.action.clone()),
+                anchor: Box::new(self.anchor.clone()),
             };
             let kind = ProposalKind::SccpRouteGovernance(payload.clone());
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
@@ -3583,7 +3575,7 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.action != payload.action {
+                if existing_payload.anchor != payload.anchor {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governance proposal id collision".into(),
                     ));
@@ -3651,6 +3643,143 @@ pub mod isi {
                 },
             );
 
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
+    impl Execute for gov::ProposeSorafsProviderGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_sorafs_provider_governance_proposer(authority, &self.action, state_transaction)?;
+            self.action.validate().map_err(|error| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    error.to_string(),
+                ))
+            })?;
+
+            let payload = SorafsProviderGovernanceProposal {
+                action: Box::new(self.action.clone()),
+            };
+            let kind = ProposalKind::SorafsProviderGovernance(payload.clone());
+            let id = kind.fingerprint();
+            let rid = hex::encode(id);
+            let desired_mode = match self.mode {
+                Some(iroha_data_model::isi::governance::VotingMode::Plain) => {
+                    crate::state::GovernanceReferendumMode::Plain
+                }
+                None | Some(iroha_data_model::isi::governance::VotingMode::Zk) => {
+                    crate::state::GovernanceReferendumMode::Zk
+                }
+            };
+
+            let h_now = state_transaction._curr_block.height().get();
+            let min_start = h_now.saturating_add(state_transaction.gov.min_enactment_delay);
+            let (start, end) = if let Some(window) = self.window {
+                if window.upper < window.lower {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.upper must be >= window.lower".into(),
+                        ),
+                    ));
+                }
+                if window.lower < min_start {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.lower below minimum enactment delay".into(),
+                        ),
+                    ));
+                }
+                (window.lower, window.upper)
+            } else {
+                let span = state_transaction.gov.window_span.max(1);
+                (min_start, min_start.saturating_add(span.saturating_sub(1)))
+            };
+
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                let Some(existing_payload) = existing.as_sorafs_provider_governance() else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                };
+                if existing_payload.action != payload.action {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                if let Some(referendum) = state_transaction.world.governance_referenda.get(&rid)
+                    && (referendum.h_start != start
+                        || referendum.h_end != end
+                        || referendum.mode != desired_mode)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "existing referendum parameters mismatch".into(),
+                    ));
+                }
+                return Ok(());
+            }
+
+            if let Some(referendum) = state_transaction.world.governance_referenda.get(&rid) {
+                if referendum.h_start != start
+                    || referendum.h_end != end
+                    || referendum.mode != desired_mode
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "referendum already exists with different parameters".into(),
+                    ));
+                }
+            } else {
+                state_transaction.world.governance_referenda.insert(
+                    rid.clone(),
+                    crate::state::GovernanceReferendumRecord {
+                        h_start: start,
+                        h_end: end,
+                        status: crate::state::GovernanceReferendumStatus::Proposed,
+                        mode: desired_mode,
+                    },
+                );
+            }
+
+            let referendum_snapshot = state_transaction
+                .world
+                .governance_referenda
+                .get(&rid)
+                .copied();
+            let pipeline = crate::state::GovernancePipeline::seeded(
+                h_now,
+                referendum_snapshot.as_ref(),
+                &state_transaction.gov,
+            );
+            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
+                GovernanceApprovalMode::ParliamentSortitionJit => Some(
+                    derive_jit_parliament_snapshot(id, h_now, state_transaction)?,
+                ),
+                GovernanceApprovalMode::LegacyCouncilEpoch => None,
+            };
+            state_transaction.world.put_governance_proposal(
+                id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind,
+                    created_height: h_now,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline,
+                    parliament_snapshot,
+                    finalization_evidence: None,
+                    enacted_at_height: None,
+                },
+            );
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
                     iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
@@ -3824,6 +3953,7 @@ pub mod isi {
             ProposalKind::DeployContract(_)
             | ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_)
             | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
@@ -6364,6 +6494,7 @@ pub mod isi {
     }
 
     fn ensure_contract_subject_binding(
+        authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<AccountId, Error> {
@@ -6389,6 +6520,10 @@ pub mod isi {
                 subject
             }
         };
+        if state_transaction.world.account(&contract_subject).is_err() {
+            Register::account(Account::new(contract_subject.clone()))
+                .execute(authority, state_transaction)?;
+        }
         match state_transaction
             .world
             .contract_subject_addresses
@@ -6421,7 +6556,7 @@ pub mod isi {
     ) -> Result<bool, Error> {
         let contract_address = payload.contract_address.clone();
         let contract_subject =
-            ensure_contract_subject_binding(state_transaction, &contract_address)?;
+            ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
         let manifest = state_transaction
             .world
             .contract_manifests
@@ -7200,10 +7335,21 @@ pub mod isi {
                     enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)?;
                 }
                 ProposalKind::SccpRouteGovernance(payload) => {
-                    apply_sccp_route_governance_action(
+                    let _ = payload;
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP route governance requires EnactSccpRouteGovernance with the complete typed anchor"
+                            .into(),
+                    ));
+                }
+                ProposalKind::SorafsProviderGovernance(payload) => {
+                    if !super::sorafs::apply_governed_provider_owner_action(
                         payload.action.as_ref().clone(),
                         state_transaction,
-                    )?;
+                    )? {
+                        mark_proposal_superseded(state_transaction, pid);
+                        close_referendum_if_open(state_transaction, &pid_hex);
+                        return Ok(());
+                    }
                 }
                 ProposalKind::MusubiRegistryGovernance(action) => {
                     action.validate().map_err(|error| {
@@ -7274,6 +7420,82 @@ pub mod isi {
         }
     }
 
+    impl Execute for gov::EnactSccpRouteGovernance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let required: Permission = CanEnactGovernance.into();
+            if !has_exact_permission(&state_transaction.world, authority, &required) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "not permitted: exact CanEnactGovernance required".into(),
+                ));
+            }
+            if self.anchor.network_id != state_transaction.network_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP enactment anchor belongs to a different exact NetworkId".into(),
+                    ),
+                ));
+            }
+            let pid = self.referendum_id;
+            if compute_sccp_route_governance_proposal_id(&self.anchor)? != pid {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP enactment referendum id does not derive from the supplied complete anchor"
+                            .into(),
+                    ),
+                ));
+            }
+            let pid_hex = hex::encode(pid);
+            let (proposal, already_terminal) = load_proposal(state_transaction, pid, &pid_hex)?;
+            let ProposalKind::SccpRouteGovernance(payload) = &proposal.kind else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "typed SCCP enactment cannot enact another proposal kind".into(),
+                    ),
+                ));
+            };
+            if payload.anchor.as_ref() != &self.anchor {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP enactment anchor does not equal the stored complete proposal preimage"
+                            .into(),
+                    ),
+                ));
+            }
+            let generic_binding = gov::EnactReferendum {
+                referendum_id: pid,
+                preimage_hash: proposal.kind.fingerprint(),
+                at_window: self.at_window,
+            };
+            validate_referendum_enactment_binding(
+                &generic_binding,
+                &proposal,
+                state_transaction,
+                &pid_hex,
+            )?;
+            if already_terminal {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route governance enactment is one-shot and cannot be replayed".into(),
+                ));
+            }
+
+            apply_sccp_route_governance_action(self.anchor.action, state_transaction)?;
+            mark_proposal_enacted(state_transaction, pid);
+            close_referendum_if_open(state_transaction, &pid_hex);
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalEnacted(
+                    iroha_data_model::events::data::governance::GovernanceProposalEnacted {
+                        id: pid,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
     impl Execute for scode::ActivateContractInstance {
         fn execute(
             self,
@@ -7303,7 +7525,7 @@ pub mod isi {
                 &manifest,
             )?;
             let contract_subject =
-                ensure_contract_subject_binding(state_transaction, &contract_address)?;
+                ensure_contract_subject_binding(authority, state_transaction, &contract_address)?;
             let existing = state_transaction
                 .world
                 .contract_instances
@@ -9083,6 +9305,7 @@ pub mod isi {
             ],
             ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_)
             | ProposalKind::MusubiRegistryGovernance(_)
             | ProposalKind::ValidationFeePolicy(_)
             | ProposalKind::ValidationFeePayoutLifecycle(_) => &[
@@ -10036,9 +10259,11 @@ pub mod isi {
                 ),
             ));
         }
-        if let Some(vk) = &new.key {
-            validate_inline_verifying_key_material(id_backend, &new.circuit_id, new.backend, vk)?;
-        }
+        crate::zk::validate_and_prepare_verifying_key_record_v1(id, new).map_err(|err| {
+            invalid_smart_contract_parameter(format!(
+                "invalid canonical verifying-key record: {err}"
+            ))
+        })?;
         validate_soracloud_fhe_stark_verifying_key_records(id, new)?;
         Ok(())
     }
@@ -11264,6 +11489,7 @@ pub mod isi {
         }
         let route = resolve_sccp_settlement_route(
             state_transaction.sccp_registry.as_ref(),
+            &state_transaction.network_id,
             governed_lane.lane_id,
             &transfer.route_id,
             &transfer.asset_id,
@@ -11325,24 +11551,20 @@ pub mod isi {
                 invalid_bridge_proof("SCCP inbound SORA recipient is not valid UTF-8")
             })?;
             let recipient = parse_sccp_taira_recipient_v1(recipient_literal)?;
-            if recipient == route.custody_account_id {
+            if recipient == route.escrow_account_id {
                 return Err(invalid_bridge_proof(
-                    "SCCP inbound recipient must differ from the custody account",
+                    "SCCP inbound recipient must differ from the route protocol escrow",
                 ));
             }
             state_transaction
                 .world
                 .asset_definition(&route.settlement_asset_definition_id)?;
-            state_transaction.world.account(&route.custody_account_id)?;
+            state_transaction.world.account(&route.escrow_account_id)?;
             let amount = sccp_payload_amount(transfer.amount, &route)?;
-            let source = AssetId::new(
-                route.settlement_asset_definition_id.clone(),
-                route.custody_account_id.clone(),
-            );
             let prepared =
                 crate::smartcontracts::isi::asset::isi::prepare_sccp_inbound_numeric_asset_release(
                     state_transaction,
-                    source,
+                    &route.route_key,
                     recipient,
                     amount,
                 )?;
@@ -12381,22 +12603,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_can_manage_sccp_governance(
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let required: Permission = CanManageSccpGovernance.into();
-        if state_transaction._curr_block.is_genesis()
-            || has_exact_permission(&state_transaction.world, authority, &required)
-        {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                "not permitted: CanManageSccpGovernance".into(),
-            ))
-        }
-    }
-
     fn commit_sccp_registry_action(
         state_transaction: &mut StateTransaction<'_, '_>,
         payload: crate::state::SccpOnChainRegistryV1,
@@ -12450,6 +12656,17 @@ pub mod isi {
         route: &iroha_data_model::bridge::SccpGovernedRouteV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<bool, Error> {
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &state_transaction.network_id,
+            &route.key(),
+            &route.settlement.asset_definition_id,
+        );
+        if state_transaction.world.account(&escrow).is_ok() {
+            // Once the deterministic account exists, the route has admitted
+            // liquidity or a settlement attempt. Retain the immutable route
+            // forever so generic account/asset guards cannot lose its binding.
+            return Ok(true);
+        }
         let configuration_hash = route.route_configuration_hash().map_err(|error| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 error.to_string(),
@@ -12530,41 +12747,50 @@ pub mod isi {
         }
         state_transaction
             .world
-            .account(&route.settlement.custody_account_id)
+            .account(&route.settlement.custody_owner)
             .map_err(|error| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("SCCP custody account is not registered: {error}"),
+                    format!("SCCP route custody owner is not registered: {error}"),
                 ))
             })?;
-        let custody_asset = AssetId::new(
-            route.settlement.asset_definition_id.clone(),
-            route.settlement.custody_account_id.clone(),
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &state_transaction.network_id,
+            &route.key(),
+            &route.settlement.asset_definition_id,
         );
-        state_transaction
-            .world
-            .asset(&custody_asset)
-            .map_err(|error| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!(
-                        "SCCP custody asset account must exist before route registration: {error}"
-                    ),
-                ))
-            })?;
-        if crate::smartcontracts::isi::offline::is_offline_escrow_source_asset(
-            state_transaction,
-            &custody_asset,
-        )? || crate::smartcontracts::isi::escrow::is_native_escrow_custody_asset(
-            state_transaction,
-            &custody_asset,
-        )? {
+        if state_transaction.world.account(&escrow).is_ok() {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "SCCP custody asset cannot overlap offline or native escrow custody".to_owned(),
+                    "SCCP route registration requires its deterministic protocol escrow account to be absent"
+                        .to_owned(),
                 ),
             )
             .into());
         }
         Ok(())
+    }
+
+    fn ensure_sccp_route_escrow_account(
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        asset_definition_id: &AssetDefinitionId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<AccountId, Error> {
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &state_transaction.network_id,
+            route_key,
+            asset_definition_id,
+        );
+        crate::smartcontracts::isi::domain::isi::ensure_controller_capabilities(
+            escrow.controller(),
+            &state_transaction.crypto.allowed_signing,
+            &state_transaction.crypto.allowed_curve_ids,
+        )?;
+        if state_transaction.world.account(&escrow).is_err() {
+            let account = Account::new(escrow.clone()).build(&escrow);
+            let (id, account) = iroha_data_model::IntoKeyValue::into_key_value(account);
+            state_transaction.world.accounts.insert(id, account);
+        }
+        Ok(escrow)
     }
 
     fn apply_sccp_route_governance_action(
@@ -12921,11 +13147,112 @@ pub mod isi {
     impl Execute for bridge::ApplySccpRouteGovernance {
         fn execute(
             self,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let _ = self;
+            Err(InstructionExecutionError::InvariantViolation(
+                "direct SCCP route mutation is retired; only finalized threshold referendum enactment may apply an action"
+                    .into(),
+            ))
+        }
+    }
+
+    impl Execute for bridge::FundSccpRouteEscrow {
+        fn execute(
+            self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_can_manage_sccp_governance(authority, state_transaction)?;
-            apply_sccp_route_governance_action(self.action, state_transaction)
+            if self.amount.is_zero() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route escrow funding amount must be positive".into(),
+                    ),
+                ));
+            }
+            let route = state_transaction
+                .sccp_registry
+                .route(&self.route_key)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP route escrow funding references an ungoverned route revision"
+                                .into(),
+                        ),
+                    )
+                })?;
+            if route.settlement.asset_definition_id != self.asset_definition_id
+                || route.settlement.custody_owner != *authority
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route escrow funding requires the exact governed asset and custody owner"
+                        .into(),
+                ));
+            }
+            ensure_sccp_route_escrow_account(
+                &self.route_key,
+                &self.asset_definition_id,
+                state_transaction,
+            )?;
+            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_funding(
+                state_transaction,
+                authority,
+                &self.route_key,
+                &self.asset_definition_id,
+                self.amount,
+            )
+        }
+    }
+
+    impl Execute for bridge::RefundSccpRouteEscrow {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if self.amount.is_zero() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP route escrow refund amount must be positive".into(),
+                    ),
+                ));
+            }
+            let route = state_transaction
+                .sccp_registry
+                .route(&self.route_key)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP route escrow refund references an ungoverned route revision"
+                                .into(),
+                        ),
+                    )
+                })?;
+            if route.settlement.asset_definition_id != self.asset_definition_id
+                || route.settlement.custody_owner != *authority
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route escrow refund requires the exact governed asset and custody owner"
+                        .into(),
+                ));
+            }
+            if !matches!(
+                route.activation,
+                iroha_data_model::bridge::SccpRouteActivationV1::Staged
+                    | iroha_data_model::bridge::SccpRouteActivationV1::Retired
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP route escrow may be refunded only while staged or retired".into(),
+                ));
+            }
+            crate::smartcontracts::isi::asset::isi::execute_sccp_route_owner_refund(
+                state_transaction,
+                authority,
+                &self.route_key,
+                &self.asset_definition_id,
+                self.amount,
+            )
         }
     }
 
@@ -13007,13 +13334,14 @@ pub mod isi {
         destination: iroha_data_model::bridge::SccpDestinationDeploymentV1,
         sora_outbound_execution_policy: iroha_data_model::bridge::SccpSoraOutboundExecutionPolicyV1,
         settlement_asset_definition_id: AssetDefinitionId,
-        custody_account_id: AccountId,
+        escrow_account_id: AccountId,
         payload_amount_scale: u32,
         counterparty_account_codec: u8,
     }
 
     fn resolve_sccp_settlement_route(
         registry: &crate::state::ValidatedSccpRegistryV1,
+        network_id: &iroha_data_model::NetworkId,
         lane_id: iroha_data_model::bridge::SccpLaneIdV1,
         route_id: &[u8],
         asset_key: &[u8],
@@ -13062,15 +13390,21 @@ pub mod isi {
         let route_configuration_hash = route.route_configuration_hash().map_err(|error| {
             invalid_bridge_proof(format!("SCCP route configuration is invalid: {error}"))
         })?;
+        let route_key = route.key();
+        let escrow_account_id = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            network_id,
+            &route_key,
+            &route.settlement.asset_definition_id,
+        );
         Ok(ResolvedSccpSettlementRouteV1 {
-            route_key: route.key(),
+            route_key,
             route_id: route.route_id.clone(),
             asset_key: route.asset_key.clone(),
             route_configuration_hash,
             destination: route.destination,
             sora_outbound_execution_policy: route.sora_outbound_execution_policy.clone(),
             settlement_asset_definition_id: route.settlement.asset_definition_id.clone(),
-            custody_account_id: route.settlement.custody_account_id.clone(),
+            escrow_account_id,
             payload_amount_scale: route.settlement.payload_amount_scale,
             counterparty_account_codec: expected_codec,
         })
@@ -13111,6 +13445,7 @@ pub mod isi {
             })?;
         let settlement = resolve_sccp_settlement_route(
             state_transaction.sccp_registry.as_ref(),
+            &state_transaction.network_id,
             lane.lane_id,
             &transfer.route_id,
             &transfer.asset_id,
@@ -13244,28 +13579,26 @@ pub mod isi {
                 "SCCP outbound recipient codec does not match the exact external profile",
             ));
         }
-        if settlement.custody_account_id == *authority {
+        if settlement.escrow_account_id == *authority {
             return Err(invalid_bridge_proof(
-                "SCCP custody account must differ from the outbound sender",
+                "SCCP route protocol escrow must differ from the outbound sender",
             ));
         }
         state_transaction
             .world
             .asset_definition(&settlement.settlement_asset_definition_id)?;
-        state_transaction
-            .world
-            .account(&settlement.custody_account_id)?;
+        ensure_sccp_route_escrow_account(
+            &settlement.route_key,
+            &settlement.settlement_asset_definition_id,
+            state_transaction,
+        )?;
         let amount = sccp_payload_amount(transfer.amount, settlement)?;
-        let source = AssetId::new(
-            settlement.settlement_asset_definition_id.clone(),
-            authority.clone(),
-        );
         state_transaction.require_transfer_transcript_identity("SCCP message recording")?;
-        crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
+        crate::smartcontracts::isi::asset::isi::execute_sccp_outbound_route_lock(
             state_transaction,
             authority,
-            source,
-            settlement.custody_account_id.clone(),
+            &settlement.route_key,
+            &settlement.settlement_asset_definition_id,
             amount,
         )
     }
@@ -13556,6 +13889,12 @@ pub mod isi {
             .cloned()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation("verifying key not found".into())
+            })?;
+        crate::zk::validate_and_prepare_verifying_key_record_v1(&attachment.vk_ref, &record)
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid stored verifying-key record: {err}").into(),
+                )
             })?;
         let vk_box = record.key.clone().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation("verifying key bytes missing".into())
@@ -17178,41 +17517,17 @@ pub mod isi {
     fn ensure_fee_sponsor_withdrawal_authority(
         authority: &AccountId,
         program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
-        state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if ensure_fee_sponsor_program_owner(authority, program_id, state_transaction).is_ok() {
+        if authority == &program_id.sponsor {
             return Ok(());
         }
-        let allowed = state_transaction
-            .world
-            .account_permissions
-            .get(authority)
-            .is_some_and(|permissions| {
-                permissions.iter().any(|permission| {
-                    CanWithdrawFeeSponsorProgram::try_from(permission)
-                        .is_ok_and(|token| &token.program_id == program_id)
-                })
-            })
-            || state_transaction
-                .world
-                .account_roles_iter(authority)
-                .filter_map(|role_id| state_transaction.world.roles.get(role_id))
-                .any(|role| {
-                    role.permissions.iter().any(|permission| {
-                        CanWithdrawFeeSponsorProgram::try_from(permission)
-                            .is_ok_and(|token| &token.program_id == program_id)
-                    })
-                });
-        if allowed {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "authority `{authority}` cannot withdraw from fee sponsor program `{program_id}`"
-                )
-                .into(),
-            ))
-        }
+        Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "only sponsor `{}` may withdraw from fee sponsor program `{program_id}`; authority was `{authority}`",
+                program_id.sponsor
+            )
+            .into(),
+        ))
     }
 
     fn validate_fee_sponsor_revision(
@@ -17389,6 +17704,17 @@ pub mod isi {
                 return Err(invalid_fee_sponsor_program(format!(
                     "unknown fee sponsor account `{}`",
                     program.id.sponsor
+                )));
+            }
+            if state_transaction
+                .world
+                .accounts
+                .get(&program.payout_account)
+                .is_none()
+            {
+                return Err(invalid_fee_sponsor_program(format!(
+                    "unknown fee sponsor payout account `{}`",
+                    program.payout_account
                 )));
             }
             if program.lifecycle != FeeSponsorProgramLifecycle::Staged
@@ -17910,7 +18236,7 @@ pub mod isi {
             use iroha_data_model::nexus::{FeeSponsorProgramLifecycle, FeeSponsorVaultKey};
 
             let program_id = self.program_id().clone();
-            ensure_fee_sponsor_withdrawal_authority(authority, &program_id, state_transaction)?;
+            ensure_fee_sponsor_withdrawal_authority(authority, &program_id)?;
             if self.amount().is_zero() {
                 return Err(invalid_fee_sponsor_program(
                     "fee sponsor vault withdrawal amount must be positive",
@@ -17921,6 +18247,7 @@ pub mod isi {
                 .fee_sponsor_programs
                 .get(&program_id)
                 .ok_or_else(|| invalid_fee_sponsor_program("fee sponsor program not found"))?;
+            let payout_account = program.payout_account.clone();
             if !matches!(
                 program.lifecycle,
                 FeeSponsorProgramLifecycle::Paused | FeeSponsorProgramLifecycle::Closing
@@ -17937,11 +18264,11 @@ pub mod isi {
             if state_transaction
                 .world
                 .accounts
-                .get(self.destination())
+                .get(&payout_account)
                 .is_none()
             {
                 return Err(invalid_fee_sponsor_program(
-                    "fee sponsor vault withdrawal destination is not registered",
+                    "registered fee sponsor payout account is no longer present",
                 ));
             }
             let definition = state_transaction
@@ -17993,7 +18320,7 @@ pub mod isi {
                 authority.clone(),
                 program_id.clone(),
                 source,
-                self.destination().clone(),
+                payout_account,
                 self.amount().clone(),
             );
             crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_vault_withdrawal(
@@ -19185,7 +19512,7 @@ pub mod isi {
                             if crate::state::is_retired_sccp_registry_parameter(&next) {
                                 return Err(InstructionExecutionError::InvalidParameter(
                                     InvalidParameterError::SmartContract(
-                                        "the reserved SCCP registry can only be changed by ApplySccpRouteGovernance"
+                                        "the reserved SCCP registry can only be changed by finalized typed SCCP referendum enactment"
                                             .to_owned(),
                                     ),
                                 ));
@@ -19546,6 +19873,116 @@ pub mod isi {
         }
 
         #[test]
+        fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
+            let kind = ProposalKind::SorafsProviderGovernance(
+                iroha_data_model::governance::types::SorafsProviderGovernanceProposal {
+                    action: Box::new(
+                        iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Establish(
+                            iroha_data_model::isi::sorafs::EstablishSorafsProviderOwnerV1 {
+                                provider_id: iroha_data_model::sorafs::capacity::ProviderId::new(
+                                    [0xA7; 32],
+                                ),
+                                owner: ALICE_ID.clone(),
+                            },
+                        ),
+                    ),
+                },
+            );
+            assert_eq!(
+                super::required_parliament_bodies(&kind),
+                &[
+                    ParliamentBody::RulesCommittee,
+                    ParliamentBody::AgendaCouncil,
+                    ParliamentBody::InterestPanel,
+                    ParliamentBody::ReviewPanel,
+                    ParliamentBody::PolicyJury,
+                    ParliamentBody::OversightCommittee,
+                    ParliamentBody::FmaCommittee,
+                ]
+            );
+        }
+
+        #[test]
+        fn contract_subject_binding_materializes_missing_account_and_preserves_existing_account() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect("seed lifecycle authority");
+
+            let missing_address = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &ALICE_ID,
+                41,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("missing-subject contract address");
+            let missing_subject = missing_address.subject_id();
+            assert!(state_transaction.world.account(&missing_subject).is_err());
+
+            let bound_subject = super::ensure_contract_subject_binding(
+                &ALICE_ID,
+                &mut state_transaction,
+                &missing_address,
+            )
+            .expect("bind and materialize missing contract subject");
+            assert_eq!(bound_subject, missing_subject);
+            assert!(state_transaction.world.account(&missing_subject).is_ok());
+            assert!(crate::smartcontracts::code::is_historical_contract_subject(
+                &state_transaction.world,
+                &missing_subject,
+            ));
+
+            let existing_address = ContractAddress::derive(
+                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &ALICE_ID,
+                42,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("existing-subject contract address");
+            let existing_subject = existing_address.subject_id();
+            let marker: Name = "contract_subject_marker".parse().expect("metadata key");
+            let mut metadata = Metadata::default();
+            metadata.insert(marker.clone(), Json::new("preserve-me"));
+            Register::account(
+                Account::new(existing_subject.clone()).with_metadata(metadata.clone()),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect("seed existing contract subject account");
+
+            let bound_existing = super::ensure_contract_subject_binding(
+                &ALICE_ID,
+                &mut state_transaction,
+                &existing_address,
+            )
+            .expect("bind existing contract subject without replacing it");
+            assert_eq!(bound_existing, existing_subject);
+            assert_eq!(
+                state_transaction
+                    .world
+                    .account(&existing_subject)
+                    .expect("existing subject remains registered")
+                    .metadata()
+                    .get(&marker),
+                metadata.get(&marker),
+                "binding must not replace or repair an existing subject account",
+            );
+        }
+
+        #[test]
         fn upgrade_execute_enforces_capability_at_the_mutation_boundary() {
             use iroha_data_model::permission::Permissions;
             use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
@@ -19788,6 +20225,201 @@ pub mod isi {
         }
 
         #[test]
+        fn fee_sponsor_program_rejects_unregistered_payout_account() {
+            use iroha_data_model::{
+                isi::nexus::CreateFeeSponsorProgram,
+                nexus::{FeeSponsorProgram, FeeSponsorProgramId},
+            };
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register sponsor");
+
+            let program_id = FeeSponsorProgramId::new(
+                ALICE_ID.clone(),
+                "closed_payout".parse().expect("program name"),
+            );
+            let create = CreateFeeSponsorProgram {
+                program: FeeSponsorProgram::new(program_id.clone(), BOB_ID.clone()),
+            };
+            let error = create
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("an unregistered payout account must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("unknown fee sponsor payout account")
+            );
+            assert!(stx.world.fee_sponsor_programs.get(&program_id).is_none());
+
+            Register::account(Account::new(BOB_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register payout account");
+            create
+                .execute(&ALICE_ID, &mut stx)
+                .expect("registered immutable payout account must be accepted");
+            assert_eq!(
+                stx.world
+                    .fee_sponsor_programs
+                    .get(&program_id)
+                    .expect("created sponsor program")
+                    .payout_account,
+                *BOB_ID
+            );
+            let error = Unregister::account(BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("a live program's immutable payout account must remain registered");
+            assert!(error.to_string().contains("immutable payout account"));
+        }
+
+        #[test]
+        fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
+            use iroha_data_model::{
+                isi::nexus::WithdrawFeeSponsorProgram,
+                nexus::{
+                    FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
+                    FeeSponsorVault, FeeSponsorVaultKey,
+                },
+                permission::Permissions,
+            };
+            use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
+            for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
+                if stx.world.account(&account).is_err() {
+                    Register::account(Account::new(account))
+                        .execute(&ALICE_ID, &mut stx)
+                        .expect("register sponsor withdrawal fixture account");
+                }
+            }
+
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            stx.world.asset_definitions.insert(
+                asset_definition_id.clone(),
+                AssetDefinition::numeric(
+                    asset_definition_id.clone(),
+                    "global fee asset".to_owned(),
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&ALICE_ID),
+            );
+            let custody_asset = AssetId::new(asset_definition_id.clone(), custody);
+            Mint::asset_quantity(Quantity::from(10_u32), custody_asset.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("fund sponsor custody");
+
+            let program_id = FeeSponsorProgramId::new(
+                ALICE_ID.clone(),
+                "owner_payout".parse().expect("program name"),
+            );
+            let mut program = FeeSponsorProgram::new(program_id.clone(), BOB_ID.clone());
+            program.lifecycle = FeeSponsorProgramLifecycle::Paused;
+            stx.world
+                .fee_sponsor_programs
+                .insert(program_id.clone(), program);
+            let vault_key = FeeSponsorVaultKey {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+            };
+            stx.world.fee_sponsor_vaults.insert(
+                vault_key.clone(),
+                FeeSponsorVault {
+                    key: vault_key.clone(),
+                    balance: Quantity::from(10_u32),
+                },
+            );
+            stx.world.account_permissions.insert(
+                BOB_ID.clone(),
+                Permissions::from([CanManageFeeSponsorProgram {
+                    sponsor: ALICE_ID.clone(),
+                }
+                .into()]),
+            );
+
+            let withdrawal = WithdrawFeeSponsorProgram {
+                program_id: program_id.clone(),
+                asset_definition_id: asset_definition_id.clone(),
+                amount: Quantity::from(3_u32),
+            };
+            let error = withdrawal
+                .clone()
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("a delegated manager must not withdraw sponsor funds");
+            assert!(error.to_string().contains("only sponsor"));
+            assert_eq!(
+                stx.world
+                    .fee_sponsor_vaults
+                    .get(&vault_key)
+                    .expect("rejected withdrawal preserves vault")
+                    .balance,
+                Quantity::from(10_u32)
+            );
+
+            withdrawal
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact sponsor may withdraw to the registered payout account");
+            let payout_asset = AssetId::new(asset_definition_id, BOB_ID.clone());
+            assert_eq!(
+                stx.world
+                    .assets
+                    .get(&payout_asset)
+                    .expect("registered payout receives withdrawal")
+                    .as_ref(),
+                &Quantity::from(3_u32)
+            );
+            assert_eq!(
+                stx.world
+                    .assets
+                    .get(&custody_asset)
+                    .expect("custody retains remaining balance")
+                    .as_ref(),
+                &Quantity::from(7_u32)
+            );
+            assert_eq!(
+                stx.world
+                    .fee_sponsor_vaults
+                    .get(&vault_key)
+                    .expect("nonempty vault remains")
+                    .balance,
+                Quantity::from(7_u32)
+            );
+        }
+
+        #[test]
         fn fee_sponsor_vault_allocation_requires_program_management_authority() {
             use iroha_data_model::{
                 isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
@@ -19827,7 +20459,8 @@ pub mod isi {
                 FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
                 fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
             );
-            let mut program = FeeSponsorProgram::new(program_id.clone());
+            let mut program =
+                FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
             program.lifecycle = FeeSponsorProgramLifecycle::Active;
             program.active_revision = Some(1);
             stx.world
@@ -19921,7 +20554,8 @@ pub mod isi {
                 FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
                 fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
             );
-            let mut program = FeeSponsorProgram::new(program_id.clone());
+            let mut program =
+                FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
             program.lifecycle = FeeSponsorProgramLifecycle::Active;
             program.active_revision = Some(1);
             stx.world
@@ -20025,7 +20659,8 @@ pub mod isi {
                 FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
                 revision_one,
             );
-            let mut program = FeeSponsorProgram::new(program_id.clone());
+            let mut program =
+                FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
             program.lifecycle = FeeSponsorProgramLifecycle::Active;
             program.active_revision = Some(1);
             stx.world
@@ -24299,7 +24934,7 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_rejects_custody_equal_to_sender_without_side_effects() {
+        fn route_owner_never_aliases_its_network_bound_protocol_escrow() {
             let state = State::new_for_testing(
                 World::default(),
                 Kura::blank_kura_for_testing(),
@@ -24316,25 +24951,98 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let mut registry = test_active_eth_registry();
-            registry.lanes[0].routes[0].settlement.custody_account_id = ALICE_ID.clone();
+            registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
                 .expect("self-custody route is structurally valid but unsafe for transfer");
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-            let (settlement_asset, _) = sccp_test_settlement_ids(&stx);
-            let sender_asset = AssetId::new(settlement_asset, ALICE_ID.clone());
-            let sender_before = sccp_asset_balance(&stx, &sender_asset);
-            let payload = sora_outbound_sccp_payload(72);
-            let key = crate::bridge::test_sccp_outbound_message_key(&payload);
+            let (_settlement_asset, escrow) = sccp_test_settlement_ids(&stx);
+            assert_ne!(escrow, *ALICE_ID);
+            assert!(crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(&stx, &escrow));
+            assert!(
+                crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(&stx, &ALICE_ID,)
+            );
+        }
 
-            let error = crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
-                &payload,
-            ))
+        #[test]
+        fn sccp_route_escrow_accepts_only_owner_funding_and_rejects_ordinary_drain() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let mut registry = test_active_eth_registry();
+            registry.lanes[0].routes[0].settlement.custody_owner = ALICE_ID.clone();
+            stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
+                .expect("owner-bound SCCP route fixture");
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            let route = stx.sccp_registry.lanes()[0].routes[0].clone();
+            let route_key = route.key();
+            let definition = route.settlement.asset_definition_id.clone();
+            let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                &stx.network_id,
+                &route_key,
+                &definition,
+            );
+            let amount = Quantity::from(7_u64);
+
+            bridge::FundSccpRouteEscrow {
+                route_key: route_key.clone(),
+                asset_definition_id: definition.clone(),
+                amount: amount.clone(),
+            }
             .execute(&ALICE_ID, &mut stx)
-            .expect_err("custody must never alias the sender");
+            .expect("the exact route owner may fund only the derived escrow");
+            let escrow_asset = AssetId::new(definition.clone(), escrow.clone());
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
 
-            assert!(format!("{error:?}").contains("custody account must differ"));
-            assert_eq!(sccp_asset_balance(&stx, &sender_asset), sender_before);
-            assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
+            if stx.world.account(&BOB_ID).is_err() {
+                Register::account(Account::new(BOB_ID.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("register non-owner fixture");
+            }
+            let non_owner_error = bridge::FundSccpRouteEscrow {
+                route_key: route_key.clone(),
+                asset_definition_id: definition.clone(),
+                amount: Quantity::from(1_u64),
+            }
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("a route manager or unrelated account cannot debit itself into custody");
+            assert!(
+                format!("{non_owner_error:?}").contains("exact governed asset and custody owner")
+            );
+
+            Grant::account_permission(
+                Permission::from(CanTransferAsset {
+                    asset: escrow_asset.clone(),
+                }),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant exact transfer permission for negative corridor test");
+            let drain_error = Transfer::asset_quantity(escrow_asset.clone(), 1_u64, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary transfer cannot drain SCCP route escrow");
+            assert!(format!("{drain_error:?}").contains("SCCP custody can only be debited"));
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
+
+            let mint_error = Mint::asset_quantity(1_u64, escrow_asset.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary mint cannot credit SCCP route escrow");
+            assert!(
+                format!("{mint_error:?}")
+                    .contains("only be credited by a route-bound native SCCP instruction")
+            );
+            assert_eq!(sccp_asset_balance(&stx, &escrow_asset), amount);
         }
 
         #[test]
@@ -26785,29 +27493,30 @@ seiyaku GovernanceLifecycle {
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             if stx.sccp_registry.lanes().is_empty() {
                 stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(
                     test_active_eth_registry(),
                 )
                 .expect("active ETH registry fixture");
             }
+            *stx.world.sccp_registry.get_mut() = stx.sccp_registry.to_wire();
             let route = stx.sccp_registry.lanes()[0]
                 .routes
                 .first()
                 .expect("active ETH route fixture");
             let settlement_asset_definition_id = route.settlement.asset_definition_id.clone();
-            let custody_account_id = route.settlement.custody_account_id.clone();
+            let custody_owner = route.settlement.custody_owner.clone();
+            let route_key = route.key();
             if stx.world.account(&ALICE_ID).is_err() {
                 Register::account(Account::new(ALICE_ID.clone()))
                     .execute(&ALICE_ID, stx)
                     .expect("register SCCP sender fixture");
             }
-            if stx.world.account(&custody_account_id).is_err() {
-                Register::account(Account::new(custody_account_id.clone()))
+            if stx.world.account(&custody_owner).is_err() {
+                Register::account(Account::new(custody_owner))
                     .execute(&ALICE_ID, stx)
-                    .expect("register SCCP custody fixture");
+                    .expect("register SCCP route custody owner fixture");
             }
             if stx
                 .world
@@ -26823,9 +27532,11 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, stx)
                 .expect("register SCCP settlement asset fixture");
             }
+            ensure_sccp_route_escrow_account(&route_key, &settlement_asset_definition_id, stx)
+                .expect("register deterministic SCCP route escrow fixture");
             let sender_asset_id = AssetId::new(settlement_asset_definition_id, ALICE_ID.clone());
             if stx.world.asset(&sender_asset_id).is_err() {
-                Mint::asset_quantity(1_000_000_u64, sender_asset_id)
+                Mint::asset_quantity(1_000_000_u64, sender_asset_id.clone())
                     .execute(&ALICE_ID, stx)
                     .expect("fund SCCP sender fixture");
             }
@@ -26852,7 +27563,11 @@ seiyaku GovernanceLifecycle {
                 .first()
                 .expect("active SCCP route fixture");
             let asset = route.settlement.asset_definition_id.clone();
-            let custody = route.settlement.custody_account_id.clone();
+            let custody = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                &stx.network_id,
+                &route.key(),
+                &asset,
+            );
             (asset, custody)
         }
 
@@ -27099,7 +27814,10 @@ seiyaku GovernanceLifecycle {
                 gas_policy_commitment: Hash::new(b"SCCP retention lifecycle gas"),
             });
             let transaction = TransactionBuilder::new(
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+                provisional_finality
+                    .finality_artifact
+                    .height_context
+                    .network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -27190,8 +27908,7 @@ seiyaku GovernanceLifecycle {
         ) -> (AssetDefinitionId, AccountId) {
             *stx.world.sccp_registry.get_mut() = registry.to_wire();
             stx.sccp_registry = registry;
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let (asset, custody) = sccp_test_settlement_ids(stx);
             for account in [ALICE_ID.clone(), custody.clone()] {
@@ -28623,6 +29340,7 @@ seiyaku GovernanceLifecycle {
                             },
                         ),
                     },
+                    recorded_at_ms: 1,
                     evidence_hashes: Vec::new(),
                 }],
             );
@@ -29773,8 +30491,7 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             stx.world
                 .sccp_outbound_message_locator
@@ -30321,8 +31038,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = state_block.transaction();
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
             stx.sccp_registry = registry;
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 
             let current = native.trust_anchor;
             let admitted_high_water = current
@@ -30437,8 +31153,7 @@ seiyaku GovernanceLifecycle {
             assert_eq!(lane.native_trust_anchors.len(), retained_cap);
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire)
                 .expect("exact retained-anchor cap must validate");
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 
             let mut next_hash = [0_u8; 32];
             next_hash[0] = 0xED;
@@ -30557,8 +31272,7 @@ seiyaku GovernanceLifecycle {
                 ..previous
             };
             stx.sccp_registry = rotate_native_registry_for_test(registry.as_ref(), next);
-            stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             seed_sccp_test_tx_call_hash(&mut stx, 0x90);
 
@@ -38134,6 +38848,11 @@ seiyaku GovernanceLifecycle {
                 DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
+            let contract_subject = contract_address.subject_id();
+            assert!(
+                stx.world.account(&contract_subject).is_err(),
+                "the activation fixture must begin without a subject account",
+            );
 
             let activate = scode::ActivateContractInstance {
                 contract_address: contract_address.clone(),
@@ -38160,6 +38879,10 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash)
+            );
+            assert!(
+                stx.world.account(&contract_subject).is_ok(),
+                "activation must atomically materialize its deterministic subject account",
             );
 
             let deactivate = scode::DeactivateContractInstance {
@@ -38349,6 +39072,11 @@ seiyaku GovernanceLifecycle {
                 DataSpaceId::UNIVERSAL,
             )
             .expect("nonce one address");
+            let subject_at_nonce_0 = address_at_nonce_0.subject_id();
+            assert!(
+                stx.world.account(&subject_at_nonce_0).is_err(),
+                "the deployment fixture must begin without a subject account",
+            );
 
             let foreign_chain_address = ContractAddress::derive(
                 &iroha_data_model::ChainId::from("foreign-contract-deployment-chain"),
@@ -38450,6 +39178,10 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 stx.world.contract_address_by_alias_at(&alias, 0),
                 Some(address_at_nonce_0.clone())
+            );
+            assert!(
+                stx.world.account(&subject_at_nonce_0).is_ok(),
+                "atomic deployment must materialize its deterministic subject account",
             );
 
             let nonce_key: Name =

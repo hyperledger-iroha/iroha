@@ -40,7 +40,8 @@ use iroha_data_model::{
 use thiserror::Error;
 
 use super::{
-    FairV2Ingress, FairV2IngressCapacityError, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
+    FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressCapacityError,
+    FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
     InboundBlockMessage, SumeragiWorker,
     message::BlockMessage,
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
@@ -55,14 +56,13 @@ use super::{
     },
     v2_body_store::{BlockSignaturePolicy, V2BodyStore},
     v2_candidate::{
-        CandidateAssemblyOutcome, CandidateAttachments, CandidateDescriptor, CandidateLimits,
-        CandidateParent, CandidateRequest, CandidateWorkProvider, CandidateWorkUnavailable,
-        PreparedCandidateWork, V2CandidateAssembler,
+        CandidateAssemblyOutcome, CandidateAttachments, CandidateLimits, CandidateParent,
+        CandidateRequest, V2CandidateAssembler, candidate_block_has_proposal_work,
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
         EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
-        PostFinalityCleanupTarget, V2EffectExecutor,
+        PostFinalityCleanupTarget, V2EffectExecutor, network_ingress_is_certified_fence_escape,
     },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
@@ -340,15 +340,15 @@ impl PendingSuccessorActivation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalValidationDisposition {
     Ignored,
-    RetryHeartbeat,
-    FatalHeartbeat,
+    RetryNonEmpty,
+    FatalNonEmpty,
 }
 
 #[derive(Default, Debug)]
 struct LocalProposalState {
     attempted: Option<LocalProposalOwner>,
     submitted: Option<(LocalProposalOwner, wire::BlockSubject)>,
-    heartbeat_only: Option<LocalProposalOwner>,
+    non_empty_retry: Option<LocalProposalOwner>,
     candidate_work_wait: Option<CandidateWorkWait>,
     pending_events: Option<PendingLocalEvents>,
     global_selection: Option<PendingGlobalSelection>,
@@ -444,10 +444,10 @@ impl LocalProposalState {
             self.attempted = continued_exact_work.then_some(owner);
         }
         if self
-            .heartbeat_only
+            .non_empty_retry
             .is_some_and(|candidate| candidate != owner)
         {
-            self.heartbeat_only = None;
+            self.non_empty_retry = None;
         }
         if self
             .candidate_work_wait
@@ -459,7 +459,7 @@ impl LocalProposalState {
     }
 
     /// Keep retrying deferred autonomous work for the bounded observation
-    /// window, then arm an explicit empty heartbeat for this exact owner.
+    /// window, then arm one ordinary non-empty recovery retry for this owner.
     ///
     /// Expiry deliberately changes only proposal shape. It never changes the
     /// lane adapter's routing or queue-ownership policy.
@@ -469,7 +469,7 @@ impl LocalProposalState {
         now: Instant,
         wait_bound: Duration,
     ) {
-        if self.heartbeat_only == Some(owner) {
+        if self.non_empty_retry == Some(owner) {
             self.candidate_work_wait = None;
             return;
         }
@@ -485,8 +485,22 @@ impl LocalProposalState {
             });
             return;
         }
-        self.heartbeat_only = Some(owner);
+        self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
+    }
+
+    /// Retire an armed recovery retry which completed assembly without finding
+    /// any publishable work. A later retry must cross a fresh bounded
+    /// observation window instead of re-running full assembly every runner
+    /// poll.
+    fn retire_unsubmitted_non_empty_retry(&mut self, owner: LocalProposalOwner) -> bool {
+        let owner = self.reconcile(owner);
+        if self.non_empty_retry != Some(owner) {
+            return false;
+        }
+        self.non_empty_retry = None;
+        self.candidate_work_wait = None;
+        true
     }
 
     fn handle_validation_rejection(
@@ -512,32 +526,32 @@ impl LocalProposalState {
         }) {
             self.global_selection = None;
         }
-        if self.heartbeat_only == Some(owner) {
-            return LocalValidationDisposition::FatalHeartbeat;
+        if self.non_empty_retry == Some(owner) {
+            return LocalValidationDisposition::FatalNonEmpty;
         }
         self.attempted = None;
-        self.heartbeat_only = Some(owner);
+        self.non_empty_retry = Some(owner);
         self.submitted = None;
         self.candidate_work_wait = None;
-        LocalValidationDisposition::RetryHeartbeat
+        LocalValidationDisposition::RetryNonEmpty
     }
 
     /// Abandon a candidate whose lane-local ownership could not be bound
-    /// before the body was submitted, then give the exact owner one empty
-    /// heartbeat attempt. The caller releases the candidate's selection lease
+    /// before the body was submitted, then give the exact owner one ordinary
+    /// non-empty retry. The caller releases the candidate's selection lease
     /// before crossing this boundary, without publishing a body or events.
     fn handle_candidate_binding_rejection(
         &mut self,
         owner: LocalProposalOwner,
     ) -> LocalValidationDisposition {
         let owner = self.reconcile(owner);
-        if self.heartbeat_only == Some(owner) {
-            return LocalValidationDisposition::FatalHeartbeat;
+        if self.non_empty_retry == Some(owner) {
+            return LocalValidationDisposition::FatalNonEmpty;
         }
         self.attempted = None;
-        self.heartbeat_only = Some(owner);
+        self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
-        LocalValidationDisposition::RetryHeartbeat
+        LocalValidationDisposition::RetryNonEmpty
     }
 
     fn take_prepared_events(
@@ -1023,7 +1037,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             state.as_ref(),
             queue.as_ref(),
             kura.as_ref(),
-            &verified_context.context().chain_id,
+            &verified_context.context().network_id,
         )?;
     reservation_recovery.complete();
     if recovered_reservations > 0 || finalized_committed_reservations > 0 || released_orphans > 0 {
@@ -1072,7 +1086,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     .roster
                     .iter()
                     .map(|validator| validator.validator.clone()),
-                &context.chain_id,
+                &context.network_id,
                 context.da_layout,
             )
             .map_err(ingress_capacity_error)?;
@@ -1109,7 +1123,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )?;
         let new_block_sync_server = block_sync_server
             .is_none()
-            .then(|| V2BlockSyncServer::new(context.chain_id.clone(), certified_request_capacity))
+            .then(|| V2BlockSyncServer::new(context.network_id, certified_request_capacity))
             .transpose()?;
         let mut block_sync = V2BlockSyncDiscovery::new(
             context.clone(),
@@ -1156,7 +1170,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&kura),
             provider_ingest_finalized_archive.clone(),
             reputation_finalized_archive.clone(),
-            context.chain_id.clone(),
+            state.chain_id.clone(),
             block_cadence,
             genesis_account.clone(),
             events_sender.clone(),
@@ -1369,6 +1383,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             lifecycle_ordinals,
             Arc::clone(&output_guard),
             Arc::clone(&block_rx),
+            leader_wire_recovery_authority,
             exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
@@ -1627,15 +1642,84 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         &mut services,
                     )?;
                 }
-                match executor.retry_retained_certified_body_response(&mut services) {
-                    Ok(_) => {}
-                    Err(EffectTransportError::Backpressure) => {}
+                if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
+                    // The retained response may predate the timeout itself,
+                    // so its strict `< target` completion turn cannot admit
+                    // the timeout signer's callback. Give exactly one owner
+                    // from the separately frozen inclusive `<= timeout` prefix
+                    // a turn before retrying the response.
+                    services.drain_timeout_recovery_prefix_completion(
+                        &mut executor,
+                        timeout_recovery_cut,
+                    )?;
+                }
+                let response_backpressured = match executor
+                    .retry_retained_certified_body_response(&mut services)
+                {
+                    Ok(_) => false,
+                    Err(EffectTransportError::Backpressure) => true,
                     Err(EffectTransportError::FailClosed(reason)) => {
                         return Err(V2RunnerError::Service(reason));
                     }
                     Err(error) => {
                         iroha_logger::debug!(%error, "rejected retained certified body response");
+                        false
                     }
+                };
+                if response_backpressured {
+                    // Transport capacity is not pacemaker authority. This
+                    // retained response owns one bounded opportunity to admit
+                    // a new authenticated certificate into the typed Progress
+                    // lane. Once charged, later retries service the finite
+                    // retained certificate prefix but cannot replenish it
+                    // from fresh ingress and recreate the same capacity cycle.
+                    if executor.retained_response_may_admit_certified_fence_escape() {
+                        drain_v2_ingress(
+                            &block_rx,
+                            &mut executor,
+                            &mut services,
+                            &mut lane_work,
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server
+                                .as_mut()
+                                .expect("block-sync server initialized before ingress"),
+                            &mut block_sync,
+                            &mut block_sync_request,
+                            &mut npos_vrf,
+                            V2IngressDrainMode::CertifiedFenceEscape,
+                            1,
+                        )?;
+                    }
+                    // Certificate escape is a one-shot retained-response
+                    // credit. TimeoutVote production is a distinct frozen
+                    // roster episode: service one eligible source on every
+                    // backpressured outer turn so reaching quorum never
+                    // depends on that certificate credit remaining unused.
+                    drain_v2_ingress(
+                        &block_rx,
+                        &mut executor,
+                        &mut services,
+                        &mut lane_work,
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server
+                            .as_mut()
+                            .expect("block-sync server initialized before ingress"),
+                        &mut block_sync,
+                        &mut block_sync_request,
+                        &mut npos_vrf,
+                        V2IngressDrainMode::TimeoutVoteEpisode,
+                        1,
+                    )?;
+                    executor.reconcile_retained_response_certified_fence_escape_phase();
+                    // Give one already-owned timeout/Progress root a turn
+                    // before retrying the exact response. Ordinary work stays
+                    // parked behind the retained physical carrier.
+                    advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;
+                    executor.reconcile_retained_response_certified_fence_escape_phase();
                 }
                 committed_lane_status_publisher.publish_if_changed(&lane_work);
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
@@ -1658,10 +1742,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 // enter the frozen prefix, and exact carrier retry retains the
                 // same episode state and ticket identity.
                 let mut older_predecessor_remains = false;
-                if services
+                let claimed_older_runtime_episode = services
                     .claim_certified_serve_runtime_episode(serve_barrier)
-                    .map_err(V2RunnerError::Service)?
-                {
+                    .map_err(V2RunnerError::Service)?;
+                if claimed_older_runtime_episode {
                     services.drain_exact_serve_runtime_predecessor(
                         &mut executor,
                         serve_barrier.scheduler_ordinal(),
@@ -1693,6 +1777,29 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             )?;
                         }
                     }
+                    if !recovering_interrupted_tip {
+                        // A backpressured Serve ticket may retain the sole I/O
+                        // unit indefinitely. It cannot suppress authenticated
+                        // certified progress admission or an already-admitted
+                        // certificate root.
+                        drain_v2_ingress(
+                            &block_rx,
+                            &mut executor,
+                            &mut services,
+                            &mut lane_work,
+                            output_guard.as_ref(),
+                            kura.as_ref(),
+                            &common_config.key_pair,
+                            block_sync_server
+                                .as_mut()
+                                .expect("block-sync server initialized before ingress"),
+                            &mut block_sync,
+                            &mut block_sync_request,
+                            &mut npos_vrf,
+                            V2IngressDrainMode::CertifiedFenceEscape,
+                            1,
+                        )?;
+                    }
                     older_predecessor_remains = executor
                         .older_runtime_lifecycle_predates_exact_serve(
                             Instant::now(),
@@ -1705,6 +1812,50 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         )
                         .map_err(V2RunnerError::Service)?;
                 }
+                service_certified_serve_barrier_liveness_turn(
+                    recovering_interrupted_tip,
+                    claimed_older_runtime_episode,
+                    |action| match action {
+                        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
+                            // The one-shot older-runtime claim above cannot own
+                            // the whole timeout-recovery episode. Admit one
+                            // authenticated direct-roster TimeoutVote on every
+                            // selected-Serve outer turn, including after that
+                            // claim reaches Complete.
+                            drain_v2_ingress(
+                                &block_rx,
+                                &mut executor,
+                                &mut services,
+                                &mut lane_work,
+                                output_guard.as_ref(),
+                                kura.as_ref(),
+                                &common_config.key_pair,
+                                block_sync_server
+                                    .as_mut()
+                                    .expect("block-sync server initialized before ingress"),
+                                &mut block_sync,
+                                &mut block_sync_request,
+                                &mut npos_vrf,
+                                V2IngressDrainMode::TimeoutVoteEpisode,
+                                1,
+                            )
+                        }
+                        CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
+                            if let Some(timeout_recovery_cut) =
+                                executor.timeout_recovery_lifecycle_cut()?
+                            {
+                                services.drain_timeout_recovery_prefix_completion(
+                                    &mut executor,
+                                    timeout_recovery_cut,
+                                )?;
+                            }
+                            Ok(())
+                        }
+                        CertifiedServeBarrierLivenessAction::Pacemaker => {
+                            advance_pacemaker_once(&block_rx, &mut executor, &mut services)
+                        }
+                    },
+                )?;
                 if !older_predecessor_remains {
                     // A full prefix may include an earlier Serve lifecycle whose
                     // auxiliary unit is released only after its sealed response is
@@ -1742,6 +1893,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             &mut block_sync,
                             &mut block_sync_request,
                             &mut npos_vrf,
+                            V2IngressDrainMode::Ordinary,
                             1,
                         )?;
                     }
@@ -1804,15 +1956,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         rejection.subject(),
                     ) {
                         LocalValidationDisposition::Ignored => {}
-                        LocalValidationDisposition::FatalHeartbeat => {
-                            return Err(V2RunnerError::LocalHeartbeatRejected(
+                        LocalValidationDisposition::FatalNonEmpty => {
+                            return Err(V2RunnerError::LocalNonEmptyRetryRejected(
                                 rejection.reason().to_owned(),
                             ));
                         }
-                        LocalValidationDisposition::RetryHeartbeat => {
+                        LocalValidationDisposition::RetryNonEmpty => {
                             iroha_logger::warn!(
                                 reason = rejection.reason(),
-                                "local Sumeragi v2 candidate rejected; retrying an empty heartbeat"
+                                "local Sumeragi v2 candidate rejected; retrying with non-empty work only"
                             );
                         }
                     }
@@ -1846,6 +1998,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut block_sync,
                     &mut block_sync_request,
                     &mut npos_vrf,
+                    V2IngressDrainMode::Ordinary,
                     body_queue_capacity,
                 )?;
                 if discovery_was_outstanding && block_sync_request.is_none() {
@@ -2313,6 +2466,16 @@ fn schedule_local_proposal(
         if !block.is_resultless_proposal() {
             return Err(V2RunnerError::ResultBearingProposal);
         }
+        let time_trigger_clock_progress_required = block
+            .header()
+            .creation_time()
+            .checked_sub(block_cadence)
+            .is_some_and(|parent_creation_time| {
+                state.time_trigger_clock_progress_required_fast(parent_creation_time)
+            });
+        if !candidate_block_has_proposal_work(&block, time_trigger_clock_progress_required) {
+            return Err(V2RunnerError::EmptyProposalWork);
+        }
         let lane_binding = if context.height == 1 {
             let authenticated_genesis = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
             lane_work.bind_locked_genesis_body(&block, authenticated_genesis)
@@ -2460,39 +2623,23 @@ fn schedule_local_proposal(
             &carrier_context_header,
             npos_vrf,
         )?;
-        let assembly = if proposal_state.heartbeat_only == Some(owner) {
-            assembler.assemble(CandidateRequest {
-                context,
-                directive,
-                local_validator,
-                parent,
-                state,
-                queue,
-                key_pair,
-                output_guard,
-                attachments,
-                allow_empty_recovery_heartbeat: true,
-                work_provider: HeartbeatOnlyWorkProvider,
-            })?
-        } else {
-            assembler.assemble(CandidateRequest {
-                context,
-                directive,
-                local_validator,
-                parent,
-                state,
-                queue,
-                key_pair,
-                output_guard,
-                attachments,
-                allow_empty_recovery_heartbeat: false,
-                work_provider: &mut *lane_work,
-            })?
-        };
+        let assembly = assembler.assemble(CandidateRequest {
+            context,
+            directive,
+            local_validator,
+            parent,
+            state,
+            queue,
+            key_pair,
+            output_guard,
+            attachments,
+            work_provider: &mut *lane_work,
+        })?;
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::NoProposalWork(report) => {
                 let now = Instant::now();
+                proposal_state.retire_unsubmitted_non_empty_retry(owner);
                 if report.work_deferred > 0 {
                     proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound);
                 } else {
@@ -2519,7 +2666,7 @@ fn schedule_local_proposal(
             return Err(V2RunnerError::StaleTag);
         }
         let report = candidate.scan_report();
-        if proposal_state.heartbeat_only != Some(owner)
+        if proposal_state.non_empty_retry != Some(owner)
             && report.selected == 0
             && report.work_deferred > 0
         {
@@ -2536,16 +2683,15 @@ fn schedule_local_proposal(
             // is available to a later-height reproposal.
             drop(candidate);
             match proposal_state.handle_candidate_binding_rejection(owner) {
-                LocalValidationDisposition::RetryHeartbeat => {
+                LocalValidationDisposition::RetryNonEmpty => {
                     iroha_logger::warn!(
                         height = tag.height(),
                         view = tag.view(),
-                        "discarded an unsubmitted candidate after lane-local ownership binding rejected; retrying as an empty heartbeat"
+                        "discarded an unsubmitted candidate after lane-local ownership binding rejected; retrying with non-empty work only"
                     );
                     return Ok(());
                 }
-                LocalValidationDisposition::FatalHeartbeat
-                | LocalValidationDisposition::Ignored => {
+                LocalValidationDisposition::FatalNonEmpty | LocalValidationDisposition::Ignored => {
                     return Err(V2RunnerError::LaneCandidateBinding);
                 }
             }
@@ -2960,6 +3106,18 @@ fn prepare_decided_lane_recovery_ingress(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IngressDrainMode {
+    /// Normal completion/runtime/ingress round-robin.
+    Ordinary,
+    /// Only a TC/CommitQC which can supersede a hung signing fence.
+    CertifiedFenceEscape,
+    /// Only one member of the finite current-view TimeoutVote producer episode.
+    /// This remains available after a retained response spends its separate
+    /// certificate credit.
+    TimeoutVoteEpisode,
+}
+
 fn drain_v2_ingress(
     receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
@@ -2972,9 +3130,10 @@ fn drain_v2_ingress(
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_vrf: &mut V2NposVrfLifecycle,
+    mode: V2IngressDrainMode,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
-    if executor.has_retained_certified_body_response() {
+    if mode == V2IngressDrainMode::Ordinary && executor.has_retained_certified_body_response() {
         // The dedicated outer episode owns all progress until this exact
         // transport completion either crosses capacity or reaches a permanent
         // terminal. Do not give even the Runtime half-turn of a new batch to a
@@ -2982,6 +3141,9 @@ fn drain_v2_ingress(
         return Ok(());
     }
     for turn in outer_ingress_turns(limit) {
+        if mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress {
+            continue;
+        }
         if turn == OuterIngressTurn::Completion {
             if services
                 .certified_serve_barrier_request_hash()
@@ -3034,8 +3196,38 @@ fn drain_v2_ingress(
         let terminal_subject = executor.local_proposal_directive()?.decided_subject();
         let terminal_decision = terminal_subject.is_some();
         let mut prepared_serve = None;
-        let Some(mut inbound) = receiver
-            .try_recv_if_checked(|inbound| {
+        let barrier_bypass = match mode {
+            V2IngressDrainMode::TimeoutVoteEpisode => {
+                FairV2IngressBarrierBypass::TimeoutVoteEpisode
+            }
+            V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {
+                FairV2IngressBarrierBypass::None
+            }
+        };
+        let Some((mut inbound, dequeue_disposition)) = receiver
+            .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound| {
+                if mode != V2IngressDrainMode::Ordinary {
+                    let BlockMessage::V2(message) = inbound.message() else {
+                        return false;
+                    };
+                    if message.validate_version().is_err() {
+                        return false;
+                    }
+                    let selected_mode_matches = match mode {
+                        V2IngressDrainMode::Ordinary => true,
+                        V2IngressDrainMode::CertifiedFenceEscape => {
+                            network_ingress_is_certified_fence_escape(&message.payload)
+                        }
+                        V2IngressDrainMode::TimeoutVoteEpisode => {
+                            inbound.ingress_ownership().is_some_and(|ownership| {
+                                executor.can_admit_timeout_vote_recovery_episode(message, ownership)
+                            })
+                        }
+                    };
+                    if !selected_mode_matches {
+                        return false;
+                    }
+                }
                 if !v2_ingress_head_can_drain(inbound, executor, terminal_subject) {
                     return false;
                 }
@@ -3179,6 +3371,28 @@ fn drain_v2_ingress(
         receiver
             .bind_leader_wire_runtime_ownership(&mut ingress_ownership)
             .map_err(V2RunnerError::Service)?;
+        if dequeue_disposition == FairV2IngressDequeueDisposition::RetireObsolete {
+            let receipt = ingress_ownership
+                .leader_wire_runtime_receipt()
+                .ok_or_else(|| {
+                    V2RunnerError::Service(
+                        "obsolete leader-wire dequeue lost its runtime receipt".to_owned(),
+                    )
+                })?;
+            let token = receipt.token();
+            iroha_logger::debug!(
+                message_kind = ?super::FairV2IngressMessageKind::classify(inbound.message()),
+                semantic_origin = ?inbound.sender(),
+                authenticated_via = ?inbound.via(),
+                obsolete_view = token.view(),
+                active_view = executor.current_tag().view(),
+                "retired WAL-obsolete Sumeragi v2 leader-wire carrier"
+            );
+            receiver
+                .mark_obsolete_leader_wire_volatile_terminal(receipt)
+                .map_err(V2RunnerError::Service)?;
+            continue;
+        }
         let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
         if !ingress_ownership.matches_reply_routes(reply_routes.as_ref()) {
             return Err(V2RunnerError::Service(
@@ -4151,6 +4365,64 @@ fn advance_executor_once_before_exact_serve(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CertifiedServeBarrierLivenessAction {
+    TimeoutVoteEpisode,
+    TimeoutRecoveryPrefix,
+    Pacemaker,
+}
+
+/// Service the complete timeout-recovery suffix of one selected Serve turn.
+///
+/// The one-shot predecessor claim is deliberately not an episode owner. Once
+/// it is Complete, the still-selected Serve carrier continues to admit one
+/// eligible direct-roster timeout vote, service an already-owned prefix
+/// completion, and run one typed pacemaker transition in that exact order.
+fn service_certified_serve_barrier_liveness_turn<E>(
+    recovering_interrupted_tip: bool,
+    older_runtime_episode_claimed: bool,
+    mut service: impl FnMut(CertifiedServeBarrierLivenessAction) -> Result<(), E>,
+) -> Result<(), E> {
+    if !recovering_interrupted_tip {
+        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;
+    }
+    service(CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix)?;
+    service_certified_serve_barrier_pacemaker_turn(
+        recovering_interrupted_tip,
+        older_runtime_episode_claimed,
+        || service(CertifiedServeBarrierLivenessAction::Pacemaker),
+    )
+}
+
+/// Keep the pacemaker live for the full lifetime of a certified Serve barrier.
+///
+/// `older_runtime_episode_claimed` deliberately does not gate service. The
+/// finite predecessor episode becomes Complete before a backpressured target
+/// necessarily leaves fair ingress, while the absolute timeout and certified
+/// progress roots remain independently live.
+fn service_certified_serve_barrier_pacemaker_turn<E>(
+    recovering_interrupted_tip: bool,
+    _older_runtime_episode_claimed: bool,
+    service: impl FnOnce() -> Result<(), E>,
+) -> Result<(), E> {
+    if recovering_interrupted_tip {
+        return Ok(());
+    }
+    service()
+}
+
+/// Execute at most one typed timeout/Progress-root transition while an exact
+/// transport episode retains ordinary ownership.
+fn advance_pacemaker_once(
+    receiver: &FairV2Ingress,
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+) -> Result<(), V2RunnerError> {
+    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
+    let _ = executor.step_pacemaker_once(Instant::now(), services)?;
+    Ok(())
+}
+
 fn reconcile_executor_locked_body(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
@@ -4451,26 +4723,6 @@ fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> Adapt
         node,
         build: Hash::new(build_preimage),
         config: config.fingerprint(),
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct HeartbeatOnlyWorkProvider;
-
-impl CandidateWorkProvider for HeartbeatOnlyWorkProvider {
-    fn prepare(
-        &mut self,
-        _context: &wire::HeightContext,
-        _view: wire::View,
-        candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
-        if candidates.is_empty() {
-            return Ok(PreparedCandidateWork::default());
-        }
-        Err(CandidateWorkUnavailable::new(
-            (0..candidates.len()).collect::<BTreeSet<_>>(),
-            "local fallback requested an empty heartbeat",
-        ))
     }
 }
 
@@ -5143,9 +5395,12 @@ pub(super) enum V2RunnerError {
     /// Deterministic local candidate operation failed.
     #[error("Sumeragi v2 candidate failed: {0}")]
     Candidate(String),
-    /// Even an empty fallback failed deterministic validation.
-    #[error("Sumeragi v2 empty heartbeat failed validation: {0}")]
-    LocalHeartbeatRejected(String),
+    /// A fresh, inbound, or recovered body carried no deterministic ledger work.
+    #[error("Sumeragi v2 proposal carries no transaction, internal, or time-trigger work")]
+    EmptyProposalWork,
+    /// The one bounded non-empty recovery retry failed deterministic validation.
+    #[error("Sumeragi v2 non-empty recovery retry failed validation: {0}")]
+    LocalNonEmptyRetryRejected(String),
     /// The exact bounded discovery request vanished before reducer admission.
     #[error("Sumeragi v2 CommitQC discovery request disappeared before reducer admission")]
     BlockSyncRequestDisappeared,
@@ -5162,7 +5417,6 @@ mod tests {
     use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::decode_framed_signed_block,
         isi::Log,
@@ -5189,6 +5443,73 @@ mod tests {
         },
         sumeragi::LaneRelayMessage,
     };
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn complete_certified_serve_episode_cannot_veto_pacemaker() {
+        let calls = Cell::new(0_u8);
+        for older_runtime_episode_claimed in [true, false] {
+            service_certified_serve_barrier_pacemaker_turn(
+                false,
+                older_runtime_episode_claimed,
+                || {
+                    calls.set(calls.get().saturating_add(1));
+                    Ok::<(), ()>(())
+                },
+            )
+            .expect("live certified Serve barrier services one pacemaker turn");
+        }
+        assert_eq!(
+            calls.get(),
+            2,
+            "a Complete predecessor episode must service the pacemaker exactly like a newly claimed episode"
+        );
+
+        service_certified_serve_barrier_pacemaker_turn(false, false, || {
+            calls.set(calls.get().saturating_add(1));
+            Err::<(), _>("typed pacemaker failure")
+        })
+        .expect_err("live runner propagates a typed pacemaker failure");
+        assert_eq!(calls.get(), 3);
+
+        service_certified_serve_barrier_pacemaker_turn(true, false, || {
+            calls.set(calls.get().saturating_add(1));
+            Ok::<(), ()>(())
+        })
+        .expect("interrupted-tip recovery does not arm a fresh pacemaker");
+        assert_eq!(calls.get(), 3);
+
+        #[cfg(feature = "bls")]
+        {
+            let mut recovery =
+                super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new();
+            for _ in 0..16 {
+                let older_runtime_episode_claimed = recovery
+                    .service_exact_serve_runtime_prefix()
+                    .expect("service the exact selected-Serve runtime prefix");
+                service_certified_serve_barrier_liveness_turn(
+                    false,
+                    older_runtime_episode_claimed,
+                    |action| match action {
+                        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
+                            recovery.service_timeout_vote_episode()
+                        }
+                        CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
+                            recovery.service_timeout_recovery_prefix()
+                        }
+                        CertifiedServeBarrierLivenessAction::Pacemaker => {
+                            recovery.service_pacemaker()
+                        }
+                    },
+                )
+                .expect("the selected-Serve suffix retains typed timeout recovery");
+                if recovery.entered_view_one() {
+                    break;
+                }
+            }
+            recovery.assert_complete();
+        }
+    }
 
     #[test]
     fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
@@ -5375,7 +5696,7 @@ mod tests {
             .collect::<Vec<_>>();
         (
             wire::HeightContext {
-                chain_id: ChainId::from("v2-runner-test"),
+                network_id: crate::sumeragi::synthetic_network_id("v2-runner-test"),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -5885,6 +6206,221 @@ mod tests {
         ));
     }
 
+    fn height_ingress_bindings_fixture(
+        owner_marker: u8,
+    ) -> (
+        TempDir,
+        Arc<FairV2Ingress>,
+        Arc<AtomicBool>,
+        HeightIngressBindings,
+        CertifiedServeIngressGate,
+        Arc<LeaderWireLifecycleStoreGate>,
+    ) {
+        let (context, _) = context();
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let directory = TempDir::new().expect("temporary joint height-ingress directory");
+        let ingress = Arc::new(
+            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
+        ingress
+            .configure_roster_for_context(
+                roster.iter().cloned(),
+                &context.network_id,
+                context.da_layout,
+            )
+            .expect("configure joint height ingress");
+        ingress.require_certified_serve_gate();
+        ingress.require_leader_wire_lifecycle_gate();
+
+        let ingress_ready = Arc::new(AtomicBool::new(false));
+        let (serve_gate, lifecycle_ordinals) =
+            super::super::v2_worker::tests::certified_serve_ingress_gate_fixture();
+        let certified_serve = CertifiedServeIngressBinding::bind(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&ingress),
+            serve_gate.clone(),
+        )
+        .expect("bind joint height Serve gate");
+
+        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
+            roster.len(),
+            context.da_layout.max_chunk_count,
+        )
+        .expect("derive joint height leader-wire capacity");
+        let owner = [owner_marker; 32];
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                context.id(),
+                context.height,
+                owner,
+                0,
+                false,
+            );
+        let (leader_gate, restore) = LeaderWireLifecycleStoreGate::open(
+            &directory.path().join("joint-height-ingress.wal"),
+            context.id(),
+            context.height,
+            owner,
+            roster,
+            capacity,
+            context.da_layout.max_chunk_count,
+            recovery_authority,
+            &[],
+            &[],
+        )
+        .expect("open joint height leader-wire gate");
+        let leader_wire = LeaderWireIngressBinding::bind(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&ingress),
+            Arc::clone(&leader_gate),
+            restore,
+            lifecycle_ordinals,
+            context.id(),
+            context.height,
+        )
+        .expect("bind joint height leader-wire gate");
+        let bindings = HeightIngressBindings::new(certified_serve, leader_wire);
+        ingress.open().expect("open joint height ingress");
+        ingress_ready.store(true, Ordering::Release);
+        (
+            directory,
+            ingress,
+            ingress_ready,
+            bindings,
+            serve_gate,
+            leader_gate,
+        )
+    }
+
+    #[test]
+    fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
+        let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+            height_ingress_bindings_fixture(0xD5);
+        {
+            let state = ingress.state.lock();
+            assert!(state.open);
+            assert!(
+                state
+                    .certified_serve_gate
+                    .as_ref()
+                    .is_some_and(|bound| bound.ptr_eq(&serve_gate))
+            );
+            assert!(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate))
+            );
+        }
+
+        bindings
+            .retire()
+            .expect("retire both per-height ingress gates atomically");
+        assert!(!ingress_ready.load(Ordering::Acquire));
+        assert!(bindings.certified_serve.gate.is_none());
+        assert!(bindings.leader_wire.gate.is_none());
+        {
+            let state = ingress.state.lock();
+            assert!(!state.open);
+            assert!(state.certified_serve_gate.is_none());
+            assert!(state.leader_wire_lifecycle_gate.is_none());
+            assert!(state.leader_wire_lifecycle_ordinals.is_none());
+            assert!(state.leader_wire_context.is_none());
+        }
+        bindings
+            .retire()
+            .expect("joint height retirement remains idempotent");
+    }
+
+    #[test]
+    fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership() {
+        {
+            let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+                height_ingress_bindings_fixture(0xD6);
+            bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));
+            let error = bindings
+                .retire()
+                .expect_err("mismatched readiness ownership must reject joint retirement");
+            assert!(matches!(
+                error,
+                V2RunnerError::Service(ref reason)
+                    if reason == "per-height ingress gates changed their shared queue"
+            ));
+            assert!(ingress_ready.load(Ordering::Acquire));
+            assert!(ingress.state.lock().open);
+
+            drop(bindings);
+            assert!(!ingress_ready.load(Ordering::Acquire));
+            let state = ingress.state.lock();
+            assert!(!state.open);
+            assert!(
+                state
+                    .certified_serve_gate
+                    .as_ref()
+                    .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
+                "a failed joint validation cannot partially detach the Serve gate"
+            );
+            assert!(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
+                "a failed joint validation cannot partially detach the leader-wire gate"
+            );
+        }
+
+        {
+            let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+                height_ingress_bindings_fixture(0xD7);
+            bindings.leader_wire.gate = None;
+            let error = bindings
+                .retire()
+                .expect_err("partial child ownership must reject joint retirement");
+            assert!(matches!(
+                error,
+                V2RunnerError::Service(ref reason)
+                    if reason == "per-height ingress gates changed joint ownership"
+            ));
+            assert!(ingress_ready.load(Ordering::Acquire));
+            assert!(ingress.state.lock().open);
+
+            drop(bindings);
+            assert!(!ingress_ready.load(Ordering::Acquire));
+            let state = ingress.state.lock();
+            assert!(!state.open);
+            assert!(
+                state
+                    .certified_serve_gate
+                    .as_ref()
+                    .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
+                "partial child ownership cannot trigger split Serve teardown"
+            );
+            assert!(
+                state
+                    .leader_wire_lifecycle_gate
+                    .as_ref()
+                    .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
+                "partial child ownership cannot trigger split leader-wire teardown"
+            );
+        }
+    }
+
     fn leader_wire_runtime_ingress_fixture() -> (
         TempDir,
         FairV2Ingress,
@@ -5940,15 +6476,21 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         let directory = TempDir::new().expect("temporary runner leader-wire directory");
-        let ingress = FairV2Ingress::new(
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             64,
             512 * 1024 * 1024,
             64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
         );
         ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
             .expect("configure runner leader-wire ingress");
         ingress.require_leader_wire_lifecycle_gate();
         let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
@@ -6053,19 +6595,6 @@ mod tests {
             gate.earliest_ingress_scheduler_ordinal()
                 .expect("retry retains the terminal tombstone"),
             None
-        );
-    }
-
-    #[test]
-    fn heartbeat_provider_accepts_only_an_empty_descriptor_batch() {
-        let (context, _) = context();
-        let mut provider = HeartbeatOnlyWorkProvider;
-        assert_eq!(
-            provider
-                .prepare(&context, 0, &[])
-                .expect("an explicit heartbeat has no lane work")
-                .native_amx_receipts,
-            Vec::new()
         );
     }
 
@@ -7841,7 +8370,7 @@ mod tests {
         let mut state = LocalProposalState {
             attempted: Some(owner_a),
             submitted: Some((owner_a, subject_a)),
-            heartbeat_only: Some(owner_a),
+            non_empty_retry: Some(owner_a),
             candidate_work_wait: Some(CandidateWorkWait {
                 owner: owner_a,
                 started_at: now,
@@ -7859,13 +8388,13 @@ mod tests {
 
         assert!(state.attempted.is_none());
         assert!(state.submitted.is_none());
-        assert!(state.heartbeat_only.is_none());
+        assert!(state.non_empty_retry.is_none());
         assert!(state.candidate_work_wait.is_none());
         assert!(state.pending_events.is_none());
     }
 
     #[test]
-    fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
+    fn deferred_autonomous_work_timeout_arms_only_a_non_empty_retry() {
         let (context, _) = context();
         let owner = proposal_owner(
             &context,
@@ -7878,7 +8407,7 @@ mod tests {
         let mut state = LocalProposalState::default();
 
         state.defer_candidate_work(owner, started_at, wait_bound);
-        assert_eq!(state.heartbeat_only, None);
+        assert_eq!(state.non_empty_retry, None);
         assert!(
             state
                 .candidate_work_wait
@@ -7889,20 +8418,34 @@ mod tests {
             .checked_add(wait_bound)
             .expect("fixture wait deadline is representable");
         state.defer_candidate_work(owner, expired_at, wait_bound);
-        assert_eq!(state.heartbeat_only, Some(owner));
+        assert_eq!(state.non_empty_retry, Some(owner));
         assert!(state.candidate_work_wait.is_none());
 
         state.defer_candidate_work(owner, expired_at, wait_bound);
         assert_eq!(
-            state.heartbeat_only,
+            state.non_empty_retry,
             Some(owner),
-            "repeated timeout handling must never re-arm ordinary candidate work"
+            "repeated timeout handling must retain the same single retry"
         );
         assert!(state.candidate_work_wait.is_none());
+
+        assert!(state.retire_unsubmitted_non_empty_retry(owner));
+        assert_eq!(state.non_empty_retry, None);
+        state.defer_candidate_work(owner, expired_at, wait_bound);
+        assert!(
+            state.candidate_work_wait.is_some_and(|wait| {
+                wait.owner == owner && wait.started_at == expired_at && wait.next_retry > expired_at
+            }),
+            "an unsubmitted retry must cross a fresh bounded observation window"
+        );
+        assert!(
+            !state.retire_unsubmitted_non_empty_retry(owner),
+            "a consumed retry cannot be retired twice"
+        );
     }
 
     #[test]
-    fn pre_submit_lane_binding_rejection_arms_one_empty_heartbeat_retry() {
+    fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
         let (context, _) = context();
         let owner = proposal_owner(
             &context,
@@ -7923,11 +8466,11 @@ mod tests {
 
         assert_eq!(
             state.handle_candidate_binding_rejection(owner),
-            LocalValidationDisposition::RetryHeartbeat,
+            LocalValidationDisposition::RetryNonEmpty,
             "an unsubmitted lane-binding rejection must not stop the process"
         );
         assert_eq!(state.attempted, None);
-        assert_eq!(state.heartbeat_only, Some(owner));
+        assert_eq!(state.non_empty_retry, Some(owner));
         assert!(state.candidate_work_wait.is_none());
         assert!(state.submitted.is_none());
         assert!(state.pending_events.is_none());
@@ -7935,8 +8478,8 @@ mod tests {
 
         assert_eq!(
             state.handle_candidate_binding_rejection(owner),
-            LocalValidationDisposition::FatalHeartbeat,
-            "a rejected empty heartbeat still fails closed"
+            LocalValidationDisposition::FatalNonEmpty,
+            "a rejected non-empty recovery retry still fails closed"
         );
     }
 
@@ -8022,7 +8565,7 @@ mod tests {
     }
 
     #[test]
-    fn late_old_rejection_cannot_arm_heartbeat_for_replacement_lock() {
+    fn late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock() {
         let (context, _) = context();
         let tag = EventTag::new(context.height, 5, Generation::new(12));
         let subject_a = proposal_subject(b"rejected old A");
@@ -8043,19 +8586,19 @@ mod tests {
             state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
             LocalValidationDisposition::Ignored
         );
-        assert_eq!(state.heartbeat_only, None);
+        assert_eq!(state.non_empty_retry, None);
 
         state.submitted = Some((owner_b, subject_b));
         assert_eq!(
             state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::RetryHeartbeat
+            LocalValidationDisposition::RetryNonEmpty
         );
-        assert_eq!(state.heartbeat_only, Some(owner_b));
+        assert_eq!(state.non_empty_retry, Some(owner_b));
 
         state.submitted = Some((owner_b, subject_b));
         assert_eq!(
             state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-            LocalValidationDisposition::FatalHeartbeat
+            LocalValidationDisposition::FatalNonEmpty
         );
     }
 
@@ -8069,7 +8612,7 @@ mod tests {
         let mut state = LocalProposalState {
             attempted: Some(active),
             submitted: Some((active, subject)),
-            heartbeat_only: None,
+            non_empty_retry: None,
             candidate_work_wait: None,
             pending_events: Some(PendingLocalEvents {
                 owner: active,
@@ -8089,8 +8632,7 @@ mod tests {
     fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
         let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
             .expect("deterministic genesis key");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("height-one-resultless-projection"),
+        let transaction = TransactionBuilder::new_genesis(
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -8153,8 +8695,7 @@ mod tests {
         let (context, _) = context();
         let key_pair = KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519)
             .expect("deterministic proposal key");
-        let transaction = TransactionBuilder::new(
-            ChainId::from("locked-reproposal-exact-body"),
+        let transaction = TransactionBuilder::new_genesis(
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

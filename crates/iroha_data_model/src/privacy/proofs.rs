@@ -1436,18 +1436,20 @@ mod exact12_fixture {
         str::FromStr as _,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_version::codec::EncodeVersioned as _;
 
     use super::*;
     use crate::{
+        NetworkId,
+        block::BlockHeader,
         domain::DomainId,
         isi::{InstructionBox, privacy::SubmitPrivacyProofV1},
         metadata::Metadata,
         name::Name,
         transaction::{
-            Executable, FeePaymentIntent, TransactionBuilder, TransactionPayload,
-            signed::PrivacyTransactionIntentErrorV1,
+            Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain,
+            TransactionPayload, signed::PrivacyTransactionIntentErrorV1,
         },
     };
 
@@ -1541,6 +1543,12 @@ mod exact12_fixture {
             statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(4)),
             engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(5)),
         }
+    }
+
+    fn exact12_network_id_v1() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xA5; Hash::LENGTH]),
+        ))
     }
 
     pub(super) fn commitment(seed: u8) -> PrivacyCommitmentV1 {
@@ -2362,7 +2370,6 @@ mod exact12_fixture {
         row_index: usize,
     ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
         let envelope = try_envelope(statement)?;
-        let chain = envelope.statement.context().chain_id.clone();
         let signing_key = exact12_signing_key_pair_v1();
         let authority = AccountId::new(signing_key.public_key().clone());
         let row_offset = u64::try_from(row_index).map_err(|_| {
@@ -2377,7 +2384,7 @@ mod exact12_fixture {
                 )
             })?;
         let mut payload = TransactionPayload {
-            chain,
+            domain: TransactionDomain::Network(exact12_network_id_v1()),
             authority,
             creation_time_ms: 1_700_000_000_000_u64
                 .checked_add(row_offset)

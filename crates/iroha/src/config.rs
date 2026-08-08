@@ -422,6 +422,63 @@ mod tests {
     }
 
     #[test]
+    fn account_private_key_file_populates_signer() {
+        let mut table = config_sample();
+        let account = table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("client account table");
+        let private_key = account
+            .remove("private_key")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .expect("inline client private key");
+        let mut key_file = tempfile::NamedTempFile::new().expect("client private-key file");
+        writeln!(key_file, "{private_key}").expect("write client private-key file");
+        key_file.flush().expect("flush client private-key file");
+        account.insert(
+            "private_key_file".into(),
+            toml::Value::String(key_file.path().to_string_lossy().into_owned()),
+        );
+
+        let config = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Root>()
+            .expect("file-backed client config should complete")
+            .parse()
+            .expect("file-backed client config should parse");
+
+        assert_eq!(
+            ExposedPrivateKey(config.key_pair.private_key().clone()).to_string(),
+            private_key
+        );
+    }
+
+    #[test]
+    fn account_private_key_sources_are_mutually_exclusive() {
+        let mut table = config_sample();
+        let account = table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("client account table");
+        let key_file = tempfile::NamedTempFile::new().expect("client private-key file");
+        account.insert(
+            "private_key_file".into(),
+            toml::Value::String(key_file.path().to_string_lossy().into_owned()),
+        );
+
+        let error = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<user::Root>()
+            .expect("duplicate private sources remain structurally readable")
+            .parse()
+            .expect_err("duplicate client private sources must fail");
+        assert_contains!(
+            format!("{error:#?}"),
+            "account.private_key and account.private_key_file are mutually exclusive"
+        );
+    }
+
+    #[test]
     fn torii_url_scheme_support() {
         fn with_scheme(scheme: &str) -> ReportResult<Config, user::ParseError> {
             ConfigReader::new()

@@ -1,45 +1,95 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.util.Collections
+import java.util.LinkedHashMap
 import java.util.Optional
 
-/** Helpers for parsing Torii pipeline status payloads. */
+/** Helpers for validating Torii's metadata-only public pipeline status. */
 internal object PipelineStatusExtractor {
     private val STATUS_KINDS =
         setOf("Queued", "Approved", "Committed", "Applied", "Rejected", "Expired")
-    private val REJECTION_REASON_KEYS =
-        arrayOf("rejection_reason", "rejectionReason", "reason", "reject_code", "rejectCode")
+    private val ROOT_FIELDS = setOf("hash", "status", "scope", "resolved_from")
+    private val STATUS_FIELDS = setOf("kind", "block_height")
 
+    /** Return the canonical top-level status kind, if present. */
     @JvmStatic
     fun extractStatusKind(payload: Any?): Optional<String> {
         if (payload !is Map<*, *>) {
             return Optional.empty()
         }
-        val direct = coerceStatus(payload["status"])
-        if (direct.isPresent) {
-            return direct
-        }
-        val content = payload["content"]
-        if (content is Map<*, *>) {
-            return coerceStatus(content["status"])
-        }
-        return Optional.empty()
+        val status = payload["status"] as? Map<*, *> ?: return Optional.empty()
+        val kind = status["kind"] as? String ?: return Optional.empty()
+        return if (kind in STATUS_KINDS) Optional.of(kind) else Optional.empty()
     }
 
+    /** Reject retired detail fields and return a fresh metadata-only map. */
     @JvmStatic
-    fun requireAuthoritativeStatus(payload: Map<String, Any>?, expectedHash: String): String {
+    fun normalizePublicStatus(payload: Map<String, Any>?): Map<String, Any> {
         checkNotNull(payload) { "Pipeline status response must not be empty" }
-        check(payload["hash"] == expectedHash) {
-            "Pipeline status hash does not match the requested transaction hash"
+        val rootKeys = payload.keys.toSet()
+        check(rootKeys == ROOT_FIELDS) {
+            val extras = (rootKeys - ROOT_FIELDS).sorted()
+            val missing = (ROOT_FIELDS - rootKeys).sorted()
+            when {
+                extras.isNotEmpty() ->
+                    "Pipeline status contains retired or unsupported fields: ${extras.joinToString(", ")}"
+                else -> "Pipeline status is missing required fields: ${missing.joinToString(", ")}"
+            }
         }
-        check(payload["scope"] == "global") { "Pipeline status must use global scope" }
-        check(payload["summary"] is String) { "Pipeline status summary is missing or malformed" }
-        val status = payload["status"] as? Map<*, *>
+        val hash = payload["hash"] as? String
+            ?: error("Pipeline status hash is missing or malformed")
+        check(hash.matches(Regex("[0-9a-f]{64}"))) {
+            "Pipeline status hash must be exact lowercase 32-byte hex"
+        }
+        val rawStatus = payload["status"] as? Map<*, *>
             ?: error("Pipeline status kind is missing or unsupported")
-        val kind = status["kind"] as? String
+        val statusKeys = rawStatus.keys.map {
+            it as? String ?: error("Pipeline status field names must be strings")
+        }.toSet()
+        check("kind" in statusKeys && statusKeys.all { it in STATUS_FIELDS }) {
+            "Pipeline status contains retired, unsupported, or missing status fields"
+        }
+        val kind = rawStatus["kind"] as? String
             ?: error("Pipeline status kind is missing or unsupported")
         check(kind in STATUS_KINDS) { "Pipeline status kind is missing or unsupported" }
+        val normalizedStatus = LinkedHashMap<String, Any>()
+        normalizedStatus["kind"] = kind
+        if ("block_height" in statusKeys) {
+            val blockHeight = rawStatus["block_height"]
+            check(hasPositiveBlockHeight(blockHeight)) {
+                "Pipeline status block height must be a positive integer"
+            }
+            normalizedStatus["block_height"] = checkNotNull(blockHeight)
+        }
+        val scope = payload["scope"] as? String
+            ?: error("Pipeline status scope is missing")
+        check(scope in setOf("local", "auto", "global")) {
+            "Pipeline status has an unsupported scope"
+        }
         val resolvedFrom = payload["resolved_from"] as? String
             ?: error("Pipeline status resolution source is missing")
+        check(resolvedFrom in setOf("queue", "cache", "state")) {
+            "Pipeline status has an unsupported resolution source"
+        }
+        val normalized = LinkedHashMap<String, Any>()
+        normalized["hash"] = hash
+        normalized["status"] = Collections.unmodifiableMap(normalizedStatus)
+        normalized["scope"] = scope
+        normalized["resolved_from"] = resolvedFrom
+        return Collections.unmodifiableMap(normalized)
+    }
+
+    /** Require exact global, state-backed terminal semantics for polling. */
+    @JvmStatic
+    fun requireAuthoritativeStatus(payload: Map<String, Any>?, expectedHash: String): String {
+        val normalized = normalizePublicStatus(payload)
+        check(normalized["hash"] == expectedHash) {
+            "Pipeline status hash does not match the requested transaction hash"
+        }
+        check(normalized["scope"] == "global") { "Pipeline status must use global scope" }
+        val status = normalized["status"] as Map<*, *>
+        val kind = status["kind"] as String
+        val resolvedFrom = normalized["resolved_from"] as String
         when (kind) {
             "Applied" -> {
                 check(resolvedFrom == "state" && hasPositiveBlockHeight(status["block_height"])) {
@@ -54,77 +104,6 @@ internal object PipelineStatusExtractor {
             }
         }
         return kind
-    }
-
-    @JvmStatic
-    fun extractRejectionReason(payload: Any?): Optional<String> {
-        if (payload !is Map<*, *>) {
-            return Optional.empty()
-        }
-        val direct = coerceReasonFromRecord(payload)
-        if (direct.isPresent) {
-            return direct
-        }
-        val content = payload["content"]
-        if (content is Map<*, *>) {
-            val contentReason = coerceReasonFromRecord(content)
-            if (contentReason.isPresent) {
-                return contentReason
-            }
-            val status = content["status"]
-            if (status is Map<*, *>) {
-                val statusReason = coerceReasonFromRecord(status)
-                if (statusReason.isPresent) {
-                    return statusReason
-                }
-                if ("Rejected".equals(status["kind"]?.toString(), ignoreCase = true)) {
-                    return coerceReason(status["content"])
-                }
-            }
-        }
-        return Optional.empty()
-    }
-
-    private fun coerceStatus(status: Any?): Optional<String> {
-        if (status is Map<*, *>) {
-            val kind = status["kind"]
-            if (kind != null) {
-                return Optional.of(kind.toString())
-            }
-        } else if (status != null) {
-            return Optional.of(status.toString())
-        }
-        return Optional.empty()
-    }
-
-    private fun coerceReason(reason: Any?): Optional<String> {
-        if (reason == null) {
-            return Optional.empty()
-        }
-        val text = reason.toString().trim()
-        if (text.isEmpty()) {
-            return Optional.empty()
-        }
-        return Optional.of(text)
-    }
-
-    private fun coerceReasonFromRecord(record: Map<*, *>): Optional<String> {
-        for (key in REJECTION_REASON_KEYS) {
-            val reason = coerceReason(record[key])
-            if (reason.isPresent) {
-                return reason
-            }
-        }
-        val details = record["details"]
-        if (details is Map<*, *>) {
-            for (key in REJECTION_REASON_KEYS) {
-                val reason = coerceReason(details[key])
-                if (reason.isPresent) {
-                    return reason
-                }
-            }
-        }
-        return Optional.empty()
     }
 
     private fun hasPositiveBlockHeight(value: Any?): Boolean {

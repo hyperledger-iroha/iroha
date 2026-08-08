@@ -841,6 +841,24 @@ pub(super) fn packed_plaintext_to_rns_v1(
     RnsPolynomial::from_t256_plaintext_bytes(&release_profile_v1(), &packed.coefficients)
 }
 
+/// Recompute the exact release-RNS image of one canonical packed chunk and
+/// return its limb-major digest.
+///
+/// This is a native equality check, not a proof verifier: the caller supplies
+/// the plaintext coefficients, and this function derives every residue under
+/// all release moduli after rechecking the packed artifact.  It is useful to
+/// bind an in-process verified capability to the real 38-limb representation,
+/// but cannot replace the missing RNS-Link carry/quotient proof on untrusted
+/// wire bytes.
+pub(super) fn packed_plaintext_rns_binding_digest_v1(
+    layout: ZkAmsT256PackingLayoutV1,
+    packed: &ZkAmsT256PackedPlaintextV1,
+) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    let polynomial = packed_plaintext_to_rns_v1(layout, packed)?;
+    rns_polynomial_digest(&profile, &polynomial)
+}
+
 fn validate_layout(layout: ZkAmsT256PackingLayoutV1) -> Result<(), ZkAmsMkheErrorV1> {
     if layout.logical_value_count > ZK_AMS_T256_MAX_LOGICAL_VALUES_V1 {
         return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
@@ -1975,6 +1993,18 @@ pub(super) mod tests {
         assert_eq!(
             packed.digest,
             ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1
+        );
+        assert_eq!(release_profile_v1().moduli.len(), 38);
+        assert_ne!(
+            packed_plaintext_rns_binding_digest_v1(layout, &packed).unwrap(),
+            [0; 32]
+        );
+        let mut noncanonical_binding = packed.clone();
+        noncanonical_binding.used_slots -= 1;
+        noncanonical_binding.digest = packed_plaintext_digest(&noncanonical_binding).unwrap();
+        assert_eq!(
+            packed_plaintext_rns_binding_digest_v1(layout, &noncanonical_binding),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         );
         assert_eq!(
             decode_zk_ams_t256_packed_plaintext_v1(layout, &packed).unwrap(),

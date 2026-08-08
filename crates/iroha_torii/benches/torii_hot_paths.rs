@@ -170,7 +170,6 @@ fn query_load_contract_authority_id(index: usize) -> AccountId {
     AccountId::new(key_pair.public_key().clone())
 }
 
-const CONTRACT_ACTIVITY_CHAIN_ID: &str = "query-load-contract-activity";
 const CONTRACT_ACTIVITY_BASE_TIMESTAMP_MS: u64 = 1_710_000_000_000;
 const CONTRACT_ACTIVITY_MATCH_ALIAS: &str = "dlmm_router";
 const CONTRACT_ACTIVITY_MATCH_ADDRESS: &str = "irohac1queryloadcontractdlmmrouter";
@@ -228,7 +227,7 @@ fn contract_activity_metadata(index: usize) -> Metadata {
 }
 
 fn contract_activity_accepted_transaction(
-    chain_id: &ChainId,
+    network_id: NetworkId,
     index: usize,
 ) -> AcceptedTransaction<'static> {
     let authority_index = if index.is_multiple_of(4) {
@@ -240,7 +239,7 @@ fn contract_activity_accepted_transaction(
     let authority = AccountId::new(key_pair.public_key().clone());
     let metadata = contract_activity_metadata(index);
     let mut builder = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
@@ -263,11 +262,9 @@ fn commit_contract_activity_transactions(state: &Arc<State>, profile: QueryLoadP
     if profile.committed_transactions == 0 {
         return;
     }
-    let chain_id: ChainId = CONTRACT_ACTIVITY_CHAIN_ID
-        .parse()
-        .expect("contract activity chain id");
+    let network_id = *state.network_id_ref();
     let transactions = (0..profile.committed_transactions)
-        .map(|index| contract_activity_accepted_transaction(&chain_id, index))
+        .map(|index| contract_activity_accepted_transaction(network_id, index))
         .collect();
     let leader = deterministic_bls_key_pair("contract-activity-leader");
     let unverified = BlockBuilder::new(transactions)
@@ -1161,16 +1158,12 @@ fn bench_query_find_parameters(c: &mut Criterion) {
 }
 
 fn bench_transaction_admission(c: &mut Criterion) {
-    let chain_id: Arc<ChainId> = Arc::new(
-        "torii_hot_path_bench_chain"
-            .parse()
-            .expect("valid chain id"),
-    );
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
+    let network_id = *tx_state.network_id_ref();
     let tx_key_pair = deterministic_key_pair("transaction-admission");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
@@ -1182,7 +1175,7 @@ fn bench_transaction_admission(c: &mut Criterion) {
                 let index = counter.fetch_add(1, Ordering::Relaxed);
                 let instruction = Log::new(Level::INFO, format!("torii-hot-path-bench-{index}"));
                 TransactionBuilder::new(
-                    chain_id.as_ref().clone(),
+                    network_id,
                     tx_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -1190,13 +1183,9 @@ fn bench_transaction_admission(c: &mut Criterion) {
                 .sign(tx_key_pair.private_key())
             },
             |tx| {
-                let accepted = accept_transaction_for_ingress_for_bench(
-                    Arc::clone(&chain_id),
-                    Arc::clone(&tx_state),
-                    tx,
-                    &telemetry,
-                )
-                .expect("transaction admission succeeds");
+                let accepted =
+                    accept_transaction_for_ingress_for_bench(Arc::clone(&tx_state), tx, &telemetry)
+                        .expect("transaction admission succeeds");
                 std::hint::black_box(accepted.hash());
             },
             BatchSize::SmallInput,
@@ -1216,6 +1205,7 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
+    let network_id = *tx_state.network_id_ref();
     let tx_key_pair = deterministic_key_pair("transaction-handle-enqueue");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
@@ -1235,7 +1225,7 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
                 let instruction =
                     Log::new(Level::INFO, format!("torii-hot-path-enqueue-bench-{index}"));
                 let tx = TransactionBuilder::new(
-                    chain_id.as_ref().clone(),
+                    network_id,
                     tx_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -1264,16 +1254,12 @@ fn bench_transaction_handle_enqueue(c: &mut Criterion) {
 }
 
 fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
-    let chain_id: Arc<ChainId> = Arc::new(
-        "torii_hot_path_sustained_enqueue_bench_chain"
-            .parse()
-            .expect("valid chain id"),
-    );
     let tx_state = Arc::new(State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
+    let network_id = *tx_state.network_id_ref();
     let tx_key_pair = deterministic_key_pair("transaction-enqueue-sustained-pressure");
     let tx_authority = AccountId::new(tx_key_pair.public_key().clone());
     let telemetry = direct_metrics_telemetry();
@@ -1292,7 +1278,7 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
             format!("torii-hot-path-sustained-enqueue-bench-{index}"),
         );
         TransactionBuilder::new(
-            chain_id.as_ref().clone(),
+            network_id,
             tx_authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1308,13 +1294,9 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
         for _ in 0..backlog {
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let tx = make_tx(index);
-            let accepted = accept_transaction_for_ingress_for_bench(
-                Arc::clone(&chain_id),
-                Arc::clone(&tx_state),
-                tx,
-                &telemetry,
-            )
-            .expect("prefill transaction admission succeeds");
+            let accepted =
+                accept_transaction_for_ingress_for_bench(Arc::clone(&tx_state), tx, &telemetry)
+                    .expect("prefill transaction admission succeeds");
             queue
                 .push(accepted, tx_state.view())
                 .expect("prefill enqueue succeeds");
@@ -1331,7 +1313,6 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                     },
                     |tx| {
                         let accepted = accept_transaction_for_ingress_for_bench(
-                            Arc::clone(&chain_id),
                             Arc::clone(&tx_state),
                             tx,
                             &telemetry,

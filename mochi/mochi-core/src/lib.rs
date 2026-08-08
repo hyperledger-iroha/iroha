@@ -8,6 +8,7 @@ pub mod chaos;
 pub mod compose;
 pub mod config;
 pub mod dashboard;
+mod generation;
 mod genesis;
 pub mod logs;
 pub mod state;
@@ -47,8 +48,12 @@ pub use state::{
 };
 pub use supervisor::{
     BinaryPaths, BinaryVersionInfo, CompatibilityReport, KagamiVerifyReport, PeerHandle, PeerState,
-    Result as SupervisorResult, Supervisor, SupervisorBuilder, SupervisorError,
-    SupervisorSessionInfo,
+    Result as SupervisorResult, SelectedPeerStoragePaths, Supervisor, SupervisorBuilder,
+    SupervisorError, SupervisorSessionInfo, resolve_selected_peer_storage_paths,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use supervisor::{
+    kagami_stub_genesis_policies_from_config, sign_kagami_stub_genesis_from_config,
 };
 pub use torii::{
     BlockDecodeStage, BlockStream, BlockStreamDecodeError, BlockStreamEvent, BlockSummary,

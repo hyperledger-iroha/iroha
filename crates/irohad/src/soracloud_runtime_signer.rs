@@ -517,9 +517,10 @@ pub fn qualify_soracloud_runtime_mutation_signer_v1(
 mod tests {
     use std::sync::Mutex;
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
+        block::BlockHeader,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         soracloud::encode_soracloud_runtime_provenance_preimage_v1,
         transaction::signed::{MultisigSignature, MultisigSignatures},
@@ -636,7 +637,9 @@ mod tests {
             forge_provenance,
         });
         let payload = TransactionBuilder::new(
-            ChainId::from("soracloud-runtime-test"),
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0x15; Hash::LENGTH]),
+            )),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )

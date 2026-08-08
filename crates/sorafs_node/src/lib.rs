@@ -27,7 +27,9 @@ pub mod pop_credentials;
 pub mod por;
 pub mod potr;
 pub mod proof_outcome_forwarder;
+pub mod provider_attestation_clock;
 pub mod provider_attestation_journal;
+pub mod provider_attestation_journal_file_store;
 pub mod provider_ingest_outbox;
 pub mod provider_ingest_runtime;
 mod reconciliation;
@@ -141,28 +143,48 @@ pub use proof_outcome_forwarder::{
     ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
     ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1, potr_proof_outcome_operation_id_v1,
 };
+pub use provider_attestation_clock::{
+    MUSUBI_PROVIDER_ATTESTATION_CLOCK_SEAL_TIMEOUT_MS_V1, MusubiProviderAttestationClockErrorV1,
+    MusubiProviderAttestationClockScopeV1, MusubiProviderAttestationClockSealBindingV1,
+    MusubiProviderAttestationClockSealErrorV1, MusubiProviderAttestationClockSealQualificationV1,
+    MusubiProviderAttestationClockSealRecordV1, MusubiProviderAttestationClockSealV1,
+    MusubiProviderAttestationJournalCheckpointHeadRecordV1,
+    MusubiProviderAttestationJournalCheckpointHeadV1,
+    MusubiProviderAttestationJournalCheckpointScopeV1,
+    MusubiProviderAttestationJournalCheckpointSealErrorV1,
+    MusubiProviderAttestationSealedUnixClockV1,
+    musubi_provider_attestation_journal_checkpoint_blob_revision_v1,
+};
 pub use provider_attestation_journal::{
+    MUSUBI_PROVIDER_ATTESTATION_EXTERNAL_TIMEOUT_MAX_MS_V1,
     MUSUBI_PROVIDER_ATTESTATION_JOURNAL_CHECKPOINT_MAX_BYTES_V1,
-    MUSUBI_PROVIDER_ATTESTATION_JOURNAL_MAX_ENTRIES_V1, MusubiProviderAttestationApprovalClaimV1,
+    MUSUBI_PROVIDER_ATTESTATION_JOURNAL_MAX_ENTRIES_V1,
+    MUSUBI_PROVIDER_ATTESTATION_READY_PAGE_MAX_V1, MusubiProviderAttestationApprovalClaimV1,
     MusubiProviderAttestationApprovalErrorV1, MusubiProviderAttestationApprovalIdV1,
     MusubiProviderAttestationApprovalIntentV1, MusubiProviderAttestationApprovalStoreOutcomeV1,
     MusubiProviderAttestationClaimOwnerV1, MusubiProviderAttestationDeadLetterReasonV1,
     MusubiProviderAttestationDeliveryOutcomeV1, MusubiProviderAttestationEnqueueOutcomeV1,
     MusubiProviderAttestationFailureClassV1, MusubiProviderAttestationHandoffClaimV1,
-    MusubiProviderAttestationInventoryErrorV1, MusubiProviderAttestationInventoryHandoffIdV1,
-    MusubiProviderAttestationInventoryItemV1, MusubiProviderAttestationInventoryReaderV1,
-    MusubiProviderAttestationInventoryReceiptV1, MusubiProviderAttestationInventoryScopeV1,
+    MusubiProviderAttestationInventoryBindingErrorV1, MusubiProviderAttestationInventoryErrorV1,
+    MusubiProviderAttestationInventoryHandoffIdV1, MusubiProviderAttestationInventoryItemV1,
+    MusubiProviderAttestationInventoryQualificationV1,
+    MusubiProviderAttestationInventoryReadbackV1, MusubiProviderAttestationInventoryReaderV1,
+    MusubiProviderAttestationInventoryReceiptV1, MusubiProviderAttestationInventoryRuntimeErrorV1,
+    MusubiProviderAttestationInventoryRuntimeV1, MusubiProviderAttestationInventoryScopeV1,
     MusubiProviderAttestationInventorySinkV1, MusubiProviderAttestationInventoryV1,
-    MusubiProviderAttestationJournalCasOutcomeV1, MusubiProviderAttestationJournalErrorV1,
-    MusubiProviderAttestationJournalPolicyV1, MusubiProviderAttestationJournalStageV1,
-    MusubiProviderAttestationJournalStatusV1, MusubiProviderAttestationJournalStoreErrorV1,
-    MusubiProviderAttestationJournalStoreSnapshotV1, MusubiProviderAttestationJournalStoreV1,
-    MusubiProviderAttestationJournalV1, MusubiProviderAttestationRetryOutcomeV1,
-    MusubiProviderAttestationSignerBindingErrorV1, MusubiProviderAttestationSignerErrorV1,
-    MusubiProviderAttestationSignerQualificationV1, MusubiProviderAttestationSignerV1,
-    approve_musubi_provider_attestation_v1, musubi_provider_attestation_approval_id_v1,
+    MusubiProviderAttestationJournalErrorV1, MusubiProviderAttestationJournalPolicyV1,
+    MusubiProviderAttestationJournalRuntimeV1, MusubiProviderAttestationJournalScanKeyV1,
+    MusubiProviderAttestationJournalStageV1, MusubiProviderAttestationJournalStatusV1,
+    MusubiProviderAttestationRetryOutcomeV1, MusubiProviderAttestationSignerBindingErrorV1,
+    MusubiProviderAttestationSignerErrorV1, MusubiProviderAttestationSignerQualificationV1,
+    MusubiProviderAttestationSignerV1, approve_musubi_provider_attestation_v1,
+    musubi_provider_attestation_approval_id_v1,
+    musubi_provider_attestation_controller_policy_digest_v1,
     musubi_provider_attestation_inventory_handoff_id_v1,
-    musubi_provider_attestation_journal_checkpoint_revision_v1,
+    validate_musubi_provider_attestation_inventory_binding_v1,
+};
+pub use provider_attestation_journal_file_store::{
+    MusubiProviderAttestationJournalFileBindingV1, MusubiProviderAttestationJournalFileStoreV1,
 };
 pub use provider_ingest_outbox::{
     FinalizedProviderIngestAuthorizationV1, FinalizedProviderIngestMusubiContextV1,
@@ -182,10 +204,13 @@ pub use provider_ingest_outbox::{
 pub use provider_ingest_runtime::{
     PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1,
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClockV1,
-    ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
-    ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerBindingErrorV1,
-    ProviderIngestCompletionSignerBindingV1, ProviderIngestCompletionSignerErrorV1,
-    ProviderIngestCompletionSignerQualificationV1,
+    ProviderIngestCompletedMusubiCaptureCandidateV1, ProviderIngestCompletedMusubiCaptureLedgerV1,
+    ProviderIngestCompletedMusubiCapturePageV1, ProviderIngestCompletedMusubiCaptureScannerV1,
+    ProviderIngestCompletedMusubiCaptureSourcePageV1,
+    ProviderIngestCompletedMusubiCaptureSourceRowV1, ProviderIngestCompletionPayloadBuilderV1,
+    ProviderIngestCompletionPayloadErrorV1, ProviderIngestCompletionPayloadRequestV1,
+    ProviderIngestCompletionSignerBindingErrorV1, ProviderIngestCompletionSignerBindingV1,
+    ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerQualificationV1,
     ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
     ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
@@ -522,6 +547,10 @@ pub use transparency::{
 
 #[cfg(test)]
 use crate::metering::ReplicationUsageSample;
+use crate::provider_attestation_journal::MusubiProviderAttestationJournalV1;
+use crate::provider_ingest_runtime::{
+    ProviderIngestCompletedMusubiReconcileErrorV1, ProviderIngestCompletedMusubiReconcileOutcomeV1,
+};
 use crate::{
     capacity::CapacityRuntimeCheckpointV1,
     metering::{CapacityMeter, MeteringSnapshot},
@@ -16368,6 +16397,157 @@ impl NodeHandle {
             .map_err(Into::into)
     }
 
+    /// Construct a read-only scanner for finalized local-provider Musubi completions.
+    ///
+    /// The scanner owns its finalized-page cursor. Its raw ledger receives no
+    /// claim factory or opaque claim; the scanner validates each returned
+    /// projection and privately seals it. It can expose only validated
+    /// authorization and opaque completed-row claims and has no storage,
+    /// signer, journal, inventory, transaction, or registry mutation
+    /// capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when provider ingest is disabled, the configured
+    /// provider/chain/genesis identity is invalid, or the page bound is zero or
+    /// exceeds the hard finalized-page limit.
+    // TODO: Relocate this construction beside the daemon-owned archive, or move
+    // authenticated archive verification under this crate's ownership, before
+    // wiring the daemon capture worker. The raw ledger no longer receives the
+    // private claim factory, but exposing this generic builder would still let
+    // an arbitrary projection be treated as chain-authoritative provenance.
+    #[allow(dead_code)]
+    pub(crate) fn build_provider_ingest_completed_musubi_capture_scanner<Ledger>(
+        &self,
+        chain_id: ChainId,
+        genesis_block_hash: [u8; 32],
+        max_page_rows: usize,
+        ledger: Arc<Ledger>,
+    ) -> Result<ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>, FinalizedProviderIngestError>
+    where
+        Ledger: ProviderIngestCompletedMusubiCaptureLedgerV1,
+    {
+        if self.provider_ingest_outbox.is_none() {
+            return Err(FinalizedProviderIngestError::Disabled);
+        }
+        let provider_id =
+            self.config
+                .provider_id()
+                .ok_or(FinalizedProviderIngestError::BindingMismatch(
+                    "provider identity is not configured",
+                ))?;
+        ProviderIngestCompletedMusubiCaptureScannerV1::new(
+            *provider_id.as_bytes(),
+            chain_id,
+            genesis_block_hash,
+            max_page_rows,
+            ledger,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Reconcile one scanner page into the durable approval-intent journal.
+    ///
+    /// Every candidate is rebound to the digest-selected admitted manifest,
+    /// its exact stored CAR plan is reconstructed, and all semantic verifier
+    /// passes run under the callback-scoped lifecycle lease before the request
+    /// is idempotently enqueued. This method performs no signing, inventory
+    /// handoff, transaction submission, or registry mutation.
+    ///
+    /// Scanner progress is restored on any plan, verification, or journal
+    /// failure. Because the capture ledger contract is replay-safe and journal
+    /// enqueue is idempotent, retrying then reconstructs the exact page without
+    /// skipping a partially enqueued suffix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a path-free error when capture validation, admitted-plan
+    /// reconstruction, lifecycle-leased verification, or durable enqueue
+    /// fails.
+    #[allow(dead_code)]
+    pub(crate) async fn reconcile_provider_ingest_completed_musubi_capture_page<Ledger>(
+        &self,
+        scanner: &mut ProviderIngestCompletedMusubiCaptureScannerV1<Ledger>,
+        journal: &MusubiProviderAttestationJournalV1,
+    ) -> Result<
+        ProviderIngestCompletedMusubiReconcileOutcomeV1,
+        ProviderIngestCompletedMusubiReconcileErrorV1,
+    >
+    where
+        Ledger: ProviderIngestCompletedMusubiCaptureLedgerV1,
+    {
+        let progress = scanner.progress();
+        let page = scanner
+            .next_page()
+            .await
+            .map_err(|_| ProviderIngestCompletedMusubiReconcileErrorV1::Capture)?;
+        let mut inserted = 0_usize;
+        let mut existing = 0_usize;
+        for candidate in page.candidates() {
+            let authorization = candidate.authorization();
+            let stored = match self.manifest_metadata_by_digest(&authorization.manifest_digest()) {
+                Ok(stored) => stored,
+                Err(_) => {
+                    scanner.restore_progress(progress);
+                    return Err(
+                        ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable,
+                    );
+                }
+            };
+            let Some(profile) =
+                sorafs_car::chunker_registry::lookup_by_handle(stored.chunk_profile_handle())
+                    .map(|descriptor| descriptor.profile)
+            else {
+                scanner.restore_progress(progress);
+                return Err(ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable);
+            };
+            let plan = match stored.try_to_car_plan_with_hint(profile, None) {
+                Ok(plan) => plan,
+                Err(_) => {
+                    scanner.restore_progress(progress);
+                    return Err(
+                        ProviderIngestCompletedMusubiReconcileErrorV1::AdmittedPlanUnavailable,
+                    );
+                }
+            };
+            let request = match self.with_admitted_payload_read_lease(
+                &authorization.manifest_digest(),
+                |lease| {
+                    lease.verify_completed_musubi_bundle(
+                        &plan,
+                        authorization,
+                        candidate.completed_claim(),
+                    )
+                },
+            ) {
+                Ok(Ok(request)) => request,
+                Ok(Err(_)) | Err(_) => {
+                    scanner.restore_progress(progress);
+                    return Err(ProviderIngestCompletedMusubiReconcileErrorV1::VerificationFailed);
+                }
+            };
+            match journal.enqueue(&request).await {
+                Ok(MusubiProviderAttestationEnqueueOutcomeV1::Inserted { .. }) => {
+                    inserted = inserted.saturating_add(1);
+                }
+                Ok(MusubiProviderAttestationEnqueueOutcomeV1::Existing { .. }) => {
+                    existing = existing.saturating_add(1);
+                }
+                Err(_) => {
+                    scanner.restore_progress(progress);
+                    return Err(ProviderIngestCompletedMusubiReconcileErrorV1::JournalUnavailable);
+                }
+            }
+        }
+        Ok(ProviderIngestCompletedMusubiReconcileOutcomeV1 {
+            finalized_cursor: page.finalized_cursor(),
+            candidates: page.candidates().len(),
+            inserted,
+            existing,
+            scan_complete: page.scan_complete(),
+        })
+    }
+
     /// Construct the supervised finalized-ledger provider-ingest runtime.
     ///
     /// The configured provider identity and node-owned durable outbox cannot be
@@ -17144,6 +17324,14 @@ mod tests {
         sample_verdict as por_sample_verdict,
     };
     use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
+
+    fn transaction_network_id(seed: u8) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([seed; iroha_crypto::Hash::LENGTH]),
+        ))
+    }
 
     #[test]
     fn finalized_capacity_projection_has_no_production_local_mutation_entrypoints() {
@@ -18027,11 +18215,39 @@ mod tests {
 
     #[test]
     fn provider_ingest_outbox_is_not_opened_when_runtime_policy_is_absent() {
+        struct DisabledCaptureLedger;
+
+        impl ProviderIngestCompletedMusubiCaptureLedgerV1 for DisabledCaptureLedger {
+            fn read_completed_musubi_capture_page(
+                &self,
+                _at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
+                _after_order_id: Option<[u8; 32]>,
+                _limit: usize,
+            ) -> ProviderIngestFutureV1<
+                '_,
+                Result<
+                    ProviderIngestCompletedMusubiCaptureSourcePageV1,
+                    ProviderIngestFinalizedLedgerErrorV1,
+                >,
+            > {
+                Box::pin(async { Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable) })
+            }
+        }
+
         let (config, _temp_dir) = storage_config_with_temp_dir();
         assert!(config.provider_ingest_outbox_policy().is_none());
         let handle = NodeHandle::try_new(config).expect("open storage without provider ingest");
         assert!(matches!(
             handle.finalized_provider_ingest_status_page(None, 1),
+            Err(FinalizedProviderIngestError::Disabled)
+        ));
+        assert!(matches!(
+            handle.build_provider_ingest_completed_musubi_capture_scanner(
+                ChainId::from("provider-ingest-capture-disabled"),
+                [0x4A; 32],
+                1,
+                Arc::new(DisabledCaptureLedger),
+            ),
             Err(FinalizedProviderIngestError::Disabled)
         ));
     }
@@ -18174,8 +18390,13 @@ mod tests {
             fixture.order.issued_by.clone(),
             completion_signer_policy,
         );
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x91; iroha_crypto::Hash::LENGTH]),
+        ));
         let mut completion_builder = TransactionBuilder::new(
-            ChainId::from("provider-ingest-node-test"),
+            network_id,
             fixture.order.issued_by.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -18207,7 +18428,8 @@ mod tests {
                 inserted.job_id(),
                 ProviderIngestCompletionSigningContextV1 {
                     baseline_finalized_cursor: fixture.ingest_cursor,
-                    chain_id: completion_payload.chain.clone(),
+                    chain_id: ChainId::from("provider-ingest-node-test"),
+                    network_id,
                     provider_owner: completion_payload.authority.clone(),
                     signer_policy: completion_signer_policy,
                     assignment_revision: fixture.order.assignment_revision,
@@ -18442,6 +18664,7 @@ mod tests {
         };
         let policy_digest = policy.digest().expect("digest orderbook policy");
         let context = OrderbookTransactionContextV1 {
+            network_id: transaction_network_id(0x65),
             chain_id: ChainId::from("orderbook-forwarder-restart-test"),
             policy_record: OrderbookAdmissionPolicyRecord {
                 policy,
@@ -18576,6 +18799,7 @@ mod tests {
         };
         let policy_digest = policy.digest().expect("digest reserve policy");
         let context = ReserveTransactionContextV1 {
+            network_id: transaction_network_id(0x78),
             chain_id: ChainId::from("reserve-forwarder-restart-test"),
             policy_record: ReserveAuthorityPolicyRecordV1 {
                 policy,
@@ -29448,10 +29672,12 @@ mod tests {
             },
         };
         let context = RepairTransactionContextV1 {
+            network_id: transaction_network_id(0xC8),
             chain_id: ChainId::from("native-repair-test-chain"),
             finalized_cursor,
         };
         let stale_context = RepairTransactionContextV1 {
+            network_id: context.network_id,
             chain_id: context.chain_id.clone(),
             finalized_cursor: RepairFinalizedCursorV1 {
                 height: 8,

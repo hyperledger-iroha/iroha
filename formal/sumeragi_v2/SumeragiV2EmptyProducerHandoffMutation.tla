@@ -77,17 +77,17 @@ RestartPreservesExactDormantReservation ==
 
 Init ==
   /\ phase = "Physical"
-  /\ physicalOwner
-  /\ ~downstreamOwner
+  /\ physicalOwner = TRUE
+  /\ downstreamOwner = FALSE
   /\ reservation = NoReservation
-  /\ ~handoffRetired
+  /\ handoffRetired = FALSE
 
 DepartLastPhysicalOwner ==
   /\ phase = "Physical"
   /\ phase' = "Dormant"
-  /\ ~physicalOwner'
-  /\ ~downstreamOwner'
-  /\ ~handoffRetired'
+  /\ physicalOwner' = FALSE
+  /\ downstreamOwner' = FALSE
+  /\ handoffRetired' = FALSE
   /\ reservation' =
        IF InstallDormantReservation
        THEN Reservation("Reserved")
@@ -104,9 +104,9 @@ AcknowledgeDownstreamOwner ==
   /\ phase \in {"Dormant", "Restarted"}
   /\ reservation = Reservation("Reserved")
   /\ phase' = "Acknowledged"
-  /\ ~physicalOwner'
-  /\ downstreamOwner'
-  /\ ~handoffRetired'
+  /\ physicalOwner' = FALSE
+  /\ downstreamOwner' = TRUE
+  /\ handoffRetired' = FALSE
   /\ reservation' = Reservation("Materialized")
 
 RetireExactEmptyHandoff ==
@@ -114,9 +114,9 @@ RetireExactEmptyHandoff ==
   /\ reservation = Reservation("Reserved")
   /\ ~downstreamOwner
   /\ phase' = "Done"
-  /\ ~physicalOwner'
-  /\ ~downstreamOwner'
-  /\ handoffRetired'
+  /\ physicalOwner' = FALSE
+  /\ downstreamOwner' = FALSE
+  /\ handoffRetired' = TRUE
   /\ reservation' = Reservation("Terminal")
 
 RetireAcknowledgedReservation ==

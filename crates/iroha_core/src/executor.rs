@@ -257,6 +257,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindDomainCommittee(_)
         | SingularQueryBox::FindSorafsProviderOwner(_)
         | SingularQueryBox::FindSorafsPinManifest(_)
+        | SingularQueryBox::FindSorafsPinManifests(_)
         | SingularQueryBox::FindSorafsOrderbookPolicy(_)
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
@@ -9140,12 +9141,8 @@ fn initial_permission_capability_root_authority(
             let token = decode!(executor_permission::settlement::CanExecuteSettlement);
             token.debited_asset.account() == authority
         }
-        "CanSetFxCorridorPolicy" | "CanSettleFxCorridor" => {
-            if permission.name() == "CanSetFxCorridorPolicy" {
-                let _ = decode!(executor_permission::settlement::CanSetFxCorridorPolicy);
-            } else {
-                let _ = decode!(executor_permission::settlement::CanSettleFxCorridor);
-            }
+        "CanSetFxCorridorPolicy" => {
+            let _ = decode!(executor_permission::settlement::CanSetFxCorridorPolicy);
             let manager: Permission = executor_permission::settlement::CanManageFxCorridors.into();
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
@@ -9178,15 +9175,6 @@ fn initial_permission_capability_root_authority(
         }
         "CanEnrollFeeSponsorProgram" => {
             let token = decode!(executor_permission::nexus::CanEnrollFeeSponsorProgram);
-            let manager: Permission = executor_permission::nexus::CanManageFeeSponsorProgram {
-                sponsor: token.program_id.sponsor.clone(),
-            }
-            .into();
-            token.program_id.sponsor == *authority
-                || authority_has_permission(&state_transaction.world, authority, &manager)?
-        }
-        "CanWithdrawFeeSponsorProgram" => {
-            let token = decode!(executor_permission::nexus::CanWithdrawFeeSponsorProgram);
             let manager: Permission = executor_permission::nexus::CanManageFeeSponsorProgram {
                 sponsor: token.program_id.sponsor.clone(),
             }
@@ -9879,10 +9867,13 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
+        iroha_data_model::isi::bridge::FundSccpRouteEscrow,
+        iroha_data_model::isi::bridge::RefundSccpRouteEscrow,
         iroha_data_model::isi::bridge::RecordSccpMessage,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
+        iroha_data_model::isi::governance::EnactSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
         iroha_data_model::isi::governance::ApproveGovernanceProposal,
@@ -10952,13 +10943,11 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanExecuteSettlement",
     "CanManageFxCorridors",
     "CanSetFxCorridorPolicy",
-    "CanSettleFxCorridor",
     "CanPublishSpaceDirectoryManifest",
     "CanPublishSpaceDirectoryManifestForUaid",
     "CanPublishSpaceDirectoryManifestForAccountDomain",
     "CanManageFeeSponsorProgram",
     "CanEnrollFeeSponsorProgram",
-    "CanWithdrawFeeSponsorProgram",
     "CanProposeContractDeployment",
     "CanProposeRuntimeUpgrade",
     "CanSubmitGovernanceBallot",
@@ -10967,9 +10956,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanRecordCitizenService",
     "CanSlashGovernanceLock",
     "CanRestituteGovernanceLock",
-    "CanRegisterSorafsPin",
-    "CanApproveSorafsPin",
-    "CanRetireSorafsPin",
     "CanBindSorafsAlias",
     "CanDeclareSorafsCapacity",
     "CanSubmitSorafsTelemetry",
@@ -11671,6 +11657,12 @@ mod tests {
         KeyPair::try_random().expect("executor fixture key generation should succeed")
     }
 
+    fn executor_test_network_id(seed: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
+    }
+
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
             .assets
@@ -12067,13 +12059,13 @@ mod tests {
     fn contract_deployment_bootstrap_recognizer_is_exact_and_plain_only() {
         let keypair = checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain = ChainId::from("contract-deployment-bootstrap-shape");
+        let network_id = executor_test_network_id(b"contract-deployment-bootstrap-shape");
         let code_hash = Hash::new(b"contract deployment bootstrap shape");
         let world = World::new();
 
         let sign = |instructions: Vec<InstructionBox>| {
             TransactionBuilder::new(
-                chain.clone(),
+                network_id,
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -12251,7 +12243,7 @@ mod tests {
         );
 
         let proved_transaction = TransactionBuilder::new(
-            chain,
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -12292,25 +12284,24 @@ mod tests {
             contract_upload_instruction(code_hash, 0),
         );
         let expected_gas = crate::gas::meter_instructions(&instructions);
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain,
+        );
         let transaction = TransactionBuilder::new(
-            chain.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::Instructions(instructions.into()))
         .sign(keypair.private_key());
-        let world = World::new();
         assert!(allows_contract_deployment_self_bootstrap(
-            &world.view(),
+            state.view().world(),
             &authority,
             &transaction
         ));
-        let state = State::new_with_chain(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-            chain,
-        );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let mut ivm_cache = IvmCache::new();
@@ -12363,16 +12354,21 @@ mod tests {
             contract_deployment_permission(),
             contract_upload_instruction(code_hash, 0),
         );
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain,
+        );
         let transaction = TransactionBuilder::new(
-            chain.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::Instructions(instructions.into()))
         .sign(keypair.private_key());
-        let world = World::new();
         assert!(allows_contract_deployment_self_bootstrap(
-            &world.view(),
+            state.view().world(),
             &authority,
             &transaction
         ));
@@ -12382,13 +12378,6 @@ mod tests {
             unreachable!("test constructs a user-provided executor")
         };
         let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
-
-        let state = State::new_with_chain(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-            chain,
-        );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let mut ivm_cache = IvmCache::new();
@@ -12445,8 +12434,15 @@ mod tests {
         let authority = AccountId::new(keypair.public_key().clone());
         let chain = ChainId::from("contract-deployment-bootstrap-user-provided-replay");
         let code_hash = Hash::new(b"default user-provided deployment bootstrap replay");
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_with_chain(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain,
+        );
         let transaction = TransactionBuilder::new(
-            chain.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -12460,13 +12456,6 @@ mod tests {
             .into(),
         ))
         .sign(keypair.private_key());
-        let account = Account::new(authority.clone()).build(&authority);
-        let state = State::new_with_chain(
-            World::with([], [account], []),
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-            chain,
-        );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         assert!(!allows_contract_deployment_self_bootstrap(
             &block.world,
@@ -12559,19 +12548,19 @@ mod tests {
             ("malformed same-name grant", malformed, 1),
             ("reordered prefix", reordered, 2),
         ] {
-            let transaction = TransactionBuilder::new(
-                chain.clone(),
-                authority.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_executable(Executable::Instructions(instructions.into()))
-            .sign(keypair.private_key());
             let state = State::new_with_chain(
                 World::new(),
                 Kura::blank_kura_for_testing(),
                 query::store::LiveQueryStore::start_test(),
                 chain.clone(),
             );
+            let transaction = TransactionBuilder::new(
+                state.network_id,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_executable(Executable::Instructions(instructions.into()))
+            .sign(keypair.private_key());
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             assert!(
                 !allows_contract_deployment_self_bootstrap(&block.world, &authority, &transaction),
@@ -12679,10 +12668,10 @@ mod tests {
             World::with([], [account], []),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain.clone(),
+            chain,
         );
         let transaction = TransactionBuilder::new(
-            chain,
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -13783,11 +13772,6 @@ mod tests {
                 true,
             ),
             (
-                "CanSettleFxCorridor",
-                executor_permission::settlement::CanSettleFxCorridor { policy_id }.into(),
-                true,
-            ),
-            (
                 "CanPublishSpaceDirectoryManifest",
                 executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into(),
                 false,
@@ -13822,15 +13806,7 @@ mod tests {
             ),
             (
                 "CanEnrollFeeSponsorProgram",
-                executor_permission::nexus::CanEnrollFeeSponsorProgram {
-                    program_id: program_id.clone(),
-                }
-                .into(),
-                true,
-            ),
-            (
-                "CanWithdrawFeeSponsorProgram",
-                executor_permission::nexus::CanWithdrawFeeSponsorProgram { program_id }.into(),
+                executor_permission::nexus::CanEnrollFeeSponsorProgram { program_id }.into(),
                 true,
             ),
             (
@@ -14921,7 +14897,7 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15017,7 +14993,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15203,7 +15179,7 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         let tx = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15426,7 +15402,10 @@ mod tests {
             [],
         );
         seed_test_asset_supply(&mut world, &asset_definition_id);
-        let mut program = iroha_data_model::nexus::FeeSponsorProgram::new(program_id.clone());
+        let mut program = iroha_data_model::nexus::FeeSponsorProgram::new(
+            program_id.clone(),
+            program_id.sponsor.clone(),
+        );
         program.lifecycle = FeeSponsorProgramLifecycle::Active;
         program.active_revision = Some(1);
         world
@@ -15502,7 +15481,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             beneficiary.clone(),
             FeePaymentIntent::sponsor(
                 program_id.clone(),
@@ -15595,8 +15574,7 @@ mod tests {
     #[test]
     fn stateful_fee_admission_exempts_authenticated_genesis_with_missing_limit() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15634,8 +15612,7 @@ mod tests {
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_fee_free() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15668,8 +15645,7 @@ mod tests {
         }
         .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15741,8 +15717,7 @@ mod tests {
             "contract_address".parse().expect("contract address key"),
             Json::new(contract_address.to_string()),
         );
-        let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15824,7 +15799,7 @@ mod tests {
     fn stateful_fee_admission_does_not_exempt_non_genesis_with_missing_limit() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15864,7 +15839,7 @@ mod tests {
         )];
         assert!(isi_gas::meter_instructions(&instructions) > 0);
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -15924,7 +15899,7 @@ mod tests {
         let (state, keypair, authority, tech_account, _, gas_asset, _) =
             pipeline_fee_state_fixture();
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -16317,7 +16292,7 @@ mod tests {
         assert!(gas_used > 0);
         let expected_fee = Quantity::from(u128::from(gas_used));
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -16589,7 +16564,7 @@ mod tests {
         }];
 
         let payload = TransactionBuilder::new(
-            ChainId::from("fee-quote"),
+            executor_test_network_id(b"fee-quote"),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -16817,7 +16792,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -16901,7 +16876,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         let transaction = TransactionBuilder::new(
-            state.chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(
                 vec![FeeChargeLimit::new(
@@ -17717,9 +17692,8 @@ mod tests {
         let attachments_dup = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
 
-        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
         let tx1 = TransactionBuilder::new(
-            chain.clone(),
+            state.network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -17727,7 +17701,7 @@ mod tests {
         .with_attachments(attachments)
         .sign(ALICE_KEYPAIR.private_key());
         let tx2 = TransactionBuilder::new(
-            chain,
+            state.network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -17815,8 +17789,14 @@ mod tests {
             );
             let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
             attachment.vk_commitment = Some(vk_commitment);
+            let state = State::new_with_chain(
+                world,
+                Kura::blank_kura_for_testing(),
+                query::store::LiveQueryStore::start_test(),
+                ChainId::from("test-chain"),
+            );
             let tx = TransactionBuilder::new(
-                "test-chain".parse().unwrap(),
+                state.network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -17826,13 +17806,6 @@ mod tests {
                     .expect("one attachment is a valid bounded proof list"),
             )
             .sign(ALICE_KEYPAIR.private_key());
-
-            let state = State::new_with_chain(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-                ChainId::from("test-chain"),
-            );
             let block_header = BlockHeader::new(
                 std::num::NonZeroU64::new(block_height).expect("nonzero block height"),
                 None,
@@ -17913,7 +17886,7 @@ mod tests {
                 VerifyingKeyId::new(backend_ident, format!("missing_vk_{idx}")),
             );
             let tx = TransactionBuilder::new(
-                "test-chain".parse().unwrap(),
+                state.network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -18047,7 +18020,7 @@ mod tests {
 
         for (label, attachments, expected_msg) in cases {
             let tx = TransactionBuilder::new(
-                "test-chain".parse().unwrap(),
+                state.network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -19859,13 +19832,13 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let chain: ChainId = "test-chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let state = State::new_with_chain(world, kura, query_handle, chain);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
         let instruction = SetKeyValue::nft(nft_id, "foo".parse().expect("key"), "value");
         let tx = TransactionBuilder::new(
-            chain,
+            state.network_id,
             bob_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -19908,7 +19881,6 @@ mod tests {
     #[test]
     fn multisig_account_direct_signing_is_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let chain: iroha_data_model::ChainId = "multisig-direct-sign".parse().unwrap();
         let signer = checked_keypair();
         let member = iroha_data_model::account::MultisigMember::new(signer.public_key().clone(), 1)
             .expect("valid member");
@@ -19927,7 +19899,7 @@ mod tests {
         let mut block = state.block(block_header);
 
         let builder = TransactionBuilder::new(
-            chain,
+            state.network_id,
             multisig_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -20418,10 +20390,10 @@ seiyaku GuardedValue {
             world,
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let transaction = TransactionBuilder::new(
-            chain_id,
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -20759,7 +20731,7 @@ seiyaku OrderedBatchGuard {
             world,
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let entrypoint_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
@@ -20784,7 +20756,7 @@ seiyaku OrderedBatchGuard {
             )),
         ];
         let transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
         )
@@ -20831,7 +20803,7 @@ seiyaku OrderedBatchGuard {
         state_tx.apply();
 
         let capped_transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
         )
@@ -20899,7 +20871,7 @@ seiyaku OrderedBatchGuard {
             .parse()
             .expect("rollback marker name");
         let failing_transaction = TransactionBuilder::new(
-            chain_id,
+            state.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000_000)),
         )
@@ -21064,7 +21036,7 @@ seiyaku IdentityRequired {
             World::with([domain], [account], []),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -21077,7 +21049,7 @@ seiyaku IdentityRequired {
         );
         let bytecode = IvmBytecode::from_compiled(program);
         let raw = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -21088,7 +21060,7 @@ seiyaku IdentityRequired {
         .with_executable(Executable::Ivm(bytecode.clone()))
         .sign(ALICE_KEYPAIR.private_key());
         let proved = TransactionBuilder::new(
-            chain_id,
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -21532,7 +21504,7 @@ seiyaku IdentityRequired {
             World::with([domain], [account], []),
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
+            chain_id,
         );
         let mut program = ivm::ProgramMetadata {
             max_cycles: 100,
@@ -21544,7 +21516,7 @@ seiyaku IdentityRequired {
         let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
         let transaction = |metadata: Metadata| {
             TransactionBuilder::new(
-                chain_id.clone(),
+                state.network_id,
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(
                     Vec::new(),
@@ -22134,7 +22106,7 @@ seiyaku IdentityRequired {
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let transaction = TransactionBuilder::new(
-            ChainId::from("authority-binding"),
+            state.network_id,
             ALICE_ID.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -22190,7 +22162,7 @@ seiyaku IdentityRequired {
                 Json::new(u64::MAX),
             );
             let tx = TransactionBuilder::new(
-                ChainId::from("test-chain"),
+                state.network_id,
                 ALICE_ID.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

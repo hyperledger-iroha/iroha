@@ -2669,8 +2669,7 @@
                     "hash": "abc",
                     "status": {
                         "kind": "Rejected",
-                        "block_height": null,
-                        "rejection_reason": null
+                        "block_height": null
                     },
                     "scope": "global",
                     "resolved_from": "cache"
@@ -2703,7 +2702,6 @@
                 PipelineTransactionStatus {
                     kind: kind.to_owned(),
                     block_height: Some(7),
-                    rejection_reason: None,
                 },
                 "global".to_owned(),
                 resolved_from.to_owned(),

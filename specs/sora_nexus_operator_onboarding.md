@@ -78,7 +78,8 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 ## Step 3 — Stage configuration from templates
 1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
 2. Treat the files under `config/` as templates:
-   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
+   - Set each public identity explicitly and provision the matching node, SoraNet transport, and streaming private keys through the configured `*_private_key_file` paths. Those owner-held files must contain one canonical key and, on Unix, grant no group/other access. Never place production private keys in the deployment template.
+   - Mount the Kagami-produced public `genesis.expected_hash` at `/run/iroha/genesis.expected_hash` for both the validator's `genesis.expected_hash_file` and the client's `network_id_file`; never render those values independently.
    - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned. Validators must be BLS-Normal with PoPs provided in `trusted_peers_pop`; any trusted peer without a PoP is treated as network-trusted only and excluded from consensus. Configs carrying the removed `trusted_peers_bls` mapping, invalid PoPs, or PoPs for keys outside `trusted_peers` are rejected.
    - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
 3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.

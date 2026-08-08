@@ -322,7 +322,7 @@
 
     #[tokio::test]
     async fn zk_ivm_prove_get_enforces_response_egress_with_retry_after() {
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app state");
             state.proof_limits.retry_after = std::time::Duration::from_secs(5);
@@ -346,6 +346,7 @@
         app.zk_ivm_prove_jobs.insert(
             job_id.clone(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms,
                 last_access_ms: created_ms,
                 status: ZkIvmProveJobStatus::Pending,
@@ -355,14 +356,7 @@
             },
         );
 
-        let err = match handler_zk_ivm_prove_get(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id),
-        )
-        .await
-        {
+        let err = match call_zk_ivm_prove_get(app.clone(), job_id).await {
             Ok(_) => panic!("prove-job response larger than the egress burst must be throttled"),
             Err(err) => err,
         };
@@ -517,6 +511,7 @@
         jobs.insert(
             "pending".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: 1,
                 last_access_ms: 1,
                 status: ZkIvmProveJobStatus::Pending,
@@ -535,10 +530,12 @@
     fn zk_ivm_completion_growth_failure_discards_material_and_shrinks_to_error() {
         let budget = Arc::new(ZkIvmProveJobBudget::new(1_100));
         let reservation = budget.try_reserve(1_024).expect("pending reservation");
+        let expected_reservation = Arc::clone(&reservation);
         let jobs = DashMap::new();
         jobs.insert(
             "capacity".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: 1,
                 last_access_ms: 1,
                 status: ZkIvmProveJobStatus::Pending,
@@ -550,7 +547,10 @@
 
         zk_ivm_prove_store_terminal(
             &jobs,
+            budget.as_ref(),
+            usize::MAX,
             "capacity",
+            &expected_reservation,
             ZkIvmProveJobStatus::Done,
             Bytes::from(vec![0_u8; 1_101]),
         );
@@ -564,6 +564,206 @@
                 .expect("error JSON is UTF-8")
                 .contains("retained-job memory budget exhausted")
         );
+    }
+
+    #[test]
+    fn zk_ivm_terminal_eviction_is_scoped_to_the_requesting_owner() {
+        let owner = sample_ivm_prove_authority();
+        let other = checked_torii_test_account_id(
+            0x84,
+            "derive foreign ZK IVM prove owner fixture key",
+        );
+        let budget = Arc::new(ZkIvmProveJobBudget::new(1_024));
+        let jobs = DashMap::new();
+        for (job_id, job_owner, last_access_ms) in
+            [("owner", owner.clone(), 1_u64), ("other", other, 0_u64)]
+        {
+            jobs.insert(
+                job_id.to_owned(),
+                ZkIvmProveJobState {
+                    owner: job_owner,
+                    created_ms: 1,
+                    last_access_ms,
+                    status: ZkIvmProveJobStatus::Done,
+                    response_body: Bytes::from_static(b"{}"),
+                    retention: budget.try_reserve(2).expect("test reservation"),
+                    cancel: tokio::sync::watch::channel(false).0,
+                },
+            );
+        }
+
+        assert!(zk_ivm_prove_evict_terminal_lru(&jobs, &owner, None));
+        assert!(jobs.get("owner").is_none());
+        assert!(
+            jobs.get("other").is_some(),
+            "one tenant must never evict another tenant's completed proof"
+        );
+    }
+
+    #[test]
+    fn zk_ivm_owner_count_quota_cannot_evict_another_tenant() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.zk_ivm_prove_job_max_entries = 2;
+            state.zk_ivm_prove_job_max_entries_per_owner = 1;
+            state.zk_ivm_prove_job_max_retained_bytes_per_owner = usize::MAX;
+        }
+        let owner = sample_ivm_prove_authority();
+        let other = checked_torii_test_account_id(
+            0x84,
+            "derive foreign ZK IVM quota owner fixture key",
+        );
+        app.zk_ivm_prove_jobs.insert(
+            "other-terminal".to_owned(),
+            ZkIvmProveJobState {
+                owner: other,
+                created_ms: 1,
+                last_access_ms: 1,
+                status: ZkIvmProveJobStatus::Done,
+                response_body: Bytes::from_static(b"{}"),
+                retention: app
+                    .zk_ivm_prove_job_budget
+                    .try_reserve(2)
+                    .expect("foreign reservation"),
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+        let (first_cancel, _first_rx) = tokio::sync::watch::channel(false);
+        let first = zk_ivm_prove_insert_pending(
+            &app,
+            owner.clone(),
+            "owner-pending".to_owned(),
+            2,
+            Bytes::from_static(b"{}"),
+            2,
+            first_cancel,
+        )
+        .expect("first owner job admitted");
+        let (second_cancel, _second_rx) = tokio::sync::watch::channel(false);
+        assert!(
+            zk_ivm_prove_insert_pending(
+                &app,
+                owner,
+                "owner-over-quota".to_owned(),
+                3,
+                Bytes::from_static(b"{}"),
+                2,
+                second_cancel,
+            )
+            .is_none(),
+            "pending owner work cannot be evicted to admit another job"
+        );
+        drop(first);
+        assert!(app.zk_ivm_prove_jobs.contains_key("other-terminal"));
+        assert!(app.zk_ivm_prove_jobs.contains_key("owner-pending"));
+    }
+
+    #[test]
+    fn zk_ivm_job_id_collision_never_replaces_another_owner() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.zk_ivm_prove_job_max_entries = 0;
+            state.zk_ivm_prove_job_max_entries_per_owner = 0;
+            state.zk_ivm_prove_job_max_retained_bytes_per_owner = 0;
+        }
+        let existing_owner = checked_torii_test_account_id(
+            0x84,
+            "derive existing ZK IVM collision owner fixture key",
+        );
+        let requested_owner = sample_ivm_prove_authority();
+        let existing_retention = app
+            .zk_ivm_prove_job_budget
+            .try_reserve(2)
+            .expect("existing reservation");
+        app.zk_ivm_prove_jobs.insert(
+            "collision".to_owned(),
+            ZkIvmProveJobState {
+                owner: existing_owner.clone(),
+                created_ms: 1,
+                last_access_ms: 1,
+                status: ZkIvmProveJobStatus::Pending,
+                response_body: Bytes::from_static(b"{}"),
+                retention: existing_retention,
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+        let used_before = app.zk_ivm_prove_job_budget.used_bytes();
+        let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+
+        assert!(
+            zk_ivm_prove_insert_pending(
+                &app,
+                requested_owner,
+                "collision".to_owned(),
+                2,
+                Bytes::from_static(b"replacement"),
+                11,
+                cancel,
+            )
+            .is_none()
+        );
+        let retained = app
+            .zk_ivm_prove_jobs
+            .get("collision")
+            .expect("existing job remains");
+        assert_eq!(retained.owner, existing_owner);
+        assert_eq!(retained.response_body, Bytes::from_static(b"{}"));
+        assert_eq!(app.zk_ivm_prove_job_budget.used_bytes(), used_before);
+    }
+
+    #[test]
+    fn zk_ivm_stale_worker_cannot_overwrite_reused_job_id() {
+        let budget = Arc::new(ZkIvmProveJobBudget::new(1_024));
+        let jobs = DashMap::new();
+        let original = budget.try_reserve(2).expect("original reservation");
+        let worker_reservation = Arc::clone(&original);
+        jobs.insert(
+            "reused".to_owned(),
+            ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
+                created_ms: 1,
+                last_access_ms: 1,
+                status: ZkIvmProveJobStatus::Running,
+                response_body: Bytes::from_static(b"{}"),
+                retention: original,
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+        jobs.remove("reused");
+
+        let replacement_owner = checked_torii_test_account_id(
+            0x84,
+            "derive replacement ZK IVM job owner fixture key",
+        );
+        jobs.insert(
+            "reused".to_owned(),
+            ZkIvmProveJobState {
+                owner: replacement_owner.clone(),
+                created_ms: 2,
+                last_access_ms: 2,
+                status: ZkIvmProveJobStatus::Pending,
+                response_body: Bytes::from_static(b"replacement"),
+                retention: budget.try_reserve(11).expect("replacement reservation"),
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+
+        zk_ivm_prove_store_terminal(
+            &jobs,
+            budget.as_ref(),
+            usize::MAX,
+            "reused",
+            &worker_reservation,
+            ZkIvmProveJobStatus::Done,
+            Bytes::from_static(b"stale result"),
+        );
+
+        let replacement = jobs.get("reused").expect("replacement remains");
+        assert_eq!(replacement.owner, replacement_owner);
+        assert_eq!(replacement.status, ZkIvmProveJobStatus::Pending);
+        assert_eq!(replacement.response_body, Bytes::from_static(b"replacement"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -601,7 +801,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -675,16 +875,15 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(axum::http::header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
         let body = http_body_util::BodyExt::collect(response.into_body())
             .await
             .unwrap()
@@ -695,16 +894,21 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
             assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get(axum::http::header::CACHE_CONTROL),
+                Some(&HeaderValue::from_static("private, no-store"))
+            );
+            assert_eq!(
+                response.headers().get(axum::http::header::VARY),
+                Some(&HeaderValue::from_static(
+                    crate::content::CANONICAL_CONTENT_AUTH_VARY
+                ))
+            );
             let body = http_body_util::BodyExt::collect(response.into_body())
                 .await
                 .unwrap()
@@ -732,12 +936,7 @@
             .expect("expected proof attachment in done response");
         assert_eq!(attachment.vk_commitment, Some(vk_commitment));
 
-        let response = handler_zk_ivm_prove_delete(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id.clone()),
-        )
+        let response = call_zk_ivm_prove_delete(app.clone(), job_id.clone())
         .await
         .expect("prove delete ok")
         .into_response();
@@ -748,7 +947,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_completes_for_stark_backend() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -814,12 +1013,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -834,12 +1028,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -879,7 +1068,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -955,12 +1144,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -975,12 +1159,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -1016,7 +1195,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -1086,12 +1265,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -1106,12 +1280,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -1143,7 +1312,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -1224,12 +1393,7 @@
 
         let req = make_ivm_prove_request(vk_id, bytecode, Some(mismatched_proved));
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
+        let response = call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body))
         .await
         .expect("prove submit ok")
         .into_response();
@@ -1244,12 +1408,7 @@
         let job_id = created.job_id;
         let mut final_dto: Option<ZkIvmProveJobDto> = None;
         for _ in 0..4000 {
-            let response = handler_zk_ivm_prove_get(
-                State(app.clone()),
-                HeaderMap::new(),
-                crate::loopback_connect_info(),
-                axum::extract::Path(job_id.clone()),
-            )
+            let response = call_zk_ivm_prove_get(app.clone(), job_id.clone())
             .await
             .expect("prove get ok")
             .into_response();
@@ -1421,6 +1580,7 @@
         jobs.insert(
             "old".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: 10,
                 last_access_ms: 10,
                 status: ZkIvmProveJobStatus::Done,
@@ -1433,6 +1593,7 @@
         jobs.insert(
             "fresh".to_owned(),
             ZkIvmProveJobState {
+                owner: sample_ivm_prove_authority(),
                 created_ms: ttl_ms + 10,
                 last_access_ms: ttl_ms + 10,
                 status: ZkIvmProveJobStatus::Done,
@@ -1467,6 +1628,7 @@
             app.zk_ivm_prove_jobs.insert(
                 (*job_id).clone(),
                 ZkIvmProveJobState {
+                    owner: sample_ivm_prove_authority(),
                     created_ms: 0,
                     last_access_ms: 0,
                     status: ZkIvmProveJobStatus::Done,
@@ -1479,6 +1641,10 @@
 
         let Err(error) = handler_zk_ivm_prove_get(
             State(app.clone()),
+            axum::http::Method::GET,
+            format!("/v1/zk/ivm/prove/{get_job_id}")
+                .parse()
+                .expect("GET URI"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(get_job_id.clone()),
@@ -1490,6 +1656,10 @@
         assert_unconfigured_api_token_error(error);
         let Err(error) = handler_zk_ivm_prove_delete(
             State(app.clone()),
+            axum::http::Method::DELETE,
+            format!("/v1/zk/ivm/prove/{delete_job_id}")
+                .parse()
+                .expect("DELETE URI"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(delete_job_id.clone()),
@@ -1501,6 +1671,8 @@
         assert_unconfigured_api_token_error(error);
         let Err(error) = handler_zk_ivm_prove(
             State(app.clone()),
+            axum::http::Method::POST,
+            "/v1/zk/ivm/prove".parse().expect("POST URI"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::new(),
@@ -1522,8 +1694,125 @@
     }
 
     #[tokio::test]
+    async fn zk_ivm_prove_jobs_reject_cross_tenant_read_and_delete() {
+        let owner_key = sample_ivm_prove_authority_keypair();
+        let owner = AccountId::new(owner_key.public_key().clone());
+        let foreign_key = checked_torii_test_ed25519_keypair(
+            0x84,
+            "derive foreign ZK IVM request signer fixture key",
+        );
+        let foreign = AccountId::new(foreign_key.public_key().clone());
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id).build(&owner);
+        let owner_account = Account::new(owner.clone()).build(&owner);
+        let foreign_account = Account::new(foreign.clone()).build(&owner);
+        let app = mk_app_state_for_tests_with_world(World::with(
+            [domain],
+            [owner_account, foreign_account],
+            [],
+        ));
+        let job_id = "33333333333333333333333333333333".to_owned();
+        let retention = app
+            .zk_ivm_prove_job_budget
+            .try_reserve(2)
+            .expect("test reservation");
+        app.zk_ivm_prove_jobs.insert(
+            job_id.clone(),
+            ZkIvmProveJobState {
+                owner: owner.clone(),
+                created_ms: zk_ivm_prove_now_ms(),
+                last_access_ms: 0,
+                status: ZkIvmProveJobStatus::Done,
+                response_body: Bytes::from_static(b"{}"),
+                retention,
+                cancel: tokio::sync::watch::channel(false).0,
+            },
+        );
+
+        let get_method = axum::http::Method::GET;
+        let get_uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+            .parse()
+            .expect("GET URI");
+        let foreign_get_headers =
+            signed_app_headers(&foreign, &foreign_key, &get_method, &get_uri, &[]);
+        let response = handler_zk_ivm_prove_get(
+            State(app.clone()),
+            get_method,
+            get_uri,
+            foreign_get_headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(job_id.clone()),
+        )
+        .await
+        .expect("foreign GET is concealed as missing")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get(axum::http::header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+        assert_eq!(
+            response.headers().get(axum::http::header::VARY),
+            Some(&HeaderValue::from_static(
+                crate::content::CANONICAL_CONTENT_AUTH_VARY
+            ))
+        );
+        assert!(app.zk_ivm_prove_jobs.contains_key(&job_id));
+
+        let delete_method = axum::http::Method::DELETE;
+        let delete_uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+            .parse()
+            .expect("DELETE URI");
+        let foreign_delete_headers = signed_app_headers(
+            &foreign,
+            &foreign_key,
+            &delete_method,
+            &delete_uri,
+            &[],
+        );
+        let response = handler_zk_ivm_prove_delete(
+            State(app.clone()),
+            delete_method,
+            delete_uri,
+            foreign_delete_headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(job_id.clone()),
+        )
+        .await
+        .expect("foreign DELETE is concealed as missing")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(app.zk_ivm_prove_jobs.contains_key(&job_id));
+
+        let owner_delete_method = axum::http::Method::DELETE;
+        let owner_delete_uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+            .parse()
+            .expect("owner DELETE URI");
+        let owner_delete_headers = signed_app_headers(
+            &owner,
+            &owner_key,
+            &owner_delete_method,
+            &owner_delete_uri,
+            &[],
+        );
+        let response = handler_zk_ivm_prove_delete(
+            State(app.clone()),
+            owner_delete_method,
+            owner_delete_uri,
+            owner_delete_headers,
+            crate::loopback_connect_info(),
+            axum::extract::Path(job_id.clone()),
+        )
+        .await
+        .expect("owner DELETE succeeds")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!app.zk_ivm_prove_jobs.contains_key(&job_id));
+    }
+
+    #[tokio::test]
     async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
-        let app = mk_app_state_for_tests();
+        let app = mk_ivm_prove_app_state_for_tests();
 
         let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-schema-mismatch");
         let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
@@ -1583,14 +1872,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let err = match handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        {
+        let err = match call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body)).await {
             Ok(_) => panic!("schema mismatch should be rejected"),
             Err(err) => err,
         };
@@ -1609,7 +1891,7 @@
     #[tokio::test]
     async fn zk_ivm_prove_rejects_when_queue_full() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_prover_keys_dir = temp.path().to_path_buf();
@@ -1683,14 +1965,7 @@
         let bytecode = IvmBytecode::from_compiled(program);
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let body = norito::json::to_vec(&req).expect("json encode request");
-        let err = match handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        {
+        let err = match call_zk_ivm_prove(app.clone(), axum::body::Bytes::from(body)).await {
             Ok(_) => panic!("queue full should be rejected"),
             Err(err) => err,
         };
@@ -1707,7 +1982,7 @@
 
     #[tokio::test]
     async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_ivm_prove_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app");
             state.zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(1));
@@ -1776,10 +2051,8 @@
         let req = make_ivm_prove_request(vk_id, bytecode, None);
         let req_body = norito::json::to_vec(&req).expect("json encode request");
 
-        let response = handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
+        let response = call_zk_ivm_prove(
+            app.clone(),
             axum::body::Bytes::from(req_body.clone()),
         )
         .await
@@ -1794,10 +2067,8 @@
             norito::json::from_slice(&resp_body).expect("json decode created dto");
         let job_id = created.job_id;
 
-        let err = match handler_zk_ivm_prove(
-            State(app.clone()),
-            proof_json_headers(),
-            crate::loopback_connect_info(),
+        let err = match call_zk_ivm_prove(
+            app.clone(),
             axum::body::Bytes::from(req_body.clone()),
         )
         .await
@@ -1809,12 +2080,7 @@
             matches!(err, Error::ProofRateLimited { endpoint, .. } if endpoint == "v1/zk/ivm/prove")
         );
 
-        let response = handler_zk_ivm_prove_delete(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id),
-        )
+        let response = call_zk_ivm_prove_delete(app.clone(), job_id)
         .await
         .expect("prove delete ok")
         .into_response();
@@ -2928,7 +3194,7 @@
             "derive fail-closed transaction ingress fixture key",
         );
         let transaction = TransactionBuilder::new(
-            (*app.chain_id).clone(),
+            *app.state.network_id_ref(),
             AccountId::new(keypair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

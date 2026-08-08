@@ -2407,10 +2407,11 @@ fn read_bounded_config(path: &Path) -> Result<Vec<u8>, RegistryErrorV1> {
 mod tests {
     use std::{cell::Cell, io::Write as _, net::TcpListener, time::Duration};
 
-    use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair, SignatureOf};
+    use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         account::AccountId,
+        block::BlockHeader,
         isi::{InstructionBox, musubi::AddMusubiArchiveLocationV1},
         musubi::{
             ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveAvailabilityV1,
@@ -2442,6 +2443,12 @@ mod tests {
     use crate::publish::{
         PublicationReleaseSignedEnvelopeV1, PublicationReleaseSubmissionTerminalReasonV1,
     };
+
+    fn test_network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([byte; Hash::LENGTH]),
+        ))
+    }
 
     fn serve_http_once(
         status: &'static str,
@@ -2825,11 +2832,13 @@ mod tests {
         let signer_keypair = KeyPair::try_from_seed(vec![89; 32], Algorithm::Ed25519)
             .expect("signer fixture key pair");
         let private_key = ExposedPrivateKey(signer_keypair.private_key().clone()).to_string();
+        let network_id = test_network_id(0x15);
         fs::write(
             &path,
             format!(
                 r#"
                     chain = "musubi-registry-test"
+                    network_id = "{network_id}"
                     torii_url = "https://registry.example/iroha/"
                     [account]
                     domain = "dex.universal"
@@ -2868,7 +2877,11 @@ mod tests {
         assert_eq!(error.code(), "MUSUBI_ACCOUNT_ID_INVALID");
     }
 
-    fn signing_client_at(url: &Url, signer_keypair: &KeyPair) -> RegistrySigningClientV1 {
+    fn signing_client_at(
+        url: &Url,
+        signer_keypair: &KeyPair,
+        network_id: NetworkId,
+    ) -> RegistrySigningClientV1 {
         let temporary = tempdir().expect("temporary signing configuration");
         let path = temporary.path().join("client.toml");
         let private_key = ExposedPrivateKey(signer_keypair.private_key().clone()).to_string();
@@ -2877,6 +2890,7 @@ mod tests {
             format!(
                 r#"
                     chain = "musubi-registry-test"
+                    network_id = "{network_id}"
                     torii_url = "{url}"
                     [account]
                     domain = "dex.universal"
@@ -2895,7 +2909,7 @@ mod tests {
     fn signed_status_probe(signer: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(signer.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            ChainId::from("musubi-registry-test"),
+            test_network_id(0x15),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2932,7 +2946,7 @@ mod tests {
             ("Queued", RegistryTransactionStateV1::Pending),
         ] {
             let (url, server) = serve_json_once(transaction_status_body(&transaction, kind));
-            let signing = signing_client_at(&url, &signer);
+            let signing = signing_client_at(&url, &signer, test_network_id(0x15));
             assert_eq!(
                 signing
                     .transaction_application_state_v1(&transaction)
@@ -2950,7 +2964,7 @@ mod tests {
         let transaction = signed_status_probe(&signer);
 
         let (url, server) = serve_json_once(transaction_status_body(&transaction, "Rejected"));
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let state = signing
             .transaction_application_state_v1(&transaction)
             .expect("state-final rejected transaction");
@@ -2964,7 +2978,7 @@ mod tests {
         server.join().expect("rejected status server");
 
         let (url, server) = serve_http_once("404 Not Found", Vec::new());
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
             signing
                 .transaction_application_state_v1(&transaction)
@@ -2989,7 +3003,7 @@ mod tests {
         }))
         .expect("cached rejection JSON");
         let (url, server) = serve_json_once(cached_rejection);
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
             signing
                 .transaction_application_state_v1(&transaction)
@@ -3007,7 +3021,7 @@ mod tests {
         }))
         .expect("heightless applied JSON");
         let (url, server) = serve_json_once(heightless_applied);
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let error = signing
             .transaction_application_state_v1(&transaction)
             .expect_err("applied status without committed height is not finality evidence");
@@ -3016,7 +3030,7 @@ mod tests {
         server.join().expect("heightless applied server");
 
         let (url, server) = serve_json_once(transaction_status_body(&transaction, "Expired"));
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         assert_eq!(
             signing
                 .transaction_application_state_v1(&transaction)
@@ -3036,7 +3050,7 @@ mod tests {
         }))
         .expect("zero-height expiry JSON");
         let (url, server) = serve_json_once(zero_height_expiry);
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let error = signing
             .transaction_application_state_v1(&transaction)
             .expect_err("zero is not a valid finalized block height");
@@ -3053,7 +3067,7 @@ mod tests {
             &"ff".repeat(32),
             "Applied",
         ));
-        let signing = signing_client_at(&url, &signer);
+        let signing = signing_client_at(&url, &signer, test_network_id(0x15));
         let error = signing
             .transaction_application_state_v1(&transaction)
             .expect_err("another transaction's applied status must fail closed");
@@ -3470,7 +3484,7 @@ mod tests {
             payload,
         };
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3647,7 +3661,7 @@ mod tests {
             expected_location_revision: prepared_page.archive.location_revision,
         };
         let mut location_builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3714,7 +3728,7 @@ mod tests {
         )
         .expect("valid release preparation fixture");
         let mut release_builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3822,7 +3836,7 @@ mod tests {
         ]);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -3910,7 +3924,7 @@ mod tests {
         ]);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -3984,13 +3998,14 @@ mod tests {
         let signing = signing_client_at(
             &"http://127.0.0.1:9/".parse().expect("loopback URL"),
             &publisher_key,
+            request.network_id(),
         );
         let instruction = request.archive_registration_instruction(&intent.staging_receipt);
         let exact_instruction: InstructionBox = instruction.clone().into();
         let payload = signing
             .prebuild_v1(instruction)
             .expect("offline exact transaction prebuild");
-        assert_eq!(payload.chain(), &request.chain_id);
+        assert_eq!(payload.network_id().copied(), Some(request.network_id()));
         assert_eq!(payload.authority(), &request.publisher);
         assert!(matches!(
             payload.instructions(),
@@ -4021,13 +4036,15 @@ mod tests {
             753,
         )
         .expect("different-profile reader");
-        let error = RegistryPublicationBackendV1::new(
+        let error = match RegistryPublicationBackendV1::new(
             read,
             signing,
             UnavailablePublicationRuntimeV1,
             &request,
-        )
-        .expect_err("read and signing clients must share one address profile");
+        ) {
+            Ok(_) => panic!("read and signing clients must share one address profile"),
+            Err(error) => error,
+        };
         assert_eq!(error.code(), "MUSUBI_PUBLICATION_REGISTRY_PROFILE_MISMATCH");
     }
 
@@ -4037,9 +4054,10 @@ mod tests {
         let signing = signing_client_at(
             &"http://127.0.0.1:9/".parse().expect("loopback URL"),
             &publisher_key,
+            request.network_id(),
         );
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4070,7 +4088,7 @@ mod tests {
         let (url, server) = serve_json_once(response);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -4115,7 +4133,7 @@ mod tests {
         let (url, server) = serve_json_once(exact_page_json);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -4162,7 +4180,7 @@ mod tests {
         let (url, server) = serve_json_once(conflicting_page_json);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
             read,
             signing,
@@ -4188,7 +4206,7 @@ mod tests {
         let (url, server) = serve_json_once(response);
         let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
-        let signing = signing_client_at(&url, &publisher_key);
+        let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
             read,
             signing,

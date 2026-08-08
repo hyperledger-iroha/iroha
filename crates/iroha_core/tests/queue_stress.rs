@@ -24,7 +24,7 @@ fn queue_stress_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_queue_stress_keypair();
 }
 
-fn build_state() -> (State, ChainId, AccountId, KeyPair) {
+fn build_state() -> (State, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
 
@@ -39,8 +39,9 @@ fn build_state() -> (State, ChainId, AccountId, KeyPair) {
 
     let chain_id = ChainId::from("queue-stress-chain");
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id.clone());
+    let network_id = *state.network_id_ref();
 
-    (state, chain_id, account_id, key_pair)
+    (state, network_id, account_id, key_pair)
 }
 
 fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
@@ -53,14 +54,14 @@ fn queue_config(capacity: usize, ttl: Duration) -> QueueConfig {
 }
 
 fn make_transaction(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     key_pair: &KeyPair,
     nonce: usize,
     ttl: Duration,
 ) -> AcceptedTransaction<'static> {
     let mut builder = TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

@@ -19,7 +19,9 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
+import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class TransactionSubmissionCompatibilityTest {
@@ -118,39 +120,68 @@ class TransactionSubmissionCompatibilityTest {
     }
 
     @Test
-    fun `retry probes fresh capabilities before a second post`() {
-        val executor = CompatibilityExecutor(
-            capabilities = listOf(
-                capabilities(),
-                capabilities(dataModelVersion = 8),
-            ),
-            postStatuses = listOf(503, 202),
-        )
+    fun `redirect and transient statuses never redispatch signed bytes`() {
+        for (status in listOf(307, 308, 503)) {
+            val transaction = sampleTransaction(status)
+            val executor = CompatibilityExecutor(
+                capabilities = listOf(capabilities()),
+                postStatuses = listOf(status, 202),
+            )
+            val client = transport(
+                executor,
+                retryPolicy = RetryPolicy.builder()
+                    .setMaxAttempts(2)
+                    .setBaseDelay(Duration.ZERO)
+                    .build(),
+            )
+
+            val error = assertFailsWith<CompletionException> {
+                client.submitTransaction(transaction).join()
+            }
+
+            val ambiguous = assertIs<AmbiguousTransactionSubmissionException>(error.cause)
+            assertEquals(SignedTransactionHasher.hashHex(transaction), ambiguous.hashHex)
+            assertEquals(status, ambiguous.statusCode)
+            assertEquals(
+                listOf(
+                    "GET /v1/node/capabilities",
+                    "POST /v1/pipeline/transactions",
+                ),
+                executor.requests,
+            )
+        }
+    }
+
+    @Test
+    fun `network failure is ambiguous and never redispatches signed bytes`() {
+        val transaction = sampleTransaction(7)
+        val executor = NetworkFailureExecutor()
         val client = transport(
             executor,
             retryPolicy = RetryPolicy.builder()
-                .setMaxAttempts(2)
+                .setMaxAttempts(3)
                 .setBaseDelay(Duration.ZERO)
                 .build(),
         )
 
         val error = assertFailsWith<CompletionException> {
-            client.submitTransaction(sampleTransaction(5)).join()
+            client.submitTransaction(transaction).join()
         }
 
-        assertIs<ToriiDataModelMismatchException>(error.cause)
+        val ambiguous = assertIs<AmbiguousTransactionSubmissionException>(error.cause)
+        assertEquals(SignedTransactionHasher.hashHex(transaction), ambiguous.hashHex)
+        assertEquals(null, ambiguous.statusCode)
         assertEquals(
             listOf(
                 "GET /v1/node/capabilities",
                 "POST /v1/pipeline/transactions",
-                "GET /v1/node/capabilities",
             ),
             executor.requests,
         )
     }
 
     @Test
-    fun `queued replay and live submission each use a fresh guard`() {
+    fun `configured pending queue is never drained or replayed implicitly`() {
         val queue = MemoryPendingQueue()
         queue.enqueue(sampleTransaction(10))
         val executor = CompatibilityExecutor(listOf(capabilities()))
@@ -158,11 +189,9 @@ class TransactionSubmissionCompatibilityTest {
 
         client.submitTransaction(sampleTransaction(11)).join()
 
-        assertEquals(0, queue.size())
+        assertEquals(1, queue.size())
         assertEquals(
             listOf(
-                "GET /v1/node/capabilities",
-                "POST /v1/pipeline/transactions",
                 "GET /v1/node/capabilities",
                 "POST /v1/pipeline/transactions",
             ),
@@ -171,7 +200,7 @@ class TransactionSubmissionCompatibilityTest {
     }
 
     @Test
-    fun `queued replay drift retains current transaction and sends no post`() {
+    fun `compatibility failure neither drains queue nor dispatches signed bytes`() {
         val queue = MemoryPendingQueue()
         queue.enqueue(sampleTransaction(20))
         val executor = CompatibilityExecutor(
@@ -187,10 +216,7 @@ class TransactionSubmissionCompatibilityTest {
         assertIs<ToriiDataModelMismatchException>(error.cause)
         assertEquals(1, queue.size())
         assertEquals(
-            listOf(
-                "GET /v1/node/capabilities",
-                "GET /v1/node/capabilities",
-            ),
+            listOf("GET /v1/node/capabilities"),
             executor.requests,
         )
     }
@@ -215,7 +241,7 @@ class TransactionSubmissionCompatibilityTest {
             .fromAccount(TestEd25519Keys.publicKey(0x37), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val payload = TransactionPayload(
-            chainId = String.format("%08x", seed),
+            networkId = TestNetworkIds.fromSeed(seed.toLong()),
             authority = authority,
             creationTimeMs = 1_700_000_000_000L + seed,
             executable = Executable.instructions(emptyList()),
@@ -283,6 +309,25 @@ class TransactionSubmissionCompatibilityTest {
         override fun size(): Int = pending.size
 
         override fun telemetryQueueName(): String = "memory"
+    }
+
+    private class NetworkFailureExecutor : HttpTransportExecutor {
+        val requests = mutableListOf<String>()
+
+        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requests.add("${request.method} ${request.uri.path}")
+            if (request.method == "GET") {
+                return CompletableFuture.completedFuture(
+                    TransportResponse.builder()
+                        .setStatusCode(200)
+                        .setBody(capabilities().toByteArray(StandardCharsets.UTF_8))
+                        .build(),
+                )
+            }
+            return CompletableFuture<TransportResponse>().also {
+                it.completeExceptionally(IllegalStateException("connection reset"))
+            }
+        }
     }
 
     private companion object {

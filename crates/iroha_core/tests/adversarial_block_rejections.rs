@@ -109,7 +109,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
         alice_asset_id,
         bob_asset_id,
     } = setup_world();
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
 
     let max_clock_drift = state
         .view()
@@ -138,7 +138,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     let ghost_asset_id = AssetId::of(ghost_def, alice_id.clone());
 
     let forged_transfer = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -150,7 +150,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     .sign(alice_kp.private_key());
     let forged_transfer = AcceptedTransaction::accept(
         forged_transfer,
-        &chain_id,
+        &network_id,
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
@@ -158,7 +158,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     .expect("admission should pass for forged transfer");
 
     let missing_burn = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -166,7 +166,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     .sign(alice_kp.private_key());
     let missing_burn = AcceptedTransaction::accept(
         missing_burn,
-        &chain_id,
+        &network_id,
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
@@ -174,7 +174,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     .expect("admission should pass for missing-asset burn");
 
     let valid_transfer = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -186,7 +186,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     .sign(alice_kp.private_key());
     let valid_transfer = AcceptedTransaction::accept(
         valid_transfer,
-        &chain_id,
+        &network_id,
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
@@ -225,14 +225,14 @@ fn block_history_tamper_rejected_without_mutation() {
         bob_asset_id,
         ..
     } = setup_world();
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let peer_key = checked_random_adversarial_bls_keypair();
     let peer = PeerId::from(peer_key.public_key().clone());
     let time_source = TimeSource::new_system();
 
     // Commit a baseline block at height 1 so subsequent rewinds have a stable checkpoint.
     let baseline_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -275,7 +275,7 @@ fn block_history_tamper_rejected_without_mutation() {
 
     // Forge a block that rewinds height to 1 with a conflicting prev hash and extra mint.
     let rewind_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

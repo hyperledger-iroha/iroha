@@ -355,6 +355,9 @@ enum CommandKind {
         output: PathBuf,
         verify: bool,
     },
+    NexusConnectFixture {
+        options: nexus::NexusConnectFixtureOptions,
+    },
     SoranetTestnetKit {
         output: PathBuf,
     },
@@ -1662,6 +1665,9 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             } else {
                 nexus::write_lane_commitment_fixtures(&output)?;
             }
+        }
+        CommandKind::NexusConnectFixture { options } => {
+            nexus::run_nexus_connect_fixture(&options)?;
         }
         CommandKind::SoranetTestnetKit { output } => {
             generate_testnet_kit(output)?;
@@ -5521,6 +5527,9 @@ where
                 suppression_ratio_budget,
             })
         }
+        "nexus-connect-fixture" => Ok(CommandKind::NexusConnectFixture {
+            options: nexus::parse_nexus_connect_fixture_options(args)?,
+        }),
         "nexus-fixtures" => {
             let mut output: Option<PathBuf> = None;
             let mut verify = false;
@@ -11759,6 +11768,24 @@ mod acceleration_state_tests {
     }
 
     #[test]
+    fn parse_routes_nexus_connect_fixture_to_the_closed_owner() {
+        let root = workspace_root();
+        let args = vec![
+            "xtask".to_owned(),
+            "nexus-connect-fixture".to_owned(),
+            "--check".to_owned(),
+            "--output-root".to_owned(),
+            root.to_string_lossy().into_owned(),
+        ];
+        let command = parse_command(args.into_iter()).expect("parse Nexus fixture command");
+        let CommandKind::NexusConnectFixture { options } = command else {
+            panic!("expected Nexus Connect fixture command");
+        };
+        assert_eq!(options.mode, nexus::NexusConnectFixtureMode::Check);
+        assert_eq!(options.output_root, root);
+    }
+
+    #[test]
     fn parse_fastpq_cuda_suite_operation_updates_default_artifact_names() {
         let args = ["xtask", "fastpq-cuda-suite", "--operation", "lde"];
         let iter = args.into_iter().map(String::from);
@@ -15390,6 +15417,12 @@ fn print_usage() {
     eprintln!("  cargo xtask nexus-fixtures [--out <dir>] [--verify]");
     eprintln!(
         "    Regenerate Nexus lane commitment fixtures (defaults to fixtures/nexus/lane_commitments); pass --verify to ensure existing files match the generated payloads."
+    );
+    eprintln!(
+        "  cargo xtask nexus-connect-fixture (--write|--check) --output-root <absolute-directory>"
+    );
+    eprintln!(
+        "    Build the Rust-owned Nexus Connect transfer SDK fixture; write mode refuses Git checkouts and requires an external staging root."
     );
     eprintln!(
         "  cargo xtask nexus-lane-maintenance --config <path> [--json-out <path|->] [--compact-retired]"

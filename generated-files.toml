@@ -16,6 +16,7 @@ forbidden_tracked_globs = [
   "target/**",
   "**/target/**",
   "**/node_modules/**",
+  "**/.docusaurus/**",
   "**/__pycache__/**",
   "**/.pytest_cache/**",
   "**/.ruff_cache/**",
@@ -196,6 +197,80 @@ inputs = [
 check = "node scripts/check_sf1_vectors.mjs"
 
 [[generated]]
+name = "sorafs-por-aggregate-fixtures"
+kind = "file"
+outputs = [
+  "fixtures/sorafs_manifest/governance/dag_block_0_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_1_bad_predecessor_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_1_bad_predecessor_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_1_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_1_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_bad_signature_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_bad_signature_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_bad_signature_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_cid_mismatch_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_block_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_signature_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_signature_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_head_bad_signature_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_reordered_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_v1.json",
+  "fixtures/sorafs_manifest/governance/dag_head_v1.to",
+  "fixtures/sorafs_manifest/governance/dag_head_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/governance/node_v1.json",
+  "fixtures/sorafs_manifest/governance/node_v1.to",
+  "fixtures/sorafs_manifest/governance/sdk_validation_inventory_v1.json",
+  "fixtures/sorafs_manifest/moderation/governance_node_v1.json",
+  "fixtures/sorafs_manifest/moderation/governance_node_v1.to",
+  "fixtures/sorafs_manifest/moderation/governance_node_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/por/challenge_v1.json",
+  "fixtures/sorafs_manifest/por/challenge_v1.to",
+  "fixtures/sorafs_manifest/por/proof_v1.json",
+  "fixtures/sorafs_manifest/por/proof_v1.to",
+  "fixtures/sorafs_manifest/por/verdict_v1.json",
+  "fixtures/sorafs_manifest/por/verdict_v1.to",
+  "fixtures/sorafs_manifest/potr/receipt_v1.json",
+  "fixtures/sorafs_manifest/potr/receipt_v1.to",
+  "fixtures/sorafs_manifest/reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_heterogeneous_positive_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_pdp_duplicate_hot_leaf_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_pdp_missing_signature_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_pdp_wrong_provider_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk/bundle_routing_admission_positive_validation_outcome_v1.json",
+  "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
+  "fixtures/sorafs_manifest/repair/negative/task_manifest_mismatch_v1.json",
+  "fixtures/sorafs_manifest/repair/negative/task_manifest_mismatch_v1.to",
+  "fixtures/sorafs_manifest/repair/negative/task_provider_unassigned_v1.json",
+  "fixtures/sorafs_manifest/repair/negative/task_provider_unassigned_v1.to",
+  "fixtures/sorafs_manifest/repair/task_v1.json",
+  "fixtures/sorafs_manifest/repair/task_v1.to",
+]
+generator = "NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --write --output-dir \"${IROHA_SORAFS_MANIFEST_STAGE:?set an absolute external complete sorafs_manifest staging tree}\""
+generator_sources = [
+  "crates/sorafs_manifest/Cargo.toml",
+  "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs",
+]
+inputs = [
+  "fixtures/sorafs_manifest/appeal_finance/**",
+  "fixtures/sorafs_manifest/orderbook/**",
+  "fixtures/sorafs_manifest/pdp/**",
+  "fixtures/sorafs_manifest/provider_admission/**",
+  "fixtures/sorafs_manifest/replication_order/**",
+]
+check = "NORITO_SKIP_BINDINGS_SYNC=1 cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p sorafs_manifest --features dev-tools --bin generate_por_fixtures -- --check"
+
+[[generated]]
 name = "ivm-pointer-abi-regions"
 kind = "regions"
 outputs = [
@@ -302,6 +377,30 @@ inputs = [
 # the fresh koto executable, and exact Git are attested only in private cache.
 # Live-tree publication remains a separate guarded operation.
 check = "python3 scripts/regenerate_current_rust_contract_artifact.py --check --cache-root \"${IROHA_KOTODAMA_CACHE_ROOT:?set the absolute external task-cache root}\" --koto \"${CARGO_TARGET_DIR:-target}/debug/koto\" --git \"${IROHA_GIT:?set the exact non-symbolic Git executable}\""
+
+[[generated]]
+name = "nexus-connect-transfer-v1-fixture"
+kind = "file"
+outputs = [
+  "fixtures/sdk/nexus_connect_transfer_v1.json",
+]
+generator = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- nexus-connect-fixture --write --output-root \"${IROHA_NEXUS_CONNECT_FIXTURE_STAGE:?set an absolute external staging tree}\""
+generator_sources = [
+  "xtask/src/main.rs",
+  "xtask/src/nexus.rs",
+]
+inputs = [
+  "Cargo.toml",
+  "crates/iroha/Cargo.toml",
+  "crates/iroha/src/nexus_app.rs",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+  "rust-toolchain.toml",
+  "xtask/Cargo.toml",
+]
+check = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p xtask --features dev-tools --bin xtask -- nexus-connect-fixture --check --output-root \"$PWD\""
 
 [[generated]]
 name = "ivm-public-syscall-table"

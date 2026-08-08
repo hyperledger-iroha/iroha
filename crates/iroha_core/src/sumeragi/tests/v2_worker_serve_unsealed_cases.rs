@@ -350,7 +350,7 @@
                 wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                     wire::CommitCertificateRequest {
                         protocol_version: wire::PROTOCOL_VERSION,
-                        chain_id: service.context.chain_id.clone(),
+                        network_id: service.context.network_id.clone(),
                         context_id: service.context.id(),
                         height: fair_predecessor_height,
                         requester: via.clone(),

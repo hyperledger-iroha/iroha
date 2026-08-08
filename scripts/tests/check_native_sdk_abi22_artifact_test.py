@@ -37,6 +37,7 @@ NATIVE_ESCROW_SHARED_TRIGGER_PATHS = {
     "integration_tests/tests/native_escrow.rs",
     "rust-toolchain.toml",
     "scripts/check_native_sdk_abi22_artifact.py",
+    "scripts/compute_workspace_source_manifest.py",
     "scripts/check_sorafs_reference_sdk_fixtures.py",
     "scripts/tests/check_native_sdk_abi22_artifact_test.py",
     "scripts/tests/check_sorafs_fixture_workflow_contract_test.py",
@@ -147,6 +148,12 @@ def exact_probe(_sdk: str, _path: Path) -> int:
     return checker.REQUIRED_BRIDGE_ABI_VERSION
 
 
+def exact_symbol_inventory(_path: Path) -> tuple[str, ...]:
+    """Return the five approved privacy C exports for synthetic artifacts."""
+
+    return checker.APPROVED_PRIVACY_C_EXPORTS
+
+
 @pytest.mark.parametrize(
     ("workflow_name", "workflow_specific"),
     NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS.items(),
@@ -176,16 +183,23 @@ def test_record_and_verify_bind_exact_artifact_and_clean_revision(
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
 
     assert manifest["bridge_abi_version"] == 22
     assert manifest["source_tree_clean"] is True
+    assert checker.SHA256_RE.fullmatch(
+        str(manifest["workspace_source_manifest_sha256"])
+    )
+    assert manifest["privacy_c_exports_inspected"] is True
+    assert manifest["privacy_c_exports"] == list(checker.APPROVED_PRIVACY_C_EXPORTS)
     assert manifest["required_symbols"] == list(checker.REQUIRED_SYMBOLS["csharp"])
     checker.verify_manifest(
         manifest,
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
 
 
@@ -200,6 +214,7 @@ def test_record_and_verify_reject_missing_artifact(tmp_path: Path) -> None:
             artifact_path=missing,
             source_root=source,
             probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
         )
 
     artifact = native_artifact(tmp_path)
@@ -209,6 +224,7 @@ def test_record_and_verify_reject_missing_artifact(tmp_path: Path) -> None:
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
     artifact.unlink()
     with pytest.raises(checker.ArtifactContractError, match="unavailable"):
@@ -217,6 +233,7 @@ def test_record_and_verify_reject_missing_artifact(tmp_path: Path) -> None:
             artifact_path=artifact,
             source_root=source,
             probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
         )
 
 
@@ -235,6 +252,7 @@ def test_record_rejects_every_non_exact_abi(
             artifact_path=artifact,
             source_root=source,
             probe=lambda _sdk, _path: observed,
+            symbol_inventory=exact_symbol_inventory,
         )
 
 
@@ -251,6 +269,7 @@ def test_verify_rejects_every_non_exact_abi(
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
 
     with pytest.raises(checker.ArtifactContractError, match="exactly 22"):
@@ -259,7 +278,180 @@ def test_verify_rejects_every_non_exact_abi(
             artifact_path=artifact,
             source_root=source,
             probe=lambda _sdk, _path: observed,
+            symbol_inventory=exact_symbol_inventory,
         )
+
+
+def test_bridge_requires_exact_five_privacy_c_exports(tmp_path: Path) -> None:
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+
+    for missing in checker.APPROVED_PRIVACY_C_EXPORTS:
+        inventory = tuple(
+            symbol
+            for symbol in checker.APPROVED_PRIVACY_C_EXPORTS
+            if symbol != missing
+        )
+        with pytest.raises(checker.ArtifactContractError, match="missing approved"):
+            checker.build_manifest(
+                sdk="c-jni",
+                target="aarch64-unknown-linux-gnu",
+                artifact_path=artifact,
+                source_root=source,
+                probe=exact_probe,
+                symbol_inventory=lambda _path, value=inventory: value,
+            )
+
+
+def test_privacy_c_export_inventory_rejects_duplicate_and_unexpected() -> None:
+    approved = checker.APPROVED_PRIVACY_C_EXPORTS
+    with pytest.raises(checker.ArtifactContractError, match="duplicate"):
+        checker.validate_privacy_c_exports(
+            (*approved, approved[0]),
+            require_exact=True,
+        )
+    for unexpected in (
+        "iroha_privacy_capabilities_v1",
+        "iroha_privacy_proof_request_v1",
+        "_iroha_privacy_compiled_profile_catalog_v1",
+    ):
+        with pytest.raises(checker.ArtifactContractError, match="privacy C symbol"):
+            checker.validate_privacy_c_exports(
+                (*approved, unexpected),
+                require_exact=True,
+            )
+
+
+@pytest.mark.parametrize(
+    "stale",
+    (
+        "iroha_privacy_compiled_profile_catalog_v21",
+        "iroha_privacy_validate_compiled_profile_catalog_abi23",
+        "connect_norito_privacy_abi_21_probe",
+        "connect_norito_privacy_abi-23-probe",
+        "connect_norito_bridge_abi_version_v21",
+    ),
+)
+def test_privacy_c_export_inventory_rejects_stale_abi_markers(stale: str) -> None:
+    with pytest.raises(checker.ArtifactContractError, match="stale privacy/bridge ABI"):
+        checker.validate_privacy_c_exports(
+            (*checker.APPROVED_PRIVACY_C_EXPORTS, stale),
+            require_exact=True,
+        )
+
+
+def test_node_and_python_do_not_invent_a_c_export_contract(tmp_path: Path) -> None:
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="python",
+        target="linux-x64-python312",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+        symbol_inventory=lambda _path: None,
+    )
+
+    assert manifest["privacy_c_exports_inspected"] is False
+    assert manifest["privacy_c_exports"] == []
+    checker.verify_manifest(
+        manifest,
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+        symbol_inventory=lambda _path: None,
+    )
+
+
+def test_verify_rejects_changed_or_missing_source_manifest_binding(
+    tmp_path: Path,
+) -> None:
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    manifest = checker.build_manifest(
+        sdk="csharp",
+        target="x86_64-unknown-linux-gnu",
+        artifact_path=artifact,
+        source_root=source,
+        probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
+    )
+
+    changed = dict(manifest)
+    changed["workspace_source_manifest_sha256"] = (
+        "b" * 64
+        if manifest["workspace_source_manifest_sha256"] != "b" * 64
+        else "c" * 64
+    )
+    with pytest.raises(checker.ArtifactContractError, match="current source manifest"):
+        checker.verify_manifest(
+            changed,
+            artifact_path=artifact,
+            source_root=source,
+            probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
+        )
+
+    missing = dict(manifest)
+    del missing["workspace_source_manifest_sha256"]
+    with pytest.raises(checker.ArtifactContractError, match="field inventory"):
+        checker.verify_manifest(
+            missing,
+            artifact_path=artifact,
+            source_root=source,
+            probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
+        )
+
+
+def test_record_rejects_source_manifest_toctou(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = clean_source(tmp_path)
+    artifact = native_artifact(tmp_path)
+    original = checker.workspace_source_manifest_sha256(source)
+    changed = "b" * 64 if original != "b" * 64 else "c" * 64
+    observed = iter((original, changed))
+    monkeypatch.setattr(
+        checker,
+        "workspace_source_manifest_sha256",
+        lambda _root: next(observed),
+    )
+
+    with pytest.raises(checker.ArtifactContractError, match="source changed"):
+        checker.build_manifest(
+            sdk="csharp",
+            target="x86_64-unknown-linux-gnu",
+            artifact_path=artifact,
+            source_root=source,
+            probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
+        )
+
+
+def test_symbol_tool_parsers_preserve_duplicates_and_normalize_only_macho() -> None:
+    symbol = checker.APPROVED_PRIVACY_C_EXPORTS[0]
+    assert checker._parse_symbol_tool_output(
+        f"_{symbol}\n_{symbol}\n".encode("ascii"),
+        "macho-lines",
+    ) == (symbol, symbol)
+    assert checker._parse_symbol_tool_output(
+        f"    1    0 0000000000001000 {symbol}\n".encode("ascii"),
+        "dumpbin",
+    ) == (symbol,)
+
+
+def test_missing_symbol_tool_fails_closed_only_for_bridge_lanes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = native_artifact(tmp_path)
+    monkeypatch.setattr(checker.shutil, "which", lambda _tool: None)
+
+    with pytest.raises(checker.ArtifactContractError, match="no supported symbol tool"):
+        checker.inspect_exported_symbols(artifact, required=True)
+    assert checker.inspect_exported_symbols(artifact, required=False) is None
 
 
 def test_record_and_verify_reject_dirty_or_stale_source(
@@ -273,6 +465,7 @@ def test_record_and_verify_reject_dirty_or_stale_source(
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
 
     (source / "untracked.py").write_text("dirty = True\n", encoding="utf-8")
@@ -283,6 +476,7 @@ def test_record_and_verify_reject_dirty_or_stale_source(
             artifact_path=artifact,
             source_root=source,
             probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
         )
     with pytest.raises(checker.ArtifactContractError, match="current clean source revision"):
         checker.verify_manifest(
@@ -290,6 +484,7 @@ def test_record_and_verify_reject_dirty_or_stale_source(
             artifact_path=artifact,
             source_root=source,
             probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
         )
 
 
@@ -304,6 +499,7 @@ def test_verify_rejects_replaced_artifact(
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
     artifact.write_bytes(b"different artifact bytes")
 
@@ -313,6 +509,7 @@ def test_verify_rejects_replaced_artifact(
             artifact_path=artifact,
             source_root=source,
             probe=exact_probe,
+            symbol_inventory=exact_symbol_inventory,
         )
 
 
@@ -331,6 +528,7 @@ def test_record_rejects_artifact_replaced_during_probe(tmp_path: Path) -> None:
             artifact_path=artifact,
             source_root=source,
             probe=replacing_probe,
+            symbol_inventory=exact_symbol_inventory,
         )
 
 
@@ -375,6 +573,7 @@ def test_manifest_loader_rejects_noncanonical_and_duplicate_json(
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
     path = tmp_path / "manifest.json"
     path.write_bytes(checker.canonical_manifest_bytes(manifest))
@@ -403,6 +602,7 @@ def test_manifest_loader_rejects_symlink_and_hardlink(
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
     path = tmp_path / "manifest.json"
     path.write_bytes(checker.canonical_manifest_bytes(manifest))
@@ -430,6 +630,7 @@ def test_manifest_loader_rejects_final_path_replacement(
         artifact_path=artifact,
         source_root=source,
         probe=exact_probe,
+        symbol_inventory=exact_symbol_inventory,
     )
     path = tmp_path / "manifest.json"
     payload = checker.canonical_manifest_bytes(manifest)
@@ -564,8 +765,8 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         "nativeSignerContractRevision() == REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION"
         in java_signer
     )
-    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 4" in kotlin_signer
-    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 4" in java_signer
+    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 5" in kotlin_signer
+    assert "REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 5" in java_signer
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in kotlin_signer
     assert "nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION" not in java_signer
     assert (

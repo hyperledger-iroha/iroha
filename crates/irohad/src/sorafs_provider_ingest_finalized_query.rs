@@ -11,7 +11,9 @@
 //! Runtime continuations carry only height, hash, and order identity. The
 //! adapter therefore retains the archive's complete timestamp-, provider-, and
 //! provider-state-root-bound cursor internally and rejects interleaved or
-//! substituted continuations.
+//! substituted continuations. The separately constructed capture reader is
+//! deliberately stateless: it reconstructs that complete cursor from the
+//! immutable exact archive record on every bounded continuation.
 
 use std::{
     fmt, io,
@@ -39,14 +41,16 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{
             PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1,
-            ProviderIngestCompletionAuthorityV1,
+            ProviderIngestCompletionAuthorityV1, ReplicationOrderId,
         },
     },
 };
 use sorafs_node::{
-    ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedAssignmentV1,
-    ProviderIngestFinalizedClaimFactoryV1, ProviderIngestFinalizedCursorV1,
-    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
+    ProviderIngestCompletedMusubiCaptureLedgerV1, ProviderIngestCompletedMusubiCaptureSourcePageV1,
+    ProviderIngestCompletedMusubiCaptureSourceRowV1, ProviderIngestFinalizedAssignmentPageV1,
+    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedClaimFactoryV1,
+    ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
+    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
 };
 
 const LIVE_SELECTION_ATTEMPTS_V1: usize = 4;
@@ -155,6 +159,12 @@ pub(crate) struct PreparedProviderIngestFinalizedArchiveV1 {
     archive: Arc<ProviderIngestFinalizedArchiveV1>,
     query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     runtime_query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
+    // TODO: Relocate capture sealing/scanner ownership beside this daemon-owned
+    // archive (or move authenticated archive verification under `sorafs_node`)
+    // before a supervised child consumes this reader. The raw-page boundary
+    // prevents claim-factory retention but cannot itself prove provenance.
+    #[allow(dead_code)]
+    capture_query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     retention_authority: Option<QualifiedProviderIngestRetentionAuthorityV1>,
 }
 
@@ -179,6 +189,13 @@ impl PreparedProviderIngestFinalizedArchiveV1 {
     /// supervised provider-ingest worker.
     pub(crate) fn runtime_query(&self) -> &Arc<ArchivedProviderIngestFinalizedLedgerV1> {
         &self.runtime_query
+    }
+
+    /// Return the independently cursor-fenced archive reader reserved for the
+    /// completed-Musubi capture scanner.
+    #[allow(dead_code)]
+    pub(crate) fn capture_query(&self) -> &Arc<ArchivedProviderIngestFinalizedLedgerV1> {
+        &self.capture_query
     }
 
     /// Return the authority qualified for explicit archive retention.
@@ -385,12 +402,17 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     let query = Arc::new(ArchivedProviderIngestFinalizedLedgerV1::new(
         reader_args.clone(),
     ));
-    let runtime_query = Arc::new(ArchivedProviderIngestFinalizedLedgerV1::new(reader_args));
+    let runtime_query = Arc::new(ArchivedProviderIngestFinalizedLedgerV1::new(
+        reader_args.clone(),
+    ));
+    let capture_query =
+        Arc::new(ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(reader_args));
     Ok(PreparedProviderIngestFinalizedArchiveV1 {
         startup_mode,
         archive,
         query,
         runtime_query,
+        capture_query,
         retention_authority,
     })
 }
@@ -747,7 +769,10 @@ impl ArchiveActivationGateV1 {
 /// requalifies the archive against the live authenticated Kura tip and pins
 /// the exact archive key visible through a fresh committed State view.
 /// Continuations must match both the public cursor and the full context
-/// retained in `ActiveArchiveScanV1`.
+/// retained in `ActiveArchiveScanV1`. The dedicated capture instance instead
+/// reconstructs every continuation from the immutable archive and never
+/// mutates `active`, making exact retries safe after validation failure or task
+/// cancellation.
 #[derive(Clone)]
 pub struct ArchivedProviderIngestFinalizedLedgerV1 {
     chain_id: ChainId,
@@ -758,6 +783,7 @@ pub struct ArchivedProviderIngestFinalizedLedgerV1 {
     max_page_rows: usize,
     max_kura_tip_lag_blocks: u64,
     activation_gate: ArchiveActivationGateV1,
+    replay_safe_capture: bool,
     active: Arc<Mutex<Option<ActiveArchiveScanV1>>>,
 }
 
@@ -781,12 +807,24 @@ impl fmt::Debug for ArchivedProviderIngestFinalizedLedgerV1 {
             .field("provider_id", &self.provider_id)
             .field("max_page_rows", &self.max_page_rows)
             .field("max_kura_tip_lag_blocks", &self.max_kura_tip_lag_blocks)
+            .field("replay_safe_capture", &self.replay_safe_capture)
             .finish_non_exhaustive()
     }
 }
 
 impl ArchivedProviderIngestFinalizedLedgerV1 {
     fn new(args: ArchivedProviderIngestFinalizedLedgerArgsV1) -> Self {
+        Self::new_with_capture_mode(args, false)
+    }
+
+    fn new_replay_safe_capture(args: ArchivedProviderIngestFinalizedLedgerArgsV1) -> Self {
+        Self::new_with_capture_mode(args, true)
+    }
+
+    fn new_with_capture_mode(
+        args: ArchivedProviderIngestFinalizedLedgerArgsV1,
+        replay_safe_capture: bool,
+    ) -> Self {
         let ArchivedProviderIngestFinalizedLedgerArgsV1 {
             chain_id,
             provider_id,
@@ -806,6 +844,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             max_page_rows,
             max_kura_tip_lag_blocks,
             activation_gate,
+            replay_safe_capture,
             active: Arc::new(Mutex::new(None)),
         }
     }
@@ -1104,7 +1143,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         after_order_id: Option<[u8; 32]>,
         limit: usize,
     ) -> Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1> {
-        if limit == 0 || limit > self.max_page_rows {
+        if self.replay_safe_capture || limit == 0 || limit > self.max_page_rows {
             return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
         }
         let mut active = self
@@ -1148,6 +1187,94 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         Ok(page)
     }
 
+    fn read_replay_safe_capture_source_page(
+        &self,
+        at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
+        after_order_id: Option<[u8; 32]>,
+        limit: usize,
+    ) -> Result<
+        ProviderIngestCompletedMusubiCaptureSourcePageV1,
+        ProviderIngestFinalizedLedgerErrorV1,
+    > {
+        if !self.replay_safe_capture
+            || limit == 0
+            || limit > self.max_page_rows
+            || at_finalized_cursor.is_none() != after_order_id.is_none()
+        {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        let (key, after_order_id, expected_generation) = match (at_finalized_cursor, after_order_id)
+        {
+            (None, None) => {
+                let key = self
+                    .select_visible_committed_key()
+                    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+                let qualification = self
+                    .qualify_live()
+                    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+                (key, None, qualification.generation())
+            }
+            (Some(public_cursor), Some(after_order_id)) => {
+                let qualification = self
+                    .qualify_live()
+                    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+                let key = self
+                    .archive
+                    .resolve_exact_key(
+                        &self.chain_id,
+                        public_cursor.height,
+                        public_cursor.block_hash,
+                    )
+                    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+                (key, Some(after_order_id), qualification.generation())
+            }
+            (None, Some(_)) | (Some(_), None) => unreachable!("validated capture cursor shape"),
+        };
+        let page = self.read_replay_safe_exact_capture_source_page(&key, after_order_id, limit)?;
+        if self
+            .archive
+            .health_generation()
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?
+            != expected_generation
+        {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
+        }
+        Ok(page)
+    }
+
+    fn read_replay_safe_exact_capture_source_page(
+        &self,
+        key: &ProviderIngestFinalizedArchiveKeyV1,
+        after_order_id: Option<[u8; 32]>,
+        limit: usize,
+    ) -> Result<
+        ProviderIngestCompletedMusubiCaptureSourcePageV1,
+        ProviderIngestFinalizedLedgerErrorV1,
+    > {
+        if !self.replay_safe_capture || limit == 0 || limit > self.max_page_rows {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        let cursor = if let Some(after_order_id) = after_order_id {
+            let first = self
+                .archive
+                .read_provider_page(key, self.provider_id, None, 1)
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+            Some(ProviderIngestFinalizedArchiveCursorV1 {
+                key: key.clone(),
+                provider_id: self.provider_id,
+                provider_state_root: first.provider_state_root,
+                after_order_id: ReplicationOrderId::new(after_order_id),
+            })
+        } else {
+            None
+        };
+        let archive_page = self
+            .archive
+            .read_provider_page(key, self.provider_id, cursor.as_ref(), limit)
+            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+        map_archive_capture_source_page(self.provider_id, &archive_page)
+    }
+
     #[cfg(test)]
     fn read_page_without_musubi_claims_for_test(
         &self,
@@ -1175,6 +1302,34 @@ impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1
             tokio::task::spawn_blocking(move || {
                 query.read_page_with_claim_factory(
                     Some(&claim_factory),
+                    at_finalized_cursor,
+                    after_order_id,
+                    limit,
+                )
+            })
+            .await
+            .unwrap_or(Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable))
+        })
+    }
+}
+
+impl ProviderIngestCompletedMusubiCaptureLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1 {
+    fn read_completed_musubi_capture_page(
+        &self,
+        at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
+        after_order_id: Option<[u8; 32]>,
+        limit: usize,
+    ) -> ProviderIngestFutureV1<
+        '_,
+        Result<
+            ProviderIngestCompletedMusubiCaptureSourcePageV1,
+            ProviderIngestFinalizedLedgerErrorV1,
+        >,
+    > {
+        let query = self.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                query.read_replay_safe_capture_source_page(
                     at_finalized_cursor,
                     after_order_id,
                     limit,
@@ -1293,12 +1448,87 @@ fn map_archive_page(
     })
 }
 
+fn map_archive_capture_source_page(
+    expected_provider_id: ProviderId,
+    page: &ProviderIngestFinalizedArchivePageV1,
+) -> Result<ProviderIngestCompletedMusubiCaptureSourcePageV1, ProviderIngestFinalizedLedgerErrorV1>
+{
+    if page.provider_id != expected_provider_id {
+        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+    }
+    let finalized_cursor = ProviderIngestFinalizedCursorV1 {
+        height: page.key.height,
+        block_hash: page.key.block_hash,
+    };
+    let pin_cursor = PinManifestFinalizedCursorV1 {
+        height: page.key.height,
+        block_hash: page.key.block_hash,
+    };
+    let mut rows = Vec::new();
+    rows.try_reserve(page.rows.len())
+        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+    for row in &page.rows {
+        if row.provider_id != expected_provider_id
+            || row.finalized_anchor.height != page.key.height
+            || row.finalized_anchor.block_hash != page.key.block_hash
+            || row.finalized_at_unix_ms != page.key.finalized_at_unix_ms
+            || row.expected_assignment_revision != row.replication_order.assignment_revision
+        {
+            return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+        }
+        let completion_authority = match (row.expected_owner.as_ref(), row.expected_signer_policy) {
+            (Some(owner), Some(policy)) if policy.is_valid() => Some(
+                ProviderIngestCompletionAuthorityV1::new(owner.clone(), policy),
+            ),
+            (_, None) => None,
+            _ => return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+        };
+        rows.push(
+            ProviderIngestCompletedMusubiCaptureSourceRowV1::from_projected_fields(
+                PinManifestFinalizedRecordV1 {
+                    finalized_cursor: pin_cursor,
+                    manifest: row.pin_manifest.clone(),
+                },
+                row.replication_order.clone(),
+                row.musubi_archive.clone(),
+                row.expected_owner.clone(),
+                completion_authority,
+                row.completion_epoch,
+                None,
+            ),
+        );
+    }
+    let next_after_order_id = page
+        .next_cursor
+        .as_ref()
+        .map(|cursor| *cursor.after_order_id.as_bytes());
+    if next_after_order_id.is_some()
+        && page.rows.last().is_none_or(|row| {
+            Some(*row.replication_order.order_id.as_bytes()) != next_after_order_id
+        })
+    {
+        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+    }
+    Ok(
+        ProviderIngestCompletedMusubiCaptureSourcePageV1::from_projected_fields(
+            page.key.chain_id.clone(),
+            *expected_provider_id.as_bytes(),
+            finalized_cursor,
+            page.key.finalized_at_unix_ms,
+            rows,
+            next_after_order_id,
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_core::{
         query::{
             provider_ingest_finalized::{
                 ProviderIngestFinalizedArchiveAssignmentV1, ProviderIngestFinalizedArchiveV1,
+                ProviderIngestFinalizedArchivedOrderV1, ProviderIngestFinalizedProjectionV1,
+                ProviderIngestFinalizedProviderProjectionV1,
             },
             store::LiveQueryStore,
         },
@@ -1314,10 +1544,14 @@ mod tests {
         },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
-            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            PinStatus, ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
             ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus,
         },
+    };
+    use sorafs_manifest::capacity::{
+        REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+        ReplicationOrderV1,
     };
 
     use super::*;
@@ -1357,6 +1591,79 @@ mod tests {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("deterministic account key");
         AccountId::new(key.public_key().clone())
+    }
+
+    fn replay_safe_archived_order(
+        order_seed: u8,
+        provider_id: ProviderId,
+    ) -> ProviderIngestFinalizedArchivedOrderV1 {
+        let digest = ManifestDigest::new([order_seed.wrapping_add(0x20); 32]);
+        let root = ManifestRootCid::from_blake3_digest([order_seed.wrapping_add(0x30); 32])
+            .expect("capture replay manifest root");
+        let chunker = ChunkerProfileHandle {
+            profile_id: 1,
+            namespace: "sorafs".to_owned(),
+            name: "sf1".to_owned(),
+            semver: "1.0.0".to_owned(),
+            multihash_code: 0x1f,
+        };
+        let mut pin_manifest = PinManifestRecord::new(
+            digest,
+            root.clone(),
+            chunker,
+            [order_seed.wrapping_add(0x40); 32],
+            [order_seed.wrapping_add(0x50); 32],
+            4_096,
+            PinPolicy::default(),
+            account(1),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        );
+        pin_manifest.status = PinStatus::Approved(1);
+        let order_id = [order_seed; 32];
+        let canonical = ReplicationOrderV1 {
+            version: REPLICATION_ORDER_VERSION_V1,
+            order_id,
+            manifest_cid: root.as_bytes().to_vec(),
+            manifest_digest: *digest.as_bytes(),
+            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+            target_replicas: 1,
+            assignments: vec![ReplicationAssignmentV1 {
+                provider_id: *provider_id.as_bytes(),
+                slice_gib: 1,
+                lane: None,
+            }],
+            issued_at: 1,
+            deadline_at: 100,
+            sla: ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 10,
+                min_availability_percent_milli: 99_000,
+                min_por_success_percent_milli: 99_000,
+            },
+            metadata: Vec::new(),
+        };
+        canonical
+            .validate()
+            .expect("capture replay canonical order");
+        ProviderIngestFinalizedArchivedOrderV1 {
+            pin_manifest,
+            replication_order: ReplicationOrderRecord {
+                order_id: ReplicationOrderId::new(order_id),
+                manifest_digest: digest,
+                manifest_root_cid: root,
+                musubi_archive: None,
+                issued_by: account(1),
+                issued_epoch: 1,
+                deadline_epoch: 100,
+                canonical_order: norito::to_bytes(&canonical).expect("capture replay order bytes"),
+                assignment_revision: 1,
+                provider_completions: Vec::new(),
+                status: ReplicationOrderStatus::Pending,
+            },
+            musubi_archive: None,
+        }
     }
 
     fn completion_record(
@@ -1555,6 +1862,54 @@ mod tests {
                 .expect("bootstrap activation gate"),
             "identity readiness must not pretend genesis is already captured"
         );
+        assert!(
+            !prepared
+                .capture_query()
+                .activation_ready()
+                .expect("bootstrap capture activation gate"),
+            "capture readiness must not pretend genesis is already captured"
+        );
+
+        let runtime_query = prepared.runtime_query();
+        let capture_query = prepared.capture_query();
+        assert!(!runtime_query.replay_safe_capture);
+        assert!(capture_query.replay_safe_capture);
+        assert!(
+            !Arc::ptr_eq(&runtime_query.active, &capture_query.active),
+            "runtime and capture readers must own distinct continuation state"
+        );
+        let key = ProviderIngestFinalizedArchiveKeyV1::try_new(chain_id, 1, [0x52; 32], 1_000)
+            .expect("test archive key");
+        let runtime_scan = ActiveArchiveScanV1 {
+            key: key.clone(),
+            cursor: ProviderIngestFinalizedArchiveCursorV1 {
+                key,
+                provider_id: ProviderId::new([0x51; 32]),
+                provider_state_root: [0x53; 32],
+                after_order_id: ReplicationOrderId::new([0x54; 32]),
+            },
+        };
+        *runtime_query.active.lock().expect("runtime cursor lock") = Some(runtime_scan.clone());
+        assert!(
+            capture_query
+                .active
+                .lock()
+                .expect("capture cursor lock")
+                .is_none(),
+            "starting a runtime scan must not start or advance the capture scan"
+        );
+        assert_eq!(
+            runtime_query
+                .active
+                .lock()
+                .expect("runtime cursor lock")
+                .as_ref()
+                .expect("runtime scan retained")
+                .cursor
+                .after_order_id,
+            ReplicationOrderId::new([0x54; 32]),
+            "the dedicated stateless capture reader must not mutate the runtime cursor"
+        );
     }
 
     #[test]
@@ -1615,18 +1970,18 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let chain_id = ChainId::from("provider-ingest-page-limit");
         let state = empty_state(&chain_id, &kura);
-        let query = ArchivedProviderIngestFinalizedLedgerV1::new(
-            ArchivedProviderIngestFinalizedLedgerArgsV1 {
-                chain_id,
-                provider_id: ProviderId::new([0x51; 32]),
-                archive,
-                kura,
-                state,
-                max_page_rows: 2,
-                max_kura_tip_lag_blocks: 0,
-                activation_gate: ArchiveActivationGateV1::StrictLive,
-            },
-        );
+        let args = ArchivedProviderIngestFinalizedLedgerArgsV1 {
+            chain_id,
+            provider_id: ProviderId::new([0x51; 32]),
+            archive,
+            kura,
+            state,
+            max_page_rows: 2,
+            max_kura_tip_lag_blocks: 0,
+            activation_gate: ArchiveActivationGateV1::StrictLive,
+        };
+        let query = ArchivedProviderIngestFinalizedLedgerV1::new(args.clone());
+        let capture_query = ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(args);
         assert_eq!(
             query.read_page_without_musubi_claims_for_test(None, None, 0),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
@@ -1634,6 +1989,108 @@ mod tests {
         assert_eq!(
             query.read_page_without_musubi_claims_for_test(None, None, 3),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected)
+        );
+        assert_eq!(
+            capture_query.read_page_without_musubi_claims_for_test(None, None, 1),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "capture mode must reject the stateful cursor path"
+        );
+        assert_eq!(
+            query.read_replay_safe_exact_capture_source_page(
+                &ProviderIngestFinalizedArchiveKeyV1::try_new(
+                    ChainId::from("provider-ingest-stateful-cross-mode"),
+                    1,
+                    [0x58; 32],
+                    1_000,
+                )
+                .expect("cross-mode archive key"),
+                None,
+                1,
+            ),
+            Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),
+            "stateful mode must reject the replay-safe capture path"
+        );
+        assert!(capture_query.replay_safe_capture);
+    }
+
+    #[test]
+    fn replay_safe_capture_exact_requests_do_not_consume_adapter_cursor_state() {
+        let daemon_root = physical_tempdir().expect("daemon root");
+        let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(
+            2 * 1024 * 1024,
+            8,
+            16 * 1024 * 1024,
+            8,
+            8,
+            16,
+            2,
+        )
+        .expect("archive bounds");
+        let archive = Arc::new(
+            ProviderIngestFinalizedArchiveV1::try_open(
+                daemon_root.path().join("capture-replay-archive"),
+                bounds,
+            )
+            .expect("open capture replay archive"),
+        );
+        let chain_id = ChainId::from("provider-ingest-capture-replay");
+        let provider_id = ProviderId::new([0x56; 32]);
+        let key =
+            ProviderIngestFinalizedArchiveKeyV1::try_new(chain_id.clone(), 7, [0x57; 32], 7_000)
+                .expect("capture replay key");
+        archive
+            .insert(ProviderIngestFinalizedProjectionV1 {
+                key: key.clone(),
+                providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
+                    provider_id,
+                    expected_owner: None,
+                    expected_signer_policy: None,
+                    orders: vec![
+                        replay_safe_archived_order(0x61, provider_id),
+                        replay_safe_archived_order(0x62, provider_id),
+                    ],
+                }],
+            })
+            .expect("insert capture replay projection");
+        let kura = Kura::blank_kura_for_testing();
+        let query = ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(
+            ArchivedProviderIngestFinalizedLedgerArgsV1 {
+                chain_id: chain_id.clone(),
+                provider_id,
+                archive,
+                state: empty_state(&chain_id, &kura),
+                kura,
+                max_page_rows: 2,
+                max_kura_tip_lag_blocks: 0,
+                activation_gate: ArchiveActivationGateV1::StrictLive,
+            },
+        );
+
+        let first = query
+            .read_replay_safe_exact_capture_source_page(&key, None, 1)
+            .expect("first replay-safe capture page");
+        let first_replay = query
+            .read_replay_safe_exact_capture_source_page(&key, None, 1)
+            .expect("replay first capture page after simulated cancellation");
+        assert_eq!(first_replay, first);
+        let after_order_id = first
+            .next_after_order_id()
+            .expect("two rows require a continuation");
+        let second = query
+            .read_replay_safe_exact_capture_source_page(&key, Some(after_order_id), 1)
+            .expect("capture continuation");
+        let second_replay = query
+            .read_replay_safe_exact_capture_source_page(&key, Some(after_order_id), 1)
+            .expect("replay capture continuation after validation failure");
+        assert_eq!(second_replay, second);
+        assert!(second.next_after_order_id().is_none());
+        assert!(
+            query
+                .active
+                .lock()
+                .expect("capture active cursor lock")
+                .is_none(),
+            "replay-safe reads must never consume adapter-local cursor state"
         );
     }
 

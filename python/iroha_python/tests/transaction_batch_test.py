@@ -8,15 +8,16 @@ import pytest
 
 import iroha_python.crypto as crypto_module
 import iroha_python.tx as tx_module
-from iroha_python import ContractCall, Instruction, TransactionConfig, TransactionDraft
+from iroha_python import ContractCall, Instruction, NetworkId, TransactionConfig, TransactionDraft
 
 VALID_HASH = "00" * 31 + "01"
+NETWORK_ID = NetworkId.from_bytes(bytes.fromhex(VALID_HASH))
 VALID_ADDRESS = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
 
 
 def config(*, gas_limit: int | None = 1000) -> TransactionConfig:
     return TransactionConfig(
-        chain_id="test-chain",
+        network_id=NETWORK_ID,
         authority="ed0120" + "11" * 32,
         fee_payment={
             "payer": "authority",
@@ -351,7 +352,7 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
     call = ContractCall(VALID_ADDRESS, VALID_HASH, "run", b"abc")
 
     result = crypto_module.build_signed_transaction(
-        "test-chain",
+        NETWORK_ID,
         "authority",
         b"private",
         fee_payment={"payer": "authority", "value": {}},
@@ -369,10 +370,23 @@ def test_build_signed_transaction_entries_select_batch_and_reject_dual_inputs(
     ]
     with pytest.raises(ValueError, match="mutually exclusive"):
         crypto_module.build_signed_transaction(
-            "test-chain",
+            NETWORK_ID,
             "authority",
             b"private",
             fee_payment={"payer": "authority", "value": {}},
             instructions=[],
             entries=[],
+        )
+
+
+@pytest.mark.parametrize("retired_domain", ["test-chain", bytes.fromhex(VALID_HASH)])
+def test_build_signed_transaction_rejects_label_and_bare_hash_domains(
+    retired_domain: object,
+) -> None:
+    with pytest.raises(TypeError, match="network_id must be a NetworkId"):
+        crypto_module.build_signed_transaction(
+            retired_domain,  # type: ignore[arg-type]
+            "authority",
+            b"private",
+            fee_payment={"payer": "authority", "value": {}},
         )

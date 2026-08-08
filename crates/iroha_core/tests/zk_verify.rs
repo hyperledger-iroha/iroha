@@ -86,11 +86,11 @@ fn build_vk_record(
 }
 
 fn signed_empty_tx_with_attachments(
-    chain: &ChainId,
+    network_id: NetworkId,
     attachments: iroha_data_model::proof::ProofAttachmentList,
 ) -> SignedTransaction {
     TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -163,7 +163,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
         )]);
 
     let tx1: SignedTransaction = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -180,7 +180,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
 
     // Second identical transaction in the same block should hit dedup
     let tx2: SignedTransaction = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -381,7 +381,7 @@ fn preverify_rejects_missing_vk_reference() {
             vk_id,
         )]);
     let tx: SignedTransaction = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -416,7 +416,7 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "vk_mismatch"),
     );
     let tx = signed_empty_tx_with_attachments(
-        &state.chain_id,
+        *state.network_id_ref(),
         bounded_proof_attachments(vec![attachment]),
     );
 
@@ -448,7 +448,7 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
         iroha_data_model::proof::VerifyingKeyId::new("stark/fri", "vk_mismatch"),
     );
     let tx = signed_empty_tx_with_attachments(
-        &state.chain_id,
+        *state.network_id_ref(),
         bounded_proof_attachments(vec![attachment]),
     );
 
@@ -488,7 +488,7 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
             ),
         );
         let tx = signed_empty_tx_with_attachments(
-            &state.chain_id,
+            *state.network_id_ref(),
             bounded_proof_attachments(vec![attachment]),
         );
 
@@ -530,7 +530,7 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
             ),
         );
         let tx = signed_empty_tx_with_attachments(
-            &state.chain_id,
+            *state.network_id_ref(),
             bounded_proof_attachments(vec![attachment]),
         );
 
@@ -565,7 +565,7 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
     );
     attachment.vk_commitment = Some([0xAB; 32]);
     let tx = signed_empty_tx_with_attachments(
-        &state.chain_id,
+        *state.network_id_ref(),
         bounded_proof_attachments(vec![attachment]),
     );
 
@@ -617,7 +617,7 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
     );
     attachment.vk_commitment = Some(expected_commitment);
     let tx = signed_empty_tx_with_attachments(
-        &state.chain_id,
+        *state.network_id_ref(),
         bounded_proof_attachments(vec![attachment]),
     );
 
@@ -891,7 +891,7 @@ fn preverify_rejects_empty_proof_as_malformed() {
         )]);
 
     let tx: SignedTransaction = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -949,7 +949,7 @@ fn preverify_rejects_proof_too_big() {
         )]);
 
     let tx: SignedTransaction = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

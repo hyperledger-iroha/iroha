@@ -35,7 +35,7 @@ private struct StubTransportError: Error {}
 
 private final class PipelineURLProtocol: URLProtocol {
     private static let lock = NSLock()
-    private static var statuses: [(kind: String, rejectionReason: String?)] = []
+    private static var statuses: [String] = []
     private static var submitStatusCode: Int = 202
     private static var submitBody: Data = PipelineURLProtocol.defaultSubmitBody
     private static var submitResponses: [(Int, Data)] = []
@@ -79,9 +79,9 @@ private final class PipelineURLProtocol: URLProtocol {
         client.urlProtocolDidFinishLoading(self)
     }
 
-    static func configure(statuses: [String], rejectionReason: String? = nil) {
+    static func configure(statuses: [String]) {
         lock.lock()
-        self.statuses = statuses.map { ($0, rejectionReason) }
+        self.statuses = statuses
         lock.unlock()
     }
 
@@ -124,12 +124,7 @@ private final class PipelineURLProtocol: URLProtocol {
         if statuses.isEmpty {
             return makeStatusBody(hash: hash, kind: "Queued")
         }
-        let next = statuses.removeFirst()
-        return makeStatusBody(
-            hash: hash,
-            kind: next.kind,
-            rejectionReason: next.rejectionReason
-        )
+        return makeStatusBody(hash: hash, kind: statuses.removeFirst())
     }
 
     private static func nextSubmitResponse() -> (Int, Data) {
@@ -141,11 +136,7 @@ private final class PipelineURLProtocol: URLProtocol {
         return (submitStatusCode, submitBody)
     }
 
-    private static func makeStatusBody(
-        hash: String,
-        kind: String,
-        rejectionReason: String? = nil
-    ) -> Data {
+    private static func makeStatusBody(hash: String, kind: String) -> Data {
         var status: [String: Any] = [
             "kind": kind
         ]
@@ -153,18 +144,9 @@ private final class PipelineURLProtocol: URLProtocol {
             status["block_height"] = 7
         }
         let terminal = ["Applied", "Rejected", "Expired"].contains(kind)
-        let diagnostics: [[String: Any]] = rejectionReason.map {
-            [[
-                "category": "validation",
-                "message": $0,
-                "decoded_reason": $0
-            ]]
-        } ?? []
         let payload: [String: Any] = [
             "hash": hash,
             "status": status,
-            "summary": rejectionReason.map { "\(kind): \($0)" } ?? kind,
-            "diagnostics": diagnostics,
             "scope": "global",
             "resolved_from": terminal ? "state" : "cache"
         ]
@@ -233,6 +215,7 @@ final class TxBuilderTests: XCTestCase {
     private static let pipelineHash = String(repeating: "a", count: 64)
     private static let fixturePrivateKeyHex = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
+    private static let fixtureNetworkId = TestNetworkIds.canonical
     private static let fixtureDomain = "wonderland.universal"
     private static let fixtureGovernanceContractAddress =
         "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
@@ -292,6 +275,35 @@ final class TxBuilderTests: XCTestCase {
         asciiOccurrenceCount(needle, in: data) > 0
     }
 
+    private func assertCompactNetworkTransactionDomain(
+        in envelope: SignedTransactionEnvelope,
+        expectedNetworkId: NetworkId,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        var signed = CanonicalNoritoReader(data: envelope.signedTransaction)
+        _ = try signed.readCompactField()
+        let payload = try signed.readCompactField()
+        XCTAssertEqual(try signed.readCompactField(), Data([0]), file: file, line: line)
+        XCTAssertEqual(signed.remaining(), 0, file: file, line: line)
+
+        var transaction = CanonicalNoritoReader(data: payload)
+        let domainPayload = try transaction.readCompactField()
+        var domain = CanonicalNoritoReader(data: domainPayload)
+        XCTAssertEqual(try domain.readUInt32LE(), 0, file: file, line: line)
+        XCTAssertEqual(
+            try domain.readCompactField(),
+            expectedNetworkId.bytes,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(domain.remaining(), 0, file: file, line: line)
+        for _ in 0..<8 {
+            _ = try transaction.readCompactField()
+        }
+        XCTAssertEqual(transaction.remaining(), 0, file: file, line: line)
+    }
+
     private func makeNativeClaimIdentifierReceiptJSON(
         _ receipt: ToriiIdentifierResolutionReceipt
     ) throws -> Data {
@@ -315,7 +327,7 @@ final class TxBuilderTests: XCTestCase {
     private func makeRegisterZkAssetRequest(authority: String,
                                             ttlMs: UInt64? = 30) throws -> RegisterZkAssetRequest {
         let unshieldVk = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_unshield")
-        return try RegisterZkAssetRequest(chainId: Self.fixtureChainId,
+        return try RegisterZkAssetRequest(networkId: Self.fixtureNetworkId,
                                           authority: authority,
                                           assetDefinitionId: Self.fixtureAssetDefinition,
                                           unshieldVerifyingKey: unshieldVk,
@@ -383,7 +395,7 @@ final class TxBuilderTests: XCTestCase {
             ToriiIdentifierResolutionReceipt.self,
             from: Data(receiptJSON.utf8)
         )
-        return ClaimIdentifierRequest(chainId: Self.fixtureChainId,
+        return ClaimIdentifierRequest(networkId: Self.fixtureNetworkId,
                                       authority: authority,
                                       accountId: claimAccountId,
                                       receipt: receipt,
@@ -395,7 +407,7 @@ final class TxBuilderTests: XCTestCase {
         try requireEd25519Encoder()
         let keypair = try Keypair.generate()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: AccountId.make(publicKey: keypair.publicKey),
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -437,7 +449,7 @@ final class TxBuilderTests: XCTestCase {
             creationTimeProvider: { Self.fixtureCreationTimeMs }
         )
         let envelope = try sdk.buildSignedExecutableBatch(
-            chainId: Self.fixtureChainId,
+            networkId: Self.fixtureNetworkId,
             authority: authority,
             entries: [
                 .instruction(instruction),
@@ -466,13 +478,11 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(try signedReader.readCompactField(), Data([0]))
         XCTAssertEqual(signedReader.remaining(), 0)
         var payloadReader = CanonicalNoritoReader(data: payload)
-        let chainIdPayload = try payloadReader.readCompactField()
-        var chainIdReader = CanonicalNoritoReader(data: chainIdPayload)
-        XCTAssertEqual(
-            try chainIdReader.readCompactField(),
-            CompactNorito.encodeString(Self.fixtureChainId)
-        )
-        XCTAssertEqual(chainIdReader.remaining(), 0)
+        let domainPayload = try payloadReader.readCompactField()
+        var domainReader = CanonicalNoritoReader(data: domainPayload)
+        XCTAssertEqual(try domainReader.readUInt32LE(), 0)
+        XCTAssertEqual(try domainReader.readCompactField(), Self.fixtureNetworkId.bytes)
+        XCTAssertEqual(domainReader.remaining(), 0)
         _ = try payloadReader.readCompactField()
         _ = try payloadReader.readCompactField()
         let executable = try payloadReader.readCompactField()
@@ -489,12 +499,12 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(try third.readUInt32LE(), 0)
         XCTAssertEqual(
             try first.readCompactField(),
-            instruction.compactInstructionBoxPayload()
+            try instruction.compactInstructionBoxPayload()
         )
         _ = try second.readCompactField()
         XCTAssertEqual(
             try third.readCompactField(),
-            instruction.compactInstructionBoxPayload()
+            try instruction.compactInstructionBoxPayload()
         )
         XCTAssertEqual(first.remaining(), 0)
         XCTAssertEqual(second.remaining(), 0)
@@ -524,7 +534,7 @@ final class TxBuilderTests: XCTestCase {
         )
 
         XCTAssertThrowsError(try sdk.buildSignedExecutableBatch(
-            chainId: Self.fixtureChainId,
+            networkId: Self.fixtureNetworkId,
             authority: authority,
             entries: [],
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -533,7 +543,7 @@ final class TxBuilderTests: XCTestCase {
             XCTAssertEqual(error as? ExecutableBatchInputError, .emptyBatch)
         }
         XCTAssertThrowsError(try sdk.buildSignedExecutableBatch(
-            chainId: Self.fixtureChainId,
+            networkId: Self.fixtureNetworkId,
             authority: authority,
             entries: [.contractCall(invocation)],
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -611,7 +621,7 @@ final class TxBuilderTests: XCTestCase {
         let plan = try AliasTransactionPlanV1(
             body: try AliasTransactionPlanBodyV1(
                 authority: authority,
-                chainId: Self.fixtureChainId,
+                networkId: Self.fixtureNetworkId,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -641,6 +651,7 @@ final class TxBuilderTests: XCTestCase {
         )
         let envelope = try sdk.buildAliasSetupPlan(
             request,
+            networkId: Self.fixtureNetworkId,
             plan: plan,
             bodyEncoder: { _ in canonicalBody },
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -651,10 +662,33 @@ final class TxBuilderTests: XCTestCase {
         )
 
         XCTAssertFalse(envelope.norito.isEmpty)
+        try assertCompactNetworkTransactionDomain(
+            in: envelope,
+            expectedNetworkId: Self.fixtureNetworkId
+        )
         XCTAssertEqual(asciiOccurrenceCount(EnsureAlias.wireId, in: envelope.norito), 1)
         XCTAssertThrowsError(
             try sdk.buildAliasSetupPlan(
                 request,
+                networkId: TestNetworkIds.other,
+                plan: plan,
+                bodyEncoder: { _ in canonicalBody },
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                keypair: makeFixtureKeypair(),
+                frameCodec: { _, payload in
+                    DecodedEnsureAliasFrame(instruction: ensure, reencodedFrame: payload)
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AliasSetupModelError,
+                .planValidation(["alias.plan.network_mismatch"])
+            )
+        }
+        XCTAssertThrowsError(
+            try sdk.buildAliasSetupPlan(
+                request,
+                networkId: Self.fixtureNetworkId,
                 plan: plan,
                 bodyEncoder: { _ in canonicalBody },
                 feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -694,7 +728,7 @@ final class TxBuilderTests: XCTestCase {
         let plan = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: Self.fixtureChainId,
+                networkId: Self.fixtureNetworkId,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -733,6 +767,7 @@ final class TxBuilderTests: XCTestCase {
         )
         let envelope = try XCTUnwrap(sdk.buildAliasLifecyclePlan(
             renewalRequest,
+            networkId: Self.fixtureNetworkId,
             plan: plan,
             bodyEncoder: { _ in bodyBytes },
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -744,7 +779,32 @@ final class TxBuilderTests: XCTestCase {
                 )
             }
         ))
+        try assertCompactNetworkTransactionDomain(
+            in: envelope,
+            expectedNetworkId: Self.fixtureNetworkId
+        )
         XCTAssertEqual(asciiOccurrenceCount(RenewAliasLease.wireId, in: envelope.norito), 1)
+        XCTAssertThrowsError(
+            try sdk.buildAliasLifecyclePlan(
+                renewalRequest,
+                networkId: TestNetworkIds.other,
+                plan: plan,
+                bodyEncoder: { _ in bodyBytes },
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                keypair: makeFixtureKeypair(),
+                frameCodec: { _, payload in
+                    DecodedAliasLifecycleFrame(
+                        operation: .renewLease(renewal),
+                        reencodedFrame: payload
+                    )
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AliasSetupModelError,
+                .planValidation(["alias.lifecycle.plan.network_mismatch"])
+            )
+        }
 
         let noOpBytes = Data([1, 1, 2, 3])
         let configuration = ConfigureAliasAutoRenew(
@@ -758,7 +818,7 @@ final class TxBuilderTests: XCTestCase {
         let noOp = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: Self.fixtureChainId,
+                networkId: Self.fixtureNetworkId,
                 anchor: plan.body.anchor,
                 operation: .configureAutoRenew(configuration),
                 disposition: .noOp,
@@ -775,6 +835,7 @@ final class TxBuilderTests: XCTestCase {
         )
         XCTAssertNil(try sdk.buildAliasLifecyclePlan(
             autoRenewRequest,
+            networkId: Self.fixtureNetworkId,
             plan: noOp,
             bodyEncoder: { _ in noOpBytes },
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
@@ -793,7 +854,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let transfer = TransferRequest(chainId: Self.fixtureChainId,
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: Self.fixtureAssetDefinition,
                                        quantity: "1",
@@ -1267,7 +1328,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -1276,7 +1337,6 @@ final class TxBuilderTests: XCTestCase {
                                        feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
 
         let expectation = expectation(description: "submit")
@@ -1310,7 +1370,7 @@ final class TxBuilderTests: XCTestCase {
         let shield = try VerifyingKeyIdReference(backend: "halo2/ipa", name: "vk_shield")
         XCTAssertThrowsError(
             try RegisterZkAssetRequest(
-                chainId: Self.fixtureChainId,
+                networkId: Self.fixtureNetworkId,
                 authority: "authority",
                 assetDefinitionId: Self.fixtureAssetDefinition,
                 shieldVerifyingKey: shield,
@@ -1365,7 +1425,7 @@ final class TxBuilderTests: XCTestCase {
         stub.result = .failure(StubError.failure)
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -1374,7 +1434,6 @@ final class TxBuilderTests: XCTestCase {
                                        feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
 
         let expectation = expectation(description: "submit error")
@@ -1392,7 +1451,7 @@ final class TxBuilderTests: XCTestCase {
         let stub = StubPipelineClient()
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -1414,7 +1473,7 @@ final class TxBuilderTests: XCTestCase {
         stub.result = .failure(StubError.failure)
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -1439,7 +1498,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -1452,7 +1511,7 @@ final class TxBuilderTests: XCTestCase {
                                                                keypair: keypair,
                                                                creationTimeMs: Self.fixtureCreationTimeMs)
 
-        guard let native = try? NoritoNativeBridge.shared.encodeTransfer(chainId: request.chainId,
+        guard let native = try? NoritoNativeBridge.shared.encodeTransfer(networkId: request.networkId,
                                                                          authority: request.authority,
                                                                          creationTimeMs: Self.fixtureCreationTimeMs,
                                                                          ttlMs: request.ttlMs,
@@ -1476,7 +1535,7 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: authority,
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "10",
@@ -1499,7 +1558,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = MintRequest(chainId: Self.fixtureChainId,
+        let request = MintRequest(networkId: Self.fixtureNetworkId,
                                   authority: authority,
                                   assetDefinitionId: Self.fixtureAssetDefinition,
                                   quantity: "3.14",
@@ -1511,7 +1570,7 @@ final class TxBuilderTests: XCTestCase {
                                                            keypair: keypair,
                                                            creationTimeMs: Self.fixtureCreationTimeMs)
 
-        guard let native = try? NoritoNativeBridge.shared.encodeMint(chainId: request.chainId,
+        guard let native = try? NoritoNativeBridge.shared.encodeMint(networkId: request.networkId,
                                                                      authority: request.authority,
                                                                      creationTimeMs: Self.fixtureCreationTimeMs,
                                                                      ttlMs: request.ttlMs,
@@ -1535,7 +1594,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = BurnRequest(chainId: Self.fixtureChainId,
+        let request = BurnRequest(networkId: Self.fixtureNetworkId,
                                   authority: authority,
                                   assetDefinitionId: Self.fixtureAssetDefinition,
                                   quantity: "2",
@@ -1547,7 +1606,7 @@ final class TxBuilderTests: XCTestCase {
                                                            keypair: keypair,
                                                            creationTimeMs: Self.fixtureCreationTimeMs)
 
-        guard let native = try? NoritoNativeBridge.shared.encodeBurn(chainId: request.chainId,
+        guard let native = try? NoritoNativeBridge.shared.encodeBurn(networkId: request.networkId,
                                                                      authority: request.authority,
                                                                      creationTimeMs: Self.fixtureCreationTimeMs,
                                                                      ttlMs: request.ttlMs,
@@ -1575,7 +1634,7 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let value = try NoritoJSON("wonderland")
-        let request = SetMetadataRequest(chainId: Self.fixtureChainId,
+        let request = SetMetadataRequest(networkId: Self.fixtureNetworkId,
                                          authority: authority,
                                          target: .account(authority),
                                          key: "display_name",
@@ -1588,7 +1647,7 @@ final class TxBuilderTests: XCTestCase {
                                                                   creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeSetKeyValue(
-            chainId: request.chainId,
+            networkId: request.networkId,
             authority: request.authority,
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
@@ -1625,7 +1684,7 @@ final class TxBuilderTests: XCTestCase {
 
         let receiptJSON = try makeNativeClaimIdentifierReceiptJSON(request.receipt)
         guard let native = try? NoritoNativeBridge.shared.encodeClaimIdentifier(
-            chainId: request.chainId,
+            networkId: request.networkId,
             authority: request.authority,
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
@@ -1660,7 +1719,7 @@ final class TxBuilderTests: XCTestCase {
         for abiVersion in ["", "01", "2", " 1", "1 "] {
             XCTAssertThrowsError(
                 try ProposeDeployContractRequest(
-                    chainId: Self.fixtureChainId,
+                    networkId: Self.fixtureNetworkId,
                     authority: "authority",
                     contractAddress: Self.fixtureGovernanceContractAddress,
                     codeHashHex: String(repeating: "11", count: 32),
@@ -1688,7 +1747,7 @@ final class TxBuilderTests: XCTestCase {
         let codeHash = Data(repeating: 0x11, count: 32)
         let abiHash = Data(repeating: 0x22, count: 32)
         let window = try GovernanceWindow(lower: 4, upper: 8)
-        let request = try ProposeDeployContractRequest(chainId: Self.fixtureChainId,
+        let request = try ProposeDeployContractRequest(networkId: Self.fixtureNetworkId,
                                                        authority: authority,
                                                        contractAddress: Self.fixtureGovernanceContractAddress,
                                                        codeHashHex: hexEncoded(codeHash),
@@ -1704,7 +1763,7 @@ final class TxBuilderTests: XCTestCase {
                                                                     creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeGovernanceProposeDeploy(
-            chainId: request.chainId,
+            networkId: request.networkId,
             authority: request.authority,
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
@@ -1735,7 +1794,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = PersistCouncilRequest(chainId: Self.fixtureChainId,
+        let request = PersistCouncilRequest(networkId: Self.fixtureNetworkId,
                                             authority: authority,
                                             epoch: 7,
                                             members: [authority],
@@ -1748,7 +1807,7 @@ final class TxBuilderTests: XCTestCase {
         let membersJson = try NoritoJSON(request.members).data
 
         guard let native = try? NoritoNativeBridge.shared.encodeGovernancePersistCouncil(
-            chainId: request.chainId,
+            networkId: request.networkId,
             authority: request.authority,
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
@@ -1772,7 +1831,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -1781,7 +1840,7 @@ final class TxBuilderTests: XCTestCase {
                                        feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                        ttlMs: nil)
 
-        guard let native = try? NoritoNativeBridge.shared.encodeTransfer(chainId: transfer.chainId,
+        guard let native = try? NoritoNativeBridge.shared.encodeTransfer(networkId: transfer.networkId,
                                                                          authority: transfer.authority,
                                                                          creationTimeMs: UInt64(Date().timeIntervalSince1970 * 1000),
                                                                          ttlMs: nil,
@@ -1806,7 +1865,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -1820,7 +1879,9 @@ final class TxBuilderTests: XCTestCase {
             XCTFail("expected JSON from native bridge")
             return
         }
-        XCTAssertTrue(json.contains("\"chain\""))
+        XCTAssertTrue(json.contains("\"domain\""))
+        XCTAssertTrue(json.contains(Self.fixtureNetworkId.literal))
+        XCTAssertFalse(json.contains("\"chain\""))
         XCTAssertTrue(json.contains("\"instructions\""))
     }
 
@@ -1835,7 +1896,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let feeSponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
         let programId = try FeeSponsorProgramId(sponsor: feeSponsor, name: "wallet_fx")
-        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let transfer = TransferRequest(networkId: Self.fixtureNetworkId,
                                        authority: authority,
                                        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
@@ -1867,7 +1928,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
 
-        guard let native = try? NoritoNativeBridge.shared.encodeMint(chainId: "00000000-0000-0000-0000-000000000000",
+        guard let native = try? NoritoNativeBridge.shared.encodeMint(networkId: Self.fixtureNetworkId,
                                                                      authority: authority,
                                                                      creationTimeMs: UInt64(Date().timeIntervalSince1970 * 1000),
                                                                      ttlMs: nil,
@@ -1895,7 +1956,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = try SetMetadataRequest(chainId: Self.fixtureChainId,
+        let request = try SetMetadataRequest(networkId: Self.fixtureNetworkId,
                                              authority: authority,
                                              target: .domain(Self.fixtureDomain),
                                              key: "label",
@@ -1918,7 +1979,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = try ProposeDeployContractRequest(chainId: Self.fixtureChainId,
+        let request = try ProposeDeployContractRequest(networkId: Self.fixtureNetworkId,
                                                        authority: authority,
                                                        contractAddress: Self.fixtureGovernanceContractAddress,
                                                        codeHashHex: String(repeating: "aa", count: 32),
@@ -1944,7 +2005,7 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
-        let request = MintRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let request = MintRequest(networkId: Self.fixtureNetworkId,
                                   authority: authority,
                                   assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "3.14",
@@ -1966,7 +2027,7 @@ final class TxBuilderTests: XCTestCase {
 
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
-        let request = try SetMetadataRequest(chainId: Self.fixtureChainId,
+        let request = try SetMetadataRequest(networkId: Self.fixtureNetworkId,
                                              authority: authority,
                                              target: .domain(Self.fixtureDomain),
                                              key: "label",
@@ -1989,7 +2050,7 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try Keypair.generate()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let destination = authority
-        let request = BurnRequest(chainId: "00000000-0000-0000-0000-000000000000",
+        let request = BurnRequest(networkId: Self.fixtureNetworkId,
                                   authority: authority,
                                   assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "2",
@@ -2012,7 +2073,7 @@ final class TxBuilderTests: XCTestCase {
         PipelineURLProtocol.configure(statuses: ["Queued", "Approved", "Committed", "Applied"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2031,7 +2092,7 @@ final class TxBuilderTests: XCTestCase {
         PipelineURLProtocol.configure(statuses: ["Approved"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2063,7 +2124,7 @@ final class TxBuilderTests: XCTestCase {
         PipelineURLProtocol.configure(statuses: ["Committed"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2095,7 +2156,7 @@ final class TxBuilderTests: XCTestCase {
         PipelineURLProtocol.configure(statuses: ["Rejected"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2119,13 +2180,13 @@ final class TxBuilderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testSubmitAndWaitAsyncFailureIncludesRejectionReason() async throws {
+    func testSubmitAndWaitAsyncFailureUsesOnlyPublicStatusMetadata() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Rejected"], rejectionReason: "build_claim_missing")
+        PipelineURLProtocol.configure(statuses: ["Rejected"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2139,8 +2200,10 @@ final class TxBuilderTests: XCTestCase {
         } catch let error as PipelineStatusError {
             switch error {
             case .failure:
-                XCTAssertEqual(error.rejectionReason, "build_claim_missing")
-                XCTAssertTrue(error.localizedDescription.contains("build_claim_missing"))
+                XCTAssertEqual(
+                    error.localizedDescription,
+                    "Pipeline transaction \(Self.pipelineHash) failed with status Rejected."
+                )
             default:
                 XCTFail("Unexpected error: \(error)")
             }
@@ -2156,7 +2219,7 @@ final class TxBuilderTests: XCTestCase {
         PipelineURLProtocol.configure(statuses: ["Approved", "Applied"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2188,7 +2251,7 @@ final class TxBuilderTests: XCTestCase {
                                                            timeout: 0.1,
                                                            maxAttempts: 1)
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2215,7 +2278,7 @@ final class TxBuilderTests: XCTestCase {
         PipelineURLProtocol.configure(statuses: ["Approved"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2235,16 +2298,13 @@ final class TxBuilderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testSubmitAddsDeterministicIdempotencyKeyAcrossRetries() async throws {
+    func testSubmitAddsDeterministicIdempotencyKeyOnce() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configureSubmissions(responses: [(503, nil), (202, nil)])
+        PipelineURLProtocol.configureSubmissions(responses: [(202, nil)])
         let sdk = try makePipelineSDK()
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 1,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2256,12 +2316,11 @@ final class TxBuilderTests: XCTestCase {
         try await sdk.submit(envelope: envelope)
 
         let keys = PipelineURLProtocol.drainObservedIdempotencyKeys().compactMap { $0 }
-        XCTAssertEqual(keys.count, 2)
-        XCTAssertEqual(Set(keys), [envelope.hashHex])
+        XCTAssertEqual(keys, [envelope.hashHex])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testSubmitRetriesOnTransportErrorAsync() async throws {
+    func testSubmitDoesNotRetryTransportErrorAsync() async throws {
         try requireEd25519Encoder()
         let stub = StubPipelineClient()
         stub.queuedResults = [
@@ -2269,36 +2328,9 @@ final class TxBuilderTests: XCTestCase {
             .success(makeSubmitReceipt()),
         ]
         let sdk = IrohaSDK(toriiClient: stub,
-                           baseURL: URL(string: "https://example.test")!,
-                           pipelineSubmitOptions: PipelineSubmitOptions(maxRetries: 2, initialBackoffSeconds: 0, backoffMultiplier: 1))
+                           baseURL: URL(string: "https://example.test")!)
         let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
-                                      authority: AccountId.make(publicKey: keypair.publicKey),
-                                      assetDefinitionId: Self.fixtureAssetDefinition,
-                                      quantity: "1",
-                                      destination: AccountId.make(publicKey: keypair.publicKey),
-                                      description: nil,
-                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
-                                      ttlMs: 60)
-        let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
-        try await sdk.submit(envelope: envelope)
-        XCTAssertEqual(stub.submitted.count, 2)
-        XCTAssertEqual(stub.submittedModes, [.pipeline, .pipeline])
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testSubmitRetriesExhaustAndThrow() async throws {
-        try requireEd25519Encoder()
-        let stub = StubPipelineClient()
-        stub.queuedResults = [
-            .failure(ToriiClientError.transport(StubTransportError())),
-            .failure(ToriiClientError.transport(StubTransportError())),
-        ]
-        let sdk = IrohaSDK(toriiClient: stub,
-                           baseURL: URL(string: "https://example.test")!,
-                           pipelineSubmitOptions: PipelineSubmitOptions(maxRetries: 1, initialBackoffSeconds: 0, backoffMultiplier: 1))
-        let keypair = try makeFixtureKeypair()
-        let request = TransferRequest(chainId: Self.fixtureChainId,
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
                                       authority: AccountId.make(publicKey: keypair.publicKey),
                                       assetDefinitionId: Self.fixtureAssetDefinition,
                                       quantity: "1",
@@ -2309,12 +2341,84 @@ final class TxBuilderTests: XCTestCase {
         let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
         do {
             try await sdk.submit(envelope: envelope)
-            XCTFail("Expected retry exhaustion")
-        } catch {
-            // expected
+            XCTFail("Expected ambiguous transport outcome")
+        } catch is ToriiClientError {
+            // Expected: the second queued success must remain unused.
         }
-        XCTAssertEqual(stub.submitted.count, 2)
-        XCTAssertEqual(stub.submittedModes, [.pipeline, .pipeline])
+        XCTAssertEqual(stub.submitted.count, 1)
+        XCTAssertEqual(stub.submittedModes, [.pipeline])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitDoesNotRetryServerErrorAsync() async throws {
+        try requireEd25519Encoder()
+        let stub = StubPipelineClient()
+        stub.queuedResults = [
+            .failure(ToriiClientError.httpStatus(code: 503,
+                                                 message: "unavailable",
+                                                 rejectCode: nil)),
+            .success(makeSubmitReceipt()),
+        ]
+        let sdk = IrohaSDK(toriiClient: stub,
+                           baseURL: URL(string: "https://example.test")!)
+        let keypair = try makeFixtureKeypair()
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
+                                      assetDefinitionId: Self.fixtureAssetDefinition,
+                                      quantity: "1",
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
+                                      description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                      ttlMs: 60)
+        let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
+        do {
+            try await sdk.submit(envelope: envelope)
+            XCTFail("Expected server error")
+        } catch let ToriiClientError.httpStatus(code, _, _) {
+            XCTAssertEqual(code, 503)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertEqual(stub.submitted.count, 1)
+        XCTAssertEqual(stub.submittedModes, [.pipeline])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitDoesNotRetryRedirectResponsesAsync() async throws {
+        try requireEd25519Encoder()
+        let keypair = try makeFixtureKeypair()
+        let request = TransferRequest(networkId: Self.fixtureNetworkId,
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
+                                      assetDefinitionId: Self.fixtureAssetDefinition,
+                                      quantity: "1",
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
+                                      description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                      ttlMs: 60)
+
+        for code in [307, 308] {
+            let stub = StubPipelineClient()
+            stub.queuedResults = [
+                .failure(ToriiClientError.httpStatus(code: code,
+                                                     message: "redirect rejected",
+                                                     rejectCode: nil)),
+                .success(makeSubmitReceipt()),
+            ]
+            let sdk = IrohaSDK(toriiClient: stub,
+                               baseURL: URL(string: "https://example.test")!)
+            let envelope = try sdk.buildSignedTransfer(transfer: request, keypair: keypair)
+
+            do {
+                try await sdk.submit(envelope: envelope)
+                XCTFail("Expected redirect response \(code)")
+            } catch let ToriiClientError.httpStatus(actualCode, _, _) {
+                XCTAssertEqual(actualCode, code)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(stub.submitted.count, 1)
+            XCTAssertEqual(stub.submittedModes, [.pipeline])
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

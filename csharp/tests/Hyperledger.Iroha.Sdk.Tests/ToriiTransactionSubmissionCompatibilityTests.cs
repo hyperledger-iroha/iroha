@@ -9,6 +9,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// </summary>
 public sealed class ToriiTransactionSubmissionCompatibilityTests
 {
+    private const string CanonicalNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string CanonicalAccountId =
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private static readonly byte[] CanonicalPrivateKeySeed =
@@ -179,7 +180,7 @@ public sealed class ToriiTransactionSubmissionCompatibilityTests
     private static SignedTransactionEnvelope ValidSignedTransactionEnvelope()
     {
         return new TransactionBuilder(
-            "00000042",
+            NetworkId.Parse(CanonicalNetworkId),
             CanonicalAccountId,
             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
             .TransferAsset(

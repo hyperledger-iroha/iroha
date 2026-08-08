@@ -12,7 +12,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.hyperledger.iroha.android.client.transport.BoundedResponseBodyReader;
+import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -38,7 +41,7 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
 
   @Override
   public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
-    final HttpRequest httpRequest = buildRequest(request);
+    final HttpRequest httpRequest = buildRequestForClient(request);
     final long responseLimit = responseLimit(request, maximumResponseBytes);
     return httpClient
         .sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
@@ -64,7 +67,7 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
 
   @Override
   public CompletableFuture<TransportStreamResponse> openStream(final TransportRequest request) {
-    final HttpRequest httpRequest = buildRequest(request);
+    final HttpRequest httpRequest = buildRequestForClient(request);
     return httpClient
         .sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
         .thenApply(
@@ -111,13 +114,23 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
         : Math.min(executorMaximumResponseBytes, requestMaximum.longValue());
   }
 
-  private static HttpRequest buildRequest(final TransportRequest request) {
+  private HttpRequest buildRequestForClient(final TransportRequest request) {
+    if (request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        && httpClient.followRedirects() != HttpClient.Redirect.NEVER) {
+      throw new IllegalArgumentException(
+          "ONE_SHOT requests require an HttpClient with redirects disabled");
+    }
+    final byte[] requestBody = request.body();
     final HttpRequest.BodyPublisher publisher =
-        request.body().length == 0
+        requestBody.length == 0
             ? HttpRequest.BodyPublishers.noBody()
-            : HttpRequest.BodyPublishers.ofByteArray(request.body());
+            : HttpRequest.BodyPublishers.ofByteArray(requestBody);
+    final HttpRequest.BodyPublisher guardedPublisher =
+        request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+            ? new OneShotBodyPublisher(publisher)
+            : publisher;
     final HttpRequest.Builder builder =
-        HttpRequest.newBuilder(request.uri()).method(request.method(), publisher);
+        HttpRequest.newBuilder(request.uri()).method(request.method(), guardedPublisher);
     request
         .headers()
         .forEach(
@@ -133,5 +146,38 @@ final class JavaHttpExecutor implements HttpTransportExecutor, StreamingTranspor
       builder.timeout(request.timeout());
     }
     return builder.build();
+  }
+
+  /** Prevents the JDK client from re-subscribing a one-shot request body for a retry/follow-up. */
+  private static final class OneShotBodyPublisher implements HttpRequest.BodyPublisher {
+    private final HttpRequest.BodyPublisher delegate;
+    private final AtomicBoolean subscribed = new AtomicBoolean(false);
+
+    private OneShotBodyPublisher(final HttpRequest.BodyPublisher delegate) {
+      this.delegate = delegate;
+    }
+
+    @Override
+    public long contentLength() {
+      return delegate.contentLength();
+    }
+
+    @Override
+    public void subscribe(final Flow.Subscriber<? super java.nio.ByteBuffer> subscriber) {
+      if (subscribed.compareAndSet(false, true)) {
+        delegate.subscribe(subscriber);
+        return;
+      }
+      subscriber.onSubscribe(
+          new Flow.Subscription() {
+            @Override
+            public void request(final long count) {}
+
+            @Override
+            public void cancel() {}
+          });
+      subscriber.onError(
+          new IllegalStateException("ONE_SHOT HTTP request body cannot be replayed"));
+    }
   }
 }

@@ -254,9 +254,7 @@ public final class HttpClientTransportHarnessTests {
         + kind
         + "\""
         + (applied ? ",\"block_height\":7" : "")
-        + "},\"summary\":\""
-        + kind
-        + "\",\"diagnostics\":[],\"scope\":\"global\",\"resolved_from\":\""
+        + "},\"scope\":\"global\",\"resolved_from\":\""
         + (applied ? "state" : "cache")
         + "\"}";
   }
@@ -264,7 +262,8 @@ public final class HttpClientTransportHarnessTests {
   private static SignedTransaction sampleTransaction(final byte seed) {
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
-            .setChainId(String.format("%08x", seed))
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(seed))
             .setAuthority(TestAccountIds.ed25519Authority(0x23))
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})

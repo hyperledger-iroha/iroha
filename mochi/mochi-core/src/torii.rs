@@ -43,7 +43,7 @@ use iroha_data_model::{
     isi::{SetKeyValue, SetParameter},
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1},
     parameter::Parameter,
-    prelude::{AccountId, ChainId, NetworkId},
+    prelude::{AccountId, NetworkId},
     query::{QueryOutput, QueryRequest, SignedQuery},
     transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
@@ -634,7 +634,7 @@ pub struct ReadinessSmokePlan {
 
 #[derive(Debug, Clone)]
 struct ReadinessSmokeFactory {
-    chain_id: String,
+    network_id: NetworkId,
     signer: SigningAuthority,
     attempts: usize,
     nonce_offset: usize,
@@ -649,7 +649,7 @@ impl ReadinessSmokeFactory {
         (0..self.attempts)
             .map(|attempt| {
                 build_readiness_smoke_transaction_at(
-                    &self.chain_id,
+                    self.network_id,
                     &self.signer,
                     attempt + self.nonce_offset,
                     creation_time,
@@ -673,27 +673,27 @@ impl ReadinessSmokePlan {
         }
     }
 
-    /// Build a plan that updates metadata on the bundled genesis domain.
+    /// Build an exact-network plan that updates metadata on the signing account.
     ///
     /// Each attempt carries a unique nonce so retries do not collide.
     pub fn for_signer_with_attempts(
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
         attempts: usize,
     ) -> Result<Self, ReadinessSmokeBuildError> {
-        Self::for_signer_with_attempts_and_offset(chain_id, signer, attempts, 0)
+        Self::for_signer_with_attempts_and_offset(network_id, signer, attempts, 0)
     }
 
-    /// Build a plan with unique nonces derived from the provided offset.
+    /// Build an exact-network plan with unique nonces derived from the provided offset.
     pub fn for_signer_with_attempts_and_offset(
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
         attempts: usize,
         nonce_offset: usize,
     ) -> Result<Self, ReadinessSmokeBuildError> {
         let attempts = attempts.max(1);
         let factory = ReadinessSmokeFactory {
-            chain_id: chain_id.to_owned(),
+            network_id,
             signer: signer.clone(),
             attempts,
             nonce_offset,
@@ -705,12 +705,12 @@ impl ReadinessSmokePlan {
         })
     }
 
-    /// Build a single-attempt plan using the bundled development signer.
+    /// Build a single-attempt exact-network plan using the provided signer.
     pub fn for_signer(
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
     ) -> Result<Self, ReadinessSmokeBuildError> {
-        Self::for_signer_with_attempts(chain_id, signer, 1)
+        Self::for_signer_with_attempts(network_id, signer, 1)
     }
 
     /// Iterator over the hashes of the configured smoke transactions.
@@ -758,9 +758,6 @@ impl ReadinessSmokePlan {
 /// Errors that can occur while constructing a readiness smoke plan.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadinessSmokeBuildError {
-    /// The configured chain identifier is not canonical.
-    #[error("invalid readiness smoke chain id `{0}`")]
-    InvalidChainId(String),
     /// Failed to construct the smoke domain identifier.
     #[error("invalid readiness smoke domain `{0}`")]
     InvalidDomain(String),
@@ -937,7 +934,7 @@ impl ReadinessSmokeAttemptCursor {
 }
 
 fn build_lane_lifecycle_transaction(
-    chain_id: &str,
+    network_id: NetworkId,
     signer: &SigningAuthority,
     status: &LaneLifecycleStatusV1,
     plan: LaneLifecyclePlan,
@@ -959,11 +956,8 @@ fn build_lane_lifecycle_transaction(
     let custom = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
         .map_err(|err| ToriiError::Decode(format!("invalid lane incarnation binding: {err}")))?
         .into_custom_parameter();
-    let chain_id = chain_id
-        .parse::<ChainId>()
-        .map_err(|error| ToriiError::Decode(format!("invalid canonical chain id: {error}")))?;
     let mut builder = TransactionBuilder::new(
-        chain_id,
+        network_id,
         signer.account_id().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -977,15 +971,12 @@ fn build_lane_lifecycle_transaction(
 }
 
 fn build_readiness_smoke_transaction_at(
-    chain_id: &str,
+    network_id: NetworkId,
     signer: &SigningAuthority,
     attempt: usize,
     creation_time: Duration,
     ttl: Duration,
 ) -> Result<SignedTransaction, ReadinessSmokeBuildError> {
-    let chain_id = chain_id
-        .parse::<ChainId>()
-        .map_err(|_| ReadinessSmokeBuildError::InvalidChainId(chain_id.to_owned()))?;
     let now_ms = creation_time.as_millis();
     let key = "mochi_smoke"
         .parse()
@@ -994,7 +985,7 @@ fn build_readiness_smoke_transaction_at(
     let quantity = u32::try_from(attempt + 1).unwrap_or(u32::MAX);
     let authority = signer.account_id().clone();
     let mut builder = TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -3043,6 +3034,14 @@ impl ToriiClient {
         self.network_id
     }
 
+    fn require_network_id(&self) -> ToriiResult<NetworkId> {
+        self.network_id.ok_or_else(|| {
+            ToriiError::SignedQueryContext(
+                "client has no exact genesis network_id configured for signed requests".to_owned(),
+            )
+        })
+    }
+
     /// Build and sign a fresh one-shot query request for this client's network.
     pub fn sign_query(
         &self,
@@ -3052,11 +3051,7 @@ impl ToriiClient {
     ) -> ToriiResult<SignedQuery> {
         const QUERY_TTL_MS: u64 = 100_000;
 
-        let network_id = self.network_id.ok_or_else(|| {
-            ToriiError::SignedQueryContext(
-                "client has no exact genesis network_id configured".to_owned(),
-            )
-        })?;
+        let network_id = self.require_network_id()?;
         let creation_time_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| ToriiError::SignedQueryContext(error.to_string()))?
@@ -3812,15 +3807,23 @@ impl ToriiClient {
 
     /// Submit and wait for a consensus-replayed Nexus lane lifecycle transaction.
     ///
+    /// The transaction is bound to the exact network configured on this client.
+    ///
     /// The status commitment is fetched once. A stale catalog or missing
     /// `CanSetParameters` permission is surfaced as a transaction rejection and
     /// is never silently retried against a different topology.
     pub async fn apply_lane_lifecycle(
         &self,
-        chain_id: &str,
+        network_id: NetworkId,
         signer: &SigningAuthority,
         plan: LaneLifecyclePlan,
     ) -> ToriiResult<SmokeCommitSnapshot> {
+        let configured_network_id = self.require_network_id()?;
+        if network_id != configured_network_id {
+            return Err(ToriiError::SignedQueryContext(format!(
+                "lane lifecycle network id `{network_id}` does not match the configured client network id `{configured_network_id}`"
+            )));
+        }
         let status = self.fetch_lane_lifecycle_status().await?;
         if !status.nexus_enabled {
             return Err(ToriiError::Decode(
@@ -3834,7 +3837,7 @@ impl ToriiClient {
             .apply_lifecycle(&plan)
             .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle plan: {err}")))?;
         let previous_incarnation_root = status.incarnation_root;
-        let transaction = build_lane_lifecycle_transaction(chain_id, signer, &status, plan)?;
+        let transaction = build_lane_lifecycle_transaction(network_id, signer, &status, plan)?;
         let options = SmokeCommitOptions::default();
         let committed = self
             .submit_and_wait_for_commit(&transaction, options)
@@ -6176,7 +6179,6 @@ mod tests {
     };
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         block::consensus::{ExecWitness, ExecWitnessMsg},
@@ -6196,7 +6198,7 @@ mod tests {
         isi::InstructionBox,
         nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
         peer::PeerId,
-        prelude::Quantity,
+        prelude::{DomainId, Quantity},
         query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
             executor::FindExecutorDataModel, prelude::SingularQueryBox,
@@ -6209,6 +6211,7 @@ mod tests {
         StatusCode,
         header::{HeaderMap, HeaderValue},
     };
+    use tokio_tungstenite::tungstenite::http;
 
     use super::*;
 
@@ -6597,7 +6600,7 @@ mod tests {
             .header(reqwest::header::RETRY_AFTER, "3")
             .body(None)
             .expect("valid WebSocket HTTP response");
-        let error = websocket_connect_error(WebSocketError::Http(response));
+        let error = websocket_connect_error(WebSocketError::Http(Box::new(response)));
         assert!(matches!(
             error,
             ToriiError::RateLimited {
@@ -7236,13 +7239,15 @@ mod tests {
             .iter()
             .next()
             .expect("development signer available");
-        let plan = ReadinessSmokePlan::for_signer_with_attempts("mochi-smoke", signer, 2)
+        let network_id = test_network_id();
+        let plan = ReadinessSmokePlan::for_signer_with_attempts(network_id, signer, 2)
             .expect("build readiness smoke plan");
 
         assert_eq!(plan.transactions.len(), 2);
         for tx in &plan.transactions {
             tx.verify_signature()
                 .expect("checked smoke transaction signature verifies");
+            assert_eq!(tx.network_id(), Some(&network_id));
         }
         assert_ne!(
             plan.transactions[0].hash(),
@@ -7256,7 +7261,7 @@ mod tests {
         let signer = crate::compose::development_signing_authorities()
             .first()
             .expect("development signer available");
-        let plan = ReadinessSmokePlan::for_signer("mochi-smoke", signer)
+        let plan = ReadinessSmokePlan::for_signer(test_network_id(), signer)
             .expect("build readiness smoke plan");
         let iroha_data_model::transaction::Executable::Instructions(instructions) =
             plan.transactions[0].instructions()
@@ -7281,7 +7286,7 @@ mod tests {
         let signer = crate::compose::development_signing_authorities()
             .first()
             .expect("development signer available");
-        let mut plan = ReadinessSmokePlan::for_signer_with_attempts("mochi-smoke", signer, 3)
+        let mut plan = ReadinessSmokePlan::for_signer_with_attempts(test_network_id(), signer, 3)
             .expect("build readiness smoke plan");
         let old_hashes = plan.tx_hashes().collect::<Vec<_>>();
         let creation_time = plan.transactions[0].creation_time();
@@ -7313,7 +7318,7 @@ mod tests {
         let signer = crate::compose::development_signing_authorities()
             .first()
             .expect("development signer available");
-        let generated = ReadinessSmokePlan::for_signer("mochi-smoke", signer)
+        let generated = ReadinessSmokePlan::for_signer(test_network_id(), signer)
             .expect("build readiness smoke plan");
         let transaction = generated.transactions[0].clone();
         let hash = transaction.hash();
@@ -7343,9 +7348,7 @@ mod tests {
     }
 
     fn sample_block() -> SignedBlock {
-        let chain: ChainId = "mochi-block-stream".parse().expect("chain id");
-        let mut builder = TransactionBuilder::new(
-            chain.clone(),
+        let mut builder = TransactionBuilder::new_genesis(
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -9180,9 +9183,8 @@ mod tests {
         };
 
         let keypair = KeyPair::random();
-        let chain: ChainId = "mochi-test".parse().expect("chain id");
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9816,12 +9818,13 @@ mod tests {
     #[test]
     fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
         let status = lifecycle_status(true);
+        let network_id = test_network_id();
         let alice = crate::compose::development_signing_authorities()
             .iter()
             .find(|signer| signer.allows_permission(InstructionPermission::SetParameters))
             .expect("development CanSetParameters signer");
         let transaction = build_lane_lifecycle_transaction(
-            "mochi-test",
+            network_id,
             alice,
             &status,
             LaneLifecyclePlan {
@@ -9833,6 +9836,7 @@ mod tests {
         transaction
             .verify_signature()
             .expect("lifecycle signature verifies");
+        assert_eq!(transaction.network_id(), Some(&network_id));
         let iroha_data_model::transaction::Executable::Instructions(instructions) =
             transaction.instructions()
         else {
@@ -9855,7 +9859,7 @@ mod tests {
             .find(|signer| !signer.allows_permission(InstructionPermission::SetParameters))
             .expect("restricted development signer");
         let error = build_lane_lifecycle_transaction(
-            "mochi-test",
+            test_network_id(),
             bob,
             &status,
             LaneLifecyclePlan::default(),
@@ -9872,13 +9876,35 @@ mod tests {
             .first()
             .expect("development signer");
         let error = build_lane_lifecycle_transaction(
-            "mochi-test",
+            test_network_id(),
             signer,
             &status,
             LaneLifecyclePlan::default(),
         )
         .expect_err("forged status hash must fail closed");
         assert!(error.to_string().contains("catalog hash mismatch"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn lane_lifecycle_rejects_network_id_different_from_client() {
+        let configured_network_id = test_network_id();
+        let supplied_network_id = NetworkId::from_genesis_hash(HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::prehashed([0x42; Hash::LENGTH]),
+        ));
+        let client = ToriiClient::new_for_network("http://127.0.0.1:9", configured_network_id)
+            .expect("client");
+        let signer = crate::compose::development_signing_authorities()
+            .first()
+            .expect("development signer");
+
+        let error = client
+            .apply_lane_lifecycle(supplied_network_id, signer, LaneLifecyclePlan::default())
+            .await
+            .expect_err("mismatched exact network identity must fail before I/O");
+
+        assert!(matches!(error, ToriiError::SignedQueryContext(_)));
     }
 
     #[tokio::test(flavor = "current_thread")]

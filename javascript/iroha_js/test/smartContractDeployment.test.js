@@ -13,6 +13,7 @@ import {
   buildUploadSmartContractCodeChunkInstruction,
 } from "../src/instructionBuilders.js";
 import { computeIvmArtifactHashes } from "../src/ivmArtifact.js";
+import { NetworkId } from "../src/networkId.js";
 import {
   noritoDecodeInstruction,
   noritoEncodeInstruction,
@@ -46,6 +47,9 @@ const PRIVATE_KEY = Buffer.from(
   "hex",
 );
 const PUBLIC_KEY = Buffer.from(ed25519.getPublicKey(PRIVATE_KEY));
+const NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const AUTHORITY = AccountAddress.fromAccount({
   algorithm: "ed25519",
   publicKey: PUBLIC_KEY,
@@ -213,7 +217,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
     codeHash: codeHashHex,
   });
   const payloadBytes = buildBrowserInstructionTransactionPayload({
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     chainDiscriminant: 753,
     instructions: [instruction],
@@ -277,6 +281,7 @@ test("browser deployment retains the existing key locally and commits every step
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
+    networkId: NETWORK_ID,
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
@@ -363,6 +368,7 @@ test("browser deployment fails closed without authentic shared artifact admissio
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
+    networkId: NETWORK_ID,
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
@@ -437,6 +443,7 @@ test("browser deployment stops without exact persisted Applied finality and auth
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
+    networkId: NETWORK_ID,
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
@@ -499,6 +506,7 @@ test("deployment rejects incompatible node bytes and invalid manifest provenance
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
+    networkId: NETWORK_ID,
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
@@ -552,6 +560,7 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
     manifest: fixture.manifest,
     compilerCodeHash: fixture.codeHashHex,
     compilerAbiHash: ABI_HASH,
+    networkId: NETWORK_ID,
     chainId: "pk3",
     chainDiscriminant: 753,
     authority: AUTHORITY,
@@ -573,6 +582,33 @@ test("deployment rejects non-Rust aliases and state/address disagreement before 
       throw new Error("submission must not be reached");
     },
   };
+
+  for (const field of ["chain", "chain_id"]) {
+    await assert.rejects(
+      deploySmartContractBrowser({
+        ...base,
+        [field]: "pk3",
+        contractAlias: "demo::universal",
+        readDeploymentState: () => deploymentState(),
+      }),
+      new RegExp(`deployment options\\.${field} is unsupported`, "u"),
+    );
+  }
+  for (const networkId of [
+    NETWORK_ID.literal,
+    NETWORK_ID.toBytes(),
+    { literal: NETWORK_ID.literal, toBytes: () => NETWORK_ID.toBytes() },
+  ]) {
+    await assert.rejects(
+      deploySmartContractBrowser({
+        ...base,
+        networkId,
+        contractAlias: "demo::universal",
+        readDeploymentState: () => deploymentState(),
+      }),
+      /deployment options\.networkId must be a NetworkId/u,
+    );
+  }
 
   await assert.rejects(
     deploySmartContractBrowser({

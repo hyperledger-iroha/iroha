@@ -24,7 +24,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     query::sorafs::prelude::{FindSorafsModerationEvents, FindSorafsModerationSnapshot},
     sorafs::moderation_ledger::{
@@ -34,8 +34,8 @@ use iroha_data_model::{
         is_canonical_moderation_identifier_v1,
     },
     transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
-        TransactionPayload,
+        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionDomain,
+        TransactionEntrypoint, TransactionPayload,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -384,7 +384,7 @@ pub enum ModerationStrictIngressFailureV1 {
 ///
 /// The orchestrator has already persisted the exact operation-to-transaction
 /// binding before `submit_exact`. Ingress must run the canonical Torii
-/// signature, chain, fee, queue-plan, and durable-admission checks without
+/// signature, network, fee, queue-plan, and durable-admission checks without
 /// replacing that transaction. Distinct envelopes signed by racing replicas
 /// are resolved by native ledger CAS semantics and finalized reconciliation;
 /// no process-local operation map is authoritative.
@@ -458,6 +458,7 @@ impl<P: ModerationRuntimeProviderV1 + ?Sized> core::fmt::Debug
 /// Fail-closed bridge from moderation operations to signed Torii ingress.
 pub struct ModerationTransactionSubmitterAdapterV1 {
     chain_id: ChainId,
+    network_id: NetworkId,
     signer: QualifiedModerationRuntimeProviderV1<dyn ModerationSignedTransactionSignerV1>,
     fee_quoter: Arc<dyn ModerationFeeQuoterV1>,
     ingress: QualifiedModerationRuntimeProviderV1<dyn ModerationStrictTransactionIngressV1>,
@@ -468,6 +469,7 @@ impl core::fmt::Debug for ModerationTransactionSubmitterAdapterV1 {
         formatter
             .debug_struct("ModerationTransactionSubmitterAdapterV1")
             .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("signer", &"<runtime-only>")
             .field("fee_quoter", &"<finalized-policy>")
             .field("ingress", &"<durable-strict-ingress>")
@@ -484,6 +486,7 @@ impl ModerationTransactionSubmitterAdapterV1 {
     /// substituted, stale, or differs from its independent exact binding.
     pub fn try_new(
         chain_id: ChainId,
+        network_id: NetworkId,
         transaction_signer_handle: &str,
         expected_transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
         signer: Arc<dyn ModerationSignedTransactionSignerV1>,
@@ -504,6 +507,7 @@ impl ModerationTransactionSubmitterAdapterV1 {
         )?;
         Ok(Self {
             chain_id,
+            network_id,
             signer,
             fee_quoter,
             ingress,
@@ -524,13 +528,17 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         self.chain_id.clone()
     }
 
+    fn network_id(&self) -> NetworkId {
+        self.network_id
+    }
+
     fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
     ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1> {
         validate_moderation_transaction_request(request)?;
         let mut builder = TransactionBuilder::new(
-            self.chain_id.clone(),
+            self.network_id,
             request.authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -539,7 +547,7 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         let mut payload = builder
             .into_payload()
             .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
-        validate_unsigned_moderation_payload(&self.chain_id, request, &payload)?;
+        validate_unsigned_moderation_payload(&self.chain_id, &self.network_id, request, &payload)?;
         payload.fee_payment = self
             .fee_quoter
             .quote(&payload)
@@ -551,7 +559,7 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
                     ModerationSubmissionFailureV1::PermanentRejection
                 }
             })?;
-        validate_unsigned_moderation_payload(&self.chain_id, request, &payload)?;
+        validate_unsigned_moderation_payload(&self.chain_id, &self.network_id, request, &payload)?;
         let expected_payload = payload.clone();
         self.signer
             .revalidate()
@@ -564,7 +572,12 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
         if transaction.payload() != &expected_payload {
             return Err(ModerationSubmissionFailureV1::PermanentRejection);
         }
-        validate_signed_moderation_transaction(&self.chain_id, request, &transaction)?;
+        validate_signed_moderation_transaction(
+            &self.chain_id,
+            &self.network_id,
+            request,
+            &transaction,
+        )?;
         ModerationSignedTransactionV1::from_signed_transaction(request, &transaction)
     }
 
@@ -575,7 +588,12 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
     ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
         validate_moderation_transaction_request(request)?;
         let transaction = signed.decode_for_request(request)?;
-        validate_signed_moderation_transaction(&self.chain_id, request, &transaction)?;
+        validate_signed_moderation_transaction(
+            &self.chain_id,
+            &self.network_id,
+            request,
+            &transaction,
+        )?;
         let expected_transaction_id = signed.transaction_id;
         self.ingress
             .revalidate()
@@ -630,6 +648,7 @@ fn validate_moderation_transaction_request(
 
 fn validate_unsigned_moderation_payload(
     chain_id: &ChainId,
+    network_id: &NetworkId,
     request: &ModerationTransactionRequestV1,
     payload: &TransactionPayload,
 ) -> Result<(), ModerationSubmissionFailureV1> {
@@ -640,7 +659,8 @@ fn validate_unsigned_moderation_payload(
     if canonical.is_empty()
         || canonical.len() > MODERATION_TRANSACTION_PAYLOAD_MAX_BYTES_V1
         || request.chain_id != *chain_id
-        || payload.chain != *chain_id
+        || request.network_id != *network_id
+        || payload.domain != TransactionDomain::Network(*network_id)
         || payload.authority != request.authority
         || payload.creation_time_ms == 0
         || payload.time_to_live_ms.map(core::num::NonZeroU64::get) != Some(expected_ttl_ms)
@@ -663,12 +683,14 @@ fn validate_unsigned_moderation_payload(
 
 fn validate_signed_moderation_transaction(
     chain_id: &ChainId,
+    network_id: &NetworkId,
     request: &ModerationTransactionRequestV1,
     transaction: &SignedTransaction,
 ) -> Result<(), ModerationSubmissionFailureV1> {
     if transaction.verify_signature().is_err()
         || request.chain_id != *chain_id
-        || transaction.chain() != chain_id
+        || request.network_id != *network_id
+        || transaction.network_id() != Some(network_id)
         || transaction.authority() != &request.authority
     {
         return Err(ModerationSubmissionFailureV1::PermanentRejection);
@@ -686,7 +708,6 @@ fn validate_signed_moderation_transaction(
 
 /// Canonical Torii fee quoter for the exact moderation payload.
 pub(crate) struct ToriiModerationFeeQuoterV1 {
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<State>,
 }
@@ -695,7 +716,6 @@ impl core::fmt::Debug for ToriiModerationFeeQuoterV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("ToriiModerationFeeQuoterV1")
-            .field("chain_id", &self.chain_id)
             .field("queue", &"<canonical-routing>")
             .field("state", &"<finalized-fee-view>")
             .finish()
@@ -704,12 +724,8 @@ impl core::fmt::Debug for ToriiModerationFeeQuoterV1 {
 
 impl ToriiModerationFeeQuoterV1 {
     #[must_use]
-    pub(crate) fn new(chain_id: Arc<ChainId>, queue: Arc<Queue>, state: Arc<State>) -> Self {
-        Self {
-            chain_id,
-            queue,
-            state,
-        }
+    pub(crate) fn new(queue: Arc<Queue>, state: Arc<State>) -> Self {
+        Self { queue, state }
     }
 }
 
@@ -719,7 +735,7 @@ impl ModerationFeeQuoterV1 for ToriiModerationFeeQuoterV1 {
         payload: &TransactionPayload,
     ) -> Result<FeePaymentIntent, ModerationFeeQuoteFailureV1> {
         crate::quote_internal_fee_payment_from_parts(
-            self.chain_id.as_ref(),
+            self.state.network_id_ref(),
             self.queue.as_ref(),
             self.state.as_ref(),
             payload,
@@ -730,7 +746,6 @@ impl ModerationFeeQuoterV1 for ToriiModerationFeeQuoterV1 {
 
 /// Canonical local strict-durable ingress and exact finalized transaction observer.
 pub(crate) struct ToriiModerationStrictTransactionIngressV1 {
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<State>,
     telemetry: crate::routing::MaybeTelemetry,
@@ -749,7 +764,6 @@ impl core::fmt::Debug for ToriiModerationStrictTransactionIngressV1 {
                 "provider_qualification",
                 &torii_moderation_strict_ingress_qualification_v1(),
             )
-            .field("chain_id", &self.chain_id)
             .field("queue", &"<strict-durable>")
             .field("state", &"<authoritative>")
             .field("pipeline_status_cache", &"<positive-hints-only>")
@@ -760,14 +774,12 @@ impl core::fmt::Debug for ToriiModerationStrictTransactionIngressV1 {
 impl ToriiModerationStrictTransactionIngressV1 {
     #[must_use]
     pub(crate) fn new(
-        chain_id: Arc<ChainId>,
         queue: Arc<Queue>,
         state: Arc<State>,
         telemetry: crate::routing::MaybeTelemetry,
         pipeline_status_cache: Arc<crate::PipelineStatusCache>,
     ) -> Self {
         Self {
-            chain_id,
             queue,
             state,
             telemetry,
@@ -836,7 +848,8 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         transaction: SignedTransaction,
     ) -> Result<ModerationStrictIngressReceiptV1, ModerationStrictIngressFailureV1> {
         if request.operation_id == [0; 32]
-            || transaction.chain() != self.chain_id.as_ref()
+            || request.network_id != *self.state.network_id_ref()
+            || transaction.network_id() != Some(self.state.network_id_ref())
             || *transaction.hash().as_ref() == [0; 32]
         {
             return Err(ModerationStrictIngressFailureV1::PermanentRejection);
@@ -844,7 +857,6 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         let observed_finalized_height = self.validate_retained_baseline(request)?;
         let transaction_id = *transaction.hash().as_ref();
         let accepted = crate::routing::accept_transaction_for_ingress(
-            Arc::clone(&self.chain_id),
             Arc::clone(&self.state),
             transaction,
             &self.telemetry,
@@ -1665,6 +1677,14 @@ mod tests {
     const TEST_NOTIFICATION_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
 
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([seed; 32]),
+            ),
+        )
+    }
+
     #[test]
     fn local_strict_ingress_identity_is_implementation_derived() {
         assert_eq!(
@@ -1863,6 +1883,7 @@ mod tests {
     fn transaction_request(authority: AccountId) -> ModerationTransactionRequestV1 {
         ModerationTransactionRequestV1::new(
             ChainId::from(TEST_CHAIN),
+            test_network_id(0xA5),
             1,
             authority,
             action(),
@@ -1978,7 +1999,7 @@ mod tests {
                     .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
                     .map_err(|_| ModerationSigningFailureV1::Refused),
                 FixedSignerBehavior::SubstituteChain => {
-                    payload.chain = ChainId::from("substituted-chain");
+                    payload.domain = TransactionDomain::Network(test_network_id(0xEE));
                     TransactionBuilder::from_payload(payload)
                         .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
                         .map_err(|_| ModerationSigningFailureV1::Refused)
@@ -2025,6 +2046,7 @@ mod tests {
     ) -> ModerationTransactionSubmitterAdapterV1 {
         ModerationTransactionSubmitterAdapterV1::try_new(
             ChainId::from(TEST_CHAIN),
+            test_network_id(0xA5),
             TEST_SIGNER_HANDLE,
             TEST_SIGNER_QUALIFICATION,
             signer,
@@ -2197,6 +2219,7 @@ mod tests {
 
         let error = ModerationTransactionSubmitterAdapterV1::try_new(
             ChainId::from(TEST_CHAIN),
+            test_network_id(0xA5),
             TEST_SIGNER_HANDLE,
             TEST_SIGNER_QUALIFICATION,
             Arc::new(signer),

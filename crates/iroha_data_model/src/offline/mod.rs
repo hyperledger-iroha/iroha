@@ -28,7 +28,7 @@ use sha2::{Digest as _, Sha256};
 
 pub use self::model::*;
 use crate::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus_v2::{
@@ -1265,8 +1265,8 @@ mod model {
     pub struct KagemushaTopUpFinalityHeightContextV2 {
         /// Typed identifier of the complete persisted height context.
         pub context_id: HeightContextId,
-        /// Chain identifier committed by the complete height context.
-        pub chain_id: ChainId,
+        /// Exact genesis-derived network identity committed by the complete height context.
+        pub network_id: NetworkId,
         /// Live Sumeragi-v2 wire protocol revision.
         pub protocol_version: u16,
         /// Height governed by the projected context.
@@ -1371,8 +1371,10 @@ mod model {
     pub struct KagemushaTopUpFinalityRosterArtifactV2 {
         /// Artifact layout version.
         pub version: u16,
-        /// Chain whose vote domain is trusted.
+        /// Chain that scopes the Kagemusha cash state authenticated by this artifact.
         pub chain_id: ChainId,
+        /// Exact genesis-derived network whose consensus votes are trusted.
+        pub network_id: NetworkId,
         /// Human-readable roster generation selected by the manifest descriptor.
         pub artifact_generation: String,
         /// Strictly ordered, non-overlapping validator windows.
@@ -7316,7 +7318,6 @@ impl KagemushaTopUpFinalityHeightContextV2 {
         });
         if self.protocol_version != PROTOCOL_VERSION
             || self.height == 0
-            || !is_kagemusha_chain_id(&self.chain_id)
             || self.epoch_end_height < self.height
             || next_roster_too_large
             || parent_signers_too_large
@@ -7349,7 +7350,7 @@ impl KagemushaTopUpFinalityHeightContextV2 {
             });
         }
         let context = HeightContext {
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
@@ -10804,6 +10805,12 @@ impl KagemushaRecursiveSpendInitRequestV4 {
             || self.topup_finality_proof.commit_qc.height_context.height
                 != self.topup_anchor.finalized_height
             || self.topup_finality_roster_artifact.chain_id != self.topup_anchor.chain_id
+            || self.topup_finality_roster_artifact.network_id
+                != self
+                    .topup_finality_proof
+                    .commit_qc
+                    .height_context
+                    .network_id
             || self.topup_finality_roster_artifact.artifact_generation
                 != self.artifact_binding.generation
         {
@@ -12108,7 +12115,7 @@ impl KagemushaRecursiveSpendTopUpProvenanceV4 {
                 || anchor.asset_scale != statement.asset_scale
                 || anchor.artifact_binding != statement.artifact_binding
                 || block_height.is_some_and(|height| anchor.finalized_height > height)
-                || height_context.chain_id != statement.chain_id
+                || height_context.network_id != self.topup_finality_roster_artifact.network_id
                 || !finality_height_matches_anchor
                 || height_context.mode != window.consensus_mode
             {
@@ -12243,7 +12250,10 @@ mod kagemusha_v4_topup_provenance_tests {
 
     use super::*;
     use crate::{
-        block::consensus_v2::{BlockSubject, ConsensusRound, ExecutionCommitment},
+        block::{
+            BlockHeader,
+            consensus_v2::{BlockSubject, ConsensusRound, ExecutionCommitment},
+        },
         domain::DomainId,
         peer::PeerId,
     };
@@ -12267,8 +12277,15 @@ mod kagemusha_v4_topup_provenance_tests {
         .expect("test execution commitment")
     }
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([
+            seed, 0xF0,
+        ])))
+    }
+
     fn evidence(
         chain_id: &ChainId,
+        network_id: NetworkId,
         asset: &AssetDefinitionId,
         binding: &KagemushaRecursiveSpendArtifactBindingV4,
         seed: u8,
@@ -12329,7 +12346,7 @@ mod kagemusha_v4_topup_provenance_tests {
             commit_qc: KagemushaTopUpFinalityCompactQcV2 {
                 height_context: KagemushaTopUpFinalityHeightContextV2 {
                     context_id,
-                    chain_id: chain_id.clone(),
+                    network_id,
                     protocol_version: PROTOCOL_VERSION,
                     height: anchor.finalized_height,
                     epoch: 0,
@@ -12366,6 +12383,7 @@ mod kagemusha_v4_topup_provenance_tests {
 
     fn fixture_with_seeds(seeds: &[u8]) -> Fixture {
         let chain_id = ChainId::from("kagemusha-provenance-test-chain");
+        let network_id = network_id(0x51);
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("test domain"),
             "rose".parse().expect("test asset name"),
@@ -12380,6 +12398,7 @@ mod kagemusha_v4_topup_provenance_tests {
         let roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             chain_id: chain_id.clone(),
+            network_id,
             artifact_generation: binding.generation.clone(),
             windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
                 activates_at_height: 1,
@@ -12394,7 +12413,7 @@ mod kagemusha_v4_topup_provenance_tests {
         };
         let mut evidence = seeds
             .iter()
-            .map(|seed| evidence(&chain_id, &asset, &binding, *seed))
+            .map(|seed| evidence(&chain_id, network_id, &asset, &binding, *seed))
             .collect::<Vec<_>>();
         evidence.sort_unstable_by_key(|item| item.topup_anchor.compact_ref().expect("anchor ref"));
         let topup_anchor_refs = evidence
@@ -12546,6 +12565,10 @@ mod kagemusha_v4_topup_provenance_tests {
             .topup_finality_roster_artifact
             .artifact_generation = "other-release".to_owned();
         rejects(&fixture, &wrong_generation, 50);
+
+        let mut wrong_network = fixture.provenance.clone();
+        wrong_network.topup_finality_roster_artifact.network_id = network_id(0x52);
+        rejects(&fixture, &wrong_network, 50);
 
         let mut wrong_window = fixture.provenance.clone();
         wrong_window.topup_finality_roster_artifact.windows[0].withdraws_at_height = 42;

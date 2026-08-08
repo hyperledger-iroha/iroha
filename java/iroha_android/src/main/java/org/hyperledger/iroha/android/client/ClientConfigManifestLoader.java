@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BiConsumer;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 
 /**
@@ -69,13 +70,20 @@ public final class ClientConfigManifestLoader {
       final Customizer customizer) {
     final Map<String, Object> root = parseRoot(payload);
     rejectNonAuthoritativePrivacyPolicyFields(root, "manifest");
+    rejectLegacyTransactionIdentityFields(root);
     final ClientConfig.Builder builder = ClientConfig.builder();
-    final String chainId = optionalString(root.get("chain_id"), "chain_id");
-    if (chainId != null) {
-      if (chainId.isEmpty()) {
-        throw new IllegalStateException("chain_id must be a non-empty string");
+    final String networkId = optionalString(root.get("network_id"), "network_id");
+    if (networkId != null) {
+      if (networkId.isEmpty()) {
+        throw new IllegalStateException("network_id must be a non-empty string");
       }
-      builder.setLocalSigningContext(new LocalSigningContext(chainId));
+      try {
+        builder.setLocalSigningContext(
+            new LocalSigningContext(NetworkId.parse(networkId)));
+      } catch (final IllegalArgumentException ex) {
+        throw new IllegalStateException(
+            "network_id must be an exact canonical network identity", ex);
+      }
     }
     applyTorii(manifestPath, builder, root);
     applyRetry(builder, root);
@@ -88,6 +96,18 @@ public final class ClientConfigManifestLoader {
     }
     final ClientConfig config = builder.build();
     return new LoadedClientConfig(config, context, Instant.now());
+  }
+
+  private static void rejectLegacyTransactionIdentityFields(
+      final Map<String, Object> root) {
+    for (final String field : Arrays.asList("chain", "chainId", "chain_id")) {
+      if (root.containsKey(field)) {
+        throw new IllegalStateException(
+            "client config manifest contains retired transaction identity field `"
+                + field
+                + "`");
+      }
+    }
   }
 
   private static Map<String, Object> parseRoot(final byte[] payload) {

@@ -5,6 +5,7 @@ public enum ExecutableBatchInputError: Error, LocalizedError, Equatable, Sendabl
     case emptyBatch
     case invalidInstructionWireName
     case invalidInstructionFrame
+    case privacyExact12CapabilityAdmissionRequired
     case invalidContractAddress
     case invalidExpectedCodeHashLength(Int)
     case invalidExpectedCodeHashMarker
@@ -22,6 +23,8 @@ public enum ExecutableBatchInputError: Error, LocalizedError, Equatable, Sendabl
             return "Instruction wire name must be exact non-empty text."
         case .invalidInstructionFrame:
             return "Instruction payload must contain a valid Norito frame."
+        case .privacyExact12CapabilityAdmissionRequired:
+            return "SubmitPrivacyProofV1 must be constructed with an Exact12 capability admission."
         case .invalidContractAddress:
             return "Contract address must be a canonical lowercase V1 Bech32m literal."
         case let .invalidExpectedCodeHashLength(length):
@@ -46,21 +49,76 @@ public enum ExecutableBatchInputError: Error, LocalizedError, Equatable, Sendabl
 public struct TransactionInstructionFrame: Equatable, Sendable {
     public let wireName: String
     public let framedPayload: Data
+    private let privacyProtocolId: PrivacyProtocolIdV1?
+    private let privacyAdmission: PrivacyExact12CapabilityTupleAdmissionV1?
 
     public init(wireName: String, framedPayload: Data) throws {
         guard !wireName.isEmpty,
               wireName == wireName.trimmingCharacters(in: .whitespacesAndNewlines) else {
             throw ExecutableBatchInputError.invalidInstructionWireName
         }
+        guard wireName != PrivacyExact12FixtureCodecV1.submitProofWireId else {
+            throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
+        }
         guard noritoDecodeFrame(framedPayload) != nil else {
             throw ExecutableBatchInputError.invalidInstructionFrame
         }
         self.wireName = wireName
-        self.framedPayload = framedPayload
+        self.framedPayload = Data(framedPayload)
+        privacyProtocolId = nil
+        privacyAdmission = nil
+    }
+
+    /// Construct the sole retained privacy instruction only after fresh
+    /// committed/native Exact12 tuple admission. The token is revalidated here;
+    /// merely retaining a token from an older binary is insufficient.
+    public static func privacyExact12SubmitProof(
+        protocolId: PrivacyProtocolIdV1,
+        framedPayload: Data,
+        admission: PrivacyExact12CapabilityTupleAdmissionV1
+    ) throws -> TransactionInstructionFrame {
+        try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
+            admission,
+            protocolId: protocolId,
+            submitProofInstructionNorito: framedPayload
+        )
+        return TransactionInstructionFrame(
+            admittedPrivacyWireName: PrivacyExact12FixtureCodecV1.submitProofWireId,
+            framedPayload: framedPayload,
+            protocolId: protocolId,
+            admission: admission
+        )
+    }
+
+    private init(
+        admittedPrivacyWireName: String,
+        framedPayload: Data,
+        protocolId: PrivacyProtocolIdV1,
+        admission: PrivacyExact12CapabilityTupleAdmissionV1
+    ) {
+        wireName = admittedPrivacyWireName
+        self.framedPayload = Data(framedPayload)
+        privacyProtocolId = protocolId
+        privacyAdmission = admission
     }
 
     /// Encode the dynamic `InstructionBox` pair under the V1 `COMPACT_LEN` layout.
-    func compactInstructionBoxPayload() -> Data {
+    func compactInstructionBoxPayload() throws -> Data {
+        if wireName == PrivacyExact12FixtureCodecV1.submitProofWireId {
+            guard let privacyProtocolId, let privacyAdmission else {
+                throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
+            }
+            // Re-run the ABI22 catalog getter+validator and the exact manifest/
+            // envelope tuple comparison at final encoding. A previously issued
+            // token cannot turn a missing or stale native artifact into authority.
+            try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
+                privacyAdmission,
+                protocolId: privacyProtocolId,
+                submitProofInstructionNorito: framedPayload
+            )
+        } else if privacyProtocolId != nil || privacyAdmission != nil {
+            throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
+        }
         var framedBytes = CompactNoritoWriter()
         // `COMPACT_LEN` changes field prefixes, not the `Vec<u8>` element count.
         framedBytes.writeUInt64LE(UInt64(framedPayload.count))
@@ -70,6 +128,16 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
         instruction.writeField(CompactNorito.encodeString(wireName))
         instruction.writeField(framedBytes.data)
         return instruction.data
+    }
+
+    public static func == (
+        lhs: TransactionInstructionFrame,
+        rhs: TransactionInstructionFrame
+    ) -> Bool {
+        lhs.wireName == rhs.wireName
+            && lhs.framedPayload == rhs.framedPayload
+            && lhs.privacyProtocolId == rhs.privacyProtocolId
+            && (lhs.privacyAdmission != nil) == (rhs.privacyAdmission != nil)
     }
 }
 
@@ -117,7 +185,7 @@ public enum TransactionBatchEntry: Equatable, Sendable {
 }
 
 public struct TransferRequest: Sendable {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let assetDefinitionId: String // e.g., "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
     public let quantity: String         // decimal string
@@ -127,7 +195,7 @@ public struct TransferRequest: Sendable {
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 assetDefinitionId: String,
                 quantity: String,
@@ -136,7 +204,7 @@ public struct TransferRequest: Sendable {
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
         self.quantity = quantity
@@ -149,7 +217,7 @@ public struct TransferRequest: Sendable {
 }
 
 public struct MintRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let assetDefinitionId: String
     public let quantity: String
@@ -158,7 +226,7 @@ public struct MintRequest {
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 assetDefinitionId: String,
                 quantity: String,
@@ -166,7 +234,7 @@ public struct MintRequest {
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
         self.quantity = quantity
@@ -178,7 +246,7 @@ public struct MintRequest {
 }
 
 public struct BurnRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let assetDefinitionId: String
     public let quantity: String
@@ -187,7 +255,7 @@ public struct BurnRequest {
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 assetDefinitionId: String,
                 quantity: String,
@@ -195,7 +263,7 @@ public struct BurnRequest {
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000,
                 nonce: UInt32? = nil) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
         self.quantity = quantity
@@ -245,7 +313,7 @@ public enum MetadataTarget: Sendable {
 }
 
 public struct SetMetadataRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let target: MetadataTarget
     public let key: String
@@ -253,14 +321,14 @@ public struct SetMetadataRequest {
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 target: MetadataTarget,
                 key: String,
                 value: NoritoJSON,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.target = target
         self.key = key
@@ -269,7 +337,7 @@ public struct SetMetadataRequest {
         self.ttlMs = ttlMs
     }
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 target: MetadataTarget,
                 key: String,
@@ -277,7 +345,7 @@ public struct SetMetadataRequest {
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) throws {
         let encoded = try NoritoJSON(value)
-        self.init(chainId: chainId,
+        self.init(networkId: networkId,
                   authority: authority,
                   target: target,
                   key: key,
@@ -288,20 +356,20 @@ public struct SetMetadataRequest {
 }
 
 public struct RemoveMetadataRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let target: MetadataTarget
     public let key: String
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 target: MetadataTarget,
                 key: String,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.target = target
         self.key = key
@@ -311,20 +379,20 @@ public struct RemoveMetadataRequest {
 }
 
 public struct MultisigRegisterRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let accountId: String
     public let spec: MultisigSpecPayload
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 accountId: String,
                 spec: MultisigSpecPayload,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.accountId = accountId
         self.spec = spec
@@ -334,20 +402,20 @@ public struct MultisigRegisterRequest {
 }
 
 public struct ClaimIdentifierRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let accountId: String
     public let receipt: ToriiIdentifierResolutionReceipt
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 accountId: String,
                 receipt: ToriiIdentifierResolutionReceipt,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.accountId = accountId
         self.receipt = receipt
@@ -358,7 +426,7 @@ public struct ClaimIdentifierRequest {
 
 /// Inputs for the atomic nonce- and alias-CAS guarded contract deployment instruction.
 public struct CommitContractDeploymentRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let expectedDeployNonce: UInt64
     public let contractAddress: String
@@ -369,13 +437,13 @@ public struct CommitContractDeploymentRequest {
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String, authority: String, expectedDeployNonce: UInt64,
+    public init(networkId: NetworkId, authority: String, expectedDeployNonce: UInt64,
                 contractAddress: String, codeHashHex: String, contractAlias: String,
                 leaseExpiryMs: UInt64? = nil,
                 expectedPreviousContractAddress: String? = nil,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.expectedDeployNonce = expectedDeployNonce
         self.contractAddress = contractAddress
@@ -447,7 +515,7 @@ public enum RegisterZkAssetRequestError: Error, LocalizedError, Equatable, Senda
 }
 
 public struct RegisterZkAssetRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let assetDefinitionId: String
     public let unshieldVerifyingKey: VerifyingKeyIdReference?
@@ -455,7 +523,7 @@ public struct RegisterZkAssetRequest {
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 assetDefinitionId: String,
                 unshieldVerifyingKey: VerifyingKeyIdReference? = nil,
@@ -465,7 +533,7 @@ public struct RegisterZkAssetRequest {
         guard shieldVerifyingKey == nil || unshieldVerifyingKey != nil else {
             throw RegisterZkAssetRequestError.shieldVerifierRequiresUnshieldVerifier
         }
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
         self.unshieldVerifyingKey = unshieldVerifyingKey
@@ -500,7 +568,7 @@ public enum BallotDirection: UInt8, Sendable {
 }
 
 public struct ProposeDeployContractRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let contractAddress: String
     public let codeHashHex: String
@@ -511,7 +579,7 @@ public struct ProposeDeployContractRequest {
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 contractAddress: String,
                 codeHashHex: String,
@@ -524,7 +592,7 @@ public struct ProposeDeployContractRequest {
         guard abiVersion == "1" else {
             throw TransactionInputError.invalidGovernanceAbiVersion(abiVersion)
         }
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.contractAddress = contractAddress
         self.codeHashHex = codeHashHex
@@ -538,7 +606,7 @@ public struct ProposeDeployContractRequest {
 }
 
 public struct CastPlainBallotRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let referendumId: String
     public let owner: String
@@ -548,7 +616,7 @@ public struct CastPlainBallotRequest {
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 referendumId: String,
                 owner: String,
@@ -557,7 +625,7 @@ public struct CastPlainBallotRequest {
                 direction: BallotDirection,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.referendumId = referendumId
         self.owner = owner
@@ -570,7 +638,7 @@ public struct CastPlainBallotRequest {
 }
 
 public struct CastZkBallotRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let electionId: String
     public let proofB64: String
@@ -578,14 +646,14 @@ public struct CastZkBallotRequest {
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 electionId: String,
                 proofB64: String,
                 publicInputs: GovernanceZkBallotPublicInputs = .init(),
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.electionId = electionId
         self.proofB64 = proofB64
@@ -596,7 +664,7 @@ public struct CastZkBallotRequest {
 }
 
 public struct EnactReferendumRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let referendumIdHex: String
     public let preimageHashHex: String
@@ -604,14 +672,14 @@ public struct EnactReferendumRequest {
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 referendumIdHex: String,
                 preimageHashHex: String,
                 window: GovernanceWindow,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.referendumIdHex = referendumIdHex
         self.preimageHashHex = preimageHashHex
@@ -622,20 +690,20 @@ public struct EnactReferendumRequest {
 }
 
 public struct FinalizeReferendumRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let referendumId: String
     public let proposalIdHex: String
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 referendumId: String,
                 proposalIdHex: String,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.referendumId = referendumId
         self.proposalIdHex = proposalIdHex
@@ -645,20 +713,20 @@ public struct FinalizeReferendumRequest {
 }
 
 public struct PersistCouncilRequest {
-    public let chainId: String
+    public let networkId: NetworkId
     public let authority: String
     public let epoch: UInt64
     public let members: [String]
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
-    public init(chainId: String,
+    public init(networkId: NetworkId,
                 authority: String,
                 epoch: UInt64,
                 members: [String],
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
-        self.chainId = chainId
+        self.networkId = networkId
         self.authority = authority
         self.epoch = epoch
         self.members = members
@@ -681,27 +749,19 @@ public struct SignedTransactionEnvelope: Codable, Sendable {
 public struct PipelineSubmitOptions: Sendable {
     public typealias IdempotencyKeyFactory = @Sendable (SignedTransactionEnvelope) -> String?
 
-    public static let defaultRetryableStatusCodes: Set<Int> = [429, 500, 502, 503, 504]
     public static let defaultIdempotencyKeyFactory: IdempotencyKeyFactory? = { envelope in
         envelope.hashHex
     }
     public static let `default` = PipelineSubmitOptions()
 
-    public var maxRetries: Int
-    public var initialBackoffSeconds: TimeInterval
-    public var backoffMultiplier: Double
-    public var retryableStatusCodes: Set<Int>
+    /// Builds the optional server-side deduplication key for the one submission attempt.
+    ///
+    /// The SDK never uses this key as authority to replay the signed envelope. After an
+    /// ambiguous transport outcome, reconcile `SignedTransactionEnvelope.hashHex` through
+    /// the pipeline status API before the application decides what to do next.
     public var idempotencyKeyFactory: IdempotencyKeyFactory?
 
-    public init(maxRetries: Int = 3,
-                initialBackoffSeconds: TimeInterval = 0.5,
-                backoffMultiplier: Double = 2.0,
-                retryableStatusCodes: Set<Int> = PipelineSubmitOptions.defaultRetryableStatusCodes,
-                idempotencyKeyFactory: IdempotencyKeyFactory? = PipelineSubmitOptions.defaultIdempotencyKeyFactory) {
-        self.maxRetries = max(maxRetries, 0)
-        self.initialBackoffSeconds = max(initialBackoffSeconds, 0)
-        self.backoffMultiplier = max(backoffMultiplier, 1)
-        self.retryableStatusCodes = retryableStatusCodes
+    public init(idempotencyKeyFactory: IdempotencyKeyFactory? = PipelineSubmitOptions.defaultIdempotencyKeyFactory) {
         self.idempotencyKeyFactory = idempotencyKeyFactory
     }
 }
@@ -734,45 +794,13 @@ public enum PipelineStatusError: Error, LocalizedError {
     case timeout(hash: String, attempts: Int)
     case failure(hash: String, status: String, payload: ToriiPipelineTransactionStatus)
 
-    public var rejectionReason: String? {
-        guard case let .failure(_, _, payload) = self else {
-            return nil
-        }
-        return Self.resolveRejectionReason(from: payload)
-    }
-
     public var errorDescription: String? {
         switch self {
         case let .timeout(hash, attempts):
             return "Pipeline transaction \(hash) did not reach a terminal status after \(attempts) attempts."
-        case let .failure(hash, status, payload):
-            if let reason = Self.resolveRejectionReason(from: payload) {
-                return "Pipeline transaction \(hash) failed with status \(status) (reason: \(reason))."
-            }
+        case let .failure(hash, status, _):
             return "Pipeline transaction \(hash) failed with status \(status)."
         }
-    }
-
-    private static func resolveRejectionReason(from payload: ToriiPipelineTransactionStatus) -> String? {
-        if let diagnostic = payload.primaryDiagnostic {
-            if let decoded = diagnostic.decodedReason?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !decoded.isEmpty {
-                return decoded
-            }
-            let message = diagnostic.message.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !message.isEmpty {
-                return message
-            }
-        }
-        if let explicit = payload.status.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !explicit.isEmpty {
-            return explicit
-        }
-        let summary = payload.summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !summary.isEmpty, summary != payload.status.kind {
-            return summary
-        }
-        return nil
     }
 }
 
@@ -917,7 +945,7 @@ public final class IrohaSDK: @unchecked Sendable {
         didSet { accelerationSettings.apply() }
     }
 
-    /// Retry configuration for `/v1/pipeline/transactions` submissions.
+    /// One-shot submission configuration for `/v1/pipeline/transactions`.
     public var pipelineSubmitOptions: PipelineSubmitOptions
 
     /// Default polling behaviour for `submitAndWait` helpers (see `PipelineStatusPollOptions`).
@@ -925,9 +953,6 @@ public final class IrohaSDK: @unchecked Sendable {
 
     /// Selects the Torii transaction submission/status endpoints (pipeline-only).
     public var pipelineEndpointMode: PipelineEndpointMode
-
-    /// Optional queue used to persist envelopes when submissions exhaust their retry budget.
-    public var pendingTransactionQueue: PendingTransactionQueue?
 
     /// Provides the creation time (ms since epoch) used when signing transactions.
     public var creationTimeProvider: @Sendable () -> UInt64
@@ -1187,7 +1212,7 @@ public final class IrohaSDK: @unchecked Sendable {
 
     /// Build and sign one atomic ordered mix of native instructions and deployed-contract calls.
     public func buildSignedExecutableBatch(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
@@ -1196,7 +1221,7 @@ public final class IrohaSDK: @unchecked Sendable {
         signingKey: SigningKey
     ) throws -> SignedTransactionEnvelope {
         try SingleInstructionSwiftNoritoEncoder.encodeExecutableBatch(
-            chainId: chainId,
+            networkId: networkId,
             authority: authority,
             creationTimeMs: makeCreationTimeMs(),
             ttlMs: ttlMs,
@@ -1209,7 +1234,7 @@ public final class IrohaSDK: @unchecked Sendable {
 
     /// Ed25519 convenience overload for an atomic mixed executable batch.
     public func buildSignedExecutableBatch(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         entries: [TransactionBatchEntry],
         feePayment: FeePaymentIntent,
@@ -1218,7 +1243,7 @@ public final class IrohaSDK: @unchecked Sendable {
         keypair: Keypair
     ) throws -> SignedTransactionEnvelope {
         try buildSignedExecutableBatch(
-            chainId: chainId,
+            networkId: networkId,
             authority: authority,
             entries: entries,
             feePayment: feePayment,
@@ -1232,6 +1257,7 @@ public final class IrohaSDK: @unchecked Sendable {
     /// indivisible ordinary transaction containing the complete setup vector.
     public func buildAliasSetupPlan(
         _ request: AliasSetupPlanRequestV1,
+        networkId: NetworkId,
         plan: AliasTransactionPlanV1,
         bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
@@ -1242,6 +1268,7 @@ public final class IrohaSDK: @unchecked Sendable {
     ) throws -> SignedTransactionEnvelope {
         try SingleInstructionSwiftNoritoEncoder.encodeAliasSetupPlan(
             request: request,
+            networkId: networkId,
             plan: plan,
             bodyEncoder: bodyEncoder,
             creationTimeMs: makeCreationTimeMs(),
@@ -1255,6 +1282,7 @@ public final class IrohaSDK: @unchecked Sendable {
     /// Ed25519 convenience overload for a verified atomic alias setup plan.
     public func buildAliasSetupPlan(
         _ request: AliasSetupPlanRequestV1,
+        networkId: NetworkId,
         plan: AliasTransactionPlanV1,
         bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
@@ -1266,6 +1294,7 @@ public final class IrohaSDK: @unchecked Sendable {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         return try buildAliasSetupPlan(
             request,
+            networkId: networkId,
             plan: plan,
             bodyEncoder: bodyEncoder,
             feePayment: feePayment,
@@ -1279,6 +1308,7 @@ public final class IrohaSDK: @unchecked Sendable {
     @available(iOS 15.0, macOS 12.0, *)
     public func submitAliasSetupPlan(
         _ request: AliasSetupPlanRequestV1,
+        networkId: NetworkId,
         plan: AliasTransactionPlanV1,
         bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
@@ -1289,6 +1319,7 @@ public final class IrohaSDK: @unchecked Sendable {
     ) async throws {
         let envelope = try buildAliasSetupPlan(
             request,
+            networkId: networkId,
             plan: plan,
             bodyEncoder: bodyEncoder,
             feePayment: feePayment,
@@ -1303,6 +1334,7 @@ public final class IrohaSDK: @unchecked Sendable {
     /// instruction. Exact auto-renew no-ops return `nil` without a transaction.
     public func buildAliasLifecyclePlan(
         _ request: AliasLifecyclePlanRequestV1,
+        networkId: NetworkId,
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
@@ -1313,6 +1345,7 @@ public final class IrohaSDK: @unchecked Sendable {
     ) throws -> SignedTransactionEnvelope? {
         try SingleInstructionSwiftNoritoEncoder.encodeAliasLifecyclePlan(
             request: request,
+            networkId: networkId,
             plan: plan,
             bodyEncoder: bodyEncoder,
             creationTimeMs: makeCreationTimeMs(),
@@ -1326,6 +1359,7 @@ public final class IrohaSDK: @unchecked Sendable {
     /// Ed25519 convenience overload for a verified alias lifecycle plan.
     public func buildAliasLifecyclePlan(
         _ request: AliasLifecyclePlanRequestV1,
+        networkId: NetworkId,
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
@@ -1337,6 +1371,7 @@ public final class IrohaSDK: @unchecked Sendable {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         return try buildAliasLifecyclePlan(
             request,
+            networkId: networkId,
             plan: plan,
             bodyEncoder: bodyEncoder,
             feePayment: feePayment,
@@ -1352,6 +1387,7 @@ public final class IrohaSDK: @unchecked Sendable {
     @discardableResult
     public func submitAliasLifecyclePlan(
         _ request: AliasLifecyclePlanRequestV1,
+        networkId: NetworkId,
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
@@ -1362,6 +1398,7 @@ public final class IrohaSDK: @unchecked Sendable {
     ) async throws -> Bool {
         guard let envelope = try buildAliasLifecyclePlan(
             request,
+            networkId: networkId,
             plan: plan,
             bodyEncoder: bodyEncoder,
             feePayment: feePayment,
@@ -1378,6 +1415,7 @@ public final class IrohaSDK: @unchecked Sendable {
     @discardableResult
     public func submitAliasLifecyclePlan(
         _ request: AliasLifecyclePlanRequestV1,
+        networkId: NetworkId,
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         feePayment: FeePaymentIntent,
@@ -1389,6 +1427,7 @@ public final class IrohaSDK: @unchecked Sendable {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
         return try await submitAliasLifecyclePlan(
             request,
+            networkId: networkId,
             plan: plan,
             bodyEncoder: bodyEncoder,
             feePayment: feePayment,
@@ -1704,9 +1743,9 @@ public final class IrohaSDK: @unchecked Sendable {
     public func submit(envelope: SignedTransactionEnvelope, completion: @Sendable @escaping (Error?) -> Void) -> Task<Void, Never> {
         return Task {
             do {
-                _ = try await submitTransactionWithRetry(envelope: envelope,
-                                                         options: pipelineSubmitOptions,
-                                                         mode: pipelineEndpointMode)
+                _ = try await submitTransactionOnce(envelope: envelope,
+                                                     options: pipelineSubmitOptions,
+                                                     mode: pipelineEndpointMode)
                 guard !Task.isCancelled else { return }
                 completion(nil)
             } catch {
@@ -1718,9 +1757,9 @@ public final class IrohaSDK: @unchecked Sendable {
 
     @available(iOS 15.0, macOS 12.0, *)
     public func submit(envelope: SignedTransactionEnvelope) async throws {
-        _ = try await submitTransactionWithRetry(envelope: envelope,
-                                                 options: pipelineSubmitOptions,
-                                                 mode: pipelineEndpointMode)
+        _ = try await submitTransactionOnce(envelope: envelope,
+                                             options: pipelineSubmitOptions,
+                                             mode: pipelineEndpointMode)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2229,82 +2268,13 @@ public final class IrohaSDK: @unchecked Sendable {
         return try await toriiRestClient.getGovernanceUnlockStats(height: height, referendumId: referendumId)
     }
 
-    private func submitTransactionWithRetry(envelope: SignedTransactionEnvelope,
-                                            options: PipelineSubmitOptions,
-                                            mode: PipelineEndpointMode,
-                                            skipQueueFlush: Bool = false) async throws -> ToriiSubmitTransactionResponse? {
-        if !skipQueueFlush {
-            try await flushPendingTransactionsIfNeeded(mode: mode)
-        }
-
+    private func submitTransactionOnce(envelope: SignedTransactionEnvelope,
+                                       options: PipelineSubmitOptions,
+                                       mode: PipelineEndpointMode) async throws -> ToriiSubmitTransactionResponse? {
         let idempotencyKey = options.idempotencyKeyFactory?(envelope)
-        var attempt = 0
-        var delay = options.initialBackoffSeconds
-        while true {
-            do {
-                return try await toriiClient.submitTransaction(data: envelope.norito,
-                                                               mode: mode,
-                                                               idempotencyKey: idempotencyKey)
-            } catch let cancellation as CancellationError {
-                throw cancellation
-            } catch let error as ToriiClientError {
-                let retryable = isRetryable(error: error, options: options)
-                if attempt < options.maxRetries && retryable {
-                    attempt += 1
-                } else {
-                    if retryable {
-                        try enqueuePendingTransaction(envelope)
-                    }
-                    throw error
-                }
-            } catch {
-                if attempt < options.maxRetries {
-                    attempt += 1
-                } else {
-                    try enqueuePendingTransaction(envelope)
-                    throw error
-                }
-            }
-
-            if delay > 0 {
-                try await Task.sleep(
-                    nanoseconds: StrictJSONNumber.saturatingNanoseconds(from: delay)
-                )
-            } else {
-                await Task.yield()
-            }
-            delay *= options.backoffMultiplier
-        }
-    }
-
-    private func enqueuePendingTransaction(_ envelope: SignedTransactionEnvelope) throws {
-        guard let queue = pendingTransactionQueue else { return }
-        try queue.enqueue(envelope)
-    }
-
-    private func requeueRecords(_ records: ArraySlice<PendingTransactionRecord>) throws {
-        guard let queue = pendingTransactionQueue else { return }
-        for record in records {
-            try queue.enqueue(record)
-        }
-    }
-
-    private func flushPendingTransactionsIfNeeded(mode: PipelineEndpointMode) async throws {
-        guard let queue = pendingTransactionQueue else { return }
-        let pending = try queue.drain()
-        guard !pending.isEmpty else { return }
-        for index in pending.indices {
-            let record = pending[index]
-            do {
-                _ = try await submitTransactionWithRetry(envelope: record.envelope,
-                                                         options: pipelineSubmitOptions,
-                                                         mode: mode,
-                                                         skipQueueFlush: true)
-            } catch {
-                try requeueRecords(pending[index...])
-                throw error
-            }
-        }
+        return try await toriiClient.submitTransaction(data: envelope.norito,
+                                                       mode: mode,
+                                                       idempotencyKey: idempotencyKey)
     }
 
     public func submit(mint request: MintRequest, keypair: Keypair, completion: @Sendable @escaping (Error?) -> Void) throws {
@@ -2740,16 +2710,6 @@ public final class IrohaSDK: @unchecked Sendable {
         }
     }
 
-    private func isRetryable(error: ToriiClientError, options: PipelineSubmitOptions) -> Bool {
-        switch error {
-        case .transport:
-            return true
-        case let .httpStatus(code, _, _):
-            return options.retryableStatusCodes.contains(code)
-        default:
-            return false
-        }
-    }
 }
 
 // MARK: - Experimental encoder helpers

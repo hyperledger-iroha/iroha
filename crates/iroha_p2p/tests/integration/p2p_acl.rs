@@ -6,7 +6,7 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_data_model::{ChainId, prelude::Peer};
+use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{NetworkHandle, network::message::*};
 use iroha_primitives::addr::{SocketAddr as IrohaSocketAddr, SocketAddrHost, socket_addr};
@@ -87,7 +87,7 @@ fn base_cfg(addr: IrohaSocketAddr) -> Config {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deny_key_blocks_connection() {
     let idle = Duration::from_millis(1500);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
@@ -145,7 +145,7 @@ async fn deny_key_blocks_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn allowlist_only_permits_only_listed_key() {
     let idle = Duration::from_millis(1500);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
@@ -216,7 +216,7 @@ async fn allowlist_only_permits_only_listed_key() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cidr_deny_blocks_inbound() {
     let idle = Duration::from_millis(1500);
-    let chain_id = ChainId::from("test_chain");
+    let chain_id = super::test_network_id("test_chain");
 
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();

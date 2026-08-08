@@ -316,7 +316,7 @@ mod app_api_integration_tests {
         ));
 
         // Build three transactions with distinct timestamps
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let network_id = *state.network_id_ref();
         let kp_a = checked_app_api_keypair(
             0x7A,
             iroha_crypto::Algorithm::Ed25519,
@@ -336,7 +336,7 @@ mod app_api_integration_tests {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
         let mut b1 = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_a.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -346,7 +346,7 @@ mod app_api_integration_tests {
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
         let mut b2 = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -356,7 +356,7 @@ mod app_api_integration_tests {
             .sign(kp_b.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
         let mut b3 = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

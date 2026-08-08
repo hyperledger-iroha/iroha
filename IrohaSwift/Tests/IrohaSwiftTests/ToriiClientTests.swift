@@ -431,8 +431,6 @@ final class ToriiContractAPITests: XCTestCase {
             value["pipeline_status"] = [
                 "hash": txHash,
                 "status": ["kind": "Queued"],
-                "summary": "Queued",
-                "diagnostics": [],
                 "scope": "local",
                 "resolved_from": "queue",
             ]
@@ -695,8 +693,6 @@ final class ToriiContractAPITests: XCTestCase {
                 return try self.response(for: request, json: [
                     "hash": self.txHash,
                     "status": ["kind": "Applied", "block_height": 44],
-                    "summary": "Applied at block 44",
-                    "diagnostics": [],
                     "scope": "global",
                     "resolved_from": "state",
                 ])
@@ -1429,8 +1425,32 @@ final class ToriiClientTests: XCTestCase {
             baseURL: baseURL,
             session: session,
             defaultHeaders: defaultHeaders,
-            localSigningContext: try! ToriiLocalSigningContext(chainId: "test-chain")
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
         )
+    }
+
+    private func canonicalUnsignedFeePayload(
+        domain: ToriiJSONValue = .object([
+            "kind": .string("network"),
+            "value": .string(TestNetworkIds.canonical.literal),
+        ])
+    ) throws -> [String: ToriiJSONValue] {
+        let feePayment = try JSONDecoder().decode(
+            ToriiJSONValue.self,
+            from: FeePaymentIntent.authority(
+                chargeLimits: [],
+                gasLimit: nil
+            ).canonicalJSONData()
+        )
+        return [
+            "domain": domain,
+            "authority": .string(authority),
+            "creation_time_ms": .number(1),
+            "instructions": .object([:]),
+            "time_to_live_ms": .number(100_000),
+            "fee_payment": feePayment,
+            "metadata": .object([:]),
+        ]
     }
 
     private func assertToriiInvalidPayload(
@@ -2220,7 +2240,7 @@ final class ToriiClientTests: XCTestCase {
         let responsePlan = try AliasTransactionPlanV1(
             body: try AliasTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -2288,7 +2308,7 @@ final class ToriiClientTests: XCTestCase {
         let renewalPlan = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -2341,7 +2361,7 @@ final class ToriiClientTests: XCTestCase {
         let autoPlan = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: renewalPlan.body.anchor,
                 operation: .configureAutoRenew(configuration),
                 disposition: .noOp,
@@ -11464,7 +11484,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "scope" })?.value, "auto")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"global","resolved_from":"state"}
+            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12},"scope":"global","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -11477,7 +11497,7 @@ final class ToriiClientTests: XCTestCase {
         let status = try await sdk.getTransactionStatus(hashHex: Self.pipelineHash)
         XCTAssertEqual(status?.hash, Self.pipelineHash)
         XCTAssertEqual(status?.status.kind, "Rejected")
-        XCTAssertEqual(status?.primaryDiagnostic?.message, "missing permission")
+        XCTAssertEqual(status?.status.blockHeight, 12)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -12801,7 +12821,8 @@ final class ToriiClientHeaderTests: XCTestCase {
     private func canonicalVerifyingKeyTransactionPayload(
         wireName: String =
             "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
-        chainId: String = "test-chain",
+        networkId: NetworkId = TestNetworkIds.canonical,
+        domainOverride: Data? = nil,
         authority: String =
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         backend: String = "halo2/ipa",
@@ -12901,8 +12922,9 @@ final class ToriiClientHeaderTests: XCTestCase {
         executable.writeUInt32LE(0)
         executable.writeField(sequence.data)
 
-        var chain = CompactNoritoWriter()
-        chain.writeField(string(chainId))
+        var networkDomain = CompactNoritoWriter()
+        networkDomain.writeUInt32LE(0)
+        networkDomain.writeField(networkId.bytes)
         let authorityPayload = try! AccountAddress.parseEncoded(authority)
             .compactNoritoAccountControllerPayload()
         var feeAuthority = CompactNoritoWriter()
@@ -12913,7 +12935,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         feePayment.writeField(feeAuthority.data)
         var payload = CompactNoritoWriter()
         for field in [
-            chain.data,
+            domainOverride ?? networkDomain.data,
             authorityPayload,
             uint64(0),
             executable.data,
@@ -13851,6 +13873,13 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertFalse(didDispatch)
     }
 
+    func testLocalSigningContextPinsNominalNetworkId() {
+        let context = ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
+
+        XCTAssertEqual(context.networkId, TestNetworkIds.canonical)
+        XCTAssertEqual(context.networkId.bytes, TestNetworkIds.canonical.bytes)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterVerifyingKeyRejectsSemanticallySubstitutedDrafts() async throws {
         let request = ToriiVerifyingKeyRegisterRequest(
@@ -13882,9 +13911,9 @@ final class ToriiClientHeaderTests: XCTestCase {
                 "full requested record"
             ),
             (
-                "wrong chain",
-                canonicalVerifyingKeyTransactionPayload(chainId: "other-chain"),
-                "configured chain"
+                "wrong network",
+                canonicalVerifyingKeyTransactionPayload(networkId: TestNetworkIds.other),
+                "configured network"
             ),
             (
                 "wrong authority",
@@ -13916,6 +13945,158 @@ final class ToriiClientHeaderTests: XCTestCase {
                     return XCTFail("Expected invalidPayload error, got \(error)")
                 }
                 XCTAssertTrue(reason.contains(item.expectedReason), "\(item.label): \(reason)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterVerifyingKeyRejectsGenesisUnknownLegacyAndUnmarkedTransactionDomains() async throws {
+        let request = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "e", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: Data([0x01, 0x02, 0x03])
+        )
+        func domain(kind: UInt32, value: Data? = nil, trailing: Data = Data()) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt32LE(kind)
+            if let value {
+                writer.writeField(value)
+            }
+            writer.writeBytes(trailing)
+            return writer.data
+        }
+        var unmarked = TestNetworkIds.canonical.bytes
+        unmarked[unmarked.index(before: unmarked.endIndex)] &= 0xfe
+        var legacyChain = CompactNoritoWriter()
+        legacyChain.writeField(CompactNorito.encodeString("test-chain"))
+        let cases: [(label: String, domain: Data, expectedReason: String)] = [
+            ("genesis", domain(kind: 1), "TransactionDomain::Network"),
+            ("unknown", domain(kind: 2), "TransactionDomain::Network"),
+            ("legacy chain", legacyChain.data, "TransactionDomain::Network"),
+            ("unmarked network", domain(kind: 0, value: unmarked), "invalid canonical NetworkId"),
+            (
+                "trailing network data",
+                domain(kind: 0, value: TestNetworkIds.canonical.bytes, trailing: Data([0])),
+                "exactly one NetworkId"
+            ),
+        ]
+
+        for item in cases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (
+                    response,
+                    self.verifyingKeyDraftResponse(
+                        payload: self.canonicalVerifyingKeyTransactionPayload(
+                            domainOverride: item.domain
+                        )
+                    )
+                )
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().registerVerifyingKey(request),
+                item.label
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error, got \(error)")
+                }
+                XCTAssertTrue(reason.contains(item.expectedReason), "\(item.label): \(reason)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteSendsOnlyCanonicalNetworkTransactionDomain() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/fees/quote")
+            let body = self.bodyJSON(from: request)
+            let payload = body["payload"] as? [String: Any]
+            let domain = payload?["domain"] as? [String: Any]
+            XCTAssertEqual(domain?["kind"] as? String, "network")
+            XCTAssertEqual(
+                domain?["value"] as? String,
+                TestNetworkIds.canonical.literal
+            )
+            XCTAssertEqual(Set(domain?.keys.map { $0 } ?? []), Set(["kind", "value"]))
+            XCTAssertNil(payload?["chain"])
+            XCTAssertNil(payload?["chainId"])
+            XCTAssertNil(payload?["chain_id"])
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let responseBody = Data(
+                """
+                {
+                  "intent":{"payer":"authority","value":{"charge_limits":[]}},
+                  "observation":{"ledger_time_ms":1,"next_block_height":1,"route_dataspace_id":0},
+                  "components":[],
+                  "capacities":[],
+                  "decision":{
+                    "status":"accepted",
+                    "value":{"debit_source":{"kind":"account","value":"\(self.authority)"}}
+                  }
+                }
+                """.utf8
+            )
+            return (response, responseBody)
+        }
+
+        let quote = try await makeClient().quoteFees(
+            unsignedPayload: try canonicalUnsignedFeePayload(),
+            canonicalAuth: canonicalReadAuth
+        )
+
+        XCTAssertEqual(quote.observation.nextBlockHeight, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testFeeQuoteRejectsRetiredIdentityAliasesAndNonNetworkDomainsBeforeDispatch() async throws {
+        let invalidDomains: [(label: String, value: ToriiJSONValue)] = [
+            ("genesis", .object(["kind": .string("genesis")])),
+            ("unknown kind", .object([
+                "kind": .string("unknown"),
+                "value": .string(TestNetworkIds.canonical.literal),
+            ])),
+            ("unmarked alias", .object([
+                "kind": .string("network"),
+                "value": .string("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91148#A2F0"),
+            ])),
+            ("extra field", .object([
+                "kind": .string("network"),
+                "value": .string(TestNetworkIds.canonical.literal),
+                "chain": .string("legacy"),
+            ])),
+        ]
+
+        for item in invalidDomains {
+            await assertToriiInvalidPayload(contains: "domain") {
+                _ = try await makeClient().quoteFees(
+                    unsignedPayload: try canonicalUnsignedFeePayload(domain: item.value),
+                    canonicalAuth: canonicalReadAuth
+                )
+            }
+        }
+        for alias in ["chain", "chainId", "chain_id"] {
+            var payload = try canonicalUnsignedFeePayload()
+            payload[alias] = .string("legacy")
+            await assertToriiInvalidPayload(contains: alias) {
+                _ = try await makeClient().quoteFees(
+                    unsignedPayload: payload,
+                    canonicalAuth: canonicalReadAuth
+                )
             }
         }
     }
@@ -18698,7 +18879,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12},"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -18724,8 +18905,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
                 XCTAssertEqual(response.txHashHex, txHash)
-                XCTAssertEqual(response.pipelineStatus?.status.rejectionReason, #"{"Validation":"missing permission"}"#)
-                XCTAssertEqual(response.pipelineStatus?.primaryDiagnostic?.decodedReason, "missing permission")
+                XCTAssertEqual(response.pipelineStatus?.status.blockHeight, 12)
                 XCTAssertEqual(response.pipelineStatus?.isRejected, true)
                 XCTAssertEqual(response.transactionTtlMs, 60_000)
                 XCTAssertEqual(response.entrypointHashHex, entrypointHash)
@@ -20586,7 +20766,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "scope" })?.value, "auto")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"global","resolved_from":"state"}
+            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12},"scope":"global","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -20596,9 +20776,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             case .success(let status):
                 XCTAssertEqual(status?.hash, Self.pipelineHash)
                 XCTAssertEqual(status?.status.kind, "Rejected")
-                XCTAssertEqual(status?.status.rejectionReason, #"{"Validation":"missing permission"}"#)
-                XCTAssertEqual(status?.summary, "Rejected: missing permission")
-                XCTAssertEqual(status?.primaryDiagnostic?.decodedReason, "missing permission")
+                XCTAssertEqual(status?.status.blockHeight, 12)
                 XCTAssertEqual(status?.scope, "global")
                 XCTAssertEqual(status?.resolvedFrom, "state")
                 XCTAssertEqual(status?.isRejected, true)
@@ -20987,7 +21165,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         )
 
         let committedJSON = """
-        {"hash":"\(Self.pipelineHash)","status":{"kind":"Committed"},"summary":"Committed","diagnostics":[],"scope":"global","resolved_from":"cache"}
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Committed"},"scope":"global","resolved_from":"cache"}
         """.data(using: .utf8)!
         let committed = try JSONDecoder().decode(
             ToriiPipelineTransactionStatus.self,
@@ -20999,13 +21177,34 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertFalse(PipelineTransactionState.approved.isKnownTerminalSuccess)
 
         let flatJSON = """
-        {"hash":"\(Self.pipelineHash)","resolved_from":"state","scope":"global","status":{"block_height":64,"kind":"Applied"},"summary":"Applied","diagnostics":[]}
+        {"hash":"\(Self.pipelineHash)","resolved_from":"state","scope":"global","status":{"block_height":64,"kind":"Applied"}}
         """.data(using: .utf8)!
         let flat = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: flatJSON)
         XCTAssertEqual(flat.hash, Self.pipelineHash)
         XCTAssertEqual(flat.status.state, .applied)
         XCTAssertTrue(flat.status.state.isTerminalSuccess)
         XCTAssertTrue(flat.isApplied)
+
+        let retiredDetailJSON = """
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","rejection_reason":"secret"},"scope":"global","resolved_from":"state","summary":"secret","diagnostics":[]}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: retiredDetailJSON)
+        )
+
+        let unknownKindJSON = """
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Finalizing"},"scope":"global","resolved_from":"state"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: unknownKindJSON)
+        )
+
+        let nullHeightJSON = """
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Applied","block_height":null},"scope":"global","resolved_from":"state"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: nullHeightJSON)
+        )
 
         let other = PipelineTransactionState(kind: "CustomStatus")
         if case let .other(value) = other {
@@ -21317,9 +21516,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x11)
         let status = try await sdk.submitAndWait(envelope: envelope)
@@ -21335,9 +21531,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x22)
         do {
@@ -21367,9 +21560,6 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
         let sdk = IrohaSDK(toriiClient: client)
-        sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 0,
-                                                          initialBackoffSeconds: 0,
-                                                          backoffMultiplier: 1)
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01,
                                                             timeout: 0.3,
                                                             maxAttempts: 3)

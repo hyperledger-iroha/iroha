@@ -16,3 +16,13 @@ fn abi_hash_matches_v1_golden() {
     let hash = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     assert_eq!(hex::encode(hash), ABI_V1_HASH_GOLDEN);
 }
+
+#[test]
+fn abi_hash_has_valid_iroha_hash_marker() {
+    let hash = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    assert_eq!(
+        hash[hash.len() - 1] & 1,
+        1,
+        "ABI hash must not be an invalid-surface diagnostic sentinel"
+    );
+}

@@ -983,7 +983,7 @@
 
         let make_block = |message: &str, prev: Option<&SignedBlock>| -> Arc<SignedBlock> {
             let tx = TransactionBuilder::new(
-                ChainId::from("test"),
+                test_network_id(b"kura-merge-log-test"),
                 SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -1165,7 +1165,7 @@
 
         let make_block = |message: &str| -> SignedBlock {
             let tx = TransactionBuilder::new(
-                ChainId::from("test"),
+                test_network_id(b"kura-merge-association-test"),
                 SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

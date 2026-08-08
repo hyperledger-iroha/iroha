@@ -17,7 +17,7 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, DataSpaceId,
+    ChainId, DataSpaceId, NetworkId,
     account::AccountId,
     isi::InstructionBox,
     nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
@@ -108,7 +108,7 @@ struct PeerRecentSuppressionEntry {
 
 fn tx_gossip_frame_payload_cap(
     network_cfg: &NetworkConfig,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     self_peer_id: &PeerId,
     max_peer_id: &PeerId,
 ) -> usize {
@@ -121,7 +121,7 @@ fn tx_gossip_frame_payload_cap(
     let dummy_keypair = tx_gossip_frame_probe_keypair();
     let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
     let dummy_signed = match iroha_data_model::transaction::TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         dummy_authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -286,8 +286,6 @@ mod handle_tests {
 
 /// Actor which gossips transactions and receives transaction gossips
 pub struct TransactionGossiper {
-    /// Unique id of the blockchain. Used for simple replay attack protection.
-    chain_id: ChainId,
     /// The time between gossip messages. More frequent gossiping shortens
     /// the time to sync, but can overload the network.
     gossip_period: Duration,
@@ -375,12 +373,15 @@ impl TransactionGossiper {
         );
         // Keep gossip batches below the plaintext per-topic cap while respecting the encrypted
         // frame ceiling and the P2P message envelope overhead.
-        let tx_frame_cap =
-            tx_gossip_frame_payload_cap(network_cfg, &chain_id, &self_peer_id, &max_peer_id);
+        let tx_frame_cap = tx_gossip_frame_payload_cap(
+            network_cfg,
+            state.network_id_ref(),
+            &self_peer_id,
+            &max_peer_id,
+        );
         let gossip_deferred = vec![Vec::new(); gossip_resend_ticks.get() as usize];
         let peer_recent_ring = vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS];
         Self {
-            chain_id,
             gossip_period,
             gossip_size,
             gossip_resend_ticks,
@@ -1804,7 +1805,7 @@ impl TransactionGossiper {
 
         if stateless_cache_cap > 0 && !materialized.is_empty() {
             let cache_context = StatelessValidationContext::new(
-                self.chain_id.clone(),
+                *self.state.network_id_ref(),
                 u64::try_from(max_clock_drift.as_millis()).unwrap_or(u64::MAX),
                 tx_limits,
                 crypto_cfg.allowed_signing.clone(),
@@ -1945,7 +1946,7 @@ impl TransactionGossiper {
                     candidate.entrypoint,
                     Arc::clone(&candidate.payload),
                     candidate.entrypoint_hash,
-                    &self.chain_id,
+                    self.state.network_id_ref(),
                     max_clock_drift,
                     tx_limits,
                     crypto_cfg.as_ref(),
@@ -2424,7 +2425,7 @@ impl TransactionGossiper {
                 entrypoint,
                 Arc::clone(&payload),
                 entrypoint_hash,
-                &self.chain_id,
+                self.state.network_id_ref(),
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
@@ -3612,11 +3613,16 @@ mod tests {
         state::{State, World},
     };
 
+    fn test_network_id() -> NetworkId {
+        "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse()
+            .expect("valid default test network id")
+    }
+
     fn build_transaction(message: &str) -> (SignedTransaction, AcceptedTransaction<'static>) {
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = (*ALICE_ID).clone();
         let signed = TransactionBuilder::new(
-            chain_id,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3744,10 +3750,10 @@ mod tests {
     }
 
     fn build_sealed_commitment_entrypoint() -> TransactionEntrypoint {
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id();
         let authority = (*ALICE_ID).clone();
         let inner = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3755,13 +3761,13 @@ mod tests {
         .sign(ALICE_KEYPAIR.private_key());
         let reveal_deadline_height = 10;
         let commitment = compute_sealed_transaction_commitment(
-            &chain_id,
+            &network_id,
             &inner,
             [0x5A; 32],
             reveal_deadline_height,
         );
         let payload = SealedTransactionCommitmentPayload::new(
-            chain_id,
+            network_id,
             authority,
             commitment,
             5,
@@ -3784,7 +3790,6 @@ mod tests {
     }
 
     fn register_ram_lfe_program_policy_tx() -> SignedTransaction {
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let owner = (*ALICE_ID).clone();
         let signer = checked_ram_lfe_policy_signer();
         let policy_id = "email#retail"
@@ -3837,7 +3842,7 @@ mod tests {
             [Box::new(RegisterRamLfeProgramPolicy { policy }).into_instruction_box()];
 
         TransactionBuilder::new(
-            chain_id,
+            test_network_id(),
             owner,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4101,7 +4106,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         ));
         let now = Instant::now();
         TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: defaults::network::TRANSACTION_GOSSIP_SIZE,
             gossip_resend_ticks: resend_ticks,
@@ -4153,10 +4157,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 .expect("checked probe public key algorithm"),
             Algorithm::Ed25519
         );
-        let chain_id: ChainId = "probe-signing".parse().expect("chain id");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let transaction = TransactionBuilder::new(
-            chain_id,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4211,8 +4214,12 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let self_peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
         let max_peer_id = self_peer_id.clone();
         let chain_id: ChainId = "test-chain".parse().expect("chain id");
-        let expected =
-            tx_gossip_frame_payload_cap(&network_cfg, &chain_id, &self_peer_id, &max_peer_id);
+        let expected = tx_gossip_frame_payload_cap(
+            &network_cfg,
+            state.network_id_ref(),
+            &self_peer_id,
+            &max_peer_id,
+        );
 
         let network = IrohaNetwork::closed_for_tests();
 
@@ -4272,7 +4279,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let now = Instant::now();
         let mut gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: resend_ticks,
@@ -4392,7 +4398,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let now = Instant::now();
         let mut gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: resend_ticks,
@@ -5806,7 +5811,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6550,7 +6554,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6670,7 +6673,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6792,9 +6794,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             &TimeSource::new_system(),
         ));
         let mixed_domain_signed = |primary: &str, secondary: &str| {
-            let chain_id: ChainId = "test-chain".parse().expect("chain id");
             TransactionBuilder::new(
-                chain_id,
+                test_network_id(),
                 (*ALICE_ID).clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -6843,7 +6844,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(2).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
@@ -6958,7 +6958,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {
-            chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
             gossip_size: NonZeroU32::new(1).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,

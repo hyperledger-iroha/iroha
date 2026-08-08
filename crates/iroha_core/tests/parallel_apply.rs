@@ -19,9 +19,17 @@ use snapshots::assert_events;
 // Use a fixed creation time so event fixtures do not depend on wall clock.
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
 
-fn tx_builder(chain_id: &ChainId, authority: &AccountId) -> TransactionBuilder {
+fn test_network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(label),
+        ),
+    )
+}
+
+fn tx_builder(network_id: &NetworkId, authority: &AccountId) -> TransactionBuilder {
     let mut builder = TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -38,7 +46,7 @@ fn block_time_source() -> TimeSource {
 #[test]
 fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Build a small world: one domain, two accounts, one numeric asset def, zeroed assets
-    let chain_id = ChainId::from("chain");
+    let network_id = test_network_id(b"parallel-apply-log-mint");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let build_world = || {
@@ -69,7 +77,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Two independent transactions: a mint and a log. Mint will take the standard path,
     // log is handled by detached path; overall results should match sequential mode.
-    let tx1 = tx_builder(&chain_id, &alice_id)
+    let tx1 = tx_builder(&network_id, &alice_id)
         .with_instructions([Mint::asset_quantity(
             10_u32,
             AssetId::of(
@@ -81,7 +89,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
             ),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx2 = tx_builder(&chain_id, &bob_id)
+    let tx2 = tx_builder(&network_id, &bob_id)
         .with_instructions([Log::new(Level::INFO, "t2".to_string())])
         .sign(iroha_test_samples::BOB_KEYPAIR.private_key());
 
@@ -98,11 +106,12 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Run sequential apply
     let world_seq = build_world();
-    let mut state_seq = iroha_core::state::State::new_with_chain_for_testing(
+    let mut state_seq = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
         world_seq,
         kura.clone(),
         query.clone(),
-        chain_id.clone(),
+        ChainId::from("chain"),
+        network_id,
     );
     let nexus = state_seq.nexus_snapshot();
     state_seq.install_lane_manifests(&Arc::new(
@@ -178,11 +187,12 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Run parallel-apply (skeleton path)
     let world_par = build_world();
-    let mut state_par = iroha_core::state::State::new_with_chain_for_testing(
+    let mut state_par = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
         world_par,
         kura,
         query,
-        chain_id.clone(),
+        ChainId::from("chain"),
+        network_id,
     );
     let nexus = state_par.nexus_snapshot();
     state_par.install_lane_manifests(&Arc::new(
@@ -298,7 +308,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
 fn run_block_and_events(
     parallel_apply: bool,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     txs: Vec<SignedTransaction>,
     bootstrap_accounts: Vec<AccountId>,
 ) -> (
@@ -346,8 +356,13 @@ fn run_block_and_events(
     let world = iroha_core::state::World::with_assets([domain], world_accounts, [ad], assets, []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state =
-        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura,
+        query,
+        ChainId::from("chain"),
+        *network_id,
+    );
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -381,7 +396,7 @@ fn run_block_and_events(
 
 #[test]
 fn events_snapshot_mint_burn_transfer_match_between_modes() {
-    let chain_id = ChainId::from("chain");
+    let network_id = test_network_id(b"parallel-apply-asset-events");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let rose: AssetDefinitionId =
@@ -393,13 +408,13 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
 
     // Build three transactions: mint to Alice, burn from Bob, transfer Alice->Bob
-    let tx_mint = tx_builder(&chain_id, &alice_id)
+    let tx_mint = tx_builder(&network_id, &alice_id)
         .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_burn = tx_builder(&chain_id, &alice_id)
+    let tx_burn = tx_builder(&network_id, &alice_id)
         .with_instructions([Burn::asset_quantity(3_u32, b_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_xfer = tx_builder(&chain_id, &alice_id)
+    let tx_xfer = tx_builder(&network_id, &alice_id)
         .with_instructions([Transfer::asset_quantity(
             a_coin.clone(),
             5_u32,
@@ -410,14 +425,14 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     // Sequential
     let (events_seq, state_seq) = run_block_and_events(
         false,
-        &chain_id,
+        &network_id,
         vec![tx_mint.clone(), tx_burn.clone(), tx_xfer.clone()],
         vec![alice_id.clone(), bob_id.clone()],
     );
     // Parallel-detached
     let (events_par, state_par) = run_block_and_events(
         true,
-        &chain_id,
+        &network_id,
         vec![tx_mint, tx_burn, tx_xfer],
         vec![alice_id.clone(), bob_id.clone()],
     );
@@ -442,57 +457,57 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
 #[test]
 fn events_snapshot_kv_and_nft_match_between_modes() {
     use iroha_data_model::prelude::*;
-    let chain_id = ChainId::from("chain");
+    let network_id = test_network_id(b"parallel-apply-kv-nft-events");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
 
     // Build transactions exercising account/domain kv and full NFT lifecycle
-    let tx_acc_set = tx_builder(&chain_id, &alice_id)
+    let tx_acc_set = tx_builder(&network_id, &alice_id)
         .with_instructions([SetKeyValue::account(
             alice_id.clone(),
             "k1".parse().unwrap(),
             iroha_primitives::json::Json::new(1u32),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_dom_set = tx_builder(&chain_id, &alice_id)
+    let tx_dom_set = tx_builder(&network_id, &alice_id)
         .with_instructions([SetKeyValue::domain(
             domain_id.clone(),
             "dk".parse().unwrap(),
             iroha_primitives::json::Json::new(3u32),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_nft_reg = tx_builder(&chain_id, &alice_id)
+    let tx_nft_reg = tx_builder(&network_id, &alice_id)
         .with_instructions([Register::nft(Nft::new(nft_id.clone(), Metadata::default()))])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_nft_set = tx_builder(&chain_id, &alice_id)
+    let tx_nft_set = tx_builder(&network_id, &alice_id)
         .with_instructions([SetKeyValue::nft(
             nft_id.clone(),
             "nk".parse().unwrap(),
             iroha_primitives::json::Json::new("v"),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_nft_xfer = tx_builder(&chain_id, &alice_id)
+    let tx_nft_xfer = tx_builder(&network_id, &alice_id)
         .with_instructions([Transfer::nft(
             alice_id.clone(),
             nft_id.clone(),
             bob_id.clone(),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_nft_rm = tx_builder(&chain_id, &alice_id)
+    let tx_nft_rm = tx_builder(&network_id, &alice_id)
         .with_instructions([RemoveKeyValue::nft(nft_id.clone(), "nk".parse().unwrap())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_nft_unreg = tx_builder(&chain_id, &alice_id)
+    let tx_nft_unreg = tx_builder(&network_id, &alice_id)
         .with_instructions([Unregister::nft(nft_id.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_acc_rm = tx_builder(&chain_id, &alice_id)
+    let tx_acc_rm = tx_builder(&network_id, &alice_id)
         .with_instructions([RemoveKeyValue::account(
             alice_id.clone(),
             "k1".parse().unwrap(),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_dom_rm = tx_builder(&chain_id, &alice_id)
+    let tx_dom_rm = tx_builder(&network_id, &alice_id)
         .with_instructions([RemoveKeyValue::domain(
             domain_id.clone(),
             "dk".parse().unwrap(),
@@ -514,13 +529,17 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
     // Sequential
     let (events_seq, _state_seq) = run_block_and_events(
         false,
-        &chain_id,
+        &network_id,
         txs.clone(),
         vec![alice_id.clone(), bob_id.clone()],
     );
     // Parallel-detached
-    let (events_par, _state_par) =
-        run_block_and_events(true, &chain_id, txs, vec![alice_id.clone(), bob_id.clone()]);
+    let (events_par, _state_par) = run_block_and_events(
+        true,
+        &network_id,
+        txs,
+        vec![alice_id.clone(), bob_id.clone()],
+    );
 
     assert_events("kv_and_nft_lifecycle", &events_seq);
     assert_events("kv_and_nft_lifecycle", &events_par);
@@ -528,21 +547,21 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
 
 #[test]
 fn events_snapshot_asset_definition_kv_match_between_modes() {
-    let chain_id = ChainId::from("chain");
+    let network_id = test_network_id(b"parallel-apply-asset-definition-kv");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 
-    let tx_set = tx_builder(&chain_id, &alice_id)
+    let tx_set = tx_builder(&network_id, &alice_id)
         .with_instructions([SetKeyValue::asset_definition(
             ad.clone(),
             "spec".parse().unwrap(),
             iroha_primitives::json::Json::new("golden"),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_rm = tx_builder(&chain_id, &alice_id)
+    let tx_rm = tx_builder(&network_id, &alice_id)
         .with_instructions([RemoveKeyValue::asset_definition(
             ad.clone(),
             "spec".parse().unwrap(),
@@ -551,19 +570,23 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
 
     let (events_seq, _) = run_block_and_events(
         false,
-        &chain_id,
+        &network_id,
         vec![tx_set.clone(), tx_rm.clone()],
         vec![alice_id.clone()],
     );
-    let (events_par, _) =
-        run_block_and_events(true, &chain_id, vec![tx_set, tx_rm], vec![alice_id.clone()]);
+    let (events_par, _) = run_block_and_events(
+        true,
+        &network_id,
+        vec![tx_set, tx_rm],
+        vec![alice_id.clone()],
+    );
     assert_events("asset_definition_kv", &events_seq);
     assert_events("asset_definition_kv", &events_par);
 }
 
 #[test]
 fn owner_transfer_domain_and_asset_def_parity() {
-    let chain_id = ChainId::from("chain");
+    let network_id = test_network_id(b"parallel-apply-owner-transfer");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -572,14 +595,14 @@ fn owner_transfer_domain_and_asset_def_parity() {
         "rose".parse().unwrap(),
     );
 
-    let tx_dom_xfer = tx_builder(&chain_id, &alice_id)
+    let tx_dom_xfer = tx_builder(&network_id, &alice_id)
         .with_instructions([Transfer::domain(
             alice_id.clone(),
             domain_id.clone(),
             bob_id.clone(),
         )])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
-    let tx_ad_xfer = tx_builder(&chain_id, &alice_id)
+    let tx_ad_xfer = tx_builder(&network_id, &alice_id)
         .with_instructions([Transfer::asset_definition(
             alice_id.clone(),
             ad.clone(),
@@ -590,14 +613,14 @@ fn owner_transfer_domain_and_asset_def_parity() {
     // Sequential
     let (events_seq, state_seq) = run_block_and_events(
         false,
-        &chain_id,
+        &network_id,
         vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()],
         vec![alice_id.clone(), bob_id.clone()],
     );
     // Parallel-detached
     let (events_par, state_par) = run_block_and_events(
         true,
-        &chain_id,
+        &network_id,
         vec![tx_dom_xfer, tx_ad_xfer],
         vec![alice_id.clone(), bob_id.clone()],
     );

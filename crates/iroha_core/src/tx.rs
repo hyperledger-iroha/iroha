@@ -127,14 +127,14 @@ fn sealed_state_encode_error(error: impl fmt::Display) -> TransactionRejectionRe
 
 pub(crate) fn validate_sealed_commitment_stateless(
     commitment: &SignedSealedTransactionCommitment,
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
     _limits: TransactionParameters,
 ) -> Result<(), AcceptTransactionFail> {
     let payload = commitment.payload();
-    if &payload.chain_id != expected_chain_id {
-        return Err(AcceptTransactionFail::ChainIdMismatch(Mismatch {
-            expected: expected_chain_id.clone(),
-            actual: payload.chain_id.clone(),
+    if &payload.network_id != expected_network_id {
+        return Err(AcceptTransactionFail::TransactionDomainMismatch(Mismatch {
+            expected: TransactionDomain::Network(*expected_network_id),
+            actual: TransactionDomain::Network(payload.network_id),
         }));
     }
     if payload.reveal_deadline_height < payload.reveal_after_height {
@@ -599,8 +599,8 @@ pub enum AcceptTransactionFail {
     },
     /// The genesis account can only sign transactions in the genesis block
     UnexpectedGenesisAccountSignature,
-    /// Chain id doesn't correspond to the id of current blockchain: {0}
-    ChainIdMismatch(Mismatch<ChainId>),
+    /// Signed transaction domain does not match the admitted domain: {0}
+    TransactionDomainMismatch(Mismatch<TransactionDomain>),
     /// Transaction creation time is in the future
     TransactionInTheFuture,
 }
@@ -703,7 +703,7 @@ impl DecodedVersionedSignedTransaction {
     /// See [`AcceptTransactionFail`].
     pub fn into_accepted(
         self,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -711,7 +711,7 @@ impl DecodedVersionedSignedTransaction {
         let now = current_unix_time();
         AcceptedTransaction::validate_with_now_and_prepared_metadata(
             &self.tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -732,7 +732,7 @@ impl DecodedVersionedSignedTransaction {
     /// See [`AcceptTransactionFail`].
     pub fn into_accepted_after_single_ed25519_precheck(
         self,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -740,7 +740,7 @@ impl DecodedVersionedSignedTransaction {
         let now = current_unix_time();
         AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
             &self.tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -1428,19 +1428,26 @@ impl<'tx> AcceptedTransaction<'tx> {
 
     fn validate_common(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
-        let actual_chain_id = tx.chain();
-
-        if expected_chain_id != actual_chain_id {
-            return Err(AcceptTransactionFail::ChainIdMismatch(Mismatch {
-                expected: expected_chain_id.clone(),
-                actual: actual_chain_id.clone(),
+        let expected_domain = TransactionDomain::Network(*expected_network_id);
+        if tx.domain() != &expected_domain {
+            return Err(AcceptTransactionFail::TransactionDomainMismatch(Mismatch {
+                expected: expected_domain,
+                actual: *tx.domain(),
             }));
         }
 
+        Self::validate_common_envelope(tx, max_clock_drift, now)
+    }
+
+    fn validate_common_envelope(
+        tx: &SignedTransaction,
+        max_clock_drift: Duration,
+        now: Duration,
+    ) -> Result<(), AcceptTransactionFail> {
         if tx.creation_time().saturating_sub(now) > max_clock_drift {
             return Err(AcceptTransactionFail::TransactionInTheFuture);
         }
@@ -1684,20 +1691,12 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// See [`AcceptTransactionFail`]
     pub fn validate_genesis(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         genesis_account: &AccountId,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<(), AcceptTransactionFail> {
         let now = current_unix_time();
-        Self::validate_genesis_with_now(
-            tx,
-            expected_chain_id,
-            max_clock_drift,
-            genesis_account,
-            crypto,
-            now,
-        )
+        Self::validate_genesis_with_now(tx, max_clock_drift, genesis_account, crypto, now)
     }
 
     /// Like [`Self::validate_genesis`], but with a caller-provided "now" timestamp.
@@ -1707,13 +1706,18 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// See [`AcceptTransactionFail`]
     pub fn validate_genesis_with_now(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         genesis_account: &AccountId,
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
-        Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
+        if tx.domain() != &TransactionDomain::Genesis {
+            return Err(AcceptTransactionFail::TransactionDomainMismatch(Mismatch {
+                expected: TransactionDomain::Genesis,
+                actual: *tx.domain(),
+            }));
+        }
+        Self::validate_common_envelope(tx, max_clock_drift, now)?;
 
         if genesis_account != tx.authority() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
@@ -1733,13 +1737,20 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[allow(clippy::too_many_lines)]
     pub fn validate(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<(), AcceptTransactionFail> {
         let now = current_unix_time();
-        Self::validate_with_now(tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
+        Self::validate_with_now(
+            tx,
+            expected_network_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+        )?;
         enforce_nts_health_for_time_sensitive(tx)?;
         Ok(())
     }
@@ -1747,7 +1758,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn validate_with_now(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -1755,7 +1766,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_with_now_and_signature_check(
             tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -1773,7 +1784,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn validate_with_now_and_prepared_metadata(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -1782,7 +1793,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_with_now_and_signature_check(
             tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -1800,7 +1811,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn validate_with_now_with_signature_result_and_prepared_metadata(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -1812,7 +1823,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             prechecked_signature_result.map_or(SignatureCheck::Verify, SignatureCheck::Override);
         Self::validate_with_now_and_signature_check(
             tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -1830,7 +1841,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -1839,7 +1850,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<(), AcceptTransactionFail> {
         Self::validate_with_now_and_signature_check(
             tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -1852,7 +1863,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     #[allow(clippy::too_many_lines)]
     fn validate_with_now_and_signature_check(
         tx: &SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -1861,7 +1872,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         prepared: Option<&PreparedTransactionMetadata>,
     ) -> Result<(), AcceptTransactionFail> {
         reject_retired_heartbeat_metadata(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
-        Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
+        Self::validate_common(tx, expected_network_id, max_clock_drift, now)?;
 
         let ttl = tx.time_to_live().ok_or_else(|| {
             AcceptTransactionFail::TransactionLimit(TransactionLimitError {
@@ -2411,7 +2422,7 @@ impl<'tx> AcceptedTransaction<'tx> {
 impl AcceptedTransaction<'static> {
     fn validate_entrypoint_with_now(
         tx: &TransactionEntrypoint,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -2421,7 +2432,7 @@ impl AcceptedTransaction<'static> {
             TransactionEntrypoint::External(signed) => {
                 Self::validate_with_now(
                     signed,
-                    expected_chain_id,
+                    expected_network_id,
                     max_clock_drift,
                     limits,
                     crypto,
@@ -2430,13 +2441,13 @@ impl AcceptedTransaction<'static> {
                 enforce_nts_health_for_time_sensitive(signed)?;
             }
             TransactionEntrypoint::SealedCommitment(commitment) => {
-                validate_sealed_commitment_stateless(commitment, expected_chain_id, limits)?;
+                validate_sealed_commitment_stateless(commitment, expected_network_id, limits)?;
             }
             TransactionEntrypoint::SealedReveal(reveal) => {
                 let signed = reveal.signed_transaction();
                 Self::validate_with_now(
                     signed,
-                    expected_chain_id,
+                    expected_network_id,
                     max_clock_drift,
                     limits,
                     crypto,
@@ -2462,19 +2473,12 @@ impl AcceptedTransaction<'static> {
     /// See [`AcceptTransactionFail`]
     pub fn accept_genesis(
         tx: SignedTransaction,
-        expected_chain_id: &ChainId,
         max_clock_drift: Duration,
         genesis_account: &AccountId,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate_genesis(
-            &tx,
-            expected_chain_id,
-            max_clock_drift,
-            genesis_account,
-            crypto,
-        )
-        .map(|()| Self::from_external_with_hot_cache(tx))
+        Self::validate_genesis(&tx, max_clock_drift, genesis_account, crypto)
+            .map(|()| Self::from_external_with_hot_cache(tx))
     }
 
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
@@ -2484,12 +2488,12 @@ impl AcceptedTransaction<'static> {
     /// See [`AcceptTransactionFail`]
     pub fn accept(
         tx: SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_chain_id, max_clock_drift, limits, crypto)
+        Self::validate(&tx, expected_network_id, max_clock_drift, limits, crypto)
             .map(|()| Self::from_external_with_hot_cache(tx))
     }
 
@@ -2502,12 +2506,12 @@ impl AcceptedTransaction<'static> {
     pub(crate) fn accept_with_canonical_signed_bytes(
         tx: SignedTransaction,
         signed_bytes: Arc<Vec<u8>>,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
-        Self::validate(&tx, expected_chain_id, max_clock_drift, limits, crypto)
+        Self::validate(&tx, expected_network_id, max_clock_drift, limits, crypto)
             .map(|()| Self::from_external_with_cached_bytes(tx, Some(signed_bytes)))
     }
 
@@ -2518,14 +2522,21 @@ impl AcceptedTransaction<'static> {
     /// See [`AcceptTransactionFail`]
     pub fn accept_with_time_source(
         tx: SignedTransaction,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
         time_source: &TimeSource,
     ) -> Result<Self, AcceptTransactionFail> {
         let now = time_source.get_unix_time();
-        Self::validate_with_now(&tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
+        Self::validate_with_now(
+            &tx,
+            expected_network_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+        )?;
         enforce_nts_health_for_time_sensitive(&tx)?;
         Ok(Self::from_external_with_hot_cache(tx))
     }
@@ -2537,7 +2548,7 @@ impl AcceptedTransaction<'static> {
     /// See [`AcceptTransactionFail`].
     pub fn accept_entrypoint(
         tx: TransactionEntrypoint,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -2545,7 +2556,7 @@ impl AcceptedTransaction<'static> {
         let now = current_unix_time();
         Self::validate_entrypoint_with_now(
             &tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -2568,7 +2579,7 @@ impl AcceptedTransaction<'static> {
     /// See [`AcceptTransactionFail`].
     pub(crate) fn accept_entrypoint_at_time(
         tx: TransactionEntrypoint,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -2576,7 +2587,7 @@ impl AcceptedTransaction<'static> {
     ) -> Result<Self, AcceptTransactionFail> {
         Self::validate_entrypoint_with_now(
             &tx,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -2597,7 +2608,7 @@ impl AcceptedTransaction<'static> {
         tx: TransactionEntrypoint,
         entrypoint_bytes: Arc<Vec<u8>>,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -2606,7 +2617,7 @@ impl AcceptedTransaction<'static> {
             tx,
             entrypoint_bytes,
             entrypoint_hash,
-            expected_chain_id,
+            expected_network_id,
             max_clock_drift,
             limits,
             crypto,
@@ -2628,7 +2639,7 @@ impl AcceptedTransaction<'static> {
         tx: TransactionEntrypoint,
         entrypoint_bytes: Arc<Vec<u8>>,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
-        expected_chain_id: &ChainId,
+        expected_network_id: &NetworkId,
         max_clock_drift: Duration,
         limits: TransactionParameters,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -2642,7 +2653,7 @@ impl AcceptedTransaction<'static> {
                     if single_ed25519_prechecked {
                         Self::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
                             signed,
-                            expected_chain_id,
+                            expected_network_id,
                             max_clock_drift,
                             limits,
                             crypto,
@@ -2652,7 +2663,7 @@ impl AcceptedTransaction<'static> {
                     } else {
                         Self::validate_with_now_and_prepared_metadata(
                             signed,
-                            expected_chain_id,
+                            expected_network_id,
                             max_clock_drift,
                             limits,
                             crypto,
@@ -2664,7 +2675,7 @@ impl AcceptedTransaction<'static> {
                 } else {
                     Self::validate_entrypoint_with_now(
                         &tx,
-                        expected_chain_id,
+                        expected_network_id,
                         max_clock_drift,
                         limits,
                         crypto,
@@ -2675,7 +2686,7 @@ impl AcceptedTransaction<'static> {
             _ => {
                 Self::validate_entrypoint_with_now(
                     &tx,
-                    expected_chain_id,
+                    expected_network_id,
                     max_clock_drift,
                     limits,
                     crypto,
@@ -3255,13 +3266,13 @@ impl StateBlock<'_> {
     ) -> TransactionResultInner {
         validate_sealed_commitment_stateless(
             commitment,
-            &state_transaction.chain_id,
+            &state_transaction.network_id,
             state_transaction.world.parameters().transaction(),
         )
         .map_err(|err| match err {
-            AcceptTransactionFail::ChainIdMismatch(mismatch) => {
+            AcceptTransactionFail::TransactionDomainMismatch(mismatch) => {
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                    "chain id mismatch: expected {} got {}",
+                    "transaction domain mismatch: expected {:?} got {:?}",
                     mismatch.expected, mismatch.actual
                 )))
             }
@@ -3338,12 +3349,12 @@ impl StateBlock<'_> {
             ));
         }
         let signed = reveal.signed_transaction();
-        if signed.chain() != &record.payload.chain_id {
+        if signed.network_id() != Some(&record.payload.network_id) {
             return Err(TransactionRejectionReason::Validation(
                 ValidationFail::NotPermitted(format!(
-                    "sealed transaction chain mismatch: commitment chain {} reveal chain {}",
-                    record.payload.chain_id,
-                    signed.chain()
+                    "sealed transaction network mismatch: commitment network {} reveal domain {:?}",
+                    record.payload.network_id,
+                    signed.domain()
                 )),
             ));
         }
@@ -3356,7 +3367,7 @@ impl StateBlock<'_> {
             ));
         }
         let expected = compute_sealed_transaction_commitment(
-            &record.payload.chain_id,
+            &record.payload.network_id,
             signed,
             reveal.salt,
             record.payload.reveal_deadline_height,
@@ -5432,6 +5443,12 @@ pub mod tests {
             .expect("transaction fixture key generation should succeed")
     }
 
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x15; Hash::LENGTH]),
+        ))
+    }
+
     #[test]
     fn tx_fixture_key_generation_preserves_algorithms() {
         assert_eq!(
@@ -5585,7 +5602,7 @@ pub mod tests {
             entries: Vec::new(),
         };
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5667,8 +5684,7 @@ pub mod tests {
     fn validate_genesis_with_now_uses_supplied_timestamp() {
         let far_future = Duration::from_secs(10_000_000_000);
         let (_handle, time_source) = TimeSource::new_mock(far_future);
-        let tx = TransactionBuilder::new_with_time_source(
-            CHAIN_ID.clone(),
+        let tx = TransactionBuilder::new_genesis_with_time_source(
             GENESIS_ACCOUNT.id.clone(),
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -5682,7 +5698,6 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         AcceptedTransaction::validate_genesis_with_now(
             &tx,
-            &CHAIN_ID,
             Duration::from_secs(1),
             &GENESIS_ACCOUNT.id,
             &crypto_cfg,
@@ -5695,8 +5710,7 @@ pub mod tests {
     fn validate_genesis_with_now_rejects_invalid_transaction_signature() {
         let now = Duration::from_secs(10_000);
         let (_handle, time_source) = TimeSource::new_mock(now);
-        let mut tx = TransactionBuilder::new_with_time_source(
-            CHAIN_ID.clone(),
+        let mut tx = TransactionBuilder::new_genesis_with_time_source(
             GENESIS_ACCOUNT.id.clone(),
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -5716,13 +5730,67 @@ pub mod tests {
         assert!(matches!(
             AcceptedTransaction::validate_genesis_with_now(
                 &tx,
-                &CHAIN_ID,
                 Duration::from_secs(1),
                 &GENESIS_ACCOUNT.id,
                 &crypto_cfg,
                 now,
             ),
             Err(AcceptTransactionFail::SignatureVerification(_))
+        ));
+    }
+
+    #[test]
+    fn runtime_and_genesis_transaction_domains_are_disjoint() {
+        let now = Duration::from_secs(10_000);
+        let (_handle, time_source) = TimeSource::new_mock(now);
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH])),
+        );
+        let fee_payment =
+            || iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        let runtime = TransactionBuilder::new_with_time_source(
+            network_id,
+            GENESIS_ACCOUNT.id.clone(),
+            &time_source,
+            fee_payment(),
+        )
+        .with_instructions([Log::new(Level::DEBUG, "runtime domain".to_string())])
+        .sign(&GENESIS_ACCOUNT.key);
+        let genesis = TransactionBuilder::new_genesis_with_time_source(
+            GENESIS_ACCOUNT.id.clone(),
+            &time_source,
+            fee_payment(),
+        )
+        .with_instructions([Log::new(Level::DEBUG, "genesis domain".to_string())])
+        .sign(&GENESIS_ACCOUNT.key);
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+
+        assert!(matches!(
+            AcceptedTransaction::validate_genesis_with_now(
+                &runtime,
+                Duration::from_secs(1),
+                &GENESIS_ACCOUNT.id,
+                &crypto_cfg,
+                now,
+            ),
+            Err(AcceptTransactionFail::TransactionDomainMismatch(Mismatch {
+                expected: TransactionDomain::Genesis,
+                actual: TransactionDomain::Network(actual),
+            })) if actual == network_id
+        ));
+        assert!(matches!(
+            AcceptedTransaction::validate_with_now(
+                &genesis,
+                &network_id,
+                Duration::from_secs(1),
+                TransactionParameters::default(),
+                &crypto_cfg,
+                now,
+            ),
+            Err(AcceptTransactionFail::TransactionDomainMismatch(Mismatch {
+                expected: TransactionDomain::Network(expected),
+                actual: TransactionDomain::Genesis,
+            })) if expected == network_id
         ));
     }
 
@@ -5784,10 +5852,9 @@ pub mod tests {
 
     #[test]
     fn multisig_authority_rejected_with_stable_code() {
-        let chain: ChainId = "multisig-accept".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -5801,7 +5868,13 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+        match AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(
                     fail.code(),
@@ -5819,7 +5892,6 @@ pub mod tests {
 
     #[test]
     fn multisig_authority_accepts_mixed_curves_with_quorum() {
-        let chain: ChainId = "multisig-accept".parse().unwrap();
         let member_ed = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let member_secp = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
 
@@ -5831,7 +5903,7 @@ pub mod tests {
         let authority = AccountId::new_multisig(policy.clone());
 
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -5846,16 +5918,15 @@ pub mod tests {
         crypto_cfg.allowed_signing.sort();
         crypto_cfg.allowed_signing.dedup();
 
-        AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+        AcceptedTransaction::accept(tx, &test_network_id(), Duration::ZERO, limits, &crypto_cfg)
             .expect("multisig with quorum should be accepted");
     }
 
     #[test]
     fn multisig_authority_rejects_unknown_signer() {
-        let chain: ChainId = "multisig-unknown".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -5882,7 +5953,13 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+        match AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::UnknownSigner);
             }
@@ -5892,7 +5969,6 @@ pub mod tests {
 
     #[test]
     fn multisig_authority_rejects_insufficient_weight_bundle() {
-        let chain: ChainId = "multisig-insufficient-weight".parse().unwrap();
         let signer = checked_random_tx_keypair();
         let other = checked_random_tx_keypair();
 
@@ -5904,7 +5980,7 @@ pub mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -5920,7 +5996,13 @@ pub mod tests {
         crypto_cfg.allowed_signing.sort();
         crypto_cfg.allowed_signing.dedup();
 
-        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+        match AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::InsufficientWeight);
             }
@@ -5969,7 +6051,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             multisig_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5981,8 +6063,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission must accept the signature shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission must accept the signature shape");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6097,7 +6185,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6109,8 +6197,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission must accept the signature shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission must accept the signature shape");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6184,7 +6278,7 @@ pub mod tests {
 
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             signer1_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6197,8 +6291,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission must accept the signature shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission must accept the signature shape");
 
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6301,7 +6401,7 @@ pub mod tests {
 
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             signer1_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6314,8 +6414,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission must accept the signature shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission must accept the signature shape");
 
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6373,7 +6479,7 @@ pub mod tests {
         state.install_lane_manifests(&registry);
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6382,8 +6488,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission should accept transaction shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission should accept transaction shape");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6406,7 +6518,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6415,8 +6527,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission should accept transaction shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission should accept transaction shape");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6481,7 +6599,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6493,8 +6611,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission should accept transaction shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission should accept transaction shape");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6519,7 +6643,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6531,8 +6655,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission should accept transaction shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission should accept transaction shape");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6558,7 +6688,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             missing_authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6570,8 +6700,14 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
-            .expect("admission should accept transaction shape");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        )
+        .expect("admission should accept transaction shape");
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -6590,12 +6726,11 @@ pub mod tests {
 
     #[test]
     fn single_authority_rejects_disallowed_algorithm() {
-        let chain: ChainId = "single-disallowed".parse().unwrap();
         let keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6608,7 +6743,13 @@ pub mod tests {
             .allowed_signing
             .retain(|algo| *algo == Algorithm::Ed25519);
 
-        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+        match AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
             }
@@ -6618,7 +6759,6 @@ pub mod tests {
 
     #[test]
     fn multisig_authority_rejects_disallowed_algorithm() {
-        let chain: ChainId = "multisig-disallowed".parse().unwrap();
         let member = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
 
         let members = vec![MultisigMember::new(member.public_key().clone(), 1).expect("member")];
@@ -6626,7 +6766,7 @@ pub mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -6642,7 +6782,13 @@ pub mod tests {
             .allowed_signing
             .retain(|algo| *algo == Algorithm::Ed25519);
 
-        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+        match AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
             }
@@ -6652,7 +6798,6 @@ pub mod tests {
 
     #[test]
     fn multisig_authority_rejects_insufficient_weight() {
-        let chain: ChainId = "multisig-insufficient".parse().unwrap();
         let member_a = checked_random_tx_keypair();
         let member_b = checked_random_tx_keypair();
 
@@ -6664,7 +6809,7 @@ pub mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -6674,7 +6819,13 @@ pub mod tests {
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+        match AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::InsufficientWeight);
             }
@@ -6684,7 +6835,6 @@ pub mod tests {
 
     #[test]
     fn multisig_signature_limit_counts_bundle_entries() {
-        let chain: ChainId = "multisig-signature-limit".parse().unwrap();
         let signer = checked_random_tx_keypair();
 
         let members = vec![MultisigMember::new(signer.public_key().clone(), 1).expect("member")];
@@ -6692,7 +6842,7 @@ pub mod tests {
         let authority = AccountId::new_multisig(policy);
 
         let mut tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6718,7 +6868,13 @@ pub mod tests {
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
-        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+        match AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+        ) {
             Err(AcceptTransactionFail::TransactionLimit(fail)) => {
                 assert!(
                     fail.reason.contains("Too many signatures"),
@@ -6732,11 +6888,10 @@ pub mod tests {
 
     #[test]
     fn accepted_transaction_into_checked_allows_pending() {
-        let chain: ChainId = "checked-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let instruction = Log::new(Level::INFO, "noop".into());
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6758,10 +6913,9 @@ pub mod tests {
 
     #[test]
     fn accepted_transaction_into_entrypoint_consumes_wrapped_entrypoint() {
-        let chain: ChainId = "accepted-into-entrypoint-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6775,11 +6929,10 @@ pub mod tests {
 
     #[test]
     fn accepted_transaction_into_checked_detects_committed() {
-        let chain: ChainId = "checked-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let instruction = Log::new(Level::INFO, "commit".into());
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6805,11 +6958,10 @@ pub mod tests {
 
     #[test]
     fn accepted_transaction_caches_hashes_and_encoded_length() {
-        let chain: ChainId = "accepted-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let instruction = Log::new(Level::INFO, "cache".into());
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6852,10 +7004,9 @@ pub mod tests {
 
     #[test]
     fn single_ed25519_fast_path_requires_ed25519_key_and_signature_shape() {
-        let chain: ChainId = "single-ed25519-fast-path-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6868,7 +7019,7 @@ pub mod tests {
         let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
         let secp_signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             secp_authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6894,10 +7045,9 @@ pub mod tests {
 
     #[test]
     fn borrowed_external_entrypoint_hash_matches_canonical_hash() {
-        let chain: ChainId = "accepted-borrowed-entrypoint-hash-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6912,12 +7062,9 @@ pub mod tests {
 
     #[test]
     fn signed_frame_entrypoint_hash_matches_canonical_hash() {
-        let chain: ChainId = "accepted-signed-frame-entrypoint-hash-chain"
-            .parse()
-            .unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6958,7 +7105,6 @@ pub mod tests {
 
     #[test]
     fn prepared_governance_transaction_hash_matches_canonical_entrypoint_hash() {
-        let chain: ChainId = "accepted-governance-entrypoint-hash-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let manifest = RuntimeUpgradeManifest {
             name: "runtime.upgrade.hash.test".into(),
@@ -6974,7 +7120,7 @@ pub mod tests {
             provenance: Vec::new(),
         };
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6992,10 +7138,9 @@ pub mod tests {
 
     #[test]
     fn accept_with_canonical_signed_bytes_reuses_payload_cache() {
-        let chain: ChainId = "accepted-canonical-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7020,7 +7165,7 @@ pub mod tests {
         let accepted = AcceptedTransaction::accept_with_canonical_signed_bytes(
             signed,
             Arc::clone(&signed_bytes),
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
@@ -7037,10 +7182,9 @@ pub mod tests {
 
     #[test]
     fn decoded_versioned_signed_transaction_prepares_exact_length_from_payload() {
-        let chain: ChainId = "decoded-versioned-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7086,7 +7230,7 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = decoded
-            .into_accepted(&chain, Duration::ZERO, limits, &crypto_cfg)
+            .into_accepted(&test_network_id(), Duration::ZERO, limits, &crypto_cfg)
             .expect("decoded transaction accepts");
 
         assert_eq!(accepted.hash(), signed.hash());
@@ -7102,10 +7246,9 @@ pub mod tests {
 
     #[test]
     fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
-        let chain: ChainId = "decoded-versioned-adaptive-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7158,10 +7301,9 @@ pub mod tests {
 
     #[test]
     fn decoded_versioned_signed_transaction_owned_supports_ed25519_prechecked_accept() {
-        let chain: ChainId = "decoded-versioned-owned-precheck-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7187,7 +7329,7 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = decoded
             .into_accepted_after_single_ed25519_precheck(
-                &chain,
+                &test_network_id(),
                 Duration::ZERO,
                 limits,
                 &crypto_cfg,
@@ -7200,7 +7342,6 @@ pub mod tests {
 
     #[test]
     fn every_prechecked_signature_path_rejects_invalid_fee_intent() {
-        let chain: ChainId = "prechecked-fee-intent-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -7208,7 +7349,7 @@ pub mod tests {
             Json::new("retired".to_owned()),
         );
         let builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7238,7 +7379,7 @@ pub mod tests {
         assert_rejected(
             AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                 &signed,
-                &chain,
+                &test_network_id(),
                 Duration::ZERO,
                 TransactionParameters::default(),
                 &crypto,
@@ -7251,7 +7392,7 @@ pub mod tests {
         assert_rejected(
             AcceptedTransaction::validate_with_now_after_single_ed25519_precheck_and_prepared_metadata(
                 &signed,
-                &chain,
+                &test_network_id(),
                 Duration::ZERO,
                 TransactionParameters::default(),
                 &crypto,
@@ -7263,7 +7404,7 @@ pub mod tests {
         assert_rejected(
             AcceptedTransaction::validate_with_now_and_prepared_metadata(
                 &signed,
-                &chain,
+                &test_network_id(),
                 Duration::ZERO,
                 TransactionParameters::default(),
                 &crypto,
@@ -7276,10 +7417,9 @@ pub mod tests {
 
     #[test]
     fn decoded_versioned_signed_transaction_rejects_malformed_payloads() {
-        let chain: ChainId = "decoded-versioned-reject-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7300,10 +7440,9 @@ pub mod tests {
 
     #[test]
     fn accepted_transaction_entrypoint_encoded_lengths_match_norito_frames() {
-        let chain: ChainId = "accepted-entrypoint-len-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7353,7 +7492,6 @@ pub mod tests {
 
     #[test]
     fn signed_encoded_len_matches_norito_for_optional_metadata_shapes() {
-        let chain: ChainId = "signed-len-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -7362,7 +7500,7 @@ pub mod tests {
         );
 
         let mut builder = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7390,7 +7528,6 @@ pub mod tests {
 
     #[test]
     fn prepared_metadata_depth_matches_direct_depth_check() {
-        let chain: ChainId = "prepared-depth-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -7398,7 +7535,7 @@ pub mod tests {
             Json::from_str_norito("[[[1]]]").expect("valid nested json"),
         );
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7419,10 +7556,9 @@ pub mod tests {
 
     #[test]
     fn gossip_signed_metadata_matches_canonical_preparation() {
-        let chain: ChainId = "gossip-signed-metadata-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7460,10 +7596,9 @@ pub mod tests {
 
     #[test]
     fn signed_encoded_len_for_limit_uses_cached_canonical_bytes() {
-        let chain: ChainId = "signed-len-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7514,10 +7649,9 @@ pub mod tests {
     #[test]
     fn accept_with_time_source_uses_mock_clock() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let chain: ChainId = "mock-clock-chain".parse().expect("chain id");
         let (handle, time_source) = TimeSource::new_mock(Duration::from_secs(5));
         let mut builder = TransactionBuilder::new_with_time_source(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -7539,7 +7673,7 @@ pub mod tests {
         handle.advance(Duration::from_secs(1));
         AcceptedTransaction::accept_with_time_source(
             signed.clone(),
-            &chain,
+            &test_network_id(),
             Duration::from_secs(0),
             tx_limits,
             &crypto_cfg,
@@ -7548,7 +7682,7 @@ pub mod tests {
         .expect("transaction should be accepted with mock clock");
         let err = AcceptedTransaction::accept(
             signed,
-            &chain,
+            &test_network_id(),
             Duration::from_secs(0),
             tx_limits,
             &crypto_cfg,
@@ -7563,9 +7697,8 @@ pub mod tests {
     #[test]
     fn stateless_admission_rejects_missing_signature_bound_ttl() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let chain: ChainId = "required-ttl-chain".parse().expect("chain id");
         let signed = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7586,7 +7719,7 @@ pub mod tests {
 
         let error = AcceptedTransaction::validate_with_now(
             &malformed,
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
             &iroha_config::parameters::actual::Crypto::default(),
@@ -7605,9 +7738,8 @@ pub mod tests {
     #[test]
     fn stateless_admission_enforces_governed_maximum_ttl() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let chain: ChainId = "bounded-ttl-chain".parse().expect("chain id");
         let mut builder = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7618,7 +7750,7 @@ pub mod tests {
 
         let error = AcceptedTransaction::validate_with_now(
             &signed,
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             limits,
             &iroha_config::parameters::actual::Crypto::default(),
@@ -7842,7 +7974,6 @@ pub mod tests {
     #[test]
     fn nts_enforcement_rejects_time_sensitive_when_unhealthy() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let chain: ChainId = "nts-reject".parse().expect("chain id");
         let ballot = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "ref-3".into(),
             owner: authority.clone(),
@@ -7851,7 +7982,7 @@ pub mod tests {
             direction: 0,
         };
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7897,9 +8028,8 @@ pub mod tests {
     #[test]
     fn nts_enforcement_skips_non_sensitive_transactions() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let chain: ChainId = "nts-skip".parse().expect("chain id");
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -8267,9 +8397,8 @@ pub mod tests {
 
         // Bind an executable gas limit but omit the required PipelineGas charge limit.
         let program = minimal_ivm_program_with_max_cycles(1, 1_000);
-        let chain: ChainId = "chain".parse().unwrap();
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8525,11 +8654,9 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
-        let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program(1);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8556,11 +8683,9 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
-        let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program(3); // unsupported abi_version
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8592,12 +8717,10 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
-        let chain: ChainId = "chain".parse().unwrap();
         // abi_version=0 must be rejected in v1-only release
         let prog = minimal_ivm_program(0);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8635,7 +8758,7 @@ pub mod tests {
             Json::from("not-a-contract-manifest"),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id,
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8692,7 +8815,7 @@ pub mod tests {
         );
 
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id,
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8781,7 +8904,7 @@ pub mod tests {
             Json::new(manifest),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8876,8 +8999,6 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
-        let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_contract_program();
         // Compute real code hash; then corrupt expected
         let code_hash = ivm::contract_code_hash(&prog);
@@ -8904,7 +9025,7 @@ pub mod tests {
             Json::new(manifest),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -8942,8 +9063,6 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
-        let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_contract_program();
         let mut wrong_bytes = [0u8; 32];
         wrong_bytes[0] = 0xFF;
@@ -8970,7 +9089,7 @@ pub mod tests {
             Json::new(manifest),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9060,7 +9179,7 @@ pub mod tests {
             Json::new(manifest),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9100,10 +9219,9 @@ pub mod tests {
         let mut block = state.block(header);
 
         // Program with max_cycles above default config bound; expect structured error
-        let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program_with_max_cycles(1, 9_999_999);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9138,7 +9256,7 @@ pub mod tests {
 
         let prog = minimal_ivm_program_with_max_cycles(1, 0);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9180,7 +9298,7 @@ pub mod tests {
 
         let prog = minimal_ivm_program_with_max_cycles(1, fuel_limit + 1);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9224,7 +9342,7 @@ pub mod tests {
 
         let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9269,7 +9387,7 @@ pub mod tests {
 
         let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9371,7 +9489,7 @@ pub mod tests {
         // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
         let prog = minimal_ivm_program_with_syscall(1, syscall);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9416,7 +9534,7 @@ pub mod tests {
 
         let prog = minimal_ivm_program_with_syscallx(1, syscall);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9443,12 +9561,10 @@ pub mod tests {
         use std::time::Duration;
 
         use iroha_data_model::prelude::*;
-
-        let chain_id = ChainId::from("chain");
         let (authority_id, keypair) = gen_account_in("wonderland");
         let instruction = SetKeyValue::account(authority_id.clone(), "k".parse().unwrap(), "v");
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9480,7 +9596,7 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::validate(
             &invalid_tx,
-            &chain_id,
+            &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
@@ -9499,7 +9615,6 @@ pub mod tests {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
 
         // Build a valid signed transaction with an oversized IVM bytecode blob
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
         // Limit bytecode size to 1024 bytes for this test
@@ -9516,7 +9631,7 @@ pub mod tests {
         // Create a blob twice the allowed size (2 KiB) — content need not be a valid IVM header
         let oversize_blob = vec![0u8; 2048];
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9527,7 +9642,7 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::validate(
             &tx,
-            &chain,
+            &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
@@ -9544,8 +9659,6 @@ pub mod tests {
         use std::time::Duration;
 
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
         // Use an exact bytecode-size limit that can be represented by the 17-byte
@@ -9565,7 +9678,7 @@ pub mod tests {
         let at_limit_blob = minimal_ivm_program_with_literal_padding(1, BYTECODE_LIMIT as usize);
         assert_eq!(at_limit_blob.len(), BYTECODE_LIMIT as usize);
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -9576,7 +9689,7 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::validate(
             &tx,
-            &chain,
+            &test_network_id(),
             Duration::from_secs(0),
             limits,
             &crypto_cfg,
@@ -9591,12 +9704,10 @@ pub mod tests {
         use std::time::Duration;
 
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9605,9 +9716,14 @@ pub mod tests {
 
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
-        let err =
-            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("missing gas limit in fee payment intent should be rejected");
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("missing gas limit in fee payment intent should be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -9626,14 +9742,12 @@ pub mod tests {
     #[test]
     fn legacy_gas_limit_metadata_is_rejected_before_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
         let mut metadata = Metadata::default();
         metadata.insert("gas_limit".parse().unwrap(), Json::new(0_u64));
         let error = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9655,12 +9769,10 @@ pub mod tests {
         use std::time::Duration;
 
         use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9674,9 +9786,14 @@ pub mod tests {
 
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
-        let err =
-            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("missing gas limit in fee payment intent should be rejected");
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("missing gas limit in fee payment intent should be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -9699,11 +9816,9 @@ pub mod tests {
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::ContractInvocation,
         };
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9719,9 +9834,14 @@ pub mod tests {
 
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
-        let err =
-            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("missing gas limit in fee payment intent should be rejected");
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("missing gas limit in fee payment intent should be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -9739,7 +9859,6 @@ pub mod tests {
 
     #[test]
     fn mixed_batch_missing_gas_bound_rejected_at_admission() {
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let call = ContractInvocation {
             contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
@@ -9750,7 +9869,7 @@ pub mod tests {
             arguments: None,
         };
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9768,7 +9887,7 @@ pub mod tests {
 
         let err = AcceptedTransaction::validate(
             &tx,
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
             &iroha_config::parameters::actual::Crypto::default(),
@@ -9784,10 +9903,9 @@ pub mod tests {
 
     #[test]
     fn empty_executable_batch_rejected_at_admission() {
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9796,7 +9914,7 @@ pub mod tests {
 
         let err = AcceptedTransaction::validate(
             &tx,
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             TransactionParameters::default(),
             &iroha_config::parameters::actual::Crypto::default(),
@@ -9813,8 +9931,6 @@ pub mod tests {
     #[test]
     fn transaction_size_limit_enforced() {
         use std::time::Duration;
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
         let mut metadata = Metadata::default();
@@ -9824,7 +9940,7 @@ pub mod tests {
         );
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9842,9 +9958,14 @@ pub mod tests {
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
-        let err =
-            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("transaction exceeding max_tx_bytes must be rejected");
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("transaction exceeding max_tx_bytes must be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -9860,8 +9981,6 @@ pub mod tests {
     #[test]
     fn attachments_decompressed_limit_enforced() {
         use std::time::Duration;
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
         let proof = ProofBox::new("halo2/ipa".into(), vec![0u8; 192]);
@@ -9871,7 +9990,7 @@ pub mod tests {
             .expect("one attachment is a valid bounded proof list");
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9889,9 +10008,14 @@ pub mod tests {
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
-        let err =
-            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("attachments exceeding max_decompressed_bytes must be rejected");
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("attachments exceeding max_decompressed_bytes must be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -9907,8 +10031,6 @@ pub mod tests {
     #[test]
     fn malformed_proof_attachments_rejected_at_transaction_admission() {
         use std::time::Duration;
-
-        let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
@@ -9995,7 +10117,7 @@ pub mod tests {
 
         for (label, attachments, expected_reason) in cases {
             let tx = TransactionBuilder::new(
-                chain.clone(),
+                test_network_id(),
                 authority_id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -10005,7 +10127,7 @@ pub mod tests {
 
             let err = AcceptedTransaction::validate(
                 &tx,
-                &chain,
+                &test_network_id(),
                 Duration::from_secs(0),
                 limits,
                 &crypto_cfg,
@@ -10031,12 +10153,10 @@ pub mod tests {
 
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
-
-        let chain: ChainId = "ttl-config-chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10055,9 +10175,14 @@ pub mod tests {
         .with_ingress_enforcement(true, false);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
-        let err =
-            AcceptedTransaction::accept(tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("transactions must provide expires_at_height when required");
+        let err = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("transactions must provide expires_at_height when required");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -10076,12 +10201,10 @@ pub mod tests {
 
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
-
-        let chain: ChainId = "sequence-config-chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10100,9 +10223,14 @@ pub mod tests {
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
-        let err =
-            AcceptedTransaction::accept(tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("transactions must provide tx_sequence when required");
+        let err = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("transactions must provide tx_sequence when required");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -10119,12 +10247,11 @@ pub mod tests {
     fn signature_verification_result_reports_invalid_signature() {
         use std::time::Duration;
 
-        let chain: ChainId = "sig-check".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let (other_id, _other_kp) = gen_account_in("underland");
 
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10139,10 +10266,9 @@ pub mod tests {
         let now = tampered.creation_time();
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let chain_id = tampered.chain().clone();
         let result = AcceptedTransaction::validate_with_now(
             &tampered,
-            &chain_id,
+            &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
@@ -10158,8 +10284,6 @@ pub mod tests {
     #[test]
     fn retired_heartbeat_string_marker_is_rejected() {
         use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-marker-true".parse().unwrap();
         let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let authority = AccountId::new(signer.public_key().clone());
@@ -10167,7 +10291,7 @@ pub mod tests {
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("true"));
 
         let tx = TransactionBuilder::new_with_time_source(
-            chain.clone(),
+            test_network_id(),
             authority,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -10179,7 +10303,7 @@ pub mod tests {
 
         let error = AcceptedTransaction::accept_with_time_source(
             tx,
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             tx_params,
             &crypto_cfg,
@@ -10197,8 +10321,6 @@ pub mod tests {
     #[test]
     fn retired_heartbeat_false_marker_is_rejected() {
         use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-marker-false".parse().unwrap();
         let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let authority = AccountId::new(signer.public_key().clone());
@@ -10206,7 +10328,7 @@ pub mod tests {
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(false));
 
         let tx = TransactionBuilder::new_with_time_source(
-            chain.clone(),
+            test_network_id(),
             authority,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -10218,7 +10340,7 @@ pub mod tests {
 
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             tx_params,
             &crypto_cfg,
@@ -10240,8 +10362,6 @@ pub mod tests {
     #[test]
     fn retired_heartbeat_arbitrary_marker_is_rejected() {
         use std::time::Duration;
-
-        let chain: ChainId = "heartbeat-marker-invalid".parse().unwrap();
         let signer = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
         let authority = AccountId::new(signer.public_key().clone());
@@ -10249,7 +10369,7 @@ pub mod tests {
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("nope"));
 
         let tx = TransactionBuilder::new_with_time_source(
-            chain.clone(),
+            test_network_id(),
             authority,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -10261,7 +10381,7 @@ pub mod tests {
 
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
-            &chain,
+            &test_network_id(),
             Duration::ZERO,
             tx_params,
             &crypto_cfg,
@@ -10286,14 +10406,12 @@ pub mod tests {
 
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
-
-        let chain: ChainId = "heartbeat-metadata-chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(true));
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10304,9 +10422,14 @@ pub mod tests {
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
-        let err =
-            AcceptedTransaction::accept(tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("retired heartbeat marker must reject a non-empty transaction");
+        let err = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect_err("retired heartbeat marker must reject a non-empty transaction");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
@@ -10348,7 +10471,7 @@ pub mod tests {
         );
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10367,9 +10490,14 @@ pub mod tests {
         )
         .with_ingress_enforcement(true, false);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted =
-            AcceptedTransaction::accept(tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect("stateless TTL checks should pass when metadata present");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect("stateless TTL checks should pass when metadata present");
 
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -10416,7 +10544,7 @@ pub mod tests {
         );
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10435,9 +10563,14 @@ pub mod tests {
         )
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted =
-            AcceptedTransaction::accept(tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect("stateless sequence checks should pass when metadata present");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect("stateless sequence checks should pass when metadata present");
 
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -10484,7 +10617,7 @@ pub mod tests {
         );
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -10503,9 +10636,14 @@ pub mod tests {
         )
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted =
-            AcceptedTransaction::accept(tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect("stateless sequence checks should pass when metadata present");
+        let accepted = AcceptedTransaction::accept(
+            tx,
+            &test_network_id(),
+            Duration::from_secs(0),
+            limits,
+            &crypto_cfg,
+        )
+        .expect("stateless sequence checks should pass when metadata present");
 
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -10558,10 +10696,9 @@ pub mod tests {
             .set_parameter(Parameter::Custom(custom));
 
         // Build program with max_cycles = 2000
-        let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -10618,10 +10755,9 @@ pub mod tests {
             .set_parameter(Parameter::Custom(custom));
 
         // Build program with max_cycles = 2000, below the bound
-        let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -10989,7 +11125,7 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11015,7 +11151,6 @@ pub mod tests {
 
     #[test]
     fn lane_privacy_proofs_collected_from_attachments() {
-        let chain: ChainId = "lane-privacy-collect".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let backend = Ident::from_str("halo2/ipa").expect("ident");
 
@@ -11048,7 +11183,7 @@ pub mod tests {
         attachment2.lane_privacy = Some(proof2.clone());
 
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11071,7 +11206,6 @@ pub mod tests {
 
     #[test]
     fn state_manifest_quorum_requires_approvers() {
-        let chain: ChainId = "lane-manifest-quorum".parse().unwrap();
         let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
         let secondary_keypair = checked_fixture_keypair(vec![0x22; 32], Algorithm::Ed25519);
         let primary_id = AccountId::new(primary_keypair.public_key().clone());
@@ -11085,7 +11219,7 @@ pub mod tests {
         let lane_alias = "gov";
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             primary_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11107,7 +11241,7 @@ pub mod tests {
             Json::new(vec![secondary_id.to_string()]),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             primary_id,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11140,7 +11274,6 @@ pub mod tests {
 
     #[test]
     fn state_manifest_quorum_rejects_duplicate_approvers() {
-        let chain: ChainId = "lane-manifest-duplicate-approvers".parse().unwrap();
         let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
         let secondary_keypair = checked_fixture_keypair(vec![0x22; 32], Algorithm::Ed25519);
         let primary_id = AccountId::new(primary_keypair.public_key().clone());
@@ -11157,7 +11290,7 @@ pub mod tests {
             Json::new(vec![secondary_id.to_string(), secondary_id.to_string()]),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             primary_id,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11178,7 +11311,6 @@ pub mod tests {
 
     #[test]
     fn manifest_protected_namespaces_require_metadata() {
-        let chain: ChainId = "lane-protected-ns".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let mut rules = GovernanceRules::default();
         rules
@@ -11197,7 +11329,7 @@ pub mod tests {
             code_hash: Hash::prehashed([0_u8; 32]),
         };
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11221,7 +11353,6 @@ pub mod tests {
 
     #[test]
     fn manifest_protected_rotation_requires_atomic_commit_instruction() {
-        let chain: ChainId = "lane-protected-atomic-rotation".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let mut rules = GovernanceRules::default();
         rules
@@ -11257,7 +11388,7 @@ pub mod tests {
             expected_previous_contract_address: Some(old_address.clone()),
         };
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11280,7 +11411,7 @@ pub mod tests {
             }),
         ];
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11357,7 +11488,7 @@ pub mod tests {
         macro_rules! validate_instruction {
             ($instruction:expr, $metadata:expr) => {{
                 let tx = TransactionBuilder::new(
-                    chain.clone(),
+                    test_network_id(),
                     authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -11573,7 +11704,7 @@ pub mod tests {
             let syscall_u8 = u8::try_from(syscall).expect("contract-admin syscall fits SCALL");
             let program = minimal_ivm_program_with_syscall(1, syscall_u8);
             let tx = TransactionBuilder::new(
-                chain.clone(),
+                test_network_id(),
                 authority.clone(),
                 fee_payment_with_gas_limit(TEST_GAS_LIMIT),
             )
@@ -11606,7 +11737,6 @@ pub mod tests {
 
     #[test]
     fn runtime_upgrade_hook_requires_metadata() {
-        let chain: ChainId = "lane-runtime-hook".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
 
         let mut rules = GovernanceRules::default();
@@ -11621,7 +11751,7 @@ pub mod tests {
             manifest_bytes: vec![0x01, 0x02],
         };
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11643,7 +11773,7 @@ pub mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(Name::from_str("upgrade_id").expect("key"), Json::new("v1"));
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11690,7 +11820,7 @@ pub mod tests {
         );
 
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11769,7 +11899,7 @@ pub mod tests {
             Json::new(contract_address.to_string()),
         );
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -11867,7 +11997,7 @@ pub mod tests {
                 Json::new(attempt),
             );
             let tx = TransactionBuilder::new(
-                chain.clone(),
+                test_network_id(),
                 authority.clone(),
                 fee_payment_with_gas_limit(TEST_GAS_LIMIT),
             )
@@ -11995,7 +12125,7 @@ pub mod tests {
                 Json::new(attempt),
             );
             let tx = TransactionBuilder::new(
-                chain.clone(),
+                test_network_id(),
                 authority.clone(),
                 fee_payment_with_gas_limit(TEST_GAS_LIMIT),
             )
@@ -12269,7 +12399,7 @@ pub mod tests {
                     Json::new(attempt),
                 );
                 let tx = TransactionBuilder::new(
-                    chain.clone(),
+                    test_network_id(),
                     authority.clone(),
                     fee_payment_with_gas_limit(TEST_GAS_LIMIT),
                 )
@@ -12349,7 +12479,7 @@ pub mod tests {
         };
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -12392,7 +12522,7 @@ pub mod tests {
         };
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
@@ -12441,7 +12571,7 @@ pub mod tests {
                     Json::new(attempt),
                 );
                 let tx = TransactionBuilder::new(
-                    chain.clone(),
+                    test_network_id(),
                     authority.clone(),
                     fee_payment_with_gas_limit(TEST_GAS_LIMIT),
                 )
@@ -12650,7 +12780,7 @@ pub mod tests {
             key: key_pair.into_parts().1,
         }
     });
-    /// Chain identifier used in sandbox transactions.
+    /// Chain identifier used by sandbox state metadata.
     pub static CHAIN_ID: LazyLock<ChainId> =
         LazyLock::new(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
 
@@ -13185,7 +13315,7 @@ pub mod tests {
                 let instructions =
                     transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
                 TransactionBuilder::new(
-                    CHAIN_ID.clone(),
+                    test_network_id(),
                     GENESIS_ACCOUNT.id.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )

@@ -35,6 +35,7 @@ use hex::encode as hex_encode;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
+    NetworkId,
     account::{AccountId, address::AccountAddress},
     da::types::{BlobDigest, StorageTicketId},
     id::ChainId,
@@ -629,7 +630,7 @@ struct DeployClientConfig {
     torii_url: Option<String>,
     public_key: PublicKey,
     private_key: PrivateKey,
-    chain_id: ChainId,
+    network_id: NetworkId,
     chain_discriminant: u16,
 }
 
@@ -668,7 +669,7 @@ struct ManifestRegisterSubmission {
 struct ManifestSubmitRequest<'a> {
     client: &'a HttpClient,
     torii_base_url: &'a Url,
-    chain_id: &'a ChainId,
+    network_id: &'a NetworkId,
     authority: &'a AccountId,
     private_key: &'a PrivateKey,
     alias_inputs: Option<&'a AliasInputs>,
@@ -682,7 +683,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut out_dir_override: Option<PathBuf> = None;
     let mut gateway_base_url_override: Option<String> = None;
     let mut peer_discovery_enabled = true;
-    let mut submitted_epoch_override: Option<u64> = None;
     let mut summary_out: Option<PathBuf> = None;
 
     for arg in raw_args {
@@ -700,12 +700,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             "--name" => name = Some(value.to_string()),
             "--out-dir" => out_dir_override = Some(PathBuf::from(value)),
             "--gateway-base-url" => gateway_base_url_override = Some(value.to_string()),
-            "--submitted-epoch" => {
-                let parsed: u64 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--submitted-epoch` value: {err}"))?;
-                submitted_epoch_override = Some(parsed);
-            }
             "--summary-out" => summary_out = Some(PathBuf::from(value)),
             _ => {
                 return Err(format!(
@@ -755,6 +749,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
 
     let mut errors: Vec<String> = Vec::new();
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let artifacts = build_deploy_artifacts(
@@ -846,36 +841,18 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let authority = AccountId::new(client_config.public_key.clone());
     let authority_literal =
         authority_payload_literal(&authority, Some(client_config.chain_discriminant))?;
-    let submitted_epoch = match submitted_epoch_override {
-        Some(epoch) => epoch,
-        None => match resolve_submitted_epoch_from_status(&client, &torii_base_url) {
-            Ok(epoch) => epoch,
-            Err(err) => {
-                errors.push(format!("failed to resolve submitted epoch: {err}"));
-                0
-            }
-        },
-    };
 
     let submit_request = ManifestSubmitRequest {
         client: &client,
         torii_base_url: &torii_base_url,
-        chain_id: &client_config.chain_id,
+        network_id: &client_config.network_id,
         authority: &authority,
         private_key: &client_config.private_key,
         alias_inputs: None,
     };
-    let registration = if errors.is_empty() {
-        submit_pin_register(&submit_request, &artifacts.manifest, submitted_epoch, None)
-    } else {
-        Err(
-            "skipped paid pin registration because submitted epoch could not be resolved"
-                .to_string(),
-        )
-    };
+    let registration = submit_pin_register(&submit_request, &artifacts.manifest, None);
 
     let mut registration_summary = Map::new();
-    registration_summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
     registration_summary.insert("authority".into(), Value::from(authority_literal));
     registration_summary.insert(
         "response_path".into(),
@@ -1019,7 +996,13 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         .and_then(toml::Value::as_str)
         .ok_or_else(|| "client config `[account]` must define `private_key`".to_string())?;
     let chain_discriminant = resolve_deploy_chain_discriminant(&root, account)?;
-    let chain_id = resolve_deploy_chain_id(&root, chain_discriminant)?;
+    let _display_chain_id = resolve_deploy_chain_id(&root, chain_discriminant)?;
+    let network_id = root
+        .get("network_id")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| "client config must define exact `network_id`".to_string())?
+        .parse()
+        .map_err(|err| format!("failed to parse client config network_id: {err}"))?;
     let public_key = PublicKey::from_str(public_key_raw)
         .map_err(|err| format!("failed to parse client config public_key: {err}"))?;
     let private_key = parse_private_key_inline(private_key_raw)
@@ -1028,7 +1011,7 @@ fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> 
         torii_url,
         public_key,
         private_key,
-        chain_id,
+        network_id,
         chain_discriminant,
     })
 }
@@ -1302,7 +1285,6 @@ fn read_gateway_expectation(
 fn submit_pin_register(
     request: &ManifestSubmitRequest<'_>,
     manifest: &ManifestV1,
-    submitted_epoch: u64,
     successor_digest: Option<[u8; 32]>,
 ) -> Result<ManifestRegisterSubmission, String> {
     let endpoint = request
@@ -1311,11 +1293,10 @@ fn submit_pin_register(
         .map_err(|err| format!("failed to build Torii pin-register endpoint URL: {err}"))?;
     let requested_endpoint = endpoint.as_str().to_string();
     let transaction = build_pin_register_transaction(
-        request.chain_id,
+        request.network_id,
         request.authority,
         request.private_key,
         manifest,
-        submitted_epoch,
         request.alias_inputs,
         successor_digest,
     )?;
@@ -2484,6 +2465,7 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
     }
 
     let client = HttpClient::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let response = client
@@ -3167,11 +3149,11 @@ fn format_car_error(err: CarWriteError) -> String {
 fn usage() -> String {
     "Usage:
   sorafs_cli norito build --source=PATH --bytecode-out=PATH [--summary-out=PATH]
-  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--submitted-epoch=EPOCH] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
-  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
-  sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
+  sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=GENESIS_HASH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
+  sorafs_cli manifest proposal --manifest=PATH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
@@ -15765,10 +15747,9 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut chunk_plan_label: Option<String> = None;
     let mut chunk_digest_hex_arg: Option<String> = None;
     let mut torii_url: Option<String> = None;
-    let mut submitted_epoch: Option<u64> = None;
-    let mut resolve_submitted_epoch = false;
     let mut authority_str: Option<String> = None;
     let mut authority_network_prefix: Option<u16> = None;
+    let mut network_id: Option<NetworkId> = None;
     let mut private_key_inline: Option<String> = None;
     let mut private_key_path: Option<PathBuf> = None;
     let mut alias_namespace: Option<String> = None;
@@ -15790,15 +15771,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
             }
             "--chunk-digest-sha3" => chunk_digest_hex_arg = Some(value.to_string()),
             "--torii-url" => torii_url = Some(value.to_string()),
-            "--submitted-epoch" => {
-                let parsed: u64 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--submitted-epoch` value: {err}"))?;
-                submitted_epoch = Some(parsed);
-            }
-            "--resolve-submitted-epoch" => {
-                resolve_submitted_epoch = parse_bool_flag(value, "--resolve-submitted-epoch")?;
-            }
             "--authority" => authority_str = Some(value.to_string()),
             "--network-prefix" => {
                 authority_network_prefix = Some(parse_u16_arg(
@@ -15806,6 +15778,13 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
                     value,
                     "sorafs_cli manifest submit",
                 )?);
+            }
+            "--network-id" => {
+                network_id = Some(
+                    value
+                        .parse()
+                        .map_err(|err| format!("invalid `--network-id` value: {err}"))?,
+                );
             }
             "--private-key" => {
                 if private_key_path.is_some() {
@@ -15845,14 +15824,11 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli manifest submit`".to_string()
     })?;
-    if submitted_epoch.is_some() && resolve_submitted_epoch {
-        return Err(
-            "`--submitted-epoch` and `--resolve-submitted-epoch` are mutually exclusive"
-                .to_string(),
-        );
-    }
     let authority_str = authority_str.ok_or_else(|| {
         "missing required `--authority=ACCOUNT_ID` for `sorafs_cli manifest submit`".to_string()
+    })?;
+    let network_id = network_id.ok_or_else(|| {
+        "missing required `--network-id=GENESIS_HASH` for `sorafs_cli manifest submit`".to_string()
     })?;
     authority_network_prefix =
         authority_network_prefix.or_else(|| infer_i105_network_prefix(&authority_str));
@@ -15930,17 +15906,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         )
     })?;
     let authority_literal = authority_payload_literal(&authority, authority_network_prefix)?;
-    let chain_discriminant = authority_network_prefix
-        .unwrap_or_else(iroha_config::parameters::defaults::common::chain_discriminant);
-    let chain_literal = known_chain_id_for_discriminant(chain_discriminant).ok_or_else(|| {
-        format!(
-            "cannot infer a transaction chain id from network discriminant {chain_discriminant}; \
-             use a supported chain-specific account address"
-        )
-    })?;
-    let chain_id: ChainId = chain_literal
-        .parse()
-        .map_err(|err| format!("failed to parse inferred chain id `{chain_literal}`: {err}"))?;
     let private_key = match (private_key_inline, private_key_path) {
         (Some(inline), None) => parse_private_key_inline(&inline)?,
         (None, Some(path)) => load_private_key_from_file(&path)?,
@@ -15969,30 +15934,17 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let client = HttpClient::builder()
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-    let submitted_epoch = match submitted_epoch {
-        Some(epoch) => epoch,
-        None if resolve_submitted_epoch => {
-            resolve_submitted_epoch_from_status(&client, &torii_base_url)?
-        }
-        None => {
-            return Err(
-                "missing required `--submitted-epoch=EPOCH` for `sorafs_cli manifest submit`"
-                    .to_string(),
-            );
-        }
-    };
 
     let submission = submit_pin_register(
         &ManifestSubmitRequest {
             client: &client,
             torii_base_url: &torii_base_url,
-            chain_id: &chain_id,
+            network_id: &network_id,
             authority: &authority,
             private_key: &private_key,
             alias_inputs: alias_inputs.as_ref(),
         },
         &manifest,
-        submitted_epoch,
         successor_digest,
     )?;
 
@@ -16014,7 +15966,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         "status".into(),
         Value::from(submission.status.as_u16() as u64),
     );
-    summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
     summary.insert("authority".into(), Value::from(authority_literal));
     summary.insert(
         "submission_mode".into(),
@@ -16307,114 +16258,11 @@ fn decode_response_value_or_text(response: &[u8]) -> Value {
     }
 }
 
-fn resolve_submitted_epoch_from_status(
-    client: &HttpClient,
-    torii_base_url: &Url,
-) -> Result<u64, String> {
-    let status_endpoint = torii_base_url
-        .join("status")
-        .map_err(|err| format!("failed to build Torii status endpoint URL: {err}"))?;
-    let response = client
-        .get(status_endpoint.as_str())
-        .header("Accept", "application/json")
-        .send()
-        .map_err(|err| {
-            format!(
-                "failed to query Torii status at `{}`: {err}",
-                status_endpoint
-            )
-        })?;
-    let status = response.status();
-    let response_bytes = response
-        .bytes()
-        .map_err(|err| format!("failed to read Torii status response: {err}"))?;
-    let body = response_bytes.to_vec();
-
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(format!(
-            "Torii status endpoint `{}` returned {status}: {body_text}",
-            status_endpoint
-        ));
-    }
-
-    let status_value: Value = from_slice(&body).map_err(|err| {
-        format!(
-            "failed to decode Torii status JSON from `{}`: {err}",
-            status_endpoint
-        )
-    })?;
-
-    resolve_submitted_epoch_from_status_value(&status_value).map_err(|err| {
-        format!(
-            "failed to resolve submitted epoch from `{}`: {err}",
-            status_endpoint
-        )
-    })
-}
-
-fn resolve_submitted_epoch_from_status_value(status_value: &Value) -> Result<u64, String> {
-    if let Some(epoch) = find_status_epoch(status_value) {
-        return Ok(epoch);
-    }
-
-    let blocks = status_value
-        .get("blocks")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "status JSON is missing `blocks`".to_string())?;
-    let epoch_length_blocks = find_status_value(status_value, &["sumeragi", "epoch_length_blocks"])
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            status_value
-                .get("epoch_length_blocks")
-                .and_then(Value::as_u64)
-        })
-        .ok_or_else(|| "status JSON is missing `sumeragi.epoch_length_blocks`".to_string())?;
-
-    if epoch_length_blocks == 0 {
-        return Err("`sumeragi.epoch_length_blocks` must be greater than zero".to_string());
-    }
-
-    Ok(blocks.saturating_sub(1) / epoch_length_blocks)
-}
-
-fn find_status_epoch(status_value: &Value) -> Option<u64> {
-    [
-        ["sumeragi", "epoch"].as_slice(),
-        ["sumeragi", "current_epoch"].as_slice(),
-        ["sumeragi", "membership", "epoch"].as_slice(),
-        ["current_epoch"].as_slice(),
-        ["epoch"].as_slice(),
-    ]
-    .into_iter()
-    .find_map(|path| find_status_value(status_value, path).and_then(parse_status_epoch_value))
-}
-
-fn find_status_value<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
-    let mut current = value;
-    for segment in path {
-        current = current.as_object()?.get(*segment)?;
-    }
-    Some(current)
-}
-
-fn parse_status_epoch_value(value: &Value) -> Option<u64> {
-    value.as_u64().or_else(|| {
-        let object = value.as_object()?;
-        object
-            .get("height")
-            .and_then(Value::as_u64)
-            .or_else(|| object.get("index").and_then(Value::as_u64))
-            .or_else(|| object.get("epoch").and_then(Value::as_u64))
-    })
-}
-
 fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut chunk_plan_source: Option<JsonSource> = None;
     let mut chunk_plan_label: Option<String> = None;
     let mut chunk_digest_hex_arg: Option<String> = None;
-    let mut submitted_epoch: Option<u64> = None;
     let mut successor_hex: Option<String> = None;
     let mut alias_hint: Option<String> = None;
     let mut proposal_out: Option<PathBuf> = None;
@@ -16430,12 +16278,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
                 chunk_plan_label = Some(value.to_string());
             }
             "--chunk-digest-sha3" => chunk_digest_hex_arg = Some(value.to_string()),
-            "--submitted-epoch" => {
-                let parsed: u64 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--submitted-epoch` value: {err}"))?;
-                submitted_epoch = Some(parsed);
-            }
             "--successor-of" => successor_hex = Some(value.to_string()),
             "--alias-hint" => alias_hint = Some(value.to_string()),
             "--proposal-out" => proposal_out = Some(PathBuf::from(value)),
@@ -16449,9 +16291,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
 
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli manifest proposal`".to_string()
-    })?;
-    let submitted_epoch = submitted_epoch.ok_or_else(|| {
-        "missing required `--submitted-epoch=EPOCH` for `sorafs_cli manifest proposal`".to_string()
     })?;
     let proposal_out = proposal_out.ok_or_else(|| {
         "missing required `--proposal-out=PATH` for `sorafs_cli manifest proposal`".to_string()
@@ -16519,7 +16358,6 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
         manifest_digest: &manifest_digest,
         chunk_digest_sha3: chunk_digest,
         chunk_plan_label: chunk_plan_label.as_deref(),
-        submitted_epoch,
         alias_hint: alias_hint.as_deref(),
         successor_bytes,
     })?;
@@ -22135,11 +21973,10 @@ fn alias_inputs_from_flags(
 }
 
 fn build_pin_register_transaction(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     private_key: &PrivateKey,
     manifest: &ManifestV1,
-    submitted_epoch: u64,
     alias: Option<&AliasInputs>,
     successor_of: Option<[u8; 32]>,
 ) -> Result<iroha_data_model::transaction::SignedTransaction, String> {
@@ -22159,10 +21996,9 @@ fn build_pin_register_transaction(
             Ok(ManifestDigest::new(successor))
         })
         .transpose()?;
-    let instruction =
-        RegisterPinManifest::new(manifest_payload, submitted_epoch, alias, successor_of);
+    let instruction = RegisterPinManifest::new(manifest_payload, alias, successor_of);
     TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         authority.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -22178,7 +22014,6 @@ struct ManifestProposalSummary<'a> {
     manifest_digest: &'a blake3::Hash,
     chunk_digest_sha3: [u8; 32],
     chunk_plan_label: Option<&'a str>,
-    submitted_epoch: u64,
     alias_hint: Option<&'a str>,
     successor_bytes: Option<[u8; 32]>,
 }
@@ -22190,7 +22025,6 @@ fn build_manifest_proposal_summary(summary: ManifestProposalSummary<'_>) -> Resu
         manifest_digest,
         chunk_digest_sha3,
         chunk_plan_label,
-        submitted_epoch,
         alias_hint,
         successor_bytes,
     } = summary;
@@ -22201,7 +22035,6 @@ fn build_manifest_proposal_summary(summary: ManifestProposalSummary<'_>) -> Resu
         &chunker_handle,
         chunk_digest_sha3,
         &policy_dm,
-        submitted_epoch,
         successor_bytes,
     );
 
@@ -22227,7 +22060,6 @@ fn build_manifest_proposal_summary(summary: ManifestProposalSummary<'_>) -> Resu
         "pin_policy".into(),
         Value::Object(pin_policy_json(&manifest.pin_policy)),
     );
-    map.insert("submitted_epoch".into(), Value::from(submitted_epoch));
     if let Some(label) = chunk_plan_label {
         map.insert("chunk_plan_source".into(), Value::from(label));
     }
@@ -22272,7 +22104,6 @@ fn build_register_instruction_value(
     chunker_handle: &ChunkerProfileHandle,
     chunk_digest_sha3: [u8; 32],
     policy: &RegistryPinPolicy,
-    submitted_epoch: u64,
     successor_bytes: Option<[u8; 32]>,
 ) -> Value {
     let mut register_map = Map::new();
@@ -22288,7 +22119,6 @@ fn build_register_instruction_value(
         "chunk_digest_sha3_256_hex".into(),
         Value::from(hex_encode(chunk_digest_sha3)),
     );
-    register_map.insert("submitted_epoch".into(), Value::from(submitted_epoch));
     register_map.insert("policy".into(), registry_pin_policy_to_value(policy));
     if let Some(bytes) = successor_bytes {
         register_map.insert("successor_of_hex".into(), Value::from(hex_encode(bytes)));
@@ -23978,23 +23808,24 @@ mod tests {
         let manifest = sample_manifest();
         let key_pair = fixture_keypair(0x9E);
         let authority = AccountId::new(key_pair.public_key().clone());
-        let chain_id: ChainId = "fc56984b-2be7-431d-840e-21514d1883f0"
-            .parse()
-            .expect("chain id");
+        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x9A; iroha_crypto::Hash::LENGTH]),
+        ));
 
         let transaction = build_pin_register_transaction(
-            &chain_id,
+            &network_id,
             &authority,
             key_pair.private_key(),
             &manifest,
-            99,
             None,
             None,
         )
         .expect("build signed transaction");
 
         transaction.verify_signature().expect("signature verifies");
-        assert_eq!(transaction.chain(), &chain_id);
+        assert_eq!(transaction.network_id(), Some(&network_id));
         assert_eq!(transaction.authority(), &authority);
         let iroha_data_model::transaction::Executable::Instructions(instructions) =
             transaction.instructions()
@@ -24012,7 +23843,6 @@ mod tests {
             register.manifest_payload,
             manifest.encode().expect("canonical manifest payload")
         );
-        assert_eq!(register.submitted_epoch, 99);
     }
 
     #[test]
@@ -24025,7 +23855,6 @@ mod tests {
             manifest_digest: &digest,
             chunk_digest_sha3: [0xCD; 32],
             chunk_plan_label: Some("plan.json"),
-            submitted_epoch: 99,
             alias_hint: Some("docs.sora.link"),
             successor_bytes: None,
         })
@@ -24050,6 +23879,12 @@ mod tests {
                 .expect("register instruction")
                 .is_object(),
             "register instruction serialized as object"
+        );
+        assert!(summary.get("submitted_epoch").is_none());
+        assert!(
+            summary["register_instruction"]
+                .get("submitted_epoch")
+                .is_none()
         );
     }
 

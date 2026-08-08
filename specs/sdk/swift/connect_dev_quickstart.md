@@ -81,7 +81,7 @@ Oversize/truncated files raise `ConnectQueueError` instead of loading into memor
 
 - **Offline wallet journal**: `OfflineJournal` stores pending/committed envelopes with hash chain + HMAC. Set caps with `OfflineJournalConfiguration(maxRecords:maxBytes:)` to prevent runaway files.
 
-- **Pipeline retry queue**: `FilePendingTransactionQueue` uses newline-delimited base64 JSON. Configure bounds with `FilePendingTransactionQueueConfiguration` and handle `overflow*` errors.
+- **Caller-managed pipeline archive**: `FilePendingTransactionQueue` uses newline-delimited base64 JSON for explicit local storage only. `IrohaSDK` never drains or submits it; configure bounds with `FilePendingTransactionQueueConfiguration` and handle `overflow*` errors.
 
 - **Evidence export**: `ConnectReplayRecorder` + `ConnectSessionDiagnostics.exportJournalBundle` write `manifest.json`, queue files, and `metrics.ndjson` so operators can inspect/replay sessions.
 

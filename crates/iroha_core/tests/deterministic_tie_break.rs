@@ -15,7 +15,7 @@ use iroha_data_model::prelude::*;
 
 fn build_world() -> (
     iroha_core::state::State,
-    ChainId,
+    NetworkId,
     Vec<(AccountId, iroha_crypto::KeyPair)>,
 ) {
     let chain_id: ChainId = "chain".parse().unwrap();
@@ -63,13 +63,14 @@ fn build_world() -> (
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     let state =
         iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
     (
         state,
-        chain_id,
+        network_id,
         vec![(a1, k1), (a2, k2), (a3, k3), (a4, k4)],
     )
 }
@@ -94,7 +95,7 @@ fn run_block(state: &mut iroha_core::state::State, txs: Vec<SignedTransaction>) 
 
 #[test]
 fn scheduler_tie_break_stable_by_call_hash_then_index() {
-    let (mut state, chain_id, accs) = build_world();
+    let (mut state, network_id, accs) = build_world();
     // Build 4 independent log transactions
     let txs: Vec<SignedTransaction> = accs
         .iter()
@@ -102,7 +103,7 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
         .map(|(i, (aid, kp))| {
             let msg = format!("log-{i}");
             TransactionBuilder::new(
-                chain_id.clone(),
+                network_id,
                 aid.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -146,7 +147,7 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
 #[test]
 fn scheduler_tie_break_randomized_input_orders() {
     // Same setup as the basic test, but exercise many randomized permutations
-    let (mut state, chain_id, accs) = build_world();
+    let (mut state, network_id, accs) = build_world();
     // Build 4 independent log transactions
     let txs: Vec<SignedTransaction> = accs
         .iter()
@@ -154,7 +155,7 @@ fn scheduler_tie_break_randomized_input_orders() {
         .map(|(i, (aid, kp))| {
             let msg = format!("log-{i}");
             TransactionBuilder::new(
-                chain_id.clone(),
+                network_id,
                 aid.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

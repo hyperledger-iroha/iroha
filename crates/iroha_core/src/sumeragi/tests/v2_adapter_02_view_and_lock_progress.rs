@@ -585,24 +585,6 @@
             }] if vote.phase() == reducer::Phase::Commit
         ));
 
-        let timeout = wire::TimeoutCertificate {
-            round: wire_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xC8; 96],
-            }],
-        };
-        let deferred_tc = adapter
-            .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
-            ))
-            .expect("defer the timeout certificate behind the signature fence");
-        assert_eq!(
-            deferred_tc.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
-
         let locked_vote =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                 round: wire_round,
@@ -615,13 +597,13 @@
             }));
         let deferred_vote = adapter
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote.clone()))
-            .expect("defer the exact locked Commit vote behind the timeout certificate");
+            .expect("defer the exact locked Commit vote behind the local signature");
         assert_eq!(
             deferred_vote.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
         );
-        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
-        assert!(adapter.deferred_progress_inputs[1].admission.is_some());
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
+        assert!(adapter.deferred_progress_inputs[0].admission.is_some());
 
         let duplicate_while_deferred = adapter
             .receive_authenticated(AuthenticatedConsensusMessage::for_test(locked_vote.clone()))
@@ -632,47 +614,63 @@
         );
         assert_eq!(
             adapter.deferred_progress_inputs.len(),
-            2,
+            1,
             "a same-generation duplicate cannot replace deferred ownership"
         );
 
         let tag_before_tc = adapter.current_tag();
-        let completed_signature = adapter
-            .signature_completed(replay_tag, vec![0xB6])
-            .expect("complete the signature before draining the older timeout")
-            .into_effects();
-        assert!(
-            completed_signature
-                .iter()
-                .all(|effect| !matches!(effect, AdapterEffect::EnterView { .. }))
-        );
-        let installed_effects = adapter
-            .drain_deferred()
-            .expect("service the timeout before the later locked vote");
+        let timeout = wire::TimeoutCertificate {
+            round: wire_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xC8; 96],
+            }],
+        };
+        let installed = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+            ))
+            .expect("authenticated timeout bypasses the hung local signature");
+        assert_eq!(installed.disposition(), reducer::StepDisposition::Applied);
+        let installed_effects = installed.into_effects();
         assert!(adapter.current_tag().strictly_advances(tag_before_tc));
         assert_eq!(
             adapter.current_tag().generation(),
             reducer::Generation::INITIAL
         );
-        assert!(installed_effects.iter().any(|effect| matches!(
-            effect,
+        assert_eq!(
+            installed_effects.len(),
+            3,
+            "TC installation owns one ordered EnterView/Fetch/Sign recovery chain"
+        );
+        assert!(matches!(
+            &installed_effects[0],
             AdapterEffect::EnterView {
                 protected_body: Some((round, subject)),
                 ..
             } if *round == wire_round && *subject == locked_subject
-        )));
-        let commit_sign_tag = installed_effects
-            .iter()
-            .find_map(|effect| match effect {
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::Vote(vote),
-                } if vote.round == wire_round && vote.phase == wire::GlobalPhase::Commit => {
-                    Some(*tag)
-                }
-                _ => None,
-            })
-            .expect("TC installation must reconstruct the exact local locked Commit vote");
+        ));
+        assert!(matches!(
+            &installed_effects[1],
+            AdapterEffect::FetchBody {
+                round,
+                subject,
+                certificate: Some(certificate),
+                ..
+            } if *round == wire_round
+                && *subject == locked_subject
+                && certificate.phase == wire::GlobalPhase::Prepare
+        ));
+        let commit_sign_tag = match &installed_effects[2] {
+            AdapterEffect::Sign {
+                tag,
+                request: SignRequest::Vote(vote),
+            } if vote.round == wire_round && vote.phase == wire::GlobalPhase::Commit => *tag,
+            effect => panic!(
+                "TC installation must reconstruct the exact local locked Commit vote: {effect:?}"
+            ),
+        };
         assert_eq!(
             adapter.deferred_progress_inputs.len(),
             1,
@@ -729,4 +727,3 @@
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
     }
-

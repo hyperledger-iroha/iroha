@@ -169,11 +169,13 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
     );
 
     let chain_id = iroha_data_model::ChainId::from("onboarding-test-chain");
-    let state = Arc::new(State::new_with_chain_for_testing(
+    let network_id = iroha_torii::test_utils::signed_query_network_id();
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         world,
         kura.clone(),
         query,
         chain_id.clone(),
+        network_id,
     ));
     let nexus = state.nexus_snapshot();
     let lane_manifests = Arc::new(LaneManifestRegistry::from_config(
@@ -183,7 +185,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
     ));
     state.install_lane_manifests(&lane_manifests);
     let seed_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -259,7 +261,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         {
             Torii::new(
                 chain_id.clone(),
-                iroha_torii::test_utils::signed_query_network_id(),
+                network_id,
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -277,7 +279,7 @@ fn build_onboarding_test_context() -> OnboardingTestContext {
         {
             Torii::new(
                 chain_id.clone(),
-                iroha_torii::test_utils::signed_query_network_id(),
+                network_id,
                 kiso,
                 cfg.torii.clone(),
                 queue.clone(),
@@ -431,7 +433,7 @@ fn remove_exact_alias_permission(
     });
     let permission = iroha_core::alias_setup::exact_alias_permission_bundle(&intent)[0].clone();
     let fixture_tx = TransactionBuilder::new(
-        context.chain_id.clone(),
+        *context.state.network_id_ref(),
         account_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

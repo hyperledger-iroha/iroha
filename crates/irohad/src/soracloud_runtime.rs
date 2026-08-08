@@ -64,7 +64,7 @@ use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 #[cfg(test)]
 use iroha_data_model::transaction::SignedTransaction;
 use iroha_data_model::{
-    ChainId, Encode,
+    Encode,
     account::AccountId,
     isi::{self, InstructionBox},
     name::Name,
@@ -362,7 +362,6 @@ pub(crate) trait SoracloudRuntimeMutationSink: Send + Sync {
 /// Queue-backed mutation sink used by `irohad` to report runtime-originated Soracloud health events.
 #[derive(Clone)]
 pub(crate) struct QueuedSoracloudRuntimeMutationSink {
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<State>,
     authority: AccountId,
@@ -380,7 +379,6 @@ impl QueuedSoracloudRuntimeMutationSink {
     /// the injected provider is unavailable, substituted, stale, revoked, or
     /// test-marked.
     pub(crate) fn new(
-        chain_id: Arc<ChainId>,
         queue: Arc<Queue>,
         state: Arc<State>,
         signer: Arc<dyn crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
@@ -401,7 +399,6 @@ impl QueuedSoracloudRuntimeMutationSink {
         .map_err(|error| eyre::eyre!("runtime signer qualification failed: {error:?}"))?;
         let authority = binding.authority().clone();
         Ok(Self {
-            chain_id,
             queue,
             state,
             authority,
@@ -428,7 +425,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         endpoint: &'static str,
     ) -> eyre::Result<()> {
         let mut payload = build_soracloud_runtime_submission_payload(
-            (*self.chain_id).clone(),
+            *self.state.network_id_ref(),
             self.authority.clone(),
             instruction,
             self.submission.fee_payment_intent(),
@@ -484,7 +481,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         };
         let accepted = AcceptedTransaction::accept(
             tx,
-            &self.chain_id,
+            self.state.network_id_ref(),
             max_clock_drift,
             transaction_params,
             crypto.as_ref(),
@@ -582,13 +579,13 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
 }
 
 fn build_soracloud_runtime_submission_payload(
-    chain_id: ChainId,
+    network_id: iroha_data_model::NetworkId,
     authority: AccountId,
     instruction: InstructionBox,
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     endpoint: &'static str,
 ) -> eyre::Result<TransactionPayload> {
-    TransactionBuilder::new(chain_id, authority, fee_payment)
+    TransactionBuilder::new(network_id, authority, fee_payment)
         .with_instructions([instruction])
         .into_payload()
         .wrap_err_with(|| format!("build internal Soracloud runtime mutation at `{endpoint}`"))
@@ -18486,7 +18483,11 @@ mod tests {
     fn runtime_submission_transaction_checked_signing_verifies() -> Result<()> {
         let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
         let payload = build_soracloud_runtime_submission_payload(
-            ChainId::from("soracloud-runtime-sign-test"),
+            iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x15; Hash::LENGTH],
+                )),
+            ),
             authority.clone(),
             InstructionBox::from(Log::new(Level::INFO, "checked runtime signing".into())),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -18614,7 +18615,11 @@ mod tests {
         let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
         let intent = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
         let payload = build_soracloud_runtime_submission_payload(
-            ChainId::from("soracloud-runtime-fee-intent-test"),
+            iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x15; Hash::LENGTH],
+                )),
+            ),
             authority,
             InstructionBox::from(Log::new(Level::INFO, "fee intent".into())),
             intent.clone(),

@@ -130,6 +130,81 @@ test("ToriiClient emits telemetry when allowInsecure is used with private_key re
   assert.equal(event.hasCanonicalAuth, false);
 });
 
+test("ToriiClient never retries a nonce-bearing canonical request status", async () => {
+  let attempts = 0;
+  const client = new ToriiClient("https://torii.primary.example", {
+    maxRetries: 9,
+    backoffInitialMs: 0,
+    retryMethods: ["POST"],
+    retryStatuses: [503],
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      assert.equal(init.redirect, "error");
+      return { status: 503 };
+    },
+  });
+
+  const response = await client._request("POST", "/query", {
+    body: new Uint8Array([0x01]),
+    canonicalAuth: {
+      accountId: "alice-1@wonderland",
+      privateKey: Buffer.alloc(32, 0x15),
+    },
+  });
+  assert.equal(response.status, 503);
+  assert.equal(attempts, 1);
+});
+
+test("ToriiClient never retries a nonce-bearing canonical request network failure", async () => {
+  let attempts = 0;
+  const networkError = new TypeError("socket closed after dispatch");
+  const client = new ToriiClient("https://torii.primary.example", {
+    maxRetries: 9,
+    backoffInitialMs: 0,
+    retryMethods: ["POST"],
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      assert.equal(init.redirect, "error");
+      throw networkError;
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      client._request("POST", "/query", {
+        body: new Uint8Array([0x02]),
+        canonicalAuth: {
+          accountId: "alice-1@wonderland",
+          privateKey: Buffer.alloc(32, 0x16),
+        },
+      }),
+    (error) => error === networkError,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("ToriiClient treats a caller-supplied nonce header as one-shot", async () => {
+  let attempts = 0;
+  const client = new ToriiClient("https://torii.primary.example", {
+    maxRetries: 9,
+    backoffInitialMs: 0,
+    retryMethods: ["POST"],
+    retryStatuses: [503],
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      assert.equal(init.redirect, "error");
+      return { status: 503 };
+    },
+  });
+
+  const response = await client._request("POST", "/query", {
+    body: new Uint8Array([0x03]),
+    headers: { "X-Iroha-Nonce": "caller-generated-nonce" },
+  });
+  assert.equal(response.status, 503);
+  assert.equal(attempts, 1);
+});
+
 test("NoritoRpcClient rejects insecure base URLs when credentials are configured", () => {
   assert.throws(
     () =>

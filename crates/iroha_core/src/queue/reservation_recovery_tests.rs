@@ -549,15 +549,28 @@ fn restart_commit_barrier_tombstones_pending_plan_before_replay() {
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
-        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+        let binding =
+            push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+        assert_eq!(binding.admission_context.proposal_height, 1);
+        seed_committed_height_for_queue_test(&state, 4);
+        let mut later_scope = lane_reservation_scope(
+            &state,
+            b"commit-window-owner",
+            b"commit-window-proposal",
+        );
+        later_scope.proposal_height = 5;
+        later_scope.lane_incarnation = state
+            .lane_incarnation_at_height(LaneId::SINGLE, later_scope.proposal_height)
+            .expect("the canonical lane remains active at the later reservation height");
         let key = *queue
             .reserve_transactions_for_lane(
                 &state,
-                lane_reservation_scope(&state, b"commit-window-owner", b"commit-window-proposal"),
+                later_scope,
                 nonzero!(1_usize),
             )
             .expect("reserve transaction")[0]
             .key();
+        assert_eq!(key.proposal_height, 5);
         // Model a crash after the reservation Commit fsync and before the independent
         // queue-plan Remove append. The public commit API closes this window with the same
         // durable barrier protocol.

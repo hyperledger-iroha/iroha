@@ -3,6 +3,103 @@ import XCTest
 @testable import IrohaSwift
 
 final class AliasSetupV1Tests: XCTestCase {
+    func testAliasPlanBodiesRejectRetiredChainAliasesAndNonCanonicalNetworkIds() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x18, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let anchor = try AliasPlanAnchorV1(
+            blockHeight: 1,
+            blockHash: String(repeating: "01", count: 32)
+        )
+        let setup = try AliasTransactionPlanBodyV1(
+            authority: authority,
+            networkId: TestNetworkIds.canonical,
+            anchor: anchor,
+            resources: [],
+            instructions: [],
+            totalsByAsset: [],
+            warnings: [],
+            blockers: [],
+            validUntilMs: 1
+        )
+        let alias = try ResolvedAccountAliasV1(
+            canonicalName: "merchant@paynet",
+            dataspaceId: 7
+        )
+        let configuration = ConfigureAliasAutoRenew(
+            target: .accountAlias(alias),
+            expectedRevision: 0,
+            config: nil
+        )
+        let lifecycle = try AliasLifecycleTransactionPlanBodyV1(
+            authority: authority,
+            networkId: TestNetworkIds.canonical,
+            anchor: anchor,
+            operation: .configureAutoRenew(configuration),
+            disposition: .noOp,
+            instruction: nil,
+            quote: nil,
+            totalsByAsset: [],
+            warnings: [],
+            blockers: [],
+            validUntilMs: 1
+        )
+        func object<T: Encodable>(_ value: T) throws -> [String: Any] {
+            try XCTUnwrap(
+                JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+                    as? [String: Any]
+            )
+        }
+        func data(_ object: [String: Any]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        }
+        let setupObject = try object(setup)
+        let lifecycleObject = try object(lifecycle)
+        XCTAssertNoThrow(try JSONDecoder().decode(
+            AliasTransactionPlanBodyV1.self,
+            from: data(setupObject)
+        ))
+        XCTAssertNoThrow(try JSONDecoder().decode(
+            AliasLifecycleTransactionPlanBodyV1.self,
+            from: data(lifecycleObject)
+        ))
+
+        for retiredAlias in ["chain", "chainId", "chain_id"] {
+            var changedSetup = setupObject
+            changedSetup[retiredAlias] = "legacy"
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                AliasTransactionPlanBodyV1.self,
+                from: data(changedSetup)
+            ), retiredAlias)
+            var changedLifecycle = lifecycleObject
+            changedLifecycle[retiredAlias] = "legacy"
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                AliasLifecycleTransactionPlanBodyV1.self,
+                from: data(changedLifecycle)
+            ), retiredAlias)
+        }
+
+        let invalidNetworkIds: [Any] = [
+            ["kind": "genesis"],
+            ["kind": "unknown", "value": TestNetworkIds.canonical.literal],
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91148#B2D1",
+        ]
+        for invalidNetworkId in invalidNetworkIds {
+            var changedSetup = setupObject
+            changedSetup["network_id"] = invalidNetworkId
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                AliasTransactionPlanBodyV1.self,
+                from: data(changedSetup)
+            ))
+            var changedLifecycle = lifecycleObject
+            changedLifecycle["network_id"] = invalidNetworkId
+            XCTAssertThrowsError(try JSONDecoder().decode(
+                AliasLifecycleTransactionPlanBodyV1.self,
+                from: data(changedLifecycle)
+            ))
+        }
+    }
+
     func testAccountAliasIntentPreservesTairaTargetAccount() throws {
         let target = try AccountAddress
             .fromAccount(publicKey: Data(repeating: 0x17, count: 32))
@@ -89,7 +186,7 @@ final class AliasSetupV1Tests: XCTestCase {
             body: try AliasTransactionPlanBodyV1(
                 version: AliasTransactionPlanBodyV1.version,
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -104,6 +201,22 @@ final class AliasSetupV1Tests: XCTestCase {
                 validUntilMs: 49_000
             ),
             planHash: setupVector.canonicalPlanHashHex
+        )
+
+        let canonicalJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(plan), encoding: .utf8)
+        )
+        XCTAssertTrue(canonicalJSON.contains("\"network_id\":\"\(TestNetworkIds.canonical.literal)\""))
+        let legacyJSON = canonicalJSON.replacingOccurrences(
+            of: "\"network_id\"",
+            with: "\"chain_id\""
+        )
+        XCTAssertNotEqual(legacyJSON, canonicalJSON)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AliasTransactionPlanV1.self,
+                from: Data(legacyJSON.utf8)
+            )
         )
 
         XCTAssertTrue(AliasPlanVerifier.verifyHash(plan, canonicalBodyNorito: bodyBytes))
@@ -402,7 +515,7 @@ final class AliasSetupV1Tests: XCTestCase {
         let renewalPlan = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
                     blockHash: String(repeating: "01", count: 32)
@@ -422,6 +535,20 @@ final class AliasSetupV1Tests: XCTestCase {
             planHash: AliasPlanVerifier.canonicalLifecycleHash(
                 canonicalBodyNorito: renewalBodyBytes
             ).hexEncodedString()
+        )
+        let renewalJSON = try XCTUnwrap(
+            String(data: JSONEncoder().encode(renewalPlan), encoding: .utf8)
+        )
+        XCTAssertTrue(renewalJSON.contains("\"network_id\":\"\(TestNetworkIds.canonical.literal)\""))
+        let legacyRenewalJSON = renewalJSON.replacingOccurrences(
+            of: "\"network_id\"",
+            with: "\"chain_id\""
+        )
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                AliasLifecycleTransactionPlanV1.self,
+                from: Data(legacyRenewalJSON.utf8)
+            )
         )
         XCTAssertEqual(AliasPlanVerifier.validateExecutable(renewalPlan), [])
         XCTAssertNoThrow(
@@ -454,7 +581,7 @@ final class AliasSetupV1Tests: XCTestCase {
         let noOpPlan = try AliasLifecycleTransactionPlanV1(
             body: try AliasLifecycleTransactionPlanBodyV1(
                 authority: authority,
-                chainId: "test-chain",
+                networkId: TestNetworkIds.canonical,
                 anchor: renewalPlan.body.anchor,
                 operation: .configureAutoRenew(configuration),
                 disposition: .noOp,

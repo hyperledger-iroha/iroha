@@ -89,10 +89,9 @@ impl QueuePlanJournalLivePosition {
     ) -> io::Result<()> {
         if self.record.entrypoint_hash != key.entrypoint_hash
             || self.plan_digest != key.routing_plan_digest
-            || self.record.admission_context.proposal_height != key.proposal_height
         {
             return Err(invalid_data(
-                "queue plan journal global-admission tombstone does not match the live entrypoint, routing plan, or admitting height",
+                "queue plan journal global-admission tombstone does not match the live entrypoint or routing plan",
             ));
         }
         self.global_admission_binding()?
@@ -4114,12 +4113,14 @@ mod tests {
         label: &str,
         instructions: impl IntoIterator<Item = InstructionBox>,
     ) -> QueuePlanJournalRecordV4 {
-        let chain_id = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("chain id");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(label.as_bytes()),
+        ));
         let (account_id, keypair) = gen_account_in(label);
         let tx = TransactionBuilder::new(
-            chain_id,
+            network_id,
             account_id,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

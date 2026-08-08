@@ -15,7 +15,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     isi::{
         InstructionBox,
@@ -108,7 +108,9 @@ impl OrderbookTransactionForwarderPolicyV1 {
 /// finalized state view identified by `finalized_cursor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookTransactionContextV1 {
-    /// Exact active chain identity for signing and signed-ingress validation.
+    /// Exact genesis-hash-derived domain for signing and signed-ingress validation.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact active, governance-authenticated policy record.
     pub policy_record: OrderbookAdmissionPolicyRecord,
@@ -211,7 +213,9 @@ impl From<OrderbookOperationV1> for InstructionBox {
 pub struct OrderbookTransactionSigningRequestV1 {
     /// Stable semantic operation identity.
     pub operation_id: [u8; 32],
-    /// Exact active chain identity.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact matcher authority or explicitly configured receipt relayer.
     pub authority: AccountId,
@@ -295,6 +299,7 @@ pub fn validate_orderbook_reconciliation_material_v1(
 ) -> Result<(), OrderbookTransactionForwarderError> {
     validate_orderbook_pending_delivery_v1(delivery)?;
     if retained.operation_id != delivery.operation_id
+        || retained.network_id != delivery.network_id
         || retained.chain_id != delivery.chain_id
         || retained.authority != delivery.authority
         || retained.operation.kind() != delivery.kind
@@ -306,9 +311,13 @@ pub fn validate_orderbook_reconciliation_material_v1(
     validate_reconciliation_operation_shape(&retained.operation)?;
     let (identity_scope, identity_digest) = operation_identity(&retained.operation)
         .map_err(|_| OrderbookTransactionForwarderError::InvalidCheckpoint)?;
-    let semantic_digest =
-        semantic_digest(&retained.chain_id, &retained.authority, &retained.operation)
-            .map_err(|_| OrderbookTransactionForwarderError::InvalidCheckpoint)?;
+    let semantic_digest = semantic_digest(
+        &retained.network_id,
+        &retained.chain_id,
+        &retained.authority,
+        &retained.operation,
+    )
+    .map_err(|_| OrderbookTransactionForwarderError::InvalidCheckpoint)?;
     if identity_digest == [0; 32]
         || semantic_digest != delivery.semantic_digest
         || operation_id_from_parts(identity_scope, identity_digest, semantic_digest)
@@ -429,7 +438,9 @@ pub struct OrderbookTransactionPendingV1 {
     pub operation_id: [u8; 32],
     /// Native orderbook instruction kind.
     pub kind: OrderbookTransactionKindV1,
-    /// Exact active chain identity.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact matcher authority or explicitly configured receipt relayer.
     pub authority: AccountId,
@@ -471,7 +482,9 @@ pub struct OrderbookTransactionDeadLetterV1 {
     pub operation_id: [u8; 32],
     /// Native orderbook instruction kind.
     pub kind: OrderbookTransactionKindV1,
-    /// Exact active chain identity.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Active policy digest bound by the operation.
     pub policy_digest: [u8; 32],
@@ -532,6 +545,7 @@ struct StoredPendingOrderbookTransactionV1 {
     identity_scope: StoredOrderbookIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     governed_policy: OrderbookAdmissionPolicyV1,
@@ -549,6 +563,7 @@ impl StoredPendingOrderbookTransactionV1 {
             sequence: self.sequence,
             operation_id: self.operation_id,
             kind: self.operation.kind(),
+            network_id: self.network_id,
             chain_id: self.chain_id.clone(),
             authority: self.authority.clone(),
             policy_digest: self.operation.policy_digest(),
@@ -627,6 +642,7 @@ struct StoredDeadOrderbookTransactionV1 {
     identity_scope: StoredOrderbookIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     governed_policy: OrderbookAdmissionPolicyV1,
@@ -764,6 +780,7 @@ impl OrderbookTransactionForwarder {
     ) -> Result<OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarderError> {
         context.validate()?;
         let prepared = PreparedOrderbookOperation::new_bounded(
+            context.network_id,
             context.chain_id.clone(),
             authority,
             context.policy_record.policy.clone(),
@@ -779,8 +796,9 @@ impl OrderbookTransactionForwarder {
     /// Match and maintenance signatures must use the exact governed matcher.
     /// A settlement receipt may be wrapped by any valid transaction signer
     /// because the canonical receipt carries the provider authorization. Every
-    /// signed transaction must bind the exact active chain retained in the
-    /// finalized context.
+    /// signed transaction must bind the exact active network retained in the
+    /// finalized context; the business chain identifier remains semantic
+    /// metadata.
     pub fn enqueue_signed_transaction(
         &self,
         signed_transaction_bytes: &[u8],
@@ -850,6 +868,7 @@ impl OrderbookTransactionForwarder {
             identity_scope: prepared.identity_scope,
             identity_digest: prepared.identity_digest,
             semantic_digest: prepared.semantic_digest,
+            network_id: prepared.network_id,
             chain_id: prepared.chain_id,
             authority: prepared.authority,
             governed_policy: prepared.governed_policy,
@@ -923,6 +942,7 @@ impl OrderbookTransactionForwarder {
             .ok_or(OrderbookTransactionForwarderError::UnknownOperation)?;
         Ok(OrderbookTransactionSigningRequestV1 {
             operation_id: entry.operation_id,
+            network_id: entry.network_id,
             chain_id: entry.chain_id.clone(),
             authority: entry.authority.clone(),
             operation: entry.operation.clone(),
@@ -946,6 +966,7 @@ impl OrderbookTransactionForwarder {
             .map(|entry| OrderbookTransactionDeadLetterV1 {
                 operation_id: entry.operation_id,
                 kind: entry.operation.kind(),
+                network_id: entry.network_id,
                 chain_id: entry.chain_id.clone(),
                 policy_digest: entry.operation.policy_digest(),
                 expected_book_revision: entry.operation.expected_book_revision(),
@@ -993,6 +1014,7 @@ impl OrderbookTransactionForwarder {
         claim_for_signing(entry, self.policy.max_attempts)?;
         let request = OrderbookTransactionSigningRequestV1 {
             operation_id: entry.operation_id,
+            network_id: entry.network_id,
             chain_id: entry.chain_id.clone(),
             authority: entry.authority.clone(),
             operation: entry.operation.clone(),
@@ -1019,6 +1041,7 @@ impl OrderbookTransactionForwarder {
         if prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || prepared.authority != entry.authority
             || prepared.governed_policy != entry.governed_policy
@@ -1277,6 +1300,7 @@ impl OrderbookTransactionForwarder {
                 identity_scope: entry.identity_scope,
                 identity_digest: entry.identity_digest,
                 semantic_digest: entry.semantic_digest,
+                network_id: entry.network_id,
                 chain_id: entry.chain_id,
                 authority: entry.authority,
                 governed_policy: entry.governed_policy,
@@ -1334,6 +1358,7 @@ struct PreparedOrderbookOperation {
     identity_scope: StoredOrderbookIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     governed_policy: OrderbookAdmissionPolicyV1,
@@ -1351,6 +1376,7 @@ impl PreparedOrderbookOperation {
                 .ok_or(OrderbookTransactionForwarderError::ExplicitRelayerAuthorityRequired)?
                 .clone();
         Self::new_bounded(
+            context.network_id,
             context.chain_id.clone(),
             authority,
             context.policy_record.policy.clone(),
@@ -1361,6 +1387,7 @@ impl PreparedOrderbookOperation {
     }
 
     fn new(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         governed_policy: OrderbookAdmissionPolicyV1,
@@ -1382,11 +1409,12 @@ impl PreparedOrderbookOperation {
         if identity_digest == [0; 32] {
             return Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation);
         }
-        let semantic_digest = semantic_digest(&chain_id, &authority, &operation)?;
+        let semantic_digest = semantic_digest(&network_id, &chain_id, &authority, &operation)?;
         Ok(Self {
             identity_scope,
             identity_digest,
             semantic_digest,
+            network_id,
             chain_id,
             authority,
             governed_policy,
@@ -1395,6 +1423,7 @@ impl PreparedOrderbookOperation {
     }
 
     fn new_bounded(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         governed_policy: OrderbookAdmissionPolicyV1,
@@ -1403,6 +1432,7 @@ impl PreparedOrderbookOperation {
         max_transaction_bytes: usize,
     ) -> Result<Self, OrderbookTransactionForwarderError> {
         let prepared = Self::new(
+            network_id,
             chain_id,
             authority,
             governed_policy,
@@ -1411,15 +1441,18 @@ impl PreparedOrderbookOperation {
         )?;
         let authority_bytes = norito::to_bytes(&prepared.authority)
             .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
+        let network_id_bytes = norito::to_bytes(&prepared.network_id)
+            .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
         let chain_id_bytes = norito::to_bytes(&prepared.chain_id)
             .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
         let policy_bytes = norito::to_bytes(&prepared.governed_policy)
             .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
         let operation_bytes = norito::to_bytes(&prepared.operation)
             .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
-        if chain_id_bytes
+        if network_id_bytes
             .len()
-            .checked_add(authority_bytes.len())
+            .checked_add(chain_id_bytes.len())
+            .and_then(|length| length.checked_add(authority_bytes.len()))
             .and_then(|length| length.checked_add(policy_bytes.len()))
             .and_then(|length| length.checked_add(operation_bytes.len()))
             .is_none_or(|length| length > max_transaction_bytes)
@@ -1454,8 +1487,8 @@ impl PreparedOrderbookOperation {
         {
             return Err(OrderbookTransactionForwarderError::InvalidSignedTransaction);
         }
-        if transaction.chain() != &context.chain_id {
-            return Err(OrderbookTransactionForwarderError::ChainIdMismatch);
+        if transaction.network_id() != Some(&context.network_id) {
+            return Err(OrderbookTransactionForwarderError::NetworkIdMismatch);
         }
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(OrderbookTransactionForwarderError::InvalidSignedTransaction);
@@ -1482,6 +1515,7 @@ impl PreparedOrderbookOperation {
             return Err(OrderbookTransactionForwarderError::InvalidSignedTransaction);
         };
         Self::new_bounded(
+            context.network_id,
             context.chain_id.clone(),
             transaction.authority().clone(),
             context.policy_record.policy.clone(),
@@ -1630,6 +1664,7 @@ fn revision_identity_digest(policy_digest: [u8; 32], expected_book_revision: u64
 }
 
 fn semantic_digest(
+    network_id: &NetworkId,
     chain_id: &ChainId,
     authority: &AccountId,
     operation: &OrderbookOperationV1,
@@ -1652,6 +1687,7 @@ fn semantic_digest(
         .map_err(|_| OrderbookTransactionForwarderError::InvalidOrderbookOperation)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(SEMANTIC_DIGEST_DOMAIN_V1);
+    hasher.update(network_id.as_bytes());
     hasher.update(&chain_id_len.to_le_bytes());
     hasher.update(chain_id.as_bytes());
     hasher.update(&authority_len.to_le_bytes());
@@ -1783,6 +1819,7 @@ fn context_for_stored_entry(
         .digest()
         .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
     Ok(OrderbookTransactionContextV1 {
+        network_id: entry.network_id,
         chain_id: entry.chain_id.clone(),
         policy_record: OrderbookAdmissionPolicyRecord {
             policy: entry.governed_policy.clone(),
@@ -1837,6 +1874,7 @@ fn validate_checkpoint(
     let mut previous_sequence = 0_u64;
     for entry in &checkpoint.pending {
         let prepared = PreparedOrderbookOperation::new_bounded(
+            entry.network_id,
             entry.chain_id.clone(),
             entry.authority.clone(),
             entry.governed_policy.clone(),
@@ -1854,6 +1892,7 @@ fn validate_checkpoint(
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || operation_id(&prepared) != entry.operation_id
             || !validate_orderbook_delivery(entry, policy.max_attempts)
@@ -1874,6 +1913,7 @@ fn validate_checkpoint(
             if decoded.identity_scope != entry.identity_scope
                 || decoded.identity_digest != entry.identity_digest
                 || decoded.semantic_digest != entry.semantic_digest
+                || decoded.network_id != entry.network_id
                 || decoded.chain_id != entry.chain_id
                 || decoded.authority != entry.authority
                 || decoded.governed_policy != entry.governed_policy
@@ -1903,6 +1943,7 @@ fn validate_checkpoint(
     }
     for entry in &checkpoint.dead_letters {
         let prepared = PreparedOrderbookOperation::new_bounded(
+            entry.network_id,
             entry.chain_id.clone(),
             entry.authority.clone(),
             entry.governed_policy.clone(),
@@ -1919,6 +1960,7 @@ fn validate_checkpoint(
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || operation_id(&prepared) != entry.operation_id
             || !identities.insert((entry.identity_scope, entry.identity_digest))
@@ -1933,6 +1975,7 @@ fn validate_checkpoint(
                 identity_scope: entry.identity_scope,
                 identity_digest: entry.identity_digest,
                 semantic_digest: entry.semantic_digest,
+                network_id: entry.network_id,
                 chain_id: entry.chain_id.clone(),
                 authority: entry.authority.clone(),
                 governed_policy: entry.governed_policy.clone(),
@@ -1954,6 +1997,7 @@ fn validate_checkpoint(
             if decoded.identity_scope != entry.identity_scope
                 || decoded.identity_digest != entry.identity_digest
                 || decoded.semantic_digest != entry.semantic_digest
+                || decoded.network_id != entry.network_id
                 || decoded.chain_id != entry.chain_id
                 || decoded.authority != entry.authority
                 || decoded.governed_policy != entry.governed_policy
@@ -2070,9 +2114,9 @@ pub enum OrderbookTransactionForwarderError {
     /// Signed bytes are malformed, noncanonical, unsigned, or have the wrong executable.
     #[error("signed orderbook transaction is invalid")]
     InvalidSignedTransaction,
-    /// Signed transaction belongs to a different chain.
-    #[error("signed orderbook transaction chain id does not match the active chain")]
-    ChainIdMismatch,
+    /// Signed transaction belongs to a different exact network.
+    #[error("signed orderbook transaction network id does not match the active network")]
+    NetworkIdMismatch,
     /// Native orderbook instruction or embedded receipt is invalid.
     #[error("native orderbook operation is invalid")]
     InvalidOrderbookOperation,
@@ -2178,10 +2222,11 @@ mod tests {
     use std::{fs, sync::Arc, thread, time::Duration};
 
     use ed25519_dalek::SigningKey;
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         account::AccountId,
+        block::BlockHeader,
         isi::{InstructionBox, Log},
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
@@ -2219,6 +2264,16 @@ mod tests {
         }
     }
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; 32]),
+        ))
+    }
+
+    fn test_network_id() -> NetworkId {
+        network_id(0xA1)
+    }
+
     fn context(
         matcher: &KeyPair,
         settlement: &KeyPair,
@@ -2246,6 +2301,7 @@ mod tests {
         };
         let policy_digest = policy.digest().unwrap();
         OrderbookTransactionContextV1 {
+            network_id: test_network_id(),
             chain_id: ChainId::from("orderbook-transaction-forwarder-test"),
             policy_record: OrderbookAdmissionPolicyRecord {
                 policy,
@@ -2310,8 +2366,8 @@ mod tests {
         instructions: impl IntoIterator<Item = InstructionBox>,
         creation_time_ms: u64,
     ) -> Vec<u8> {
-        signed_bytes_on_chain(
-            ChainId::from("orderbook-transaction-forwarder-test"),
+        signed_bytes_on_network(
+            test_network_id(),
             signer,
             authority,
             instructions,
@@ -2319,15 +2375,15 @@ mod tests {
         )
     }
 
-    fn signed_bytes_on_chain(
-        chain_id: ChainId,
+    fn signed_bytes_on_network(
+        network_id: NetworkId,
         signer: &KeyPair,
         authority: AccountId,
         instructions: impl IntoIterator<Item = InstructionBox>,
         creation_time_ms: u64,
     ) -> Vec<u8> {
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2488,8 +2544,8 @@ mod tests {
             Err(OrderbookTransactionForwarderError::GovernedAuthorityMismatch)
         ));
 
-        let wrong_chain = signed_bytes_on_chain(
-            ChainId::from("foreign-orderbook-chain"),
+        let wrong_network = signed_bytes_on_network(
+            network_id(0xF1),
             &matcher,
             AccountId::new(matcher.public_key().clone()),
             [operation.clone().into()],
@@ -2498,8 +2554,8 @@ mod tests {
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
                 .unwrap()
-                .enqueue_signed_transaction(&wrong_chain, &context),
-            Err(OrderbookTransactionForwarderError::ChainIdMismatch)
+                .enqueue_signed_transaction(&wrong_network, &context),
+            Err(OrderbookTransactionForwarderError::NetworkIdMismatch)
         ));
 
         let multiple = signed_bytes(

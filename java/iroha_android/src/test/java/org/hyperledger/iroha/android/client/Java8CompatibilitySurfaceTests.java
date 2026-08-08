@@ -268,15 +268,17 @@ public final class Java8CompatibilitySurfaceTests {
   }
 
   @Test
-  public void transactionStatusExceptionsDropWhitespaceDetails() {
+  public void transactionStatusExceptionsExposeOnlyMetadata() {
     final TransactionStatusException statusException =
-        new TransactionStatusException("ab12", "Rejected", " \t\n", new LinkedHashMap<>());
+        new TransactionStatusException("ab12", "Rejected", new LinkedHashMap<>());
     final TransactionStatusHttpException httpException =
         new TransactionStatusHttpException("ab12", 429, " \t\n", " \t\n");
 
-    assertFalse(
-        "blank rejection reasons must normalize to absent",
-        statusException.rejectionReason().isPresent());
+    for (final java.lang.reflect.Method method : statusException.getClass().getMethods()) {
+      assertFalse(
+          "retired rejectionReason surface must stay absent",
+          "rejectionReason".equals(method.getName()));
+    }
     assertFalse(
         "blank reject codes must normalize to absent", httpException.rejectCode().isPresent());
     assertFalse(

@@ -3,11 +3,14 @@ using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Numeric;
+using Hyperledger.Iroha.Privacy;
 
 namespace Hyperledger.Iroha.Transactions;
 
 public sealed class TransactionBuilder
 {
+    public const ulong DefaultTimeToLiveMilliseconds = 100_000;
+
     private static readonly HashSet<string> RetiredFeeMetadataKeys =
         new(["fee_sponsor", "gas_asset_id", "gas_limit"], StringComparer.Ordinal);
 
@@ -17,18 +20,19 @@ public sealed class TransactionBuilder
     private bool forceExecutableBatch;
 
     public TransactionBuilder(
-        string chainId,
+        NetworkId networkId,
         string authorityAccountId,
         FeePaymentIntent feePayment)
     {
-        ChainId = RequireExactNonBlank(chainId, nameof(chainId));
+        NetworkId = networkId ?? throw new ArgumentNullException(nameof(networkId));
         AuthorityAccountId = TransactionEncodingContext.CanonicalizeAccountId(
             authorityAccountId,
             nameof(authorityAccountId));
         this.feePayment = feePayment ?? throw new ArgumentNullException(nameof(feePayment));
     }
 
-    public string ChainId { get; }
+    /// <summary>Exact genesis-header-derived network identity.</summary>
+    public NetworkId NetworkId { get; }
 
     public string AuthorityAccountId { get; }
 
@@ -36,7 +40,7 @@ public sealed class TransactionBuilder
 
     public ulong? CreationTimeMilliseconds { get; private set; }
 
-    public ulong? TimeToLiveMilliseconds { get; private set; }
+    public ulong TimeToLiveMilliseconds { get; private set; } = DefaultTimeToLiveMilliseconds;
 
     public uint? Nonce { get; private set; }
 
@@ -48,6 +52,15 @@ public sealed class TransactionBuilder
     public IReadOnlyList<TransactionBatchEntry> ExecutableEntries => executableEntries.ToArray();
 
     public IReadOnlyDictionary<string, JsonNode?> Metadata => SnapshotMetadata(metadata);
+
+    /// <summary>
+    /// Shared mandatory guard for every retained Exact12 construction method added to this
+    /// builder. A local catalog or legacy capability snapshot can never satisfy this boundary.
+    /// </summary>
+    internal static void RequireExact12CapabilityAdmission(
+        PrivacyExact12CapabilityTupleAdmissionV1 admission,
+        PrivacyProtocolIdV1 protocol) =>
+        PrivacyExact12CapabilityAdmissionV1.RequireForConstruction(admission, protocol);
 
     public TransactionBuilder AddInstruction(TransactionInstruction instruction)
     {
@@ -306,7 +319,7 @@ public sealed class TransactionBuilder
         return SetCreationTimeMilliseconds((ulong)creationTimeMilliseconds);
     }
 
-    public TransactionBuilder SetTimeToLiveMilliseconds(ulong? timeToLiveMilliseconds)
+    public TransactionBuilder SetTimeToLiveMilliseconds(ulong timeToLiveMilliseconds)
     {
         if (timeToLiveMilliseconds == 0)
         {
@@ -384,13 +397,16 @@ public sealed class TransactionBuilder
         var payloadHash = IrohaHash.Hash(transactionPayload);
         var signature = Ed25519Signer.Sign(payloadHash, privateKeySeed);
 
-        var signedTransaction = new OfflineNoritoWriter();
-        signedTransaction.WriteField(context.EncodeConstVec(signature));
+        var transactionSignature = new CanonicalNoritoWriter();
+        transactionSignature.WriteField(context.EncodeConstVec(signature));
+
+        var signedTransaction = new CanonicalNoritoWriter();
+        signedTransaction.WriteField(transactionSignature.ToArray());
         signedTransaction.WriteField(transactionPayload);
         signedTransaction.WriteField(new byte[] { 0 });
         var signedTransactionBytes = signedTransaction.ToArray();
 
-        var entrypoint = new OfflineNoritoWriter();
+        var entrypoint = new CanonicalNoritoWriter();
         entrypoint.WriteUInt32LittleEndian(0);
         entrypoint.WriteField(transactionPayload);
         var transactionHash = IrohaHash.Hash(entrypoint.ToArray());
@@ -400,15 +416,15 @@ public sealed class TransactionBuilder
 
     internal byte[] BuildPayloadBytes(TransactionEncodingContext context)
     {
-        var payload = new OfflineNoritoWriter();
-        payload.WriteField(context.EncodeChainId(ChainId));
+        var payload = new CanonicalNoritoWriter();
+        payload.WriteField(context.EncodeNetworkDomain(NetworkId));
         payload.WriteField(context.EncodeAccountId(AuthorityAccountId));
         payload.WriteField(context.EncodeUInt64(CreationTimeMilliseconds ?? (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
         var contractCallPresent = executableEntries.Any(static entry => entry is TransactionBatchEntry.ContractCallEntry);
         payload.WriteField(forceExecutableBatch || contractCallPresent
             ? context.EncodeExecutableBatch(executableEntries)
             : context.EncodeInstructionsExecutable(Instructions));
-        payload.WriteField(context.EncodeOption(TimeToLiveMilliseconds, context.EncodeUInt64));
+        payload.WriteField(context.EncodeOption<ulong>(TimeToLiveMilliseconds, context.EncodeUInt64));
         payload.WriteField(context.EncodeOption(Nonce, context.EncodeUInt32));
         payload.WriteField(context.EncodeFeePaymentIntent(feePayment));
         payload.WriteField(metadata.Count == 0 ? context.EncodeEmptyMetadata() : context.EncodeMetadata(metadata));
@@ -450,7 +466,7 @@ public sealed class TransactionBuilder
             };
         }
         return new UnsignedTransactionPayload(
-            ChainId,
+            NetworkId,
             AuthorityAccountId,
             CreationTimeMilliseconds!.Value,
             executable,

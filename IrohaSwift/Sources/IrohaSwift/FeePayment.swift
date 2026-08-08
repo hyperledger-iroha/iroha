@@ -415,6 +415,7 @@ public struct FeeSponsorProgramActivation: Codable, Sendable, Equatable {
 /// Sponsor-owned lifecycle record returned by Torii.
 public struct FeeSponsorProgram: Codable, Sendable, Equatable {
     public let id: FeeSponsorProgramId
+    public let payoutAccount: String
     public let lifecycle: FeeSponsorProgramLifecycle
     public let activeRevision: UInt64?
     public let stagedRevision: UInt64?
@@ -422,6 +423,7 @@ public struct FeeSponsorProgram: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id
+        case payoutAccount = "payout_account"
         case lifecycle
         case activeRevision = "active_revision"
         case stagedRevision = "staged_revision"
@@ -433,10 +435,12 @@ public struct FeeSponsorProgram: Codable, Sendable, Equatable {
         try requireExactKeys(
             container,
             expected: Set(CodingKeys.allCases),
-            required: [.id, .lifecycle],
+            required: [.id, .payoutAccount, .lifecycle],
             at: decoder.codingPath
         )
         id = try container.decode(FeeSponsorProgramId.self, forKey: .id)
+        payoutAccount = try container.decode(String.self, forKey: .payoutAccount)
+        _ = try canonicalFeeSponsorAddress(payoutAccount)
         lifecycle = try container.decode(FeeSponsorProgramLifecycle.self, forKey: .lifecycle)
         activeRevision = try container.decodeIfPresent(UInt64.self, forKey: .activeRevision)
         stagedRevision = try container.decodeIfPresent(UInt64.self, forKey: .stagedRevision)

@@ -72,6 +72,7 @@ pub mod isi {
             ProposalKind::DeployContract(_)
             | ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_)
             | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
@@ -880,13 +881,6 @@ pub mod isi {
             return account_subject_matches(&permission.program_id.sponsor, account_id);
         }
         if let Ok(permission) =
-            iroha_executor_data_model::permission::nexus::CanWithdrawFeeSponsorProgram::try_from(
-                permission,
-            )
-        {
-            return account_subject_matches(&permission.program_id.sponsor, account_id);
-        }
-        if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanMintAssetToAccount::try_from(
                 permission,
             )
@@ -1239,6 +1233,30 @@ pub mod isi {
                 }
                 .into());
             }
+            if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
+                state_transaction,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot register account {account_id}: its identity is reserved for deterministic SCCP route protocol escrow"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
+                state_transaction,
+                &account_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot register account {account_id}: its identity is reserved for deterministic FX corridor protocol escrow"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some(uaid) = account.uaid() {
                 if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -1393,15 +1411,65 @@ pub mod isi {
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
 
+            if let Some((program_id, _)) =
+                state_transaction
+                    .world
+                    .fee_sponsor_programs
+                    .iter()
+                    .find(|(_, program)| {
+                        program.payout_account == account_id
+                            && program.lifecycle
+                                != iroha_data_model::nexus::FeeSponsorProgramLifecycle::Closed
+                    })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is the immutable payout account for fee sponsor program {program_id}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
             if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
+                state_transaction,
+                &account_id,
+            ) || crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(
                 state_transaction,
                 &account_id,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    format!("cannot unregister account {account_id}: it is governed SCCP custody")
-                        .into(),
+                    format!(
+                        "cannot unregister account {account_id}: it is retained SCCP protocol escrow or an immutable route custody owner"
+                    )
+                    .into(),
                 )
                 .into());
+            }
+            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
+                state_transaction,
+                &account_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained FX protocol escrow"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
+            if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_account(
+                state_transaction.world(),
+                &account_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is active SoraFS reserve custody"
+                    )
+                    .into(),
+                )
+                    .into());
             }
 
             if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
@@ -2464,6 +2532,31 @@ pub mod isi {
                     .into(),
                 )
                 .into());
+            }
+            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_asset_definition(
+                state_transaction,
+                &asset_definition_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is retained native FX corridor backing"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
+            if crate::smartcontracts::isi::sorafs_reserve::is_reserve_asset_definition(
+                state_transaction.world(),
+                &asset_definition_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it backs active SoraFS reserve custody"
+                    )
+                    .into(),
+                )
+                    .into());
             }
 
             let orchard_pool_references =
@@ -9454,6 +9547,7 @@ mod tests {
                         },
                     ),
                 },
+                recorded_at_ms: 1,
                 evidence_hashes: Vec::new(),
             }],
         );

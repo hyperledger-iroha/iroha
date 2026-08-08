@@ -40,9 +40,11 @@ use iroha_core::{
     state::{State, StateReadOnly, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature};
+use iroha_crypto::{
+    Algorithm, BlsNormal, Hash, HashOf, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
+};
 use iroha_data_model::{
-    ChainId, IntoKeyValue, Registrable,
+    ChainId, IntoKeyValue, NetworkId, Registrable,
     account::AccountId,
     block::BlockHeader,
     isi::sorafs::RegisterPinManifest,
@@ -1621,6 +1623,7 @@ struct ToriiHarness {
     state: Arc<State>,
     queue: Arc<CoreQueue>,
     chain_id: Arc<ChainId>,
+    network_id: NetworkId,
     alias_policy: actual_cfg::SorafsAliasCachePolicy,
     // Keeps Torii persistence (including the exclusive advert replay lock)
     // isolated for the lifetime of each parallel test harness.
@@ -1799,14 +1802,15 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = Arc::new(State::new_for_testing(
+    let chain_id = cfg.common.chain.clone();
+    let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::default(),
         kura.clone(),
         query.clone(),
+        chain_id.clone(),
+        network_id,
     ));
-    if let Some(inner) = Arc::get_mut(&mut state) {
-        inner.chain_id = cfg.common.chain.clone();
-    }
     let queue_cfg = actual_cfg::Queue::default();
     let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(CoreQueue::from_config(queue_cfg, queue_events));
@@ -1814,7 +1818,6 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
 
-    let chain_id = cfg.common.chain.clone();
     let chain_id_arc = Arc::new(chain_id.clone());
     let runtime_deps = ToriiRuntimeDeps::new(MaybeTelemetry::disabled());
     let runtime_deps = if let Some((proof, repair, reserve, orderbook)) = native_signers {
@@ -1832,7 +1835,7 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     };
     let torii = Torii::new_with_handle(
         chain_id,
-        iroha_torii::test_utils::signed_query_network_id(),
+        network_id,
         kiso,
         cfg.torii.clone(),
         Arc::clone(&queue),
@@ -1855,6 +1858,7 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         state,
         queue,
         chain_id: chain_id_arc,
+        network_id,
         alias_policy,
         _torii_data_dir: torii_data_dir,
     }
@@ -1972,7 +1976,7 @@ fn manifest_request_authority_fixture_uses_checked_ed25519_key_generation() {
 }
 
 fn manifest_request_fixture<F>(
-    chain_id: &ChainId,
+    network_id: NetworkId,
     submitted_epoch: u64,
     tweak_manifest: F,
 ) -> ManifestRequestFixture
@@ -2007,10 +2011,9 @@ where
         account: account.clone(),
         private_key: dm::ExposedPrivateKey(key_pair.private_key().clone()),
     };
-    let instruction =
-        RegisterPinManifest::new(manifest_payload.clone(), submitted_epoch, None, None);
+    let instruction = RegisterPinManifest::new(manifest_payload.clone(), None, None);
     let transaction = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         account,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2091,13 +2094,11 @@ fn create_manifest_setup_with_seed(
 
     let register = RegisterPinManifest::new(
         manifest.encode().expect("encode canonical manifest"),
-        submitted_epoch,
         None,
         successor_of,
     );
-    let chain_id = harness.chain_id.as_ref().clone();
     let register_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        harness.network_id,
         authority.account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2190,24 +2191,7 @@ fn ensure_authority_registered(
         .is_some();
     let authority_fee_asset = dm::AssetId::new(fee_asset_id.clone(), authority.account.clone());
     let fee_balance_exists = view.world().assets().get(&authority_fee_asset).is_some();
-    let permissions = view.world().account_permissions().get(&authority.account);
-    let has_register = permissions.as_ref().is_some_and(|perms| {
-        perms
-            .iter()
-            .any(|perm| perm.name() == "CanRegisterSorafsPin")
-    });
-    let has_approve = permissions.as_ref().is_some_and(|perms| {
-        perms
-            .iter()
-            .any(|perm| perm.name() == "CanApproveSorafsPin")
-    });
-    if account_exists
-        && has_register
-        && has_approve
-        && treasury_exists
-        && fee_asset_exists
-        && fee_balance_exists
-    {
+    if account_exists && treasury_exists && fee_asset_exists && fee_balance_exists {
         return;
     }
     drop(view);
@@ -2261,29 +2245,6 @@ fn ensure_authority_registered(
         )
         .execute(&authority.account, &mut tx)
         .expect("mint SoraFS fee balance for test authority");
-    }
-
-    if !has_register {
-        let register_perm = dm::Permission::new(
-            "CanRegisterSorafsPin"
-                .parse()
-                .expect("CanRegisterSorafsPin permission token"),
-            Json::new(()),
-        );
-        dm::Grant::account_permission(register_perm, authority.account.clone())
-            .execute(&authority.account, &mut tx)
-            .expect("grant register pin permission");
-    }
-    if !has_approve {
-        let approve_perm = dm::Permission::new(
-            "CanApproveSorafsPin"
-                .parse()
-                .expect("CanApproveSorafsPin permission token"),
-            Json::new(()),
-        );
-        dm::Grant::account_permission(approve_perm, authority.account.clone())
-            .execute(&authority.account, &mut tx)
-            .expect("grant approve pin permission");
     }
 
     tx.apply();
@@ -2699,7 +2660,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 7, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, 7, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
 
@@ -2766,7 +2727,7 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 8, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, 8, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
 
@@ -2798,7 +2759,7 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 9, |manifest| {
+    let fixture = manifest_request_fixture(harness.network_id, 9, |manifest| {
         manifest.chunking.name = "bogus".into();
     });
 
@@ -2830,7 +2791,7 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 6, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, 6, |_| {});
     let legacy = norito::json!({
         "authority": (fixture.authority.account.to_string()),
         "private_key": "[redacted]",
@@ -2855,22 +2816,22 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_rejects_wrong_shape_chain_and_signature() {
+async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
 
-    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 6, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, 6, |_| {});
     let two_instructions = TransactionBuilder::new(
-        harness.chain_id.as_ref().clone(),
+        harness.network_id,
         fixture.authority.account.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([
-        RegisterPinManifest::new(fixture.manifest_payload.clone(), 6, None, None),
-        RegisterPinManifest::new(fixture.manifest_payload.clone(), 6, None, None),
+        RegisterPinManifest::new(fixture.manifest_payload.clone(), None, None),
+        RegisterPinManifest::new(fixture.manifest_payload.clone(), None, None),
     ])
     .sign(&fixture.authority.private_key.0);
     let response = harness
@@ -2893,21 +2854,24 @@ async fn sorafs_pin_register_rejects_wrong_shape_chain_and_signature() {
         "exactly one RegisterPinManifest",
     );
 
-    let wrong_chain: ChainId = "wrong-chain".parse().expect("chain id");
-    let wrong_chain_fixture = manifest_request_fixture(&wrong_chain, 6, |_| {});
+    let wrong_network =
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"Sorafs discovery wrong-network fixture",
+        )));
+    let wrong_network_fixture = manifest_request_fixture(wrong_network, 6, |_| {});
     let response = harness
         .app
         .clone()
         .oneshot(pin_register_http_request(
-            norito::json::to_vec(&wrong_chain_fixture.transaction)
-                .expect("serialize wrong-chain transaction"),
+            norito::json::to_vec(&wrong_network_fixture.transaction)
+                .expect("serialize wrong-network transaction"),
             "application/json",
         ))
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let fixture = manifest_request_fixture(harness.chain_id.as_ref(), 6, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, 6, |_| {});
     let tamper_key = checked_manifest_request_authority_fixture();
     let tampered = fixture
         .transaction

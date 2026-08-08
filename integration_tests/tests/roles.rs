@@ -163,7 +163,7 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
     let grant_role_tx = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         mouse_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -377,7 +377,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
     let grant_role_tx = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         mouse_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -414,7 +414,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
 
     // Alice can modify Mouse's metadata after permission is granted to role
     let grant_role_permission_tx = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         mouse_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -434,7 +434,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
 
     // Alice can't modify Mouse's metadata after permission is removed from role
     let revoke_role_permission_tx = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         mouse_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -502,7 +502,7 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     let revoke_role_permission = Revoke::role_permission(perm.clone(), role_id.clone());
     let grant_role_permission = Grant::role_permission(perm.clone(), role_id.clone());
     let tx = TransactionBuilder::new(
-        network.chain_id(),
+        network.network_id(),
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

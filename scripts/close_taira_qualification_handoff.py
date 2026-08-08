@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -23,17 +24,17 @@ from release_artifact_contract import (
     exclusive_write_bytes,
     scan_inventory_paths,
     stable_read_path,
+    stable_read_relative,
 )
+import taira_privacy_protocol_receipt as privacy_evidence
 from taira_rollout_admission import (
     MACOS_RECEIPT_SCHEMA,
     MACOS_RECEIPT_SCHEMA_VERSION,
-    PRIVACY_PROTOCOL_RECEIPT_SCHEMA,
-    PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION,
 )
 
 HANDOFF_MANIFEST = "handoff-inventory-v1.json"
 RECEIPT_NAME = "four-peer-receipt-v2.json"
-PRIVACY_PROTOCOL_RECEIPT_NAME = "privacy-protocol-four-peer-receipt-v1.json"
+PRIVACY_PROTOCOL_DIRECTORY = "privacy-protocol-four-peer-v2"
 SOURCE_IDENTITY_NAME = "taira-source-identity-v1.json"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -197,7 +198,7 @@ def _canonical_payload(
 
 def close_handoff(
     receipt: Path,
-    privacy_protocol_receipt: Path,
+    privacy_protocol_evidence: Path,
     source_identity: Path,
     output: Path,
 ) -> dict[str, object]:
@@ -207,10 +208,11 @@ def close_handoff(
     identity_value, identity_payload = _canonical_payload(
         source_identity, "source identity", 1024 * 1024, compact=True
     )
-    privacy_value, privacy_payload = _canonical_payload(
-        privacy_protocol_receipt,
+    privacy_receipt = privacy_protocol_evidence / privacy_evidence.RECEIPT_NAME
+    privacy_value, _privacy_receipt_payload = _canonical_payload(
+        privacy_receipt,
         "privacy protocol four-peer receipt",
-        4 * 1024 * 1024,
+        privacy_evidence.MAX_RECEIPT_BYTES,
         compact=False,
     )
     source = identity_value.get("source")
@@ -252,18 +254,56 @@ def close_handoff(
         )
     privacy_candidate = privacy_value.get("candidate")
     if (
-        privacy_value.get("schema") != PRIVACY_PROTOCOL_RECEIPT_SCHEMA
-        or privacy_value.get("schema_version")
-        != PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION
+        privacy_value.get("schema") != privacy_evidence.RECEIPT_SCHEMA
+        or privacy_value.get("schema_version") != privacy_evidence.RECEIPT_SCHEMA_VERSION
         or not isinstance(privacy_candidate, dict)
         or privacy_candidate.get("source") != source
         or privacy_candidate.get("validator_binary_sha256")
         != receipt_value.get("validator_binary_sha256")
+        or privacy_candidate.get("artifact_handoff_sha256")
+        != receipt_value.get("artifact_handoff_sha256")
         or SHA256_RE.fullmatch(str(privacy_value.get("receipt_id", ""))) is None
     ):
         raise QualificationHandoffError(
             "privacy protocol receipt is not bound to the exact source and validator"
         )
+    try:
+        privacy_evidence.validate_evidence_directory(
+            privacy_protocol_evidence,
+            expected_source=source,
+            expected_validator_binary_sha256=str(
+                receipt_value["validator_binary_sha256"]
+            ),
+            expected_linux_release_archive_sha256=str(
+                privacy_candidate.get("linux_release_archive_sha256", "")
+            ),
+            expected_exact12_matrix_sha256=str(
+                privacy_candidate.get("exact12_matrix_sha256", "")
+            ),
+            expected_artifact_handoff_sha256=str(
+                receipt_value["artifact_handoff_sha256"]
+            ),
+            expected_receipt_id=str(privacy_value["receipt_id"]),
+            now_unix=int(time.time()),
+        )
+    except privacy_evidence.PrivacyProtocolEvidenceError as exc:
+        raise QualificationHandoffError(str(exc)) from exc
+    privacy_payloads: dict[str, bytes] = {}
+    for name in sorted(privacy_evidence.EVIDENCE_NAMES):
+        maximum = privacy_evidence.evidence_file_maximum(name)
+        try:
+            _info, payload = stable_read_relative(
+                privacy_protocol_evidence,
+                name,
+                max_size=maximum,
+                return_payload=True,
+            )
+        except ReleaseArtifactError as exc:
+            raise QualificationHandoffError(
+                f"cannot preserve privacy evidence {name}: {exc}"
+            ) from exc
+        assert payload is not None
+        privacy_payloads[name] = payload
     output = create_fresh_directory(output, mode=0o700)
     directory_flags = (
         os.O_RDONLY
@@ -273,6 +313,7 @@ def close_handoff(
     )
     parent_fd = -1
     output_fd = -1
+    privacy_fd = -1
     committed = False
     try:
         expected_uid = os.geteuid()
@@ -303,7 +344,6 @@ def close_handoff(
             )
         parent_after_create = os.fstat(parent_fd)
         payloads = {
-            PRIVACY_PROTOCOL_RECEIPT_NAME: privacy_payload,
             RECEIPT_NAME: receipt_payload,
             SOURCE_IDENTITY_NAME: identity_payload,
         }
@@ -324,8 +364,81 @@ def close_handoff(
                     "size": len(payload),
                 }
             )
+        os.mkdir(PRIVACY_PROTOCOL_DIRECTORY, mode=0o700, dir_fd=output_fd)
+        privacy_before = os.stat(
+            PRIVACY_PROTOCOL_DIRECTORY,
+            dir_fd=output_fd,
+            follow_symlinks=False,
+        )
+        privacy_fd = os.open(
+            PRIVACY_PROTOCOL_DIRECTORY,
+            directory_flags,
+            dir_fd=output_fd,
+        )
+        privacy_opened = os.fstat(privacy_fd)
+        if (
+            not stat.S_ISDIR(privacy_opened.st_mode)
+            or stat.S_ISLNK(privacy_opened.st_mode)
+            or _directory_identity(privacy_opened)
+            != _directory_identity(privacy_before)
+            or privacy_opened.st_uid != expected_uid
+            or privacy_opened.st_gid != expected_gid
+            or stat.S_IMODE(privacy_opened.st_mode) != 0o700
+        ):
+            raise QualificationHandoffError(
+                "privacy evidence handoff directory identity differs"
+            )
+        privacy_installed: dict[str, tuple[int, ...]] = {}
+        for name, payload in sorted(privacy_payloads.items()):
+            privacy_installed[name] = _write_frozen_at(
+                privacy_fd,
+                name,
+                payload,
+                expected_uid=expected_uid,
+                expected_gid=expected_gid,
+            )
+            rows.append(
+                {
+                    "path": f"{PRIVACY_PROTOCOL_DIRECTORY}/{name}",
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size": len(payload),
+                }
+            )
+        if sorted(os.listdir(privacy_fd)) != sorted(privacy_payloads):
+            raise QualificationHandoffError(
+                "privacy evidence handoff inventory is not exactly closed"
+            )
+        try:
+            privacy_evidence.validate_evidence_directory(
+                output / PRIVACY_PROTOCOL_DIRECTORY,
+                expected_source=source,
+                expected_validator_binary_sha256=str(
+                    receipt_value["validator_binary_sha256"]
+                ),
+                expected_linux_release_archive_sha256=str(
+                    privacy_candidate.get("linux_release_archive_sha256", "")
+                ),
+                expected_exact12_matrix_sha256=str(
+                    privacy_candidate.get("exact12_matrix_sha256", "")
+                ),
+                expected_artifact_handoff_sha256=str(
+                    receipt_value["artifact_handoff_sha256"]
+                ),
+                expected_receipt_id=str(privacy_value["receipt_id"]),
+                now_unix=int(time.time()),
+            )
+        except privacy_evidence.PrivacyProtocolEvidenceError as exc:
+            raise QualificationHandoffError(
+                f"installed privacy evidence failed replay validation: {exc}"
+            ) from exc
+        for name, payload in privacy_payloads.items():
+            _replay_frozen_at(
+                privacy_fd, name, payload, privacy_installed[name]
+            )
+        os.fchmod(privacy_fd, 0o555)
+        os.fsync(privacy_fd)
         handoff = {
-            "files": rows,
+            "files": sorted(rows, key=lambda row: str(row["path"])),
             "kind": "qualification-receipt",
             "schema": "iroha.taira.release_handoff",
             "schema_version": 1,
@@ -338,7 +451,9 @@ def close_handoff(
             expected_uid=expected_uid,
             expected_gid=expected_gid,
         )
-        expected = sorted([HANDOFF_MANIFEST, *payloads])
+        expected = sorted(
+            [HANDOFF_MANIFEST, PRIVACY_PROTOCOL_DIRECTORY, *payloads]
+        )
         if sorted(os.listdir(output_fd)) != expected:
             raise QualificationHandoffError(
                 "qualification handoff inventory is not exactly closed"
@@ -365,6 +480,19 @@ def close_handoff(
             raise QualificationHandoffError(
                 "qualification handoff root ownership or mode differs"
             )
+        privacy_named = os.stat(
+            PRIVACY_PROTOCOL_DIRECTORY,
+            dir_fd=output_fd,
+            follow_symlinks=False,
+        )
+        if (
+            _directory_identity(privacy_named)
+            != _directory_identity(os.fstat(privacy_fd))
+            or stat.S_IMODE(privacy_named.st_mode) != 0o555
+        ):
+            raise QualificationHandoffError(
+                "privacy evidence handoff directory changed after freeze"
+            )
         reopened_fd = os.open(output.name, directory_flags, dir_fd=parent_fd)
         try:
             if _directory_identity(os.fstat(reopened_fd)) != _directory_identity(
@@ -389,6 +517,8 @@ def close_handoff(
                 pass
         raise
     finally:
+        if privacy_fd >= 0:
+            os.close(privacy_fd)
         if output_fd >= 0:
             os.close(output_fd)
         if parent_fd >= 0:
@@ -399,7 +529,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument(
-        "--privacy-protocol-receipt", type=Path, required=True
+        "--privacy-protocol-evidence-dir", type=Path, required=True
     )
     parser.add_argument("--source-identity", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -411,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = close_handoff(
             args.receipt,
-            args.privacy_protocol_receipt,
+            args.privacy_protocol_evidence_dir,
             args.source_identity,
             args.output,
         )

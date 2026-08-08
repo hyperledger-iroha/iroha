@@ -1650,7 +1650,7 @@ export function deriveSccpSolanaSourceIdentityHashesV1(identity) {
 function parseSettlement(value, label) {
   const record = exactFields(
     value,
-    new Set(["asset_definition_id", "custody_account_id", "payload_amount_scale"]),
+    new Set(["asset_definition_id", "custody_owner", "payload_amount_scale"]),
     label,
   );
   const assetDefinitionId = canonicalText(
@@ -1661,7 +1661,7 @@ function parseSettlement(value, label) {
   if (assetDefinitionId !== TAIRA_XOR_ASSET_DEFINITION_ID) {
     throw new TypeError(`${label}.asset_definition_id is not the first-release Taira XOR asset`);
   }
-  const custody = canonicalText(record.custody_account_id, `${label}.custody_account_id`, 512);
+  const custody = canonicalText(record.custody_owner, `${label}.custody_owner`, 512);
   AccountAddress.fromAccountId(custody);
   const payloadAmountScale = integer(
     record.payload_amount_scale,

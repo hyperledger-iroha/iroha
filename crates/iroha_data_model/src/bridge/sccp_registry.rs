@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use iroha_crypto::keccak256;
+use iroha_crypto::{derive_non_signing_ed25519_public_key, keccak256};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::Sha256;
@@ -19,7 +19,9 @@ use super::{
     SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1, SccpSolanaSourceEmitterV1,
     SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
-use crate::{account::AccountId, asset::AssetDefinitionId, block::consensus_v2::PROTOCOL_VERSION};
+use crate::{
+    NetworkId, account::AccountId, asset::AssetDefinitionId, block::consensus_v2::PROTOCOL_VERSION,
+};
 
 /// Oldest authoritative Sumeragi wire revision retained in SCCP V1 anchors.
 pub const SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION: u16 = 3;
@@ -88,6 +90,7 @@ const SOLANA_NATIVE_VERIFIER_CONFIG_DOMAIN_V1: &[u8] = b"sccp:solana:verifier-co
 const CONCRETE_ROUTE_CONFIG_DOMAIN_V1: &[u8] = b"sccp:concrete-route-config:v1";
 const NETWORK_HASH_DOMAIN_V1: &[u8] = b"sccp:network-identity:v1";
 const LANE_HASH_DOMAIN_V1: &[u8] = b"sccp:lane-id:v1";
+const ROUTE_ESCROW_ACCOUNT_DOMAIN_V1: &[u8] = b"iroha:sccp:route-escrow-account:v1";
 const SOURCE_EMITTER_HASH_DOMAIN_V1: &[u8] = b"sccp:source-emitter-identity:v1";
 const SOURCE_IDENTITY_HASH_DOMAIN_V1: &[u8] = b"sccp:source-identity:v1";
 const SEMANTIC_PROOF_PROFILE_HASH_DOMAIN_V1: &[u8] = b"sccp:semantic-proof-profile:v1";
@@ -1237,10 +1240,37 @@ impl SccpDestinationDeploymentV1 {
 pub struct SccpSoraSettlementV1 {
     /// Canonical SORA-home asset definition locked and released by Core.
     pub asset_definition_id: AssetDefinitionId,
-    /// Canonical custody account holding route liquidity.
-    pub custody_account_id: AccountId,
+    /// Exact account that owns and may fund or refund this route's protocol escrow.
+    ///
+    /// Core derives the actual non-signable escrow account from the exact
+    /// [`NetworkId`], route key, and settlement asset. This owner is never a
+    /// manager-selected debit source or settlement destination.
+    pub custody_owner: AccountId,
     /// Decimal scale used by the SCCP unsigned amount field.
     pub payload_amount_scale: u32,
+}
+
+/// Derive the non-signable protocol escrow account for one exact SCCP route.
+///
+/// The derivation binds the genesis-derived [`NetworkId`], the complete
+/// canonical route key (including its immutable revision), and the settlement
+/// asset. No private signing scalar is known for the derived Ed25519 point.
+#[must_use]
+pub fn sccp_route_escrow_account_id_v1(
+    network_id: &NetworkId,
+    route_key: &SccpRouteKeyV1,
+    asset_definition_id: &AssetDefinitionId,
+) -> AccountId {
+    let route_key = route_key.encode();
+    let asset_definition_id = asset_definition_id.encode();
+    AccountId::new(derive_non_signing_ed25519_public_key(
+        ROUTE_ESCROW_ACCOUNT_DOMAIN_V1,
+        &[
+            network_id.as_bytes(),
+            route_key.as_slice(),
+            asset_definition_id.as_slice(),
+        ],
+    ))
 }
 
 impl SccpSoraSettlementV1 {
@@ -3066,9 +3096,7 @@ mod tests {
             sora_outbound_execution_policy: sora_outbound_execution_policy(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_account_id: AccountId::new(
-                    SIGNATORY.parse().expect("valid custody public key"),
-                ),
+                custody_owner: AccountId::new(SIGNATORY.parse().expect("valid custody public key")),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             },
         }
@@ -3119,12 +3147,40 @@ mod tests {
             sora_outbound_execution_policy: sora_outbound_execution_policy(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_account_id: AccountId::new(
-                    SIGNATORY.parse().expect("valid custody public key"),
-                ),
+                custody_owner: AccountId::new(SIGNATORY.parse().expect("valid custody public key")),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             },
         }
+    }
+
+    fn network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([byte; iroha_crypto::Hash::LENGTH]),
+            ),
+        )
+    }
+
+    #[test]
+    fn route_escrow_derivation_is_stable_and_exact_network_bound() {
+        let first_route = route(1, SccpRouteActivationV1::Staged);
+        let second_route = route(2, SccpRouteActivationV1::Staged);
+        let asset = first_route.settlement.asset_definition_id.clone();
+        let first = sccp_route_escrow_account_id_v1(&network_id(0x31), &first_route.key(), &asset);
+        assert_eq!(
+            first,
+            sccp_route_escrow_account_id_v1(&network_id(0x31), &first_route.key(), &asset)
+        );
+        assert_ne!(
+            first,
+            sccp_route_escrow_account_id_v1(&network_id(0x32), &first_route.key(), &asset),
+            "the same display route on another genesis lineage needs distinct escrow"
+        );
+        assert_ne!(
+            first,
+            sccp_route_escrow_account_id_v1(&network_id(0x31), &second_route.key(), &asset),
+            "immutable route revisions must not share custody"
+        );
     }
 
     fn retarget_evm_route_source(

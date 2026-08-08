@@ -14,7 +14,7 @@ compile_error!(
     "The `bls` feature is mandatory for iroha_core consensus; rebuild with `--features bls`"
 );
 
-use iroha_config::parameters::actual::{Common as CommonConfig, Sumeragi as SumeragiConfig};
+use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 #[cfg(test)]
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
@@ -64,9 +64,9 @@ pub fn qc_signer_count(qc: &Qc) -> usize {
 pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSpan, WriteEntry};
 
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
-pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
+pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
-    let domain = consensus_domain(chain_id, "Vote", b"v1", mode_tag);
+    let domain = consensus_domain(network_id, "Vote", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(v.block_hash.as_ref().as_ref());
     out.extend_from_slice(v.parent_state_root.as_ref());
@@ -92,18 +92,18 @@ pub fn vote_preimage(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
 }
 
 /// Build the canonical preimage for a VRF commit signature under the given chain and mode tag.
-pub fn vrf_commit_preimage(chain_id: &ChainId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
-    vrf_commit_preimage_fields(chain_id, mode_tag, c.epoch, c.signer, &c.commitment)
+pub fn vrf_commit_preimage(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
+    vrf_commit_preimage_fields(network_id, mode_tag, c.epoch, c.signer, &c.commitment)
 }
 
 /// Build the canonical preimage for a versioned-v2 VRF commitment.
 pub fn v2_vrf_commit_preimage(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     mode_tag: &str,
     commit: &iroha_data_model::block::consensus_v2::VrfCommit,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
-    let domain = consensus_domain(chain_id, "VrfCommit", b"v2", mode_tag);
+    let domain = consensus_domain(network_id, "VrfCommit", b"v2", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(&commit.epoch.to_be_bytes());
     out.extend_from_slice(&commit.signer.to_be_bytes());
@@ -112,14 +112,14 @@ pub fn v2_vrf_commit_preimage(
 }
 
 fn vrf_commit_preimage_fields(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     mode_tag: &str,
     epoch: u64,
     signer: u32,
     commitment: &[u8; 32],
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
-    let domain = consensus_domain(chain_id, "VrfCommit", b"v1", mode_tag);
+    let domain = consensus_domain(network_id, "VrfCommit", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(&epoch.to_be_bytes());
     out.extend_from_slice(&signer.to_be_bytes());
@@ -128,19 +128,19 @@ fn vrf_commit_preimage_fields(
 }
 
 /// Build the canonical preimage for a VRF reveal signature under the given chain and mode tag.
-pub fn vrf_reveal_preimage(chain_id: &ChainId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
-    vrf_reveal_preimage_fields(chain_id, mode_tag, r.epoch, r.signer, &r.reveal)
+pub fn vrf_reveal_preimage(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
+    vrf_reveal_preimage_fields(network_id, mode_tag, r.epoch, r.signer, &r.reveal)
 }
 
 /// Build the canonical preimage for a versioned-v2 VRF reveal.
 pub fn v2_vrf_reveal_preimage(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     mode_tag: &str,
     reveal: &iroha_data_model::block::consensus_v2::VrfReveal,
 ) -> Vec<u8> {
     let proof_len = u64::try_from(reveal.vrf_proof.len()).unwrap_or(u64::MAX);
     let mut out = Vec::with_capacity(32 + 8 + 4 + 32 + 8 + reveal.vrf_proof.len());
-    let domain = consensus_domain(chain_id, "VrfReveal", b"v2", mode_tag);
+    let domain = consensus_domain(network_id, "VrfReveal", b"v2", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(&reveal.epoch.to_be_bytes());
     out.extend_from_slice(&reveal.signer.to_be_bytes());
@@ -151,14 +151,14 @@ pub fn v2_vrf_reveal_preimage(
 }
 
 fn vrf_reveal_preimage_fields(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     mode_tag: &str,
     epoch: u64,
     signer: u32,
     reveal: &[u8; 32],
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 8 + 4 + 32);
-    let domain = consensus_domain(chain_id, "VrfReveal", b"v1", mode_tag);
+    let domain = consensus_domain(network_id, "VrfReveal", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(&epoch.to_be_bytes());
     out.extend_from_slice(&signer.to_be_bytes());
@@ -172,25 +172,25 @@ pub mod bls_preimage {
     use super::*;
 
     /// Build the canonical preimage for a Vote signature under the given chain and mode tag.
-    pub fn vote(chain_id: &ChainId, mode_tag: &str, v: &Vote) -> Vec<u8> {
-        super::vote_preimage(chain_id, mode_tag, v)
+    pub fn vote(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
+        super::vote_preimage(network_id, mode_tag, v)
     }
 
     /// Build the canonical preimage for a VRF commit signature.
-    pub fn vrf_commit(chain_id: &ChainId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
-        super::vrf_commit_preimage(chain_id, mode_tag, c)
+    pub fn vrf_commit(network_id: &NetworkId, mode_tag: &str, c: &VrfCommit) -> Vec<u8> {
+        super::vrf_commit_preimage(network_id, mode_tag, c)
     }
 
     /// Build the canonical preimage for a VRF reveal signature.
-    pub fn vrf_reveal(chain_id: &ChainId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
-        super::vrf_reveal_preimage(chain_id, mode_tag, r)
+    pub fn vrf_reveal(network_id: &NetworkId, mode_tag: &str, r: &VrfReveal) -> Vec<u8> {
+        super::vrf_reveal_preimage(network_id, mode_tag, r)
     }
 }
 
 /// Domain separation helper for signable payloads.
 /// Returns a 32‑byte Blake2b digest of the domain preimage.
 pub fn consensus_domain(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     message_type_tag: &str,
     extra: &[u8],
     mode_tag: &str,
@@ -198,10 +198,7 @@ pub fn consensus_domain(
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
     let mut hasher = Blake2b512::new();
     iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha-sumeragi-consensus/v1");
-    iroha_crypto::blake2::digest::Update::update(
-        &mut hasher,
-        chain_id.clone().into_inner().as_bytes(),
-    );
+    iroha_crypto::blake2::digest::Update::update(&mut hasher, network_id.as_bytes());
     iroha_crypto::blake2::digest::Update::update(&mut hasher, mode_tag.as_bytes());
     iroha_crypto::blake2::digest::Update::update(&mut hasher, &PROTO_VERSION.to_be_bytes());
     iroha_crypto::blake2::digest::Update::update(&mut hasher, message_type_tag.as_bytes());
@@ -212,7 +209,7 @@ pub fn consensus_domain(
     out
 }
 
-/// Compute the live v2 handshake fingerprint from only frozen protocol inputs.
+/// Compute the genesis-embedded v2 consensus-parameters fingerprint.
 ///
 /// The projection deliberately omits v1 collectors, phase-specific and
 /// adaptive timeouts, the global-RBC switch, and any local fallback. Mode,
@@ -220,11 +217,10 @@ pub fn consensus_domain(
 /// and the genesis-selected NPoS election inputs are canonical Norito fields.
 /// Mutable shared adapter settings are committed separately by
 /// [`SumeragiConfig::v2_config`].
-pub fn compute_consensus_fingerprint_from_params(
-    chain_id: &ChainId,
+pub fn compute_consensus_parameters_fingerprint(
     params: &ConsensusGenesisParams,
 ) -> Result<[u8; 32], String> {
-    iroha_data_model::block::consensus_v2::fingerprint::compute(chain_id, params)
+    iroha_data_model::block::consensus_v2::fingerprint::compute(params)
 }
 
 /// Build the exact first-release carrier for consensus-genesis parameters.
@@ -289,7 +285,6 @@ pub fn consensus_genesis_params_from_parameters(
 pub fn compute_consensus_handshake_caps_from_world(
     world: &impl WorldReadOnly,
     _height: u64,
-    common_config: &CommonConfig,
     sumeragi_config: &SumeragiConfig,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
@@ -308,7 +303,7 @@ pub fn compute_consensus_handshake_caps_from_world(
     };
     let canon = consensus_genesis_params_from_parameters(frozen_mode, s_params, signed_v2_context)
         .map_err(str::to_owned)?;
-    let fingerprint = compute_consensus_fingerprint_from_params(&common_config.chain, &canon)?;
+    let fingerprint = compute_consensus_parameters_fingerprint(&canon)?;
     let mut config_caps = *config_caps;
     config_caps.execution_policy_hash = signed_v2_context.execution_policy_hash;
     config_caps.v2_config_fingerprint = sumeragi_config
@@ -333,7 +328,6 @@ pub fn compute_consensus_handshake_caps_from_world(
 /// state view and configuration.
 pub fn compute_consensus_handshake_caps_from_view(
     view: &StateView<'_>,
-    common_config: &CommonConfig,
     sumeragi_config: &SumeragiConfig,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     frozen_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
@@ -343,7 +337,6 @@ pub fn compute_consensus_handshake_caps_from_view(
     compute_consensus_handshake_caps_from_world(
         view.world(),
         height,
-        common_config,
         sumeragi_config,
         config_caps,
         frozen_mode,
@@ -354,20 +347,20 @@ pub fn compute_consensus_handshake_caps_from_view(
 /// Handshake gate structure for p2p checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandshakeGate {
-    /// Local chain id.
-    pub chain_id: ChainId,
+    /// Local exact genesis-derived network id.
+    pub network_id: NetworkId,
     /// Local runtime mode tag.
     pub mode_tag: String,
     /// Local protocol version.
     pub proto_version: u32,
-    /// Deterministic consensus fingerprint.
-    pub consensus_fingerprint: [u8; 32],
+    /// Deterministic genesis-embedded consensus-parameters fingerprint.
+    pub parameters_fingerprint: [u8; 32],
 }
 
 /// Build canonical preimage for signing an RBC READY message.
-pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) -> Vec<u8> {
+pub fn rbc_ready_preimage(network_id: &NetworkId, mode_tag: &str, ready: &RbcReady) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32);
-    let domain = consensus_domain(chain_id, "RbcReady", b"v1", mode_tag);
+    let domain = consensus_domain(network_id, "RbcReady", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(ready.block_hash.as_ref().as_ref());
     out.extend_from_slice(&ready.height.to_be_bytes());
@@ -380,7 +373,11 @@ pub fn rbc_ready_preimage(chain_id: &ChainId, mode_tag: &str, ready: &RbcReady) 
 }
 
 /// Build canonical preimage for signing an RBC DELIVER message.
-pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDeliver) -> Vec<u8> {
+pub fn rbc_deliver_preimage(
+    network_id: &NetworkId,
+    mode_tag: &str,
+    deliver: &RbcDeliver,
+) -> Vec<u8> {
     let ready_bytes = deliver
         .ready_signatures
         .iter()
@@ -391,7 +388,7 @@ pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDel
         })
         .sum::<usize>();
     let mut out = Vec::with_capacity(32 + 32 + 8 * 3 + 4 + 32 + 32 + 4 + ready_bytes);
-    let domain = consensus_domain(chain_id, "RbcDeliver", b"v1", mode_tag);
+    let domain = consensus_domain(network_id, "RbcDeliver", b"v1", mode_tag);
     out.extend_from_slice(&domain);
     out.extend_from_slice(deliver.block_hash.as_ref().as_ref());
     out.extend_from_slice(&deliver.height.to_be_bytes());
@@ -412,13 +409,13 @@ pub fn rbc_deliver_preimage(chain_id: &ChainId, mode_tag: &str, deliver: &RbcDel
 }
 
 impl HandshakeGate {
-    /// Build a local handshake gate tuple from chain id and consensus fingerprint.
-    pub fn local(chain_id: ChainId, consensus_fingerprint: [u8; 32], mode_tag: &str) -> Self {
+    /// Build a local handshake gate from an exact network id and parameters fingerprint.
+    pub fn local(network_id: NetworkId, parameters_fingerprint: [u8; 32], mode_tag: &str) -> Self {
         Self {
-            chain_id,
+            network_id,
             mode_tag: mode_tag.to_string(),
             proto_version: PROTO_VERSION,
-            consensus_fingerprint,
+            parameters_fingerprint,
         }
     }
 
@@ -430,15 +427,15 @@ impl HandshakeGate {
     /// configuration and the values reported by a peer.
     pub fn validate_peer(
         &self,
-        peer_chain: &ChainId,
+        peer_network_id: &NetworkId,
         peer_mode_tag: &str,
         peer_proto: u32,
-        peer_fingerprint: &[u8; 32],
+        peer_parameters_fingerprint: &[u8; 32],
     ) -> Result<(), String> {
-        if peer_chain != &self.chain_id {
+        if peer_network_id != &self.network_id {
             return Err(format!(
-                "handshake rejected: expected chain_id `{}`, got `{}`",
-                self.chain_id, peer_chain
+                "handshake rejected: expected network_id `{}`, got `{}`",
+                self.network_id, peer_network_id
             ));
         }
         if peer_mode_tag != self.mode_tag {
@@ -453,11 +450,11 @@ impl HandshakeGate {
                 self.proto_version, peer_proto
             ));
         }
-        if peer_fingerprint != &self.consensus_fingerprint {
-            let expected_hex = hex::encode(self.consensus_fingerprint);
-            let got_hex = hex::encode(peer_fingerprint);
+        if peer_parameters_fingerprint != &self.parameters_fingerprint {
+            let expected_hex = hex::encode(self.parameters_fingerprint);
+            let got_hex = hex::encode(peer_parameters_fingerprint);
             return Err(format!(
-                "handshake rejected: consensus fingerprint mismatch (expected {expected_hex}, got {got_hex})"
+                "handshake rejected: consensus-parameters fingerprint mismatch (expected {expected_hex}, got {got_hex})"
             ));
         }
         Ok(())
@@ -469,6 +466,12 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1;
+
+    fn test_network_id(seed: &str) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(seed.as_bytes()),
+        ))
+    }
 
     fn checked_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -636,8 +639,8 @@ mod tests {
 
     #[test]
     fn domain_depends_on_all_fields() {
-        let cid_a = ChainId::from("iroha:test:A");
-        let cid_b = ChainId::from("iroha:test:B");
+        let cid_a = test_network_id("iroha:test:A");
+        let cid_b = test_network_id("iroha:test:B");
         let d1 = consensus_domain(&cid_a, "Vote", b"x", PERMISSIONED_TAG);
         let d2 = consensus_domain(&cid_b, "Vote", b"x", PERMISSIONED_TAG);
         assert_ne!(d1, d2);
@@ -645,7 +648,7 @@ mod tests {
 
     #[test]
     fn preimages_use_current_domain_tags() {
-        let chain = ChainId::from("iroha:test:preimage-tags");
+        let chain = test_network_id("iroha:test:preimage-tags");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
         let roster_hash = iroha_crypto::Hash::prehashed([3u8; 32]);
         let chunk_root = iroha_crypto::Hash::prehashed([4u8; 32]);
@@ -741,7 +744,7 @@ mod tests {
 
     #[test]
     fn vote_preimage_matches_formal_layout_and_excludes_signature_material() {
-        let chain = ChainId::from("iroha:test:classic-vote-preimage-layout");
+        let chain = test_network_id("iroha:test:classic-vote-preimage-layout");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x11; 32]));
         let parent_state_root = iroha_crypto::Hash::prehashed([0x12; 32]);
         let post_state_root = iroha_crypto::Hash::prehashed([0x13; 32]);
@@ -787,7 +790,7 @@ mod tests {
         );
         assert_ne!(
             vote_preimage(
-                &ChainId::from("iroha:test:classic-vote-other-chain"),
+                &test_network_id("iroha:test:classic-vote-other-chain"),
                 PERMISSIONED_TAG,
                 &vote
             ),
@@ -835,7 +838,7 @@ mod tests {
 
     #[test]
     fn vrf_preimages_match_formal_layout_and_exclude_signatures() {
-        let chain = ChainId::from("iroha:test:classic-vrf-preimage-layout");
+        let chain = test_network_id("iroha:test:classic-vrf-preimage-layout");
         let mut commit = VrfCommit {
             epoch: 0x0102_0304_0506_0708,
             commitment: [0x21; 32],
@@ -961,7 +964,7 @@ mod tests {
 
     #[test]
     fn rbc_ready_preimage_matches_formal_layout_and_excludes_signature() {
-        let chain = ChainId::from("iroha:test:rbc-ready-preimage-layout");
+        let chain = test_network_id("iroha:test:rbc-ready-preimage-layout");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x31; 32]));
         let roster_hash = iroha_crypto::Hash::prehashed([0x32; 32]);
         let chunk_root = iroha_crypto::Hash::prehashed([0x33; 32]);
@@ -1005,7 +1008,7 @@ mod tests {
 
     #[test]
     fn rbc_deliver_preimage_matches_formal_layout_and_excludes_signature() {
-        let chain = ChainId::from("iroha:test:rbc-deliver-preimage-layout");
+        let chain = test_network_id("iroha:test:rbc-deliver-preimage-layout");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x41; 32]));
         let roster_hash = iroha_crypto::Hash::prehashed([0x42; 32]);
         let chunk_root = iroha_crypto::Hash::prehashed([0x43; 32]);
@@ -1072,7 +1075,7 @@ mod tests {
 
     #[test]
     fn vote_preimage_binds_chain_order() {
-        let chain = ChainId::from("iroha:test:chain-order-binding");
+        let chain = test_network_id("iroha:test:chain-order-binding");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));
         let vote = Vote {
             block_hash,
@@ -1103,8 +1106,9 @@ mod tests {
     }
 
     #[test]
-    fn handshake_gate_validates_mismatches() {
-        let chain = ChainId::from("iroha:test:gate");
+    fn handshake_gate_rejects_same_name_same_config_different_genesis() {
+        let display_name = iroha_data_model::ChainId::from("shared-display-name");
+        let chain = test_network_id("iroha:test:genesis-a");
         let fp = [9u8; 32];
         let gate = HandshakeGate::local(chain.clone(), fp, PERMISSIONED_TAG);
         // OK path
@@ -1113,19 +1117,19 @@ mod tests {
                 .is_ok()
         );
         // Mismatch
-        let other = ChainId::from("iroha:test:other");
+        let other = test_network_id("iroha:test:genesis-b");
         let err = gate
             .validate_peer(&other, PERMISSIONED_TAG, PROTO_VERSION, &fp)
             .expect_err("chain id mismatch must be rejected");
-        assert_eq!(
-            err,
-            "handshake rejected: expected chain_id `iroha:test:gate`, got `iroha:test:other`"
-        );
+        assert!(err.starts_with("handshake rejected: expected network_id `"));
+        assert!(err.contains(&chain.to_string()));
+        assert!(err.contains(&other.to_string()));
+        assert_eq!(display_name.as_str(), "shared-display-name");
     }
 
     #[test]
     fn handshake_fingerprint_changes_with_mode() {
-        let chain = ChainId::from("iroha:test:cutover");
+        let chain = test_network_id("iroha:test:cutover");
         let permissioned_params = permissioned_genesis_params();
         let npos_params = ConsensusGenesisParams {
             mode: ConsensusGenesisModeParams::Npos(NposGenesisParams {
@@ -1148,10 +1152,9 @@ mod tests {
             ..permissioned_params
         };
 
-        let fp_permissioned =
-            compute_consensus_fingerprint_from_params(&chain, &permissioned_params)
-                .expect("permissioned fixture must fingerprint");
-        let fp_npos = compute_consensus_fingerprint_from_params(&chain, &npos_params)
+        let fp_permissioned = compute_consensus_parameters_fingerprint(&permissioned_params)
+            .expect("permissioned fixture must fingerprint");
+        let fp_npos = compute_consensus_parameters_fingerprint(&npos_params)
             .expect("NPoS fixture must fingerprint");
 
         assert_ne!(
@@ -1191,13 +1194,12 @@ mod tests {
 
     #[test]
     fn canonical_fingerprint_binds_v2_protocol_and_context() {
-        let chain = ChainId::from("iroha:test:fpcanon-v2-timeout");
         let params = permissioned_genesis_params();
-        let baseline = compute_consensus_fingerprint_from_params(&chain, &params)
+        let baseline = compute_consensus_parameters_fingerprint(&params)
             .expect("canonical fixture must fingerprint");
         let mut changed_context = params.clone();
         changed_context.v2_context.nexus_amx_context_hash[0] ^= 1;
-        let changed_context = compute_consensus_fingerprint_from_params(&chain, &changed_context)
+        let changed_context = compute_consensus_parameters_fingerprint(&changed_context)
             .expect("changed signed context must remain valid");
         let changed_protocol = ConsensusGenesisParams {
             protocol_version: PROTO_VERSION.saturating_add(1),
@@ -1205,12 +1207,11 @@ mod tests {
         };
 
         assert_ne!(baseline, changed_context);
-        assert!(compute_consensus_fingerprint_from_params(&chain, &changed_protocol).is_err());
+        assert!(compute_consensus_parameters_fingerprint(&changed_protocol).is_err());
     }
 
     #[test]
     fn canonical_v2_npos_fingerprint_binds_election_seed() {
-        let chain = ChainId::from("iroha:test:fpcanon-npos");
         let mut p = ConsensusGenesisParams {
             mode: ConsensusGenesisModeParams::Npos(NposGenesisParams {
                 epoch_length_blocks: core::num::NonZeroU64::new(3_600)
@@ -1235,26 +1236,26 @@ mod tests {
             unreachable!("fixture must use NPoS")
         };
         npos.epoch_seed = [7; 32];
-        let a = compute_consensus_fingerprint_from_params(&chain, &p)
-            .expect("NPoS fixture must fingerprint");
+        let a =
+            compute_consensus_parameters_fingerprint(&p).expect("NPoS fixture must fingerprint");
         let ConsensusGenesisModeParams::Npos(npos) = &mut p.mode else {
             unreachable!("fixture must use NPoS")
         };
         npos.epoch_seed[0] ^= 1;
-        let election_seed_changed = compute_consensus_fingerprint_from_params(&chain, &p)
+        let election_seed_changed = compute_consensus_parameters_fingerprint(&p)
             .expect("changed NPoS fixture must fingerprint");
         assert_ne!(a, election_seed_changed);
     }
 
     #[test]
     fn handshake_gate_rejects_on_fingerprint_mismatch() {
-        let chain = ChainId::from("iroha:test:hshake");
+        let chain = test_network_id("iroha:test:hshake");
         let p1 = permissioned_genesis_params();
         let mut p2 = p1.clone();
         p2.v2_context.nexus_amx_context_hash[0] ^= 1;
-        let f1 = compute_consensus_fingerprint_from_params(&chain, &p1)
+        let f1 = compute_consensus_parameters_fingerprint(&p1)
             .expect("baseline carrier must fingerprint");
-        let f2 = compute_consensus_fingerprint_from_params(&chain, &p2)
+        let f2 = compute_consensus_parameters_fingerprint(&p2)
             .expect("changed carrier must fingerprint");
         let gate = HandshakeGate::local(chain.clone(), f1, PERMISSIONED_TAG);
         assert!(
@@ -1270,7 +1271,7 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "handshake rejected: consensus fingerprint mismatch (expected {expected_hex}, got {got_hex})"
+                "handshake rejected: consensus-parameters fingerprint mismatch (expected {expected_hex}, got {got_hex})"
             )
         );
     }

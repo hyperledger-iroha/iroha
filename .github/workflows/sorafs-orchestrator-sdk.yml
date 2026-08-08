@@ -38,6 +38,7 @@ on:
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
       - "scripts/check_native_sdk_abi22_artifact.py"
+      - "scripts/compute_workspace_source_manifest.py"
       - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "Cargo.toml"

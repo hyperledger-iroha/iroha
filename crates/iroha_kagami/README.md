@@ -213,6 +213,15 @@ target/debug/kagami genesis sign \
   --expected-hash-out genesis.expected_hash
 ```
 
+The last option also publishes `genesis.identity.toml`. Treat that paired
+artifact as the deployment trust-root bundle: it carries the same exact signed
+header hash as both client `network_id` and validator
+`genesis.expected_hash`. Do not render those values independently. The
+one-line `genesis.expected_hash` file remains for validator launchers that
+consume it directly. Production templates select that exact file through
+validator `genesis.expected_hash_file` and client `network_id_file` rather than
+carrying replaceable inline placeholders.
+
 For seedless `kagami docker`, place that body and hash beside the canonical
 `genesis.public_key` and exact `peerN.toml` validator configs. Generation rejects
 any signer, hash, identity, trusted-roster, or PoP disagreement. The generated

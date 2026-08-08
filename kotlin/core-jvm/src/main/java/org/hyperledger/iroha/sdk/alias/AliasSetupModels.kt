@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.alias
 import java.math.BigInteger
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 /** Account provisioning behavior requested by an account-alias intent. */
@@ -787,7 +788,8 @@ class AliasPlanAnchorV1(
 class AliasTransactionPlanBodyV1(
     version: Int,
     authority: String,
-    chainId: String,
+    /** Exact genesis-derived identity of the network that produced this plan. */
+    @JvmField val networkId: NetworkId,
     /** World-state classification anchor. */
     @JvmField val anchor: AliasPlanAnchorV1,
     resources: List<AliasPlanResourceV1>,
@@ -804,10 +806,6 @@ class AliasTransactionPlanBodyV1(
     /** Transaction authority and lease payer. */
     @JvmField
     val authority: String = requireCanonicalI105Address(authority, "authority")
-
-    /** Target chain identifier. */
-    @JvmField
-    val chainId: String = requireNonBlank(chainId, "chainId")
 
     /** Ordered resources in dependency order. */
     @JvmField
@@ -836,7 +834,7 @@ class AliasTransactionPlanBodyV1(
     override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
         "version" to version,
         "authority" to authority,
-        "chain_id" to chainId,
+        "network_id" to networkId.literal,
         "anchor" to anchor.toJsonMap(),
         "resources" to resources.map { it.toJsonMap() },
         "instructions" to instructions.map { it.toJsonMap() },
@@ -872,7 +870,8 @@ class AliasTransactionPlanV1(
 class AliasLifecycleTransactionPlanBodyV1(
     version: Int,
     authority: String,
-    chainId: String,
+    /** Exact genesis-derived identity of the network that produced this plan. */
+    @JvmField val networkId: NetworkId,
     /** World-state classification anchor. */
     @JvmField val anchor: AliasPlanAnchorV1,
     /** Exact signed lifecycle operation. */
@@ -896,10 +895,6 @@ class AliasLifecycleTransactionPlanBodyV1(
     @JvmField
     val authority: String = requireCanonicalI105Address(authority, "authority")
 
-    /** Target chain identifier. */
-    @JvmField
-    val chainId: String = requireNonBlank(chainId, "chainId")
-
     /** Exact totals in canonical payment-asset order. */
     @JvmField
     val totalsByAsset: List<AliasAssetTotalV1> = totalsByAsset.toList()
@@ -919,7 +914,7 @@ class AliasLifecycleTransactionPlanBodyV1(
     override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
         "version" to version,
         "authority" to authority,
-        "chain_id" to chainId,
+        "network_id" to networkId.literal,
         "anchor" to anchor.toJsonMap(),
         "operation" to operation.toJsonMap(),
         "disposition" to disposition.toJsonMap(),

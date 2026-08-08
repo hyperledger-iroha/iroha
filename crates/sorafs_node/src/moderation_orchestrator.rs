@@ -766,6 +766,8 @@ impl ModerationOrchestratorConfigV1 {
 pub struct ModerationTransactionRequestV1 {
     /// Exact ledger chain bound into the signed transaction and operation id.
     pub chain_id: iroha_data_model::ChainId,
+    /// Exact genesis-derived network identity signed into the transaction.
+    pub network_id: iroha_data_model::NetworkId,
     /// Durable signed-envelope generation; semantic operation identity remains stable.
     pub envelope_generation: u32,
     /// Stable, replica-independent semantic operation identity.
@@ -796,6 +798,7 @@ impl ModerationTransactionRequestV1 {
     /// finalized baseline is invalid.
     pub fn new(
         chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         envelope_generation: u32,
         authority: AccountId,
         action: ModerationNativeActionV1,
@@ -819,6 +822,7 @@ impl ModerationTransactionRequestV1 {
         let operation_id = action.operation_id(&chain_id, &authority)?;
         let request = Self {
             chain_id,
+            network_id,
             envelope_generation,
             operation_id,
             authority,
@@ -1031,6 +1035,9 @@ pub trait ModerationTransactionSubmitterV1: Send + Sync {
     /// The orchestrator freezes this value at open and rejects every retained
     /// or newly signed envelope whose chain differs.
     fn chain_id(&self) -> iroha_data_model::ChainId;
+
+    /// Exact genesis-derived network identity implemented by this runtime boundary.
+    fn network_id(&self) -> iroha_data_model::NetworkId;
 
     /// Sign exactly one native action without exposing it to transaction ingress.
     ///
@@ -1393,6 +1400,17 @@ impl QualifiedModerationTransactionSubmitterV1 {
         self.revalidate_transaction_signer()?;
         self.revalidate_strict_ingress()?;
         Ok(chain_id)
+    }
+
+    fn network_id(
+        &self,
+    ) -> Result<iroha_data_model::NetworkId, ModerationRuntimeProviderQualificationErrorV1> {
+        self.revalidate_transaction_signer()?;
+        self.revalidate_strict_ingress()?;
+        let network_id = self.submitter.network_id();
+        self.revalidate_transaction_signer()?;
+        self.revalidate_strict_ingress()?;
+        Ok(network_id)
     }
 
     fn sign(
@@ -1926,6 +1944,7 @@ impl PreparedExternalWorkV1 {
 pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
     chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     deps: QualifiedModerationOrchestratorDepsV1,
     state: Mutex<ModerationOrchestratorCheckpointV1>,
     checkpoint_record: Mutex<ModerationCheckpointStoreRecordV1>,
@@ -1972,15 +1991,21 @@ impl ModerationOrchestratorV1 {
                 "moderation submitter chain id must be non-empty and canonical".to_owned(),
             ));
         }
+        let network_id = deps
+            .submitter
+            .network_id()
+            .map_err(map_runtime_provider_qualification_error)?;
         let (mut state, mut checkpoint_record) = checkpoint_store::open_authoritative_checkpoint(
             &config,
             &chain_id,
+            network_id,
             &deps.checkpoint_store,
         )?;
         if recover_external_work_after_restart(&mut state) {
             checkpoint_store::persist_authoritative_checkpoint(
                 &config,
                 &chain_id,
+                network_id,
                 &deps.checkpoint_store,
                 &mut checkpoint_record,
                 &mut state,
@@ -1989,6 +2014,7 @@ impl ModerationOrchestratorV1 {
         Ok(Self {
             config,
             chain_id,
+            network_id,
             deps,
             state: Mutex::new(state),
             checkpoint_record: Mutex::new(checkpoint_record),
@@ -2753,6 +2779,7 @@ impl ModerationOrchestratorV1 {
         if let Err(error) = checkpoint_store::persist_authoritative_checkpoint(
             &self.config,
             &self.chain_id,
+            self.network_id,
             &self.deps.checkpoint_store,
             &mut checkpoint_record,
             state,
@@ -2963,7 +2990,8 @@ impl ModerationOrchestratorV1 {
                 && entry.signed_transaction_digest.is_some()
                 && entry.signed_transaction_bytes.is_some();
             let expired = if complete_transaction {
-                let request = moderation_transaction_request(&self.chain_id, entry)?;
+                let request =
+                    moderation_transaction_request(&self.chain_id, self.network_id, entry)?;
                 let signed = moderation_signed_transaction(entry)?;
                 let transaction = signed.decode_for_request(&request).map_err(|_| {
                     ModerationOrchestratorError::CheckpointCorrupt(
@@ -3040,7 +3068,11 @@ impl ModerationOrchestratorV1 {
                     candidate.baseline_finalized_height = cursor.height;
                     candidate.baseline_finalized_block_hash = cursor.block_hash;
                     candidate.state = StoredOutboxStateV1::Signing;
-                    let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+                    let request = moderation_transaction_request(
+                        &self.chain_id,
+                        self.network_id,
+                        &candidate,
+                    )?;
                     let work_digest = outbox_sign_work_digest(&candidate);
                     let identity = ExternalWorkIdentityV1 {
                         identity: candidate.operation_id,
@@ -3080,7 +3112,11 @@ impl ModerationOrchestratorV1 {
                         continue;
                     }
                     let mut candidate = entry.clone();
-                    let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+                    let request = moderation_transaction_request(
+                        &self.chain_id,
+                        self.network_id,
+                        &candidate,
+                    )?;
                     let signed = moderation_signed_transaction(&candidate)?;
                     signed.decode_for_request(&request).map_err(|_| {
                         ModerationOrchestratorError::CheckpointCorrupt(
@@ -3445,7 +3481,7 @@ impl ModerationOrchestratorV1 {
             state.outbox[position] = candidate;
             return self.persist_checkpoint_locked(&mut state);
         };
-        let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+        let request = moderation_transaction_request(&self.chain_id, self.network_id, &candidate)?;
         let signed = moderation_signed_transaction(&candidate)?;
         let transaction = signed.decode_for_request(&request).map_err(|_| {
             ModerationOrchestratorError::CheckpointCorrupt(
@@ -5223,6 +5259,7 @@ fn validate_checkpoint(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
     chain_id: &iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
 ) -> Result<(), ModerationOrchestratorError> {
     if state.version != MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1 {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
@@ -5453,7 +5490,7 @@ fn validate_checkpoint(
             ));
         }
         if !empty_cursor {
-            let request = moderation_transaction_request(chain_id, entry)?;
+            let request = moderation_transaction_request(chain_id, network_id, entry)?;
             if complete_transaction {
                 let signed = moderation_signed_transaction(entry)?;
                 let transaction = signed.decode_for_request(&request).map_err(|_| {
@@ -5766,10 +5803,12 @@ fn finalized_snapshot_digest(
 
 fn moderation_transaction_request(
     chain_id: &iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     entry: &StoredOutboxEntryV1,
 ) -> Result<ModerationTransactionRequestV1, ModerationOrchestratorError> {
     ModerationTransactionRequestV1::new(
         chain_id.clone(),
+        network_id,
         entry.envelope_generation,
         entry.authority.clone(),
         entry.action.clone(),
@@ -5961,7 +6000,7 @@ fn validate_signed_transaction_for_request(
     let canonical_envelope = norito::to_bytes(transaction)
         .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
     if transaction.verify_signature().is_err()
-        || transaction.chain() != &request.chain_id
+        || transaction.network_id() != Some(&request.network_id)
         || transaction.authority() != &request.authority
         || *transaction.hash().as_ref() == [0; 32]
         || transaction.creation_time().is_zero()
@@ -7397,6 +7436,14 @@ mod tests {
     const CHECKPOINT_STORE_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
         ModerationRuntimeProviderQualificationV1::new(7, [0xA7; 32]);
 
+    fn test_network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
+        ))
+    }
+
     #[derive(Debug)]
     struct MockRuntimeProvider {
         handle: String,
@@ -7597,6 +7644,10 @@ mod tests {
             ChainId::from("moderation-orchestrator-test")
         }
 
+        fn network_id(&self) -> iroha_data_model::NetworkId {
+            test_network_id()
+        }
+
         fn sign(
             &self,
             request: &ModerationTransactionRequestV1,
@@ -7612,7 +7663,7 @@ mod tests {
             }
             let signer = key_for_authority(&request.authority);
             let mut builder = TransactionBuilder::new(
-                request.chain_id.clone(),
+                request.network_id,
                 request.authority.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
             );
@@ -7840,6 +7891,10 @@ mod tests {
             self.inner.chain_id()
         }
 
+        fn network_id(&self) -> iroha_data_model::NetworkId {
+            self.inner.network_id()
+        }
+
         fn sign(
             &self,
             request: &ModerationTransactionRequestV1,
@@ -7935,6 +7990,10 @@ mod tests {
             self.inner.chain_id()
         }
 
+        fn network_id(&self) -> iroha_data_model::NetworkId {
+            self.inner.network_id()
+        }
+
         fn sign(
             &self,
             request: &ModerationTransactionRequestV1,
@@ -7988,6 +8047,10 @@ mod tests {
 
         fn chain_id(&self) -> ChainId {
             self.inner.chain_id()
+        }
+
+        fn network_id(&self) -> iroha_data_model::NetworkId {
+            self.inner.network_id()
         }
 
         fn sign(
@@ -8582,6 +8645,7 @@ mod tests {
     fn provider_test_request() -> ModerationTransactionRequestV1 {
         ModerationTransactionRequestV1::new(
             ChainId::from("moderation-orchestrator-test"),
+            test_network_id(),
             1,
             account(41),
             policy_action(policy(1)),
@@ -8947,8 +9011,9 @@ mod tests {
         let [entry] = state.outbox.as_slice() else {
             panic!("one retained moderation envelope");
         };
-        let request = moderation_transaction_request(&orchestrator.chain_id, entry)
-            .expect("retained transaction request");
+        let request =
+            moderation_transaction_request(&orchestrator.chain_id, orchestrator.network_id, entry)
+                .expect("retained transaction request");
         let signed = moderation_signed_transaction(entry).expect("retained signed transaction");
         let transaction = signed
             .decode_for_request(&request)
@@ -9315,6 +9380,7 @@ mod tests {
         let action = policy_action(policy(1));
         let request = ModerationTransactionRequestV1::new(
             chain_id.clone(),
+            test_network_id(),
             1,
             authority.clone(),
             action.clone(),
@@ -9325,6 +9391,7 @@ mod tests {
         .expect("canonical generic request");
         let other_chain_request = ModerationTransactionRequestV1::new(
             ChainId::from("other-moderation-chain"),
+            test_network_id(),
             1,
             authority.clone(),
             action.clone(),
@@ -9336,6 +9403,7 @@ mod tests {
         assert_ne!(request.operation_id, other_chain_request.operation_id);
         let next_generation_request = ModerationTransactionRequestV1::new(
             chain_id.clone(),
+            test_network_id(),
             2,
             authority.clone(),
             action.clone(),
@@ -9356,7 +9424,7 @@ mod tests {
 
         let exact_builder = || {
             TransactionBuilder::new(
-                chain_id.clone(),
+                request.network_id,
                 authority.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -9376,7 +9444,11 @@ mod tests {
 
         let wrong_chain = sign_exact(
             TransactionBuilder::new(
-                ChainId::from("other-moderation-chain"),
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"other-moderation-network"),
+                )),
                 authority.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
             ),

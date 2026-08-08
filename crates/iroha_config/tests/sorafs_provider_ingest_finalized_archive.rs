@@ -123,6 +123,29 @@ max_kura_tip_lag_blocks = 0
 "#
 }
 
+fn attestation_journal_overlay(extra: &str) -> String {
+    format!(
+        r#"{}
+[sorafs.storage.provider_ingest_runtime.provider_attestation_journal]
+enabled = true
+clock_seal_handle = "sealed://sorafs/provider-attestation/clock-primary"
+clock_seal_revision = 11
+clock_seal_policy_digest_hex = "{}"
+approval_signer_handle = "hsm://sorafs/provider-attestation/approval-primary"
+approval_signer_revision = 12
+approval_signer_policy_digest_hex = "{}"
+inventory_handle = "coordinator://sorafs/provider-attestation/inventory-primary"
+inventory_revision = 13
+inventory_policy_digest_hex = "{}"
+{extra}
+"#,
+        enabled_overlay(valid_archive_policy()),
+        "c1".repeat(32),
+        "c2".repeat(32),
+        "c3".repeat(32),
+    )
+}
+
 #[test]
 fn explicit_nested_archive_policy_projects_exact_relative_root_and_bounds() {
     let actual = parse_overlay(&enabled_overlay(valid_archive_policy()))
@@ -155,6 +178,106 @@ fn explicit_nested_archive_policy_projects_exact_relative_root_and_bounds() {
         archive.retention_authority.is_none(),
         "manual/no-retention must remain the default"
     );
+}
+
+#[test]
+fn attestation_journal_projects_exact_public_bindings_and_bounds() {
+    let source = attestation_journal_overlay(
+        "max_entries = 17\nmax_attempts = 3\nlease_ttl_ms = 90000\napproval_timeout_ms = 20000\nhandoff_timeout_ms = 25000\nretry_delay_ms = 2000\ncheckpoint_max_bytes = 8388608\nmax_cas_retries = 5",
+    );
+    let actual = parse_overlay(&source).expect("valid attestation journal policy");
+    let journal = actual
+        .torii
+        .sorafs_storage
+        .provider_ingest_runtime
+        .as_ref()
+        .expect("enabled provider-ingest runtime")
+        .provider_attestation_journal
+        .as_ref()
+        .expect("enabled attestation journal");
+
+    assert_eq!(
+        journal.clock_seal.handle,
+        "sealed://sorafs/provider-attestation/clock-primary"
+    );
+    assert_eq!(journal.clock_seal.revision, 11);
+    assert_eq!(journal.clock_seal.policy_digest, [0xC1; 32]);
+    assert_eq!(
+        journal.approval_signer.handle,
+        "hsm://sorafs/provider-attestation/approval-primary"
+    );
+    assert_eq!(journal.approval_signer.revision, 12);
+    assert_eq!(journal.approval_signer.policy_digest, [0xC2; 32]);
+    assert_eq!(
+        journal.inventory.handle,
+        "coordinator://sorafs/provider-attestation/inventory-primary"
+    );
+    assert_eq!(journal.inventory.revision, 13);
+    assert_eq!(journal.inventory.policy_digest, [0xC3; 32]);
+    assert_eq!(journal.max_entries, 17);
+    assert_eq!(journal.max_attempts, 3);
+    assert_eq!(journal.lease_ttl_ms, 90_000);
+    assert_eq!(journal.approval_timeout_ms, 20_000);
+    assert_eq!(journal.handoff_timeout_ms, 25_000);
+    assert_eq!(journal.retry_delay_ms, 2_000);
+    assert_eq!(journal.checkpoint_max_bytes, 8 * 1024 * 1024);
+    assert_eq!(journal.max_cas_retries, 5);
+}
+
+#[test]
+fn attestation_journal_checkpoint_minimum_is_inclusive() {
+    let minimum =
+        defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::CHECKPOINT_MIN_BYTES;
+    let source = attestation_journal_overlay(&format!("checkpoint_max_bytes = {minimum}"));
+    let actual = parse_overlay(&source).expect("exact journal checkpoint minimum is valid");
+    assert_eq!(
+        actual
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_ref()
+            .expect("enabled provider-ingest runtime")
+            .provider_attestation_journal
+            .as_ref()
+            .expect("enabled attestation journal")
+            .checkpoint_max_bytes,
+        minimum
+    );
+}
+
+#[test]
+fn attestation_journal_checkpoint_below_minimum_is_rejected() {
+    let minimum =
+        defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::CHECKPOINT_MIN_BYTES;
+    let source = attestation_journal_overlay(&format!("checkpoint_max_bytes = {}", minimum - 1));
+    let error = parse_overlay(&source).expect_err("sub-minimum journal checkpoint must fail");
+    let minimum_text = minimum.to_string();
+    assert!(
+        error.contains("checkpoint_max_bytes") && error.contains(minimum_text.as_str()),
+        "unexpected minimum-bound diagnostic: {error}"
+    );
+}
+
+#[test]
+fn attestation_journal_rejects_path_nonce_endpoint_and_secret_fields() {
+    for selector in [
+        "path = \"attestation-journal\"",
+        "relative_root = \"attestation-journal\"",
+        "nonce = \"01020304\"",
+        "signer_handle = \"hsm.sorafs.attestation.primary\"",
+        "inventory_endpoint = \"https://inventory.invalid\"",
+        "approval_signer_private_key = \"secret\"",
+        "bearer_token = \"secret\"",
+    ] {
+        let source = attestation_journal_overlay(selector);
+        let error = parse_overlay(&source)
+            .expect_err("journal must reject path, nonce, endpoint, and secret selectors");
+        let field = selector.split_once(' ').expect("selector field").0;
+        assert!(
+            error.contains(field),
+            "unknown-field diagnostic must identify {field}: {error}"
+        );
+    }
 }
 
 #[test]

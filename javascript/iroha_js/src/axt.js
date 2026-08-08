@@ -188,23 +188,25 @@ function resolveAxtNative() {
  *   lane: number | null,
  *   snapshot_version: number | null,
  *   detail: string,
- *   next_min_handle_era: number | null,
- *   next_min_sub_nonce: number | null
+ *   active_handle_era: number | null,
+ *   next_handle_counter: number | null
  * }}
  */
 export function normalizeAxtRejectContext(input, context = "axt reject context") {
   const record = ensureObject(input ?? {}, context);
-  const camelKeys = [
+  const retiredOrNoncanonicalKeys = [
     "dataspaceId",
     "targetLane",
     "snapshotVersion",
-    "nextMinHandleEra",
-    "nextMinSubNonce",
+    "activeHandleEra",
+    "nextHandleCounter",
+    "next_min_handle_era",
+    "next_min_sub_nonce",
   ];
-  for (const key of camelKeys) {
+  for (const key of retiredOrNoncanonicalKeys) {
     if (record[key] !== undefined) {
       throw new TypeError(
-        `${context}.dataspace must use snake_case fields (dataspace, target_lane, snapshot_version, next_min_handle_era, next_min_sub_nonce)`,
+        `${context} must use snake_case fields (dataspace, target_lane, snapshot_version, active_handle_era, next_handle_counter)`,
       );
     }
   }
@@ -213,8 +215,8 @@ export function normalizeAxtRejectContext(input, context = "axt reject context")
   const dataspaceRaw = record.dataspace ?? null;
   const laneRaw = record.target_lane ?? null;
   const snapshotRaw = record.snapshot_version ?? null;
-  const nextEraRaw = record.next_min_handle_era ?? null;
-  const nextSubNonceRaw = record.next_min_sub_nonce ?? null;
+  const activeEraRaw = record.active_handle_era ?? null;
+  const nextCounterRaw = record.next_handle_counter ?? null;
   const detailRaw = record.detail ?? "";
   return {
     reason,
@@ -222,13 +224,13 @@ export function normalizeAxtRejectContext(input, context = "axt reject context")
     lane: assertOptionalUnsigned(laneRaw, `${context}.lane`),
     snapshot_version: assertOptionalUnsigned(snapshotRaw, `${context}.snapshot_version`),
     detail: detailRaw === null ? "" : String(detailRaw),
-    next_min_handle_era: assertOptionalUnsigned(
-      nextEraRaw,
-      `${context}.next_min_handle_era`,
+    active_handle_era: assertOptionalUnsigned(
+      activeEraRaw,
+      `${context}.active_handle_era`,
     ),
-    next_min_sub_nonce: assertOptionalUnsigned(
-      nextSubNonceRaw,
-      `${context}.next_min_sub_nonce`,
+    next_handle_counter: assertOptionalUnsigned(
+      nextCounterRaw,
+      `${context}.next_handle_counter`,
     ),
   };
 }
@@ -241,8 +243,8 @@ export function normalizeAxtRejectContext(input, context = "axt reject context")
  * @param {Partial<{
  *  dataspace: number | null,
  *  targetLane: number | null,
- *  nextMinHandleEra: number | null,
- *  nextMinSubNonce: number | null,
+ *  activeHandleEra: number | null,
+ *  nextHandleCounter: number | null,
  *  reason: string,
  *  snapshotVersion: number | null,
  *  detail: string
@@ -250,8 +252,8 @@ export function normalizeAxtRejectContext(input, context = "axt reject context")
  * @returns {{
  *  dataspace: number | null,
  *  targetLane: number | null,
- *  nextMinHandleEra: number | null,
- *  nextMinSubNonce: number | null,
+ *  activeHandleEra: number | null,
+ *  nextHandleCounter: number | null,
  *  reason: string,
  *  snapshotVersion: number | null,
  *  detail: string
@@ -272,20 +274,20 @@ export function buildHandleRefreshRequest(rejectContext, overrides = {}) {
       overrideRecord.targetLane !== undefined
         ? assertOptionalUnsigned(overrideRecord.targetLane, "overrides.targetLane")
         : normalized.lane,
-    nextMinHandleEra:
-      overrideRecord.nextMinHandleEra !== undefined
+    activeHandleEra:
+      overrideRecord.activeHandleEra !== undefined
         ? assertOptionalUnsigned(
-            overrideRecord.nextMinHandleEra,
-            "overrides.nextMinHandleEra",
+            overrideRecord.activeHandleEra,
+            "overrides.activeHandleEra",
           )
-        : normalized.next_min_handle_era,
-    nextMinSubNonce:
-      overrideRecord.nextMinSubNonce !== undefined
+        : normalized.active_handle_era,
+    nextHandleCounter:
+      overrideRecord.nextHandleCounter !== undefined
         ? assertOptionalUnsigned(
-            overrideRecord.nextMinSubNonce,
-            "overrides.nextMinSubNonce",
+            overrideRecord.nextHandleCounter,
+            "overrides.nextHandleCounter",
           )
-        : normalized.next_min_sub_nonce,
+        : normalized.next_handle_counter,
     reason: overrideRecord.reason ?? normalized.reason,
     snapshotVersion:
       overrideRecord.snapshotVersion !== undefined

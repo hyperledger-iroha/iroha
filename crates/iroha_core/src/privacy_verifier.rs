@@ -4670,6 +4670,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "release gate: generates and verifies a full masked ZK-AMS batch proof"]
     fn zk_ams_production_dispatch_covers_batch_and_successor_provisioning() {
         let fixture = zk_ams_runtime_fixture_for_test();
         let context = |expected_action_index| PrivacyVerificationContextV1 {

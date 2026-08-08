@@ -2624,6 +2624,7 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
         StubResponse(
             payload={
                 "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+                "payout_account": CANONICAL_OWNER,
                 "lifecycle": "active",
             }
         )
@@ -2642,6 +2643,7 @@ def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
     )
 
     assert result["lifecycle"] == "active"
+    assert result["payout_account"] == CANONICAL_OWNER
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
         "program_id": f"{CANONICAL_OWNER}/retail"
     }
@@ -2711,6 +2713,90 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         "payload": {"value": 1, "labels": ["alpha"]},
         "fee_payment": _authority_fee_payment(5000),
     }
+
+
+def test_pipeline_status_parser_exposes_only_public_metadata() -> None:
+    transaction_hash = "ab" * 32
+    parsed = ToriiClient._parse_pipeline_status_response(
+        {
+            "hash": transaction_hash,
+            "status": {"kind": "Applied", "block_height": 7},
+            "scope": "global",
+            "resolved_from": "state",
+        },
+        context="pipeline status",
+    )
+
+    assert parsed.hash == transaction_hash
+    assert parsed.status.kind == "Applied"
+    assert parsed.status.block_height == 7
+    assert parsed.scope == "global"
+    assert parsed.resolved_from == "state"
+    assert not hasattr(parsed, "diagnostics")
+    assert not hasattr(parsed, "summary")
+    assert not hasattr(parsed, "raw")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("summary", "Rejected: secret"),
+        ("diagnostics", [{"message": "secret"}]),
+        ("trigger_completions", []),
+        ("batch_transfer_outcomes", []),
+    ],
+)
+def test_pipeline_status_parser_rejects_retired_detail_fields(
+    field: str,
+    value: object,
+) -> None:
+    payload = {
+        "hash": "cd" * 32,
+        "status": {"kind": "Rejected"},
+        "scope": "global",
+        "resolved_from": "state",
+        field: value,
+    }
+
+    with pytest.raises(RuntimeError, match="unsupported fields"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
+
+
+@pytest.mark.parametrize("block_height", [None, 0, -1, True, 1.5])
+def test_pipeline_status_parser_rejects_non_positive_or_non_integer_height(
+    block_height: object,
+) -> None:
+    payload = {
+        "hash": "cd" * 32,
+        "status": {"kind": "Applied", "block_height": block_height},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+
+    with pytest.raises(RuntimeError, match="block_height"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
+
+
+@pytest.mark.parametrize("transaction_hash", ["ab", "AB" * 32, "gg" * 32, " ab" * 32])
+def test_pipeline_status_parser_rejects_noncanonical_hash(transaction_hash: str) -> None:
+    payload = {
+        "hash": transaction_hash,
+        "status": {"kind": "Applied", "block_height": 1},
+        "scope": "global",
+        "resolved_from": "state",
+    }
+
+    with pytest.raises(RuntimeError, match="exact lowercase 32-byte hex"):
+        ToriiClient._parse_pipeline_status_response(
+            payload,
+            context="pipeline status",
+        )
 
 
 def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
@@ -8047,8 +8133,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
                             "snapshot_version": 7,
                             "dataspace": 8,
                             "lane": 9,
-                            "next_min_handle_era": 10,
-                            "next_min_sub_nonce": 11,
+                            "active_handle_era": 10,
+                            "next_handle_counter": 11,
                             "unknown_axt_member": "ignored",
                         },
                     },
@@ -8071,7 +8157,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
     assert details.queue.saturated is True
     assert details.axt is not None
     assert details.axt.lane == 9
-    assert details.axt.next_min_sub_nonce == 11
+    assert details.axt.active_handle_era == 10
+    assert details.axt.next_handle_counter == 11
     assert not hasattr(details, "unknown_detail")
     assert not hasattr(details.queue, "unknown_queue_member")
     assert not hasattr(details.axt, "unknown_axt_member")
@@ -8079,6 +8166,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
 
 def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> None:
     invalid_details = [
+        {"axt": {"next_min_handle_era": 1}},
+        {"axt": {"next_min_sub_nonce": 1}},
         {"queue": {"state": "healthy", "queued": 0, "capacity": 1}},
         {
             "queue": {

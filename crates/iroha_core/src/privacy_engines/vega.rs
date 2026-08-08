@@ -13,7 +13,7 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey as IrohaPublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, ChainId},
+    prelude::{AccountId, ChainId, NetworkId},
     privacy::{
         PRIVACY_MAX_CHAIN_ID_BYTES_V1, PrivacyChallengeV1, PrivacyConsensusLimitsV1,
         PrivacyP256PointV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
@@ -51,6 +51,15 @@ use thiserror::Error;
 use time::{Date, Month, OffsetDateTime};
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(hash),
+        ),
+    )
+}
+
 use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
 
 pub use mdl::{
@@ -79,6 +88,8 @@ pub const VEGA_PRIVACY_ACTION_PROVER_WORKERS_V1: usize = 1;
 /// Exact signature-bound transaction fields for one direct Vega action.
 #[derive(Clone, Debug)]
 pub struct VegaPrivacyActionTransactionContextV1 {
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Exact chain identifier.
     pub chain_id: ChainId,
     /// Exact single-key transaction authority.
@@ -617,6 +628,9 @@ pub enum VegaPrivacyActionBuildErrorV1 {
     /// The caller supplied the all-zero genesis sentinel.
     #[error("Vega action requires a non-zero canonical genesis hash")]
     ZeroGenesisHash,
+    /// The signed transaction domain does not equal the supplied canonical genesis hash.
+    #[error("Vega action transaction network does not match the canonical genesis hash")]
+    NetworkIdMismatch,
     /// The chain identifier is empty or exceeds the consensus maximum.
     #[error("Vega action chain id is outside the first-release byte bound")]
     InvalidChainId,
@@ -992,7 +1006,7 @@ fn validate_vega_transaction_context_v1(
     }
 
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -1069,7 +1083,7 @@ fn vega_transaction_payload_v1(
     envelope: PrivacyProofEnvelopeV1,
 ) -> Result<TransactionPayload, VegaPrivacyActionBuildErrorV1> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -1238,6 +1252,9 @@ where
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(VegaPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
     validate_vega_transaction_context_v1(&context)?;
     validate_vega_public_input_v1(input)?;
@@ -1871,6 +1888,7 @@ mod tests {
     fn action_context() -> VegaPrivacyActionTransactionContextV1 {
         let key_pair = transaction_key(0x41);
         VegaPrivacyActionTransactionContextV1 {
+            network_id: network_id_from_genesis_hash_bytes([0xA7; 32]),
             chain_id: ChainId::from("vega-signed-action-boundary-v1"),
             authority: AccountId::new(key_pair.public_key().clone()),
             creation_time: Duration::from_millis(1_785_023_999_999),

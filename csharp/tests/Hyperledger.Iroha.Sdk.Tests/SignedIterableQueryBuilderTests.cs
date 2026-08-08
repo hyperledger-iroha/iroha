@@ -82,6 +82,66 @@ public sealed class SignedIterableQueryBuilderTests
             expectedQueryPayload: Array.Empty<byte>());
     }
 
+    [Fact]
+    public void FindTransactionDetailsBindsOneExactEntrypointHash()
+    {
+        const string entrypointHash = "1111111111111111111111111111111111111111111111111111111111111111";
+        var envelope = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
+            .FindTransactionDetails(entrypointHash)
+            .BuildSigned(
+                Convert.FromHexString(FixtureSeedHex),
+                1_735_689_600_000,
+                100_000,
+                Enumerable.Repeat((byte)0x5A, 32).ToArray());
+
+        var start = ReadIterableStart(envelope);
+        Assert.Equal(12u, start.ItemKindDiscriminant);
+        Assert.Empty(start.QueryPayload);
+        Assert.Equal(2u, start.PredicateDiscriminant);
+        Assert.Empty(start.SelectorBytes);
+        Assert.Null(start.Limit);
+        Assert.Equal(0ul, start.Offset);
+        Assert.Null(start.FetchSize);
+        Assert.Null(start.SortByMetadataKey);
+        Assert.Null(start.SortOrderDiscriminant);
+
+        var transactionPredicate = ReadField(start.PredicateBytes.AsSpan(4), out var outerConsumed);
+        Assert.Equal(start.PredicateBytes.Length - 4, outerConsumed);
+        Assert.Equal(21u, BinaryPrimitives.ReadUInt32LittleEndian(transactionPredicate.AsSpan(0, 4)));
+        var encodedHash = ReadField(transactionPredicate.AsSpan(4), out var innerConsumed);
+        Assert.Equal(transactionPredicate.Length - 4, innerConsumed);
+        Assert.Equal(Convert.FromHexString(entrypointHash), encodedHash);
+        AssertSignatureVerifies(envelope);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("11")]
+    [InlineData("0x1111111111111111111111111111111111111111111111111111111111111111")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    [InlineData("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg")]
+    public void FindTransactionDetailsRejectsNoncanonicalHash(string hash)
+    {
+        AssertArgumentException(
+            "entrypointHashHex",
+            () => new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
+                .FindTransactionDetails(hash));
+    }
+
+    [Fact]
+    public void FindTransactionDetailsRejectsNondefaultQueryParameters()
+    {
+        const string entrypointHash = "1111111111111111111111111111111111111111111111111111111111111111";
+        var builder = new SignedIterableQueryBuilder(FixtureAccountId, FixtureNetworkId)
+            .FindTransactionDetails(entrypointHash)
+            .SetLimit(1);
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            builder.BuildSigned(Convert.FromHexString(FixtureSeedHex)));
+
+        Assert.Contains("canonical default query parameters", error.Message);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
@@ -210,7 +270,7 @@ public sealed class SignedIterableQueryBuilderTests
         var accountsWithAssetParams = ReadIterableStart(accountsWithAsset);
         Assert.Equal(1u, accountsWithAssetParams.ItemKindDiscriminant);
         var assetDefinitionBytes = ReadField(accountsWithAssetParams.QueryPayload, out _);
-        Assert.Equal(16 * 9, assetDefinitionBytes.Length);
+        AssertCanonicalAssetDefinitionId(assetDefinitionBytes);
         Assert.Equal((ulong)25, accountsWithAssetParams.Limit);
         Assert.Equal((ulong)7, accountsWithAssetParams.Offset);
         Assert.Equal((ulong)50, accountsWithAssetParams.FetchSize);
@@ -400,7 +460,7 @@ public sealed class SignedIterableQueryBuilderTests
         var itemKindDiscriminant = ReadFieldlessEnumDiscriminant(itemField);
         var predicateBytes = ReadByteVector(predicateField);
         var selectorBytes = ReadByteVector(selectorField);
-        var predicateDiscriminant = ReadFieldlessEnumDiscriminant(predicateBytes);
+        var predicateDiscriminant = BinaryPrimitives.ReadUInt32LittleEndian(predicateBytes.AsSpan(0, 4));
 
         var paginationField = ReadField(paramsField, out var offsetAfterPagination);
         var sortingField = ReadField(paramsField[offsetAfterPagination..], out var offsetAfterSorting);
@@ -418,6 +478,7 @@ public sealed class SignedIterableQueryBuilderTests
             queryPayload,
             itemKindDiscriminant,
             predicateDiscriminant,
+            predicateBytes,
             selectorBytes,
             ReadOptionalUInt64(limitField),
             BinaryPrimitives.ReadUInt64LittleEndian(offsetField),
@@ -484,9 +545,29 @@ public sealed class SignedIterableQueryBuilderTests
 
     private static byte[] ReadField(ReadOnlySpan<byte> bytes, out int consumed)
     {
-        var length = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
-        consumed = 8 + length;
-        return bytes.Slice(8, length).ToArray();
+        var reader = new CanonicalNoritoReader(bytes, "iterable-query test field", nameof(bytes));
+        var field = reader.ReadField("field").ToArray();
+        consumed = bytes.Length - reader.Remaining;
+        return field;
+    }
+
+    private static void AssertCanonicalAssetDefinitionId(ReadOnlySpan<byte> bytes)
+    {
+        Assert.Equal(16 * 2, bytes.Length);
+        var uuid = new byte[16];
+        var offset = 0;
+        for (var index = 0; index < uuid.Length; index++)
+        {
+            var component = ReadField(bytes[offset..], out var consumed);
+            Assert.Single(component);
+            Assert.Equal(2, consumed);
+            uuid[index] = component[0];
+            offset += consumed;
+        }
+
+        Assert.Equal(bytes.Length, offset);
+        Assert.Equal(4, uuid[6] >> 4);
+        Assert.Equal(2, uuid[8] >> 6);
     }
 
     private static byte[] ReadByteVector(ReadOnlySpan<byte> bytes)
@@ -534,24 +615,26 @@ public sealed class SignedIterableQueryBuilderTests
 
     private static string ReadNoritoString(ReadOnlySpan<byte> bytes)
     {
-        var length = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
-        return Encoding.UTF8.GetString(bytes.Slice(8, length));
+        var reader = new CanonicalNoritoReader(bytes, "iterable-query test string", nameof(bytes));
+        var length = checked((int)reader.ReadCompactLength("length"));
+        var value = Encoding.UTF8.GetString(reader.ReadExact(length, "value"));
+        reader.RequireEnd();
+        return value;
     }
 
     private static byte[] DecodeConstVec(ReadOnlySpan<byte> bytes)
     {
-        var count = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
+        var reader = new CanonicalNoritoReader(bytes, "iterable-query test signature", nameof(bytes));
+        var count = checked((int)reader.ReadSequenceLength("count"));
         var output = new byte[count];
-        var offset = 8;
         for (var index = 0; index < count; index++)
         {
-            var fieldLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, 8)));
-            Assert.Equal(1, fieldLength);
-            output[index] = bytes[offset + 8];
-            offset += 9;
+            var item = reader.ReadField($"signature[{index}]");
+            Assert.Single(item.ToArray());
+            output[index] = item[0];
         }
 
-        Assert.Equal(bytes.Length, offset);
+        reader.RequireEnd();
         return output;
     }
 
@@ -559,6 +642,7 @@ public sealed class SignedIterableQueryBuilderTests
         byte[] QueryPayload,
         uint ItemKindDiscriminant,
         uint PredicateDiscriminant,
+        byte[] PredicateBytes,
         byte[] SelectorBytes,
         ulong? Limit,
         ulong Offset,

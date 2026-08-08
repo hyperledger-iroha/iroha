@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 from scripts import close_taira_qualification_handoff as closer
+from scripts import taira_privacy_protocol_receipt as privacy_evidence
+from scripts.tests.taira_privacy_protocol_receipt_test import build_valid_evidence
 
 
 def _canonical(value: object) -> bytes:
@@ -42,21 +45,19 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, object]]:
     }
     receipt = tmp_path / closer.RECEIPT_NAME
     receipt.write_bytes(closer.canonical_json_bytes(receipt_value))
-    privacy_receipt = tmp_path / closer.PRIVACY_PROTOCOL_RECEIPT_NAME
-    privacy_receipt.write_bytes(
-        closer.canonical_json_bytes(
-            {
-                "candidate": {
-                    "source": source,
-                    "validator_binary_sha256": "1" * 64,
-                },
-                "receipt_id": "9" * 64,
-                "schema": closer.PRIVACY_PROTOCOL_RECEIPT_SCHEMA,
-                "schema_version": closer.PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION,
-            }
-        )
+    privacy_protocol_evidence = tmp_path / closer.PRIVACY_PROTOCOL_DIRECTORY
+    build_valid_evidence(
+        privacy_protocol_evidence,
+        source=source,
+        bindings={
+            "artifact_handoff_sha256": "e" * 64,
+            "exact12_matrix_sha256": "2" * 64,
+            "linux_release_archive_sha256": "3" * 64,
+            "validator_binary_sha256": "1" * 64,
+        },
+        now_unix=int(time.time()) - 1,
     )
-    return receipt, privacy_receipt, identity, receipt_value
+    return receipt, privacy_protocol_evidence, identity, receipt_value
 
 
 def test_qualification_handoff_is_root_freezable_and_exactly_closed(
@@ -71,19 +72,28 @@ def test_qualification_handoff_is_root_freezable_and_exactly_closed(
     assert closer.scan_inventory_paths(output) == sorted(
         [
             closer.HANDOFF_MANIFEST,
-            closer.PRIVACY_PROTOCOL_RECEIPT_NAME,
             closer.RECEIPT_NAME,
             closer.SOURCE_IDENTITY_NAME,
+            *(
+                f"{closer.PRIVACY_PROTOCOL_DIRECTORY}/{name}"
+                for name in privacy_evidence.EVIDENCE_NAMES
+            ),
         ]
     )
     assert stat_mode(output) == 0o555
+    assert stat_mode(output / closer.PRIVACY_PROTOCOL_DIRECTORY) == 0o555
     assert all(stat_mode(output / name) == 0o444 for name in closer.scan_inventory_paths(output))
     manifest = json.loads((output / closer.HANDOFF_MANIFEST).read_bytes())
-    assert [row["path"] for row in manifest["files"]] == [
-        closer.RECEIPT_NAME,
-        closer.PRIVACY_PROTOCOL_RECEIPT_NAME,
-        closer.SOURCE_IDENTITY_NAME,
-    ]
+    assert [row["path"] for row in manifest["files"]] == sorted(
+        [
+            closer.RECEIPT_NAME,
+            closer.SOURCE_IDENTITY_NAME,
+            *(
+                f"{closer.PRIVACY_PROTOCOL_DIRECTORY}/{name}"
+                for name in privacy_evidence.EVIDENCE_NAMES
+            ),
+        ]
+    )
 
 
 def stat_mode(path: Path) -> int:
@@ -213,6 +223,32 @@ def test_post_read_source_replacement_cannot_change_closed_handoff(
     output = tmp_path / "handoff"
     closer.close_handoff(receipt, privacy_receipt, identity, output)
     assert (output / closer.RECEIPT_NAME).read_bytes() == original
+
+
+def test_privacy_evidence_toctou_mutation_cannot_cross_the_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt, privacy_root, identity, _receipt_value = _fixture(tmp_path)
+    real_read = closer.stable_read_relative
+    mutated = False
+
+    def mutating_read(root: Path, relative: str, **kwargs):
+        nonlocal mutated
+        result = real_read(root, relative, **kwargs)
+        if root == privacy_root and not mutated:
+            (privacy_root / privacy_evidence.RECEIPT_NAME).write_bytes(b"{}\n")
+            mutated = True
+        return result
+
+    monkeypatch.setattr(closer, "stable_read_relative", mutating_read)
+    with pytest.raises(
+        closer.QualificationHandoffError,
+        match="installed privacy evidence failed replay validation",
+    ):
+        closer.close_handoff(
+            receipt, privacy_root, identity, tmp_path / "toctou-output"
+        )
 
 
 def test_qualification_handoff_rejects_device_input(tmp_path: Path) -> None:

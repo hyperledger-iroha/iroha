@@ -22,6 +22,14 @@ use ivm::{ProgramMetadata, encoding, instruction, kotodama::wide as kwide, sysca
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+fn test_network_id(label: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::new(label),
+        ),
+    )
+}
+
 fn new_state(
     world: World,
     kura: Arc<Kura>,
@@ -93,7 +101,7 @@ fn provision_fee_sponsor_program(
     };
 
     iroha_data_model::isi::nexus::CreateFeeSponsorProgram {
-        program: FeeSponsorProgram::new(program_id.clone()),
+        program: FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone()),
     }
     .execute(sponsor, state_transaction)
     .expect("create fee sponsor program");
@@ -193,7 +201,7 @@ fn non_vm_instructions_charge_fees() {
     );
 
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )
@@ -310,7 +318,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         NonZeroU64::new(1_000_000),
     );
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )
@@ -444,7 +452,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     );
 
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )
@@ -655,7 +663,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         None,
     );
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )
@@ -802,7 +810,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     .into();
     let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
 
-    let tx = TransactionBuilder::new(chain, alice_id.clone(), fee_payment)
+    let tx = TransactionBuilder::new(*state.network_id_ref(), alice_id.clone(), fee_payment)
         .with_executable(Executable::from(core::iter::once(instruction)))
         .sign(alice_kp.private_key());
 
@@ -905,7 +913,7 @@ fn non_vm_gas_limit_too_low_rejects() {
     );
 
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )
@@ -990,7 +998,7 @@ fn ivm_syscall_charges_fees() {
     );
 
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )
@@ -1055,9 +1063,9 @@ fn legacy_gas_limit_metadata_string_is_rejected() {
         iroha_primitives::json::Json::new("not-a-number"),
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
+    let network_id = test_network_id(b"isi-gas-fees-legacy-metadata-string");
     let error = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1090,9 +1098,9 @@ fn legacy_gas_limit_metadata_zero_is_rejected() {
         iroha_primitives::json::Json::new(0_u64),
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
+    let network_id = test_network_id(b"isi-gas-fees-legacy-metadata-zero");
     let error = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1180,7 +1188,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
     );
 
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )
@@ -1277,7 +1285,7 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     );
 
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
-        chain,
+        *state.network_id_ref(),
         alice_id.clone(),
         fee_payment,
     )

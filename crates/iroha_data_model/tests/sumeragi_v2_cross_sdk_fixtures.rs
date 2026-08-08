@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::consensus_v2::{
         BlockSubject, CertifiedBodyRequest, CertifiedBodyResponse, CommitCertificateRequest,
         CommitCertificateResponse, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
@@ -32,6 +32,12 @@ fn peer(seed: u8) -> PeerId {
     PeerId::new(key_pair.public_key().clone())
 }
 
+fn network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([seed; Hash::LENGTH]),
+    ))
+}
+
 fn context() -> HeightContext {
     let mut peers = (1..=4).map(peer).collect::<Vec<_>>();
     peers.sort();
@@ -43,7 +49,7 @@ fn context() -> HeightContext {
         })
         .collect::<Vec<_>>();
     HeightContext {
-        chain_id: ChainId::from("sumeragi-v2-test"),
+        network_id: network_id(0x71),
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 2,
@@ -234,7 +240,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
 
     let commit_request = CommitCertificateRequest {
         protocol_version: PROTOCOL_VERSION,
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         context_id: context.id(),
         height: context.height,
         requester: peer(99),

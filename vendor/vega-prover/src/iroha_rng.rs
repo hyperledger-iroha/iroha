@@ -37,6 +37,13 @@ pub fn with_external_seed<T>(
     output
 }
 
+/// Run a test operation in a deterministic externally seeded proof scope.
+#[cfg(test)]
+pub(crate) fn with_deterministic_test_seed<T>(seed_byte: u8, operation: impl FnOnce() -> T) -> T {
+    with_external_seed([seed_byte; 32], operation)
+        .expect("deterministically seeded Vega test scope must complete")
+}
+
 /// RNG facade used by the patched PCS, mask, and IPA call sites.
 pub(crate) struct ScopedRng;
 

@@ -55,7 +55,7 @@ use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, 
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
-    AccountId, ChainId,
+    AccountId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
@@ -17301,7 +17301,7 @@ impl Kura {
             commit_qc: KagemushaTopUpFinalityCompactQcV2 {
                 height_context: KagemushaTopUpFinalityHeightContextV2 {
                     context_id: context.id(),
-                    chain_id: context.chain_id.clone(),
+                    network_id: context.network_id,
                     protocol_version: context.protocol_version,
                     height: context.height,
                     epoch: context.epoch,
@@ -49564,6 +49564,14 @@ impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
 
 #[cfg(test)]
 mod tests {
+    fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(label)
+        ))
+    }
+
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");

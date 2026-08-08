@@ -60,6 +60,7 @@ use iroha_data_model::bridge::{
     sccp_solana_native_verifier_config_hash_v1, sccp_sora_taira_chain_id_hash_v1,
 };
 use iroha_data_model::{
+    NetworkId,
     account::{AccountController, AccountId},
     block::BlockHeader,
     bridge::{
@@ -183,8 +184,19 @@ pub const SCCP_DOMAIN_BSC: u32 = 2;
 pub const SCCP_DOMAIN_SOLANA: u32 = 3;
 /// SCCP protocol domain assigned to TRON networks.
 pub const SCCP_DOMAIN_TRON: u32 = 5;
-/// Public TAIRA chain id bound into TAIRA-origin SCCP finality proofs.
-pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Public TAIRA chain label retained as SCCP deployment metadata.
+pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Exact TAIRA genesis hash bound into TAIRA-origin SCCP finality proofs.
+pub const SCCP_TAIRA_FINALITY_NETWORK_ID_V1: &str =
+    "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b";
+
+/// Return the exact genesis-derived TAIRA network identity governed by SCCP V1.
+#[must_use]
+pub fn sccp_taira_finality_network_id_v1() -> NetworkId {
+    SCCP_TAIRA_FINALITY_NETWORK_ID_V1
+        .parse()
+        .expect("compiled SCCP Taira network identity must be canonical")
+}
 /// Canonical I105 chain discriminant required for every SCCP Taira account literal.
 pub const SCCP_TAIRA_I105_DISCRIMINANT_V1: u16 = 369;
 /// TAIRA SCCP route id used for the initial XOR bridge to TRON Nile.
@@ -5384,7 +5396,7 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
         return false;
     };
     if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V1
-        || artifact.height_context.chain_id.as_str() != SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+        || artifact.height_context.network_id != sccp_taira_finality_network_id_v1()
         || block_header_bytes.len() > SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1
         || !preflight_uncompressed_norito_frame(
             &block_header_bytes,
@@ -5424,7 +5436,7 @@ pub fn verify_taira_bridge_finality_proof_cryptographic(
     count_sccp_destination_bls_verification_v1();
     iroha_data_model::bridge::verify_bridge_finality_proof(
         proof,
-        &SCCP_TAIRA_FINALITY_CHAIN_ID_V1.into(),
+        &sccp_taira_finality_network_id_v1(),
     )
     .is_ok()
 }
@@ -5605,6 +5617,14 @@ mod tests {
         request: SccpGroth16Bn254ProofRequestV1,
         artifact: SccpGroth16Bn254ProofArtifactV1,
         bridge_proof: BridgeSccpDestinationProofV1,
+    }
+
+    #[test]
+    fn taira_finality_network_id_matches_the_governed_genesis_vector() {
+        assert_eq!(
+            sccp_taira_finality_network_id_v1().to_string(),
+            SCCP_TAIRA_FINALITY_NETWORK_ID_V1
+        );
     }
 
     fn word_u64(value: u64) -> H256 {
@@ -5999,7 +6019,7 @@ mod tests {
             sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_account_id: AccountId::new(custody),
+                custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             },
         };
@@ -6053,7 +6073,7 @@ mod tests {
             sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-                custody_account_id: AccountId::new(custody),
+                custody_owner: AccountId::new(custody),
                 payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
             },
         };
@@ -7549,8 +7569,11 @@ mod tests {
         candidates.push(candidate);
         let mut candidate = fixture.bundle.clone();
         let mut finality = decode_taira_bridge_finality_proof(&candidate.finality_proof).unwrap();
-        finality.finality_artifact.height_context.chain_id =
-            "00000000-0000-0000-0000-000000000753".into();
+        finality.finality_artifact.height_context.network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"substituted SCCP bundle network",
+            )),
+        );
         candidate.finality_proof = to_bytes(&finality).unwrap();
         candidates.push(candidate);
         let mut candidate = fixture.bundle.clone();
@@ -7615,7 +7638,11 @@ mod tests {
                 attack.finality_artifact.height_context.id();
         });
         assert_finality_structure_rejected(&proof, |attack| {
-            attack.finality_artifact.height_context.chain_id = "attacker-chain".into();
+            attack.finality_artifact.height_context.network_id = NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"attacker SCCP finality network"),
+                ),
+            );
             attack.finality_artifact.commit_qc.round.context_id =
                 attack.finality_artifact.height_context.id();
             attack.finality_artifact.commit_qc.proposal_round.context_id =

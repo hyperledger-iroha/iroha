@@ -538,7 +538,7 @@ impl ValidationFeeCurrentPolicyProofV1 {
     )]
     #[expect(
         clippy::needless_pass_by_value,
-        reason = "the public V1 verifier owns one ChainId across finality verification and registry binding"
+        reason = "the public V1 verifier owns one ChainId across registry and projection binding"
     )]
     pub fn verify_against(
         &self,
@@ -592,7 +592,12 @@ impl ValidationFeeCurrentPolicyProofV1 {
                 "validation-fee finality chain does not begin at the caller's checkpoint".into(),
             );
         }
-        let mut verifier = BridgeFinalityVerifier::with_context(chain_id.clone(), trusted_context);
+        // The exact caller-pinned context authenticates its complete HeightContext.
+        // Recover the genesis-derived network identity only after that comparison;
+        // the ChainId remains policy metadata and never becomes a finality domain.
+        let trusted_network_id = first.finality_artifact.height_context.network_id;
+        let mut verifier =
+            BridgeFinalityVerifier::with_context(trusted_network_id, trusted_context);
         for proof in &self.finality_chain {
             verifier
                 .verify(proof)
@@ -693,7 +698,7 @@ impl ValidationFeeCurrentPolicyProofV1 {
     /// genesis mismatch, or policy-chain genesis mismatch.
     #[expect(
         clippy::needless_pass_by_value,
-        reason = "the public V1 verifier owns one ChainId across finality verification and immutable deployment binding"
+        reason = "the public V1 verifier owns one ChainId across registry and immutable deployment binding"
     )]
     pub fn verify_with_immutable_binding(
         &self,

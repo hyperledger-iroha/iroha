@@ -39,7 +39,9 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
-    block::consensus_v2::{SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops},
+    block::consensus_v2::{
+        SnapshotV2BootstrapRecord, finality::verify_validator_power_roster_pops,
+    },
     block::{
         BlockHeader, SignedBlock,
         consensus::{
@@ -130,9 +132,9 @@ use iroha_data_model::{
         FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey, FeeSponsorVault,
         FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
-        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardRecord,
-        PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        UniversalAccountId, VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
+        LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardRecord, PublicLaneStakeShare,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
+        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
@@ -796,7 +798,7 @@ fn advance_axt_policy_for_handle(
             .into(),
         ));
     }
-    policy.min_sub_nonce =
+    policy.next_handle_counter =
         iroha_data_model::nexus::next_axt_handle_sub_nonce(&policy, &handle.handle).map_err(
             |error| {
                 Error::InvariantViolation(
@@ -810,6 +812,12 @@ fn advance_axt_policy_for_handle(
         )?;
     policy.current_slot = current_slot;
     Ok(policy)
+}
+
+fn axt_policy_identity_matches(left: &AxtPolicyEntry, right: &AxtPolicyEntry) -> bool {
+    left.manifest_root == right.manifest_root
+        && left.target_lane == right.target_lane
+        && left.active_handle_era == right.active_handle_era
 }
 
 /// Helper utilities for mutating MV cells that store vectors.
@@ -2412,7 +2420,7 @@ fn decode_canonical_merge_routing_plan(
 }
 
 /// Return the transaction-membership hashes committed by an execution batch.
-pub(crate) fn merge_execution_committed_transaction_hashes(
+pub fn merge_execution_committed_transaction_hashes(
     batch: &MergeExecutionBatch,
 ) -> Vec<HashOf<SignedTransaction>> {
     batch
@@ -2820,11 +2828,15 @@ pub enum QueuePlanAdmissionRegistryMatch {
 
 /// Durable disposition of one authenticated pending QueuePlan certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PendingQueuePlanAdmissionDisposition {
+pub enum PendingQueuePlanAdmissionDisposition {
     /// The exact immutable marker is already present in canonical WSV.
     Exact,
     /// No marker exists and the complete certificate is eligible for the next carrier.
     EligibleAbsent,
+    /// The certificate is authentic but its bound canonical frontier has not arrived locally yet.
+    ///
+    /// Callers must retain the bounded durable certificate and reclassify it after catch-up.
+    Future,
     /// A different well-formed immutable marker already owns this source identity.
     DefinitiveConflict,
     /// The certificate is authentic but its history, lifecycle, or authority context is stale.
@@ -10137,6 +10149,7 @@ impl GovernanceProposalRecord {
             }
             iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
@@ -10155,6 +10168,7 @@ impl GovernanceProposalRecord {
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
@@ -10173,6 +10187,26 @@ impl GovernanceProposalRecord {
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+            | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
+                None
+            }
+        }
+    }
+
+    /// Access the SoraFS provider-owner action when the proposal represents SoraFS governance.
+    pub fn as_sorafs_provider_governance(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::SorafsProviderGovernanceProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(
+                payload,
+            ) => Some(payload),
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
@@ -10192,6 +10226,7 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
                 None
@@ -10210,6 +10245,7 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => {
                 None
@@ -10228,6 +10264,7 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
             | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
             | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
             | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
                 None
@@ -11403,6 +11440,7 @@ fn validation_fee_plain_electorate_rules(
         ProposalKind::DeployContract(_)
         | ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::SccpRouteGovernance(_)
+        | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_) => None,
     }
 }
@@ -11866,7 +11904,7 @@ mod pipeline_parallelism_tests {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StatelessValidationContext {
-    chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     max_clock_drift_ms: u64,
     tx_params: iroha_data_model::parameter::TransactionParameters,
     allowed_signing: Vec<iroha_crypto::Algorithm>,
@@ -11874,13 +11912,13 @@ pub(crate) struct StatelessValidationContext {
 
 impl StatelessValidationContext {
     pub(crate) fn new(
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         max_clock_drift_ms: u64,
         tx_params: iroha_data_model::parameter::TransactionParameters,
         allowed_signing: Vec<iroha_crypto::Algorithm>,
     ) -> Self {
         Self {
-            chain_id,
+            network_id,
             max_clock_drift_ms,
             tx_params,
             allowed_signing,
@@ -12044,7 +12082,8 @@ mod stateless_validation_cache_tests {
     use super::{StatelessValidationCache, StatelessValidationContext};
     use iroha_crypto::{Algorithm, Hash, HashOf};
     use iroha_data_model::{
-        ChainId, parameter::TransactionParameters, transaction::SignedTransaction,
+        NetworkId, block::BlockHeader, parameter::TransactionParameters,
+        transaction::SignedTransaction,
     };
 
     fn dummy_hash(seed: u8) -> HashOf<SignedTransaction> {
@@ -12089,21 +12128,23 @@ mod stateless_validation_cache_tests {
         let mut cache = StatelessValidationCache::new(4);
         let key = dummy_hash(9);
 
-        cache.ensure_context(context("cache-a"));
+        cache.ensure_context(context(0xA1));
         cache.insert_ok(key, None, 0);
         assert!(cache.get_ok(&key, 100));
 
-        cache.ensure_context(context("cache-a"));
+        cache.ensure_context(context(0xA1));
         assert!(cache.get_ok(&key, 100));
 
-        cache.ensure_context(context("cache-b"));
+        cache.ensure_context(context(0xB2));
         assert!(!cache.get_ok(&key, 100));
         assert!(!cache.contains_key(&key));
     }
 
-    fn context(chain_id: &str) -> StatelessValidationContext {
+    fn context(seed: u8) -> StatelessValidationContext {
         StatelessValidationContext::new(
-            chain_id.parse::<ChainId>().expect("valid chain id"),
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([seed; Hash::LENGTH]),
+            )),
             0,
             TransactionParameters::default(),
             vec![Algorithm::Ed25519],
@@ -12562,6 +12603,8 @@ pub struct State {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier from configuration (used in VRF prehash binding).
     pub chain_id: iroha_data_model::ChainId,
+    /// Exact transaction security domain derived from `genesis.expected_hash`.
+    pub network_id: iroha_data_model::NetworkId,
     /// Typed v2 trust root parsed from a snapshot but not yet authorized by snapshot policy.
     snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
     /// Snapshot-policy-authorized and WSV-validated v2 trust root.
@@ -12958,6 +13001,118 @@ enum CommitRosterAuthority<'a> {
     V2Finality,
 }
 
+/// Immutable AXT authorization context captured before any effects of a block run.
+///
+/// Policy identity, issuer identity, the issuer's verification key, and the replay
+/// ledger are frozen together. The per-dataspace handle counter is deliberately
+/// tracked outside this snapshot because accepted handles advance it within the block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AxtBlockStartSnapshot {
+    policy_snapshot: AxtPolicySnapshot,
+    issuer_bindings: BTreeMap<
+        DataSpaceId,
+        Result<
+            crate::nexus::space_directory::AxtIssuerBinding,
+            crate::nexus::space_directory::AxtIssuerResolutionError,
+        >,
+    >,
+    replay_ledger: BTreeMap<AxtHandleReplayKey, AxtReplayRecord>,
+}
+
+impl AxtBlockStartSnapshot {
+    fn capture(state_block: &StateBlock<'_>) -> Self {
+        let mut policy_snapshot = WorldReadOnly::axt_policy_snapshot(state_block.world());
+        if policy_snapshot.entries.is_empty() {
+            policy_snapshot = crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
+                state_block,
+            )
+            .unwrap_or_default();
+        }
+        let current_slot = current_axt_slot_from_block(
+            &state_block._curr_block,
+            state_block.nexus.axt.slot_length_ms,
+        );
+        for binding in &mut policy_snapshot.entries {
+            binding.policy.current_slot = current_slot;
+        }
+        policy_snapshot.version = AxtPolicySnapshot::compute_version(&policy_snapshot.entries);
+        policy_snapshot
+            .validate()
+            .expect("block-start AXT policy projection must be canonical");
+
+        let issuer_bindings = policy_snapshot
+            .entries
+            .iter()
+            .map(|binding| {
+                (
+                    binding.dsid,
+                    crate::nexus::space_directory::resolve_axt_issuer_binding(
+                        state_block.world(),
+                        binding.dsid,
+                        binding.policy.manifest_root,
+                    ),
+                )
+            })
+            .collect();
+        let replay_ledger = state_block
+            .world()
+            .axt_replay_ledger()
+            .iter()
+            .map(|(key, record)| (*key, *record))
+            .collect();
+
+        Self {
+            policy_snapshot,
+            issuer_bindings,
+            replay_ledger,
+        }
+    }
+
+    /// Return the exact policy identity and initial counters captured at block start.
+    #[must_use]
+    pub const fn policy_snapshot(&self) -> &AxtPolicySnapshot {
+        &self.policy_snapshot
+    }
+
+    /// Resolve the issuer identity and verification key captured for `dataspace`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the deterministic resolution failure captured from the pre-block
+    /// state, or [`crate::nexus::space_directory::AxtIssuerResolutionError::MissingManifest`]
+    /// when the dataspace had no block-start policy entry.
+    pub fn issuer_binding(
+        &self,
+        dataspace: DataSpaceId,
+    ) -> Result<
+        &crate::nexus::space_directory::AxtIssuerBinding,
+        crate::nexus::space_directory::AxtIssuerResolutionError,
+    > {
+        self.issuer_bindings
+            .get(&dataspace)
+            .ok_or(crate::nexus::space_directory::AxtIssuerResolutionError::MissingManifest)?
+            .as_ref()
+            .map_err(|error| *error)
+    }
+
+    /// Return a replay record that existed before any effect of this block.
+    #[must_use]
+    pub fn replay_record(&self, key: &AxtHandleReplayKey) -> Option<&AxtReplayRecord> {
+        self.replay_ledger.get(key)
+    }
+
+    fn policy_with_counters(&self, counters: &BTreeMap<DataSpaceId, u64>) -> AxtPolicySnapshot {
+        let mut snapshot = self.policy_snapshot.clone();
+        for binding in &mut snapshot.entries {
+            if let Some(counter) = counters.get(&binding.dsid) {
+                binding.policy.next_handle_counter = *counter;
+            }
+        }
+        snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
+        snapshot
+    }
+}
+
 /// Struct for block's aggregated changes
 pub struct StateBlock<'state> {
     state_ref: &'state State,
@@ -13025,6 +13180,8 @@ pub struct StateBlock<'state> {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
     pub chain_id: iroha_data_model::ChainId,
+    /// Exact transaction security domain for this block.
+    pub network_id: iroha_data_model::NetworkId,
     /// `NPoS` PRF seed derived from the pre-block world state at this height.
     #[allow(dead_code)]
     pre_block_npos_seed: [u8; 32],
@@ -13040,6 +13197,10 @@ pub struct StateBlock<'state> {
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Immutable policy/issuer/key context captured before start-of-block effects.
+    axt_block_start_snapshot: Option<Arc<AxtBlockStartSnapshot>>,
+    /// Transactional next-counter state advanced under the frozen AXT policy.
+    axt_next_handle_counters: BTreeMap<DataSpaceId, u64>,
     /// Durable native independent-batch leg outcomes keyed by entrypoint hash.
     batch_transfer_outcomes:
         BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,
@@ -13110,8 +13271,6 @@ pub struct StateBlock<'state> {
     pub(crate) replay_compatibility: bool,
     /// True for the disposable full-range replay pass that must not publish external effects.
     replay_prevalidation: bool,
-    /// True when applying committed Kura results after replay execution drift.
-    pub(crate) trust_committed_execution_results: bool,
 }
 
 impl<'state> StateBlock<'state> {
@@ -13119,6 +13278,34 @@ impl<'state> StateBlock<'state> {
     #[inline]
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
+    }
+
+    fn freeze_axt_block_start(&mut self) {
+        assert!(
+            self.axt_block_start_snapshot.is_none(),
+            "AXT block-start authorization context must be captured exactly once"
+        );
+        let snapshot = Arc::new(AxtBlockStartSnapshot::capture(self));
+        self.axt_next_handle_counters = snapshot
+            .policy_snapshot()
+            .entries
+            .iter()
+            .map(|binding| (binding.dsid, binding.policy.next_handle_counter))
+            .collect();
+        self.axt_block_start_snapshot = Some(snapshot);
+    }
+
+    /// Return the immutable AXT authorization context captured before block effects.
+    #[must_use]
+    pub fn axt_block_start_snapshot(&self) -> &AxtBlockStartSnapshot {
+        self.axt_block_start_snapshot
+            .as_deref()
+            .expect("StateBlock constructors must freeze AXT authorization before use")
+    }
+
+    fn axt_execution_policy_snapshot(&self) -> AxtPolicySnapshot {
+        self.axt_block_start_snapshot()
+            .policy_with_counters(&self.axt_next_handle_counters)
     }
 
     /// Return the staged lane-incarnation lineage used by canonical snapshot hashing.
@@ -13554,9 +13741,9 @@ impl<'state> StateBlock<'state> {
             if let Some(prev) = existing.get(&binding.dsid) {
                 if prev.manifest_root == binding.policy.manifest_root
                     && prev.target_lane == binding.policy.target_lane
-                    && prev.min_handle_era == binding.policy.min_handle_era
+                    && prev.active_handle_era == binding.policy.active_handle_era
                 {
-                    binding.policy.min_sub_nonce = prev.min_sub_nonce;
+                    binding.policy.next_handle_counter = prev.next_handle_counter;
                 }
             }
         }
@@ -13769,6 +13956,8 @@ pub struct StateTransaction<'block, 'state> {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier (from configuration). Used for VRF prehash binding.
     pub chain_id: iroha_data_model::ChainId,
+    /// Exact transaction security domain for this transaction.
+    pub network_id: iroha_data_model::NetworkId,
     /// Accumulator used to record settlement receipts for this block.
     settlement_accumulator: &'block mut crate::settlement::SettlementAccumulator,
     /// Settlement receipts staged during this transaction execution.
@@ -13859,8 +14048,6 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
     pub(crate) replay_compatibility: bool,
-    /// True when replay is applying committed Kura results after execution drift.
-    pub(crate) trust_committed_execution_results: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Deterministic per-execution ordinal for contract lifecycle transitions.
@@ -13879,6 +14066,12 @@ pub struct StateTransaction<'block, 'state> {
     block_axt_envelopes: &'block mut Vec<AxtEnvelopeRecord>,
     /// Pending AXT envelopes captured during this transaction execution.
     pending_axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Immutable AXT policy/issuer/key context inherited from the parent block.
+    axt_block_start_snapshot: Arc<AxtBlockStartSnapshot>,
+    /// Parent block's accepted AXT counter state, updated only on transaction apply.
+    block_axt_next_handle_counters: &'block mut BTreeMap<DataSpaceId, u64>,
+    /// Transaction-local AXT counters used for admission and envelope recording.
+    axt_next_handle_counters_after_block: BTreeMap<DataSpaceId, u64>,
     /// Block-level accumulator for durable native independent-batch outcomes.
     block_batch_transfer_outcomes: &'block mut BTreeMap<
         HashOf<TransactionEntrypoint>,
@@ -14110,6 +14303,8 @@ pub struct StateView<'state> {
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this view.
     pub chain_id: iroha_data_model::ChainId,
+    /// Exact transaction security domain for this view.
+    pub network_id: iroha_data_model::NetworkId,
     /// Creation timestamp to catch long-lived view guards.
     created_at: Instant,
 }
@@ -14166,6 +14361,8 @@ pub struct StateQueryView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Chain identifier for this view.
     pub chain_id: iroha_data_model::ChainId,
+    /// Exact transaction security domain for this view.
+    pub network_id: iroha_data_model::NetworkId,
 }
 
 fn time_trigger_action_requires_clock_progress(
@@ -14832,28 +15029,6 @@ pub(crate) fn live_consensus_key_pop_for_peer(
         }
     }
     None
-}
-
-/// Filter lane-relay emergency peers to those that are currently usable for QC verification.
-pub(crate) fn eligible_lane_relay_emergency_peers(
-    snapshot: &impl WorldReadOnly,
-    peers: &[PeerId],
-    commit_topology: &[PeerId],
-    block_height: u64,
-) -> Vec<PeerId> {
-    let present_peers: BTreeSet<PeerId> = snapshot.peers().iter().cloned().collect();
-    let topology_peers: BTreeSet<PeerId> = commit_topology.iter().cloned().collect();
-    let enforce_topology_membership = !topology_peers.is_empty();
-
-    let mut eligible = peers.to_vec();
-    eligible.retain(|peer| {
-        present_peers.contains(peer)
-            && (!enforce_topology_membership || topology_peers.contains(peer))
-            && live_consensus_key_pop_for_peer(snapshot, peer, block_height).is_some()
-    });
-    eligible.sort();
-    eligible.dedup();
-    eligible
 }
 
 fn active_stake_elected_validator_peers_for_checkpoint_lanes<I, P>(
@@ -21394,7 +21569,7 @@ mod confidential_policy_transition_index_tests {
             domain_id,
             "second".parse().expect("valid asset name"),
         );
-        let mut world = World::default();
+        let world = World::default();
         let mut block = world.block();
         let mut transaction = block.transaction_without_telemetry(LaneConfig::default(), 0);
 
@@ -25563,19 +25738,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                     let mut entry = AxtPolicyEntry {
                         manifest_root,
                         target_lane,
-                        min_handle_era: record
+                        active_handle_era: record
                             .lifecycle
                             .activated_epoch
                             .unwrap_or(record.manifest.activation_epoch),
-                        min_sub_nonce: 1,
+                        next_handle_counter: 1,
                         current_slot,
                     };
                     if let Some(existing) = existing_policies.get(dsid) {
                         if existing.manifest_root == entry.manifest_root
                             && existing.target_lane == entry.target_lane
-                            && existing.min_handle_era == entry.min_handle_era
+                            && existing.active_handle_era == entry.active_handle_era
                         {
-                            entry.min_sub_nonce = existing.min_sub_nonce;
+                            entry.next_handle_counter = existing.next_handle_counter;
                         }
                     }
                     let activated_epoch = record.lifecycle.activated_epoch;
@@ -25613,16 +25788,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         let mut entry = AxtPolicyEntry {
                             manifest_root: [0; 32],
                             target_lane,
-                            min_handle_era: 0,
-                            min_sub_nonce: 0,
+                            active_handle_era: 0,
+                            next_handle_counter: 0,
                             current_slot,
                         };
                         if let Some(existing) = existing_policies.get(dsid) {
                             if existing.manifest_root == entry.manifest_root
                                 && existing.target_lane == entry.target_lane
-                                && existing.min_handle_era == entry.min_handle_era
+                                && existing.active_handle_era == entry.active_handle_era
                             {
-                                entry.min_sub_nonce = existing.min_sub_nonce;
+                                entry.next_handle_counter = existing.next_handle_counter;
                             }
                         }
                         (entry, None)
@@ -27478,10 +27653,10 @@ impl State {
             .snapshot_bootstrap
             .as_ref()
             .expect("validated snapshot bootstrap record must contain an anchor");
-        if record.context.chain_id != self.chain_id {
+        if record.context.network_id != self.network_id {
             return Err(format!(
-                "bootstrap context chain id {} differs from snapshot chain id {}",
-                record.context.chain_id, self.chain_id
+                "bootstrap context network id {} differs from snapshot network id {}",
+                record.context.network_id, self.network_id
             ));
         }
         let snapshot_height = u64::try_from(self.committed_height())
@@ -27890,7 +28065,7 @@ impl State {
             && !autoscale_lane_drain_state_matches_context(
                 lane,
                 &drain_state,
-                &self.chain_id,
+                &self.network_id,
                 incarnation,
             )
         {
@@ -27963,7 +28138,8 @@ impl State {
             self.lane_incarnation_activation_heights_snapshot();
         let authoritative_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
         let lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
-        let lineage_root = lane_incarnation_lineage_root(&self.chain_id, &lane_incarnation_lineage);
+        let lineage_root =
+            lane_incarnation_lineage_root(&self.network_id, &lane_incarnation_lineage);
         self.kura
             .restore_lane_segments_with_geometry_at_height_and_lineage_root(
                 &lane_config,
@@ -28002,7 +28178,7 @@ impl State {
                 &lane_config,
                 &lane_incarnations,
                 &lane_incarnation_activation_heights,
-                lane_incarnation_lineage_root(&self.chain_id, &lane_incarnation_lineage),
+                lane_incarnation_lineage_root(&self.network_id, &lane_incarnation_lineage),
                 0,
             )
             .map_err(|err| {
@@ -28018,6 +28194,7 @@ impl State {
     }
 
     /// Clone the block storage handle used by isolated snapshot-state reconstruction.
+    #[cfg(test)]
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {
         Arc::clone(&self.kura)
     }
@@ -29687,10 +29864,12 @@ impl State {
                 if prev.manifest_root == binding.policy.manifest_root
                     && prev.target_lane == binding.policy.target_lane
                 {
-                    binding.policy.min_handle_era =
-                        binding.policy.min_handle_era.max(prev.min_handle_era);
-                    binding.policy.min_sub_nonce =
-                        binding.policy.min_sub_nonce.max(prev.min_sub_nonce);
+                    binding.policy.active_handle_era =
+                        binding.policy.active_handle_era.max(prev.active_handle_era);
+                    binding.policy.next_handle_counter = binding
+                        .policy
+                        .next_handle_counter
+                        .max(prev.next_handle_counter);
                 }
             }
         }
@@ -30016,6 +30195,8 @@ impl State {
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
         exact_durable_height: usize,
+        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> core::result::Result<Self, MergeLedgerCommitError> {
         world
@@ -30042,8 +30223,7 @@ impl State {
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.enabled = iroha_config::parameters::defaults::nexus::ENABLED;
-        let chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
-        let lane_incarnations = derive_static_lane_incarnations(&chain_id, &nexus.lane_catalog);
+        let lane_incarnations = derive_static_lane_incarnations(&network_id, &nexus.lane_catalog);
         let lane_incarnation_lineage = lane_incarnations
             .iter()
             .map(|(&lane_id, &incarnation)| {
@@ -30185,6 +30365,7 @@ impl State {
             lane_compliance: parking_lot::RwLock::new(None),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             chain_id,
+            network_id,
             snapshot_v2_bootstrap_candidate: None,
             authenticated_snapshot_v2_bootstrap: None,
             authenticated_snapshot_bootstrap_payload: None,
@@ -30549,7 +30730,7 @@ impl State {
 
     pub(crate) fn reseed_static_lane_incarnations(&mut self) {
         let incarnations =
-            derive_static_lane_incarnations(&self.chain_id, &self.nexus.get_mut().lane_catalog);
+            derive_static_lane_incarnations(&self.network_id, &self.nexus.get_mut().lane_catalog);
         let activation_heights = incarnations
             .keys()
             .copied()
@@ -30622,7 +30803,7 @@ impl State {
     #[cfg(test)]
     pub(crate) fn reseed_static_lane_incarnations_for_tests(&self) {
         let lane_catalog = self.nexus.read().lane_catalog.clone();
-        let incarnations = derive_static_lane_incarnations(&self.chain_id, &lane_catalog);
+        let incarnations = derive_static_lane_incarnations(&self.network_id, &lane_catalog);
         let activation_heights = incarnations
             .keys()
             .copied()
@@ -30659,21 +30840,15 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Result<Self, MergeLedgerCommitError> {
-        let exact_durable_height = kura.exact_durable_blocks_count()?;
-        let mut s = Self::new_inner(
+        Self::try_new_with_chain_and_network_id(
             world,
             kura,
             query_handle,
-            exact_durable_height,
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            *DEFAULT_TEST_NETWORK_ID,
             #[cfg(feature = "telemetry")]
             telemetry,
-        )?;
-        s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
-        s.reseed_static_lane_incarnations();
-        if !s.kura.provisional_snapshot_bootstrap_pending() {
-            s.recover_merge_ledger_from_kura()?;
-        }
-        Ok(s)
+        )
     }
 
     /// Test-fixture convenience wrapper retaining the historical infallible surface.
@@ -30732,17 +30907,46 @@ impl State {
         chain_id: iroha_data_model::ChainId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Result<Self, MergeLedgerCommitError> {
+        Self::try_new_with_chain_and_network_id(
+            world,
+            kura,
+            query_handle,
+            chain_id,
+            *DEFAULT_TEST_NETWORK_ID,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+        )
+    }
+
+    /// Fallibly construct [`State`] with display and exact security identities.
+    ///
+    /// The `network_id` must be derived directly from the mandatory configured
+    /// `genesis.expected_hash`; the human-readable `chain_id` is never used as
+    /// a transaction replay-protection domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact durable merge-ledger or Kura validation failure.
+    #[inline]
+    pub fn try_new_with_chain_and_network_id(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
+        #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+    ) -> Result<Self, MergeLedgerCommitError> {
         let exact_durable_height = kura.exact_durable_blocks_count()?;
-        let mut s = Self::new_inner(
+        let s = Self::new_inner(
             world,
             kura,
             query_handle,
             exact_durable_height,
+            chain_id,
+            network_id,
             #[cfg(feature = "telemetry")]
             telemetry,
         )?;
-        s.chain_id = chain_id;
-        s.reseed_static_lane_incarnations();
         if !s.kura.provisional_snapshot_bootstrap_pending() {
             s.recover_merge_ledger_from_kura()?;
         }
@@ -30801,6 +31005,31 @@ impl State {
             kura,
             query_handle,
             chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        )
+    }
+
+    /// Fallibly construct [`State`] with exact display/security identities and
+    /// the default telemetry sink when telemetry support is compiled in.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact durable merge-ledger or Kura validation failure.
+    #[inline]
+    pub fn try_new_with_chain_and_network_id_with_default_telemetry(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> Result<Self, MergeLedgerCommitError> {
+        Self::try_new_with_chain_and_network_id(
+            world,
+            kura,
+            query_handle,
+            chain_id,
+            network_id,
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         )
@@ -31065,6 +31294,35 @@ impl State {
         s
     }
 
+    /// Create a [`State`] test fixture with independent display and exact network identities.
+    ///
+    /// This is the protocol-test counterpart of [`Self::new_with_chain_for_testing`]; callers
+    /// exercising replay protection must supply the genesis-derived [`iroha_data_model::NetworkId`]
+    /// instead of inheriting the repository's default test network.
+    #[must_use]
+    #[inline]
+    pub fn new_with_chain_and_network_id_for_testing(
+        world: World,
+        kura: Arc<Kura>,
+        query_handle: LiveQueryStoreHandle,
+        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> Self {
+        let mut s = Self::try_new_with_chain_and_network_id(
+            world,
+            kura,
+            query_handle,
+            chain_id,
+            network_id,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("test fixture durable State startup journals must validate");
+        s.install_active_lane_markers_for_tests();
+        s.configure_test_runtime_defaults();
+        s
+    }
+
     /// Commit a synthetic account-heavy world transaction for benchmark scenarios.
     ///
     /// # Errors
@@ -31132,7 +31390,7 @@ impl State {
             let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
             let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
                 &world_view,
-                &self.chain_id,
+                &self.network_id,
                 curr_block.height().get(),
             );
             (gas_limit_per_block, pre_block_npos_seed)
@@ -31197,6 +31455,7 @@ impl State {
             kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
@@ -31204,6 +31463,8 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            axt_block_start_snapshot: None,
+            axt_next_handle_counters: BTreeMap::new(),
             batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
@@ -31240,8 +31501,8 @@ impl State {
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
-            trust_committed_execution_results: false,
         };
+        sb.freeze_axt_block_start();
         stage(&mut sb)?;
         // Chain-wide privacy policy changes take effect at the start of their
         // exact incoming height, before protocol promotions or transactions.
@@ -31546,6 +31807,7 @@ impl State {
                                         ],
                                         iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
                                         | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+                                        | iroha_data_model::governance::types::ProposalKind::SorafsProviderGovernance(_)
                                         | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
                                         | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
                                         | iroha_data_model::governance::types::ProposalKind::MusubiRegistryGovernance(_) => &[
@@ -32038,7 +32300,7 @@ impl State {
             let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
             let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
                 &world_view,
-                &self.chain_id,
+                &self.network_id,
                 curr_block.height().get(),
             );
             (gas_limit_per_block, pre_block_npos_seed)
@@ -32063,7 +32325,7 @@ impl State {
             world.privacy_consensus_policy.get().current_limits,
         )
         .expect("persisted privacy consensus policy was validated before block construction");
-        StateBlock {
+        let mut state_block = StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
             world,
@@ -32097,6 +32359,7 @@ impl State {
             kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
@@ -32104,6 +32367,8 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            axt_block_start_snapshot: None,
+            axt_next_handle_counters: BTreeMap::new(),
             batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
@@ -32140,8 +32405,9 @@ impl State {
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
-            trust_committed_execution_results: false,
-        }
+        };
+        state_block.freeze_axt_block_start();
+        state_block
     }
 
     /// Create structure to execute a block while reverting changes made in the latest block
@@ -32157,7 +32423,7 @@ impl State {
             let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
             let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
                 &world_view,
-                &self.chain_id,
+                &self.network_id,
                 curr_block.height().get(),
             );
             (gas_limit_per_block, pre_block_npos_seed)
@@ -32171,7 +32437,7 @@ impl State {
         .expect("persisted privacy consensus policy was validated before block construction");
         let mut autoscale_sample_history = self.autoscale_sample_history_snapshot();
         autoscale_sample_history.retain(|record| record.block_height <= target_height);
-        StateBlock {
+        let mut state_block = StateBlock {
             state_ref: self,
             // Keep lock ordering consistent with `State::view` to avoid deadlocks.
             block_hashes,
@@ -32206,6 +32472,7 @@ impl State {
             kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             pre_block_npos_seed,
             settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
             fastpq_transcripts: BTreeMap::new(),
@@ -32213,6 +32480,8 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            axt_block_start_snapshot: None,
+            axt_next_handle_counters: BTreeMap::new(),
             batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
@@ -32249,8 +32518,9 @@ impl State {
             committed_fragments: 0,
             replay_compatibility: false,
             replay_prevalidation: false,
-            trust_committed_execution_results: false,
-        }
+        };
+        state_block.freeze_axt_block_start();
+        state_block
     }
 
     /// Create a point-in-time view of just the world state.
@@ -32455,6 +32725,7 @@ impl State {
             sccp_registry,
             content: self.content.clone(),
             chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
         }
     }
 
@@ -32799,7 +33070,7 @@ impl State {
 
         let allowed_signing = self.crypto.read().allowed_signing.clone();
         let context = StatelessValidationContext::new(
-            self.chain_id.clone(),
+            self.network_id,
             u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
             tx_params,
             allowed_signing,
@@ -32860,6 +33131,12 @@ impl State {
     #[must_use]
     pub fn chain_id_ref(&self) -> &iroha_data_model::ChainId {
         &self.chain_id
+    }
+
+    /// Borrow the exact genesis-derived transaction security domain.
+    #[must_use]
+    pub const fn network_id_ref(&self) -> &iroha_data_model::NetworkId {
+        &self.network_id
     }
 
     /// Snapshot the current ZK verification configuration.
@@ -33156,6 +33433,7 @@ impl State {
                 kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
+                network_id: self.network_id,
                 created_at: Instant::now(),
             };
         }
@@ -34252,7 +34530,6 @@ impl State {
         let commit_topology = self.commit_topology_snapshot();
         Self::authoritative_lane_peer_ids_from_sources(
             &self.world.view(),
-            &self.chain_id,
             lane_id,
             validator_mode,
             manifest_registry.as_ref(),
@@ -34404,7 +34681,7 @@ impl State {
         let world_view = self.world.view();
         Self::lane_relay_committee_seed_from_sources(
             &world_view,
-            &self.chain_id,
+            &self.network_id,
             dataspace_id,
             lane_id,
             block_height,
@@ -34413,13 +34690,13 @@ impl State {
 
     fn lane_relay_committee_seed_from_sources(
         world: &impl WorldReadOnly,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         dataspace_id: DataSpaceId,
         lane_id: LaneId,
         block_height: u64,
     ) -> [u8; 32] {
         let epoch_seed =
-            crate::sumeragi::npos_seed_for_height_from_world(world, chain_id, block_height);
+            crate::sumeragi::npos_seed_for_height_from_world(world, network_id, block_height);
         let mut buffer = Vec::with_capacity(LANE_RELAY_SEED_DOMAIN.len() + epoch_seed.len() + 12);
         buffer.extend_from_slice(LANE_RELAY_SEED_DOMAIN);
         buffer.extend_from_slice(&epoch_seed);
@@ -34564,7 +34841,6 @@ impl State {
 
     fn authoritative_lane_peer_ids_from_sources(
         world: &impl WorldReadOnly,
-        _chain_id: &iroha_data_model::ChainId,
         lane_id: LaneId,
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
@@ -34693,7 +34969,7 @@ impl State {
     /// derived; all later authority resolution reads that pin instead.
     fn derive_new_autoscale_lane_committee_from_sources(
         world: &impl WorldReadOnly,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         lane_id: LaneId,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
@@ -34743,7 +35019,7 @@ impl State {
                 .collect::<Vec<_>>();
                 return Self::autoscale_lane_committee_from_pool(
                     world,
-                    chain_id,
+                    network_id,
                     lane_id,
                     dataspace_id,
                     nexus,
@@ -34765,7 +35041,7 @@ impl State {
             .collect::<Vec<_>>();
             return Self::autoscale_lane_committee_from_pool(
                 world,
-                chain_id,
+                network_id,
                 lane_id,
                 dataspace_id,
                 nexus,
@@ -34775,7 +35051,7 @@ impl State {
         }
         Self::autoscale_lane_committee_from_topology(
             world,
-            chain_id,
+            network_id,
             lane_id,
             dataspace_id,
             nexus,
@@ -34786,7 +35062,7 @@ impl State {
 
     fn pin_new_autoscale_lane_committee_from_sources(
         world: &impl WorldReadOnly,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
         commit_topology: &[PeerId],
@@ -34812,7 +35088,7 @@ impl State {
         )?;
         let validator_set = Self::derive_new_autoscale_lane_committee_from_sources(
             world,
-            chain_id,
+            network_id,
             lane.id,
             manifest_registry,
             &prospective_nexus,
@@ -34848,7 +35124,7 @@ impl State {
 
     fn autoscale_lane_committee_from_topology(
         world: &impl WorldReadOnly,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         nexus: &iroha_config::parameters::actual::Nexus,
@@ -34858,7 +35134,7 @@ impl State {
         let pool = Self::live_commit_topology_peers(world, commit_topology, block_height);
         Self::autoscale_lane_committee_from_pool(
             world,
-            chain_id,
+            network_id,
             lane_id,
             dataspace_id,
             nexus,
@@ -34869,7 +35145,7 @@ impl State {
 
     fn autoscale_lane_committee_from_pool(
         world: &impl WorldReadOnly,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         nexus: &iroha_config::parameters::actual::Nexus,
@@ -34886,7 +35162,7 @@ impl State {
         // later relay verification cannot derive different committee membership.
         let seed = Self::lane_relay_committee_seed_from_sources(
             world,
-            chain_id,
+            network_id,
             dataspace_id,
             lane_id,
             block_height,
@@ -34936,73 +35212,6 @@ impl State {
         peers.sort();
         peers.dedup();
         peers
-    }
-
-    fn lane_relay_qc_signers(
-        world: &impl WorldReadOnly,
-        committee: &[PeerId],
-        pinned_committee: Option<&[(PeerId, Vec<u8>)]>,
-        signers_bitmap: &[u8],
-        block_height: u64,
-    ) -> Result<(Vec<PublicKey>, Vec<Vec<u8>>), LaneRelayError> {
-        let pinned_pops = if let Some(pinned_committee) = pinned_committee {
-            if pinned_committee.len() != committee.len() {
-                return Err(LaneRelayError::AggregateSignatureInvalid);
-            }
-            let by_peer = pinned_committee.iter().cloned().collect::<BTreeMap<_, _>>();
-            if by_peer.len() != committee.len()
-                || committee.iter().any(|peer| !by_peer.contains_key(peer))
-            {
-                return Err(LaneRelayError::AggregateSignatureInvalid);
-            }
-            Some(by_peer)
-        } else {
-            None
-        };
-        let expected_len = committee.len().div_ceil(8);
-        if signers_bitmap.len() != expected_len {
-            return Err(LaneRelayError::SignerBitmapLengthMismatch {
-                expected: expected_len,
-                actual: signers_bitmap.len(),
-            });
-        }
-        let validator_count = u32::try_from(committee.len()).unwrap_or(u32::MAX);
-        let mut public_keys = Vec::new();
-        let mut pops = Vec::new();
-        for (byte_index, byte) in signers_bitmap.iter().enumerate() {
-            if *byte == 0 {
-                continue;
-            }
-            let base = byte_index * 8;
-            for bit in 0..8 {
-                if byte & (1 << bit) == 0 {
-                    continue;
-                }
-                let signer_index = base + bit;
-                if signer_index >= committee.len() {
-                    return Err(LaneRelayError::InvalidSignerIndex {
-                        signer: u32::try_from(signer_index).unwrap_or(u32::MAX),
-                        validator_count,
-                    });
-                }
-                let peer = &committee[signer_index];
-                if !crate::sumeragi::is_bls_normal_public_key(peer.public_key()) {
-                    return Err(LaneRelayError::AggregateSignatureInvalid);
-                }
-                let pop = if let Some(pinned_pops) = &pinned_pops {
-                    pinned_pops
-                        .get(peer)
-                        .cloned()
-                        .ok_or(LaneRelayError::AggregateSignatureInvalid)?
-                } else {
-                    live_consensus_key_pop_for_peer(world, peer, block_height)
-                        .ok_or(LaneRelayError::AggregateSignatureInvalid)?
-                };
-                public_keys.push(peer.public_key().clone());
-                pops.push(pop);
-            }
-        }
-        Ok((public_keys, pops))
     }
 
     /// Resolve compact lane-finality authority through immutable Kura state.
@@ -36266,19 +36475,21 @@ impl State {
         });
         let mut canonical = Vec::with_capacity(ordered.len());
         for (registry_key, registry_value, bytes) in ordered {
-            if let Some((previous_key, previous_value, _)) = canonical.last() {
+            if let Some((previous_key, _, _)) = canonical.last() {
                 if previous_key == &registry_key {
-                    if previous_value != &registry_value {
-                        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                            "pending queue-plan admissions contain conflicting bindings for one source registry key"
-                                .to_owned(),
-                        ));
-                    }
-                    // Distinct authority response timing may produce multiple valid quorum
-                    // certificates for the same immutable binding.  Their signer subsets and
-                    // bytes can differ, but they are one semantic admission.  Sorting by the
-                    // complete tuple above makes the first certificate the deterministic
-                    // canonical representative on every peer.
+                    // One byte-identical ingress retry can acquire more than one fully valid
+                    // certificate before its entrypoint has a committed registry marker.  A
+                    // different authority frontier, enqueue timestamp, or signer subset changes
+                    // the binding/certificate bytes without changing the global source identity.
+                    // The WSV registry is the compare-and-set arbiter for that identity, so retain
+                    // exactly one representative here.  Sorting by registry value and complete
+                    // certificate bytes above makes the winner independent of arrival order for
+                    // any one leader's pending set.  Followers validate that chosen certificate;
+                    // they do not need an identical pending inventory.  Once its marker commits,
+                    // normal pending-certificate reconciliation classifies
+                    // every competing binding as a definitive conflict and retires its exact queue
+                    // claim.  Certificate validation and the one-key/one-value invariant of a
+                    // signed merge candidate remain unchanged.
                     continue;
                 }
             }
@@ -36740,7 +36951,7 @@ impl State {
             if !autoscale_lane_drain_state_matches_context(
                 lane,
                 &state,
-                &self.chain_id,
+                &self.network_id,
                 incarnation,
             ) {
                 return None;
@@ -36865,7 +37076,12 @@ impl State {
                     Ok(validated) => validated,
                     Err(_) => return true,
                 };
-            if disposition != PendingQueuePlanAdmissionDisposition::EligibleAbsent {
+            if matches!(
+                disposition,
+                PendingQueuePlanAdmissionDisposition::Exact
+                    | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                    | PendingQueuePlanAdmissionDisposition::Stale
+            ) {
                 return false;
             }
             admission
@@ -37178,7 +37394,7 @@ impl State {
     /// certificate is authenticated, a well-formed conflicting marker or a
     /// stale lifecycle/history binding is definitive and may be retired at an
     /// exact durable parent frontier.
-    pub(crate) fn classify_pending_queue_plan_admission(
+    pub fn classify_pending_queue_plan_admission(
         &self,
         bytes: &[u8],
         carrier_height: u64,
@@ -37210,47 +37426,46 @@ impl State {
                     .authority_height
                     > committed_height
                 {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "pending QueuePlan admission is ahead of the committed State frontier"
-                            .to_owned(),
-                    ));
-                }
-                let lifecycle = self.lane_consensus_lifecycle_snapshot();
-                let active_lanes = lifecycle
-                    .nexus
-                    .lane_catalog
-                    .lanes()
-                    .iter()
-                    .map(|lane| {
-                        Ok(MergeLaneBinding {
-                            lane_id: lane.id,
-                            dataspace_id: lane.dataspace_id,
-                            lane_config_hash: merge_lane_config_hash(lane),
-                            incarnation: *lifecycle
-                                .incarnations
-                                .get(&lane.id)
-                                .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                            activation_height: lifecycle
-                                .activation_heights
-                                .get(&lane.id)
-                                .and_then(|height| height.checked_add(1))
-                                .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
-                let encoded = vec![bytes.to_vec()];
-                if self
-                    .validate_merge_queue_plan_admissions(
-                        &encoded,
-                        &active_lanes,
-                        carrier_height,
-                        true,
-                    )
-                    .is_ok()
-                {
-                    PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                    PendingQueuePlanAdmissionDisposition::Future
                 } else {
-                    PendingQueuePlanAdmissionDisposition::Stale
+                    let lifecycle = self.lane_consensus_lifecycle_snapshot();
+                    let active_lanes = lifecycle
+                        .nexus
+                        .lane_catalog
+                        .lanes()
+                        .iter()
+                        .map(|lane| {
+                            Ok(MergeLaneBinding {
+                                lane_id: lane.id,
+                                dataspace_id: lane.dataspace_id,
+                                lane_config_hash: merge_lane_config_hash(lane),
+                                incarnation: *lifecycle.incarnations.get(&lane.id).ok_or(
+                                    MergeLedgerCommitError::UnknownLane { lane_id: lane.id },
+                                )?,
+                                activation_height: lifecycle
+                                    .activation_heights
+                                    .get(&lane.id)
+                                    .and_then(|height| height.checked_add(1))
+                                    .ok_or(MergeLedgerCommitError::UnknownLane {
+                                        lane_id: lane.id,
+                                    })?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+                    let encoded = vec![bytes.to_vec()];
+                    if self
+                        .validate_merge_queue_plan_admissions(
+                            &encoded,
+                            &active_lanes,
+                            carrier_height,
+                            true,
+                        )
+                        .is_ok()
+                    {
+                        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                    } else {
+                        PendingQueuePlanAdmissionDisposition::Stale
+                    }
                 }
             }
         };
@@ -37406,7 +37621,7 @@ impl State {
             ))
         })?;
         let intent = &certificate.body.intent;
-        if intent.chain_id_digest != crate::merge::merge_chain_id_digest(&self.chain_id)
+        if intent.chain_id_digest != crate::merge::merge_network_id_digest(&self.network_id)
             || carrier_height <= intent.close_global_height
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -41214,6 +41429,7 @@ impl State {
                 let authorization = VerifiedNexusFeeBurn::new(asset_id.clone(), amount.clone());
                 crate::smartcontracts::isi::asset::isi::apply_verified_nexus_fee_burn_to_world_for_test(
                     &mut tx,
+                    &self.network_id,
                     &nexus,
                     authorization,
                 )
@@ -42535,7 +42751,7 @@ impl State {
             ));
         }
         validate_merge_snapshot_carrier_bounds(qc.carrier_height, &entry.lane_snapshots)?;
-        let expected_chain_id_digest = crate::merge::merge_chain_id_digest(&self.chain_id);
+        let expected_chain_id_digest = crate::merge::merge_network_id_digest(&self.network_id);
         if qc.chain_id_digest != expected_chain_id_digest {
             return Err(MergeLedgerCommitError::MergeQCChainIdMismatch {
                 expected: expected_chain_id_digest,
@@ -42592,7 +42808,7 @@ impl State {
         }
         let candidate = crate::merge::MergeLedgerCandidate::from(entry);
         let expected = crate::merge::merge_qc_message_digest(
-            &self.chain_id,
+            &self.network_id,
             &candidate,
             qc.validator_set_hash_version,
             qc.validator_set_hash,
@@ -42938,7 +43154,7 @@ impl State {
     /// baseline or the retained geometry journal no longer reaches the primary replay floor.
     pub fn preflight_configured_primary_geometry_replay(
         kura: &Kura,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         configured_lane_catalog: &LaneCatalog,
     ) -> Result<(), LaneLifecycleError> {
         let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
@@ -42956,8 +43172,8 @@ impl State {
                 "configured-primary replay preflight mismatch: expected {durable_hash}, attempted {configured_hash}"
             )));
         }
-        let geometry = configured_primary_replay_geometry(chain_id, configured_lane_catalog)?;
-        let lineage_root = lane_incarnation_lineage_root(chain_id, &geometry.lineage);
+        let geometry = configured_primary_replay_geometry(network_id, configured_lane_catalog)?;
+        let lineage_root = lane_incarnation_lineage_root(network_id, &geometry.lineage);
         kura.preflight_lane_geometry_recovery_floor_with_lineage_root(
             &geometry.lane_config,
             &geometry.incarnations,
@@ -42993,11 +43209,12 @@ impl State {
         }
         Self::preflight_configured_primary_geometry_replay(
             &self.kura,
-            &self.chain_id,
+            &self.network_id,
             configured_lane_catalog,
         )?;
         let configured_hash = LaneLifecycleParameterV1::catalog_hash(configured_lane_catalog);
-        let geometry = configured_primary_replay_geometry(&self.chain_id, configured_lane_catalog)?;
+        let geometry =
+            configured_primary_replay_geometry(&self.network_id, configured_lane_catalog)?;
         self.kura
             .establish_or_verify_configured_primary_geometry_anchor(
                 geometry.lane_config.primary(),
@@ -43090,7 +43307,7 @@ impl State {
                 )
             })?;
         let expected_incarnation =
-            derive_static_lane_incarnations(&self.chain_id, &configured_primary_catalog)
+            derive_static_lane_incarnations(&self.network_id, &configured_primary_catalog)
                 .get(&LaneId::SINGLE)
                 .copied()
                 .ok_or_else(|| {
@@ -43426,7 +43643,7 @@ impl State {
             &previous_lane_incarnation_lineage,
         )?;
         let static_incarnations =
-            derive_static_lane_incarnations(&self.chain_id, &nexus.lane_catalog);
+            derive_static_lane_incarnations(&self.network_id, &nexus.lane_catalog);
         let updated_catalog_hash =
             iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog);
         let mut updated_lane_incarnations = BTreeMap::new();
@@ -43476,7 +43693,7 @@ impl State {
                     ))
                 })?;
                 let incarnation = derive_config_lane_incarnation(
-                    &self.chain_id,
+                    &self.network_id,
                     &previous_nexus.lane_catalog,
                     current_block_height,
                     lane,
@@ -43510,7 +43727,7 @@ impl State {
                 && !autoscale_lane_drain_state_matches_context(
                     lane,
                     &drain_state,
-                    &self.chain_id,
+                    &self.network_id,
                     updated_lane_incarnations[&lane.id],
                 )
             {
@@ -43961,7 +44178,7 @@ impl State {
                     } else {
                         State::pin_new_autoscale_lane_committee_from_sources(
                             &world,
-                            &self.chain_id,
+                            &self.network_id,
                             manifests.as_ref(),
                             &nexus,
                             &topology,
@@ -43977,7 +44194,7 @@ impl State {
             let previous_lane_incarnation_activation_heights =
                 self.lane_incarnation_activation_heights_snapshot();
             let committing_header_hash =
-                synthetic_lane_lifecycle_header_hash(&self.chain_id, current_block_height, plan);
+                synthetic_lane_lifecycle_header_hash(&self.network_id, current_block_height, plan);
             let compliance_engine = self.lane_compliance.read().clone();
             let (lifecycle_update, updated_lane_manifests) = {
                 let nexus = self.nexus.read();
@@ -43987,7 +44204,7 @@ impl State {
                     &previous_lane_incarnations,
                     &previous_lane_incarnation_lineage,
                     &previous_lane_incarnation_activation_heights,
-                    &self.chain_id,
+                    &self.network_id,
                     committing_header_hash,
                     plan,
                     current_block_height,
@@ -44232,8 +44449,8 @@ impl State {
                 current_incarnations,
                 previous_activation_heights,
                 current_activation_heights,
-                lane_incarnation_lineage_root(&self.chain_id, previous_lineage),
-                lane_incarnation_lineage_root(&self.chain_id, current_lineage),
+                lane_incarnation_lineage_root(&self.network_id, previous_lineage),
+                lane_incarnation_lineage_root(&self.network_id, current_lineage),
                 replaced_lane_ids,
                 certified_frontiers,
                 transition_height,
@@ -44260,7 +44477,7 @@ impl State {
                     previous,
                     previous_incarnations,
                     previous_activation_heights,
-                    lane_incarnation_lineage_root(&self.chain_id, previous_lineage),
+                    lane_incarnation_lineage_root(&self.network_id, previous_lineage),
                     transition_height,
                 )
                 .map_err(|rollback| {
@@ -44318,7 +44535,7 @@ impl State {
                 lane_config,
                 incarnations,
                 activation_heights,
-                lane_incarnation_lineage_root(&self.chain_id, lineage),
+                lane_incarnation_lineage_root(&self.network_id, lineage),
                 configured_baseline,
             )
             .map_err(|err| {
@@ -44348,7 +44565,7 @@ impl State {
                 previous,
                 previous_incarnations,
                 previous_activation_heights,
-                lane_incarnation_lineage_root(&self.chain_id, previous_lineage),
+                lane_incarnation_lineage_root(&self.network_id, previous_lineage),
                 transition_height,
             )
             .map_err(|err| LaneLifecycleError::Storage(format!("kura rollback: {err}")))?;
@@ -44649,7 +44866,7 @@ impl State {
             &lane_incarnations,
             &lane_incarnation_lineage,
             &lane_incarnation_activation_heights,
-            &self.chain_id,
+            &self.network_id,
             block_header_hash,
             &pending.plan,
             pending.transition_height,
@@ -44737,7 +44954,7 @@ impl State {
             if !autoscale_lane_drain_state_matches_context(
                 previous_lane,
                 &drain_state,
-                &self.chain_id,
+                &self.network_id,
                 incarnation,
             ) || commitment.carrier_height >= block_height
             {
@@ -44977,7 +45194,7 @@ impl State {
         if !autoscale_lane_drain_state_matches_context(
             previous_lane,
             &expected_state,
-            &self.chain_id,
+            &self.network_id,
             incarnation,
         ) {
             return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
@@ -45268,6 +45485,7 @@ impl State {
     /// committed SCCP and confidential-policy transition validation as
     /// [`Self::set_zk`] but deliberately does not mutate the process-wide
     /// confidential-gas schedule.
+    #[cfg(test)]
     pub(crate) fn install_zk_for_isolated_prevalidation(
         &mut self,
         zk: iroha_config::parameters::actual::Zk,
@@ -45720,21 +45938,13 @@ impl State {
     }
 
     /// Update governance settings (default VKs and policy tunables) using loaded configuration.
+    ///
+    /// Provider-owner bindings are accepted only before the first block. This
+    /// trusted bootstrap step may precede genesis account registration; after
+    /// genesis, owner transitions require an enacted native referendum.
     pub fn set_gov(&mut self, gov: iroha_config::parameters::actual::Governance) {
-        for (provider, owner) in &gov.sorafs_provider_owners {
-            let owner_exists = {
-                let accounts = self.world.accounts.view();
-                accounts.get(owner).is_some()
-            };
-            if !owner_exists {
-                iroha_logger::warn!(
-                    provider = %hex::encode(provider.as_bytes()),
-                    owner = %owner,
-                    "skipping SoraFS provider binding from configuration because owner account does not exist"
-                );
-                continue;
-            }
-
+        let bootstrap = self.block_hashes.view().len() == 0;
+        for (provider, owner) in gov.sorafs_provider_owners.iter().filter(|_| bootstrap) {
             let existing = self.world.provider_owners.view().get(provider).cloned();
             match existing {
                 Some(existing_owner) if existing_owner != *owner => {
@@ -45771,6 +45981,12 @@ impl State {
                     self.world.account_permissions.insert(owner.clone(), perms);
                 }
             }
+        }
+        if !bootstrap && !gov.sorafs_provider_owners.is_empty() {
+            iroha_logger::warn!(
+                configured_bindings = gov.sorafs_provider_owners.len(),
+                "ignoring runtime SoraFS provider-owner configuration; bindings change only through enacted governance after genesis"
+            );
         }
         self.gov = gov;
     }
@@ -45920,7 +46136,7 @@ const LANE_INCARNATION_LINEAGE_ROOT_DOMAIN: &[u8] =
     b"iroha:nexus:lane-incarnation-lineage-root:v1\0";
 
 pub(crate) fn lane_incarnation_lineage_root(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
 ) -> Hash {
     let entries = lineage
@@ -45934,7 +46150,7 @@ pub(crate) fn lane_incarnation_lineage_root(
             )
         })
         .collect::<Vec<_>>();
-    let encoded = (chain_id.clone(), entries).encode();
+    let encoded = (network_id.clone(), entries).encode();
     Hash::new_from_chunks(&[LANE_INCARNATION_LINEAGE_ROOT_DOMAIN, encoded.as_slice()])
 }
 #[cfg(test)]
@@ -45960,11 +46176,11 @@ fn lane_incarnation_matches_at_height(
 
 #[cfg(test)]
 fn synthetic_lane_lifecycle_header_hash(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     current_block_height: u64,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
 ) -> HashOf<BlockHeader> {
-    let encoded = (chain_id.clone(), current_block_height, plan.clone()).encode();
+    let encoded = (network_id.clone(), current_block_height, plan.clone()).encode();
     HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
         SYNTHETIC_LANE_LIFECYCLE_HEADER_DOMAIN,
         encoded.as_slice(),
@@ -45972,7 +46188,7 @@ fn synthetic_lane_lifecycle_header_hash(
 }
 
 fn derive_static_lane_incarnations(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     catalog: &LaneCatalog,
 ) -> BTreeMap<LaneId, Hash> {
     let catalog_hash = merge_lane_catalog_hash(catalog);
@@ -45981,7 +46197,7 @@ fn derive_static_lane_incarnations(
         .iter()
         .map(|lane| {
             let encoded = (
-                chain_id.clone(),
+                network_id.clone(),
                 catalog_hash,
                 lane.id,
                 lane_without_autoscale_drain_metadata(lane),
@@ -45996,7 +46212,7 @@ fn derive_static_lane_incarnations(
 }
 
 fn configured_primary_replay_geometry(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     configured_lane_catalog: &LaneCatalog,
 ) -> Result<ConfiguredPrimaryReplayGeometry, LaneLifecycleError> {
     let primary = configured_lane_catalog
@@ -46010,7 +46226,7 @@ fn configured_primary_replay_geometry(
         })?;
     let catalog = LaneCatalog::new(configured_lane_catalog.lane_count(), vec![primary])
         .map_err(|error| LaneLifecycleError::ConfiguredCatalogBaseline(error.to_string()))?;
-    let incarnations = derive_static_lane_incarnations(chain_id, &catalog);
+    let incarnations = derive_static_lane_incarnations(network_id, &catalog);
     let primary_incarnation = incarnations.get(&LaneId::SINGLE).copied().ok_or_else(|| {
         LaneLifecycleError::ConfiguredCatalogBaseline(
             "configured primary catalog does not contain lane zero".to_owned(),
@@ -46106,7 +46322,7 @@ fn validate_lane_incarnation_lineage(
 }
 
 fn derive_config_lane_incarnation(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     previous_catalog: &LaneCatalog,
     current_block_height: u64,
     lane: &iroha_data_model::nexus::LaneConfig,
@@ -46117,7 +46333,7 @@ fn derive_config_lane_incarnation(
     let previous_catalog_hash =
         iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(previous_catalog);
     let encoded = (
-        chain_id.clone(),
+        network_id.clone(),
         previous_catalog_hash,
         updated_catalog_hash,
         current_block_height,
@@ -46189,7 +46405,7 @@ fn lane_lifecycle_incarnation_root(
 }
 
 fn derive_lifecycle_lane_incarnations(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     committing_header_hash: HashOf<BlockHeader>,
     previous_catalog: &LaneCatalog,
     updated_catalog: &LaneCatalog,
@@ -46228,7 +46444,7 @@ fn derive_lifecycle_lane_incarnations(
                 })?
             };
             let encoded = (
-                chain_id.clone(),
+                network_id.clone(),
                 previous_catalog_hash,
                 lane.id,
                 lane.clone(),
@@ -46446,7 +46662,7 @@ fn prepare_lane_lifecycle_update(
     previous_lane_incarnations: &BTreeMap<LaneId, Hash>,
     previous_lane_incarnation_lineage: &BTreeMap<LaneId, LaneIncarnationLineage>,
     previous_lane_incarnation_activation_heights: &BTreeMap<LaneId, u64>,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     committing_header_hash: HashOf<BlockHeader>,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
     current_block_height: u64,
@@ -46547,7 +46763,7 @@ fn prepare_lane_lifecycle_update(
             .then_some(addition.id)
     }));
     let updated_lane_incarnations = derive_lifecycle_lane_incarnations(
-        chain_id,
+        network_id,
         committing_header_hash,
         &nexus.lane_catalog,
         &updated_catalog,
@@ -46976,13 +47192,13 @@ fn merge_lane_catalog_hash(catalog: &LaneCatalog) -> Hash {
 fn autoscale_lane_drain_state_matches_context(
     lane: &iroha_data_model::nexus::LaneConfig,
     state: &LaneDrainStateV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     lane_incarnation: Hash,
 ) -> bool {
     let Ok(Some(committee)) = decode_autoscale_lane_committee(lane) else {
         return false;
     };
-    state.intent.chain_id_digest == crate::merge::merge_chain_id_digest(chain_id)
+    state.intent.chain_id_digest == crate::merge::merge_network_id_digest(network_id)
         && state.intent.lane_id == lane.id
         && state.intent.dataspace_id == lane.dataspace_id
         && state.intent.lane_incarnation == lane_incarnation
@@ -47844,38 +48060,46 @@ fn lane_topology_diff<'a>(
     }
 }
 
-static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_data_model::ChainId> = LazyLock::new(|| {
-    use iroha_config::{base::read::ConfigReader, parameters::user};
+static DEFAULT_TEST_IDENTITIES: LazyLock<(iroha_data_model::ChainId, iroha_data_model::NetworkId)> =
+    LazyLock::new(|| {
+        use iroha_config::{base::read::ConfigReader, parameters::user};
 
-    let config_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
 
-    let reader = ConfigReader::new()
-        .read_toml_with_extends(&config_path)
-        .unwrap_or_else(|err| {
+        let reader = ConfigReader::new()
+            .read_toml_with_extends(&config_path)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to read default testing config `{}`: {err:?}",
+                    config_path.display()
+                )
+            });
+        let user_config = user::Root::read_and_complete(reader).unwrap_or_else(|err| {
             panic!(
-                "failed to read default testing config `{}`: {err:?}",
+                "default testing config `{}` is incomplete: {err:?}",
                 config_path.display()
             )
         });
-    let user_config = user::Root::read_and_complete(reader).unwrap_or_else(|err| {
-        panic!(
-            "default testing config `{}` is incomplete: {err:?}",
-            config_path.display()
+
+        let config: iroha_config::parameters::actual::Root =
+            user_config.parse().unwrap_or_else(|err| {
+                panic!(
+                    "failed to parse default testing config `{}`: {err}",
+                    config_path.display()
+                )
+            });
+        (
+            config.common.chain,
+            iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
         )
     });
 
-    user_config
-        .parse()
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to parse default testing config `{}`: {err}",
-                config_path.display()
-            )
-        })
-        .common
-        .chain
-});
+static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_data_model::ChainId> =
+    LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());
+
+static DEFAULT_TEST_NETWORK_ID: LazyLock<iroha_data_model::NetworkId> =
+    LazyLock::new(|| DEFAULT_TEST_IDENTITIES.1);
 
 fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<SumeragiNposParameters> {
     let id = SumeragiNposParameters::parameter_id();
@@ -48168,6 +48392,8 @@ pub trait StateReadOnly: WorldStateSnapshot {
     fn sccp_registry(&self) -> &ValidatedSccpRegistryV1;
     /// Chain identifier bound to this state view.
     fn chain_id(&self) -> &iroha_data_model::ChainId;
+    /// Exact genesis-derived security domain bound to this state view.
+    fn network_id(&self) -> &iroha_data_model::NetworkId;
     /// Snapshot of per-dataspace AXT policies available to hosts/admission.
     fn axt_policy_snapshot(&self) -> iroha_data_model::nexus::AxtPolicySnapshot
     where
@@ -48175,6 +48401,19 @@ pub trait StateReadOnly: WorldStateSnapshot {
     {
         crate::smartcontracts::ivm::host::CoreHost::axt_policy_snapshot_from_state(self)
             .unwrap_or_default()
+    }
+
+    /// Immutable AXT policy, issuer identity, and issuer key captured at block start.
+    ///
+    /// Committed point-in-time views outside block execution return `None` and
+    /// continue to project their current live policy.
+    fn axt_block_start_snapshot(&self) -> Option<&AxtBlockStartSnapshot> {
+        None
+    }
+
+    /// AXT block-start policy with only its transactionally advancing counters applied.
+    fn axt_execution_policy_snapshot(&self) -> Option<AxtPolicySnapshot> {
+        None
     }
 
     /// Cached snapshot of all account identifiers currently known to the state view.
@@ -48278,6 +48517,52 @@ pub trait StateReadOnly: WorldStateSnapshot {
     }
 }
 
+trait AxtBlockContextSource {
+    fn block_start_axt_snapshot(&self) -> Option<&AxtBlockStartSnapshot>;
+    fn execution_axt_policy_snapshot(&self) -> Option<AxtPolicySnapshot>;
+}
+
+impl AxtBlockContextSource for StateBlock<'_> {
+    fn block_start_axt_snapshot(&self) -> Option<&AxtBlockStartSnapshot> {
+        self.axt_block_start_snapshot.as_deref()
+    }
+
+    fn execution_axt_policy_snapshot(&self) -> Option<AxtPolicySnapshot> {
+        self.axt_block_start_snapshot
+            .as_ref()
+            .map(|_| StateBlock::axt_execution_policy_snapshot(self))
+    }
+}
+
+impl AxtBlockContextSource for StateTransaction<'_, '_> {
+    fn block_start_axt_snapshot(&self) -> Option<&AxtBlockStartSnapshot> {
+        Some(&self.axt_block_start_snapshot)
+    }
+
+    fn execution_axt_policy_snapshot(&self) -> Option<AxtPolicySnapshot> {
+        Some(
+            self.axt_block_start_snapshot
+                .policy_with_counters(&self.axt_next_handle_counters_after_block),
+        )
+    }
+}
+
+macro_rules! impl_live_axt_context_source {
+    ($($ident:ty),* $(,)?) => {$(
+        impl AxtBlockContextSource for $ident {
+            fn block_start_axt_snapshot(&self) -> Option<&AxtBlockStartSnapshot> {
+                None
+            }
+
+            fn execution_axt_policy_snapshot(&self) -> Option<AxtPolicySnapshot> {
+                None
+            }
+        }
+    )*};
+}
+
+impl_live_axt_context_source! { StateView<'_>, StateQueryView<'_> }
+
 macro_rules! impl_state_ro {
     ($($ident:ty),*) => {$(
         impl WorldStateSnapshot for $ident {
@@ -48355,7 +48640,7 @@ macro_rules! impl_state_ro {
                     && !autoscale_lane_drain_state_matches_context(
                         lane,
                         &drain_state,
-                        &self.chain_id,
+                        &self.network_id,
                         incarnation,
                     )
                 {
@@ -48374,6 +48659,15 @@ macro_rules! impl_state_ro {
             }
             fn chain_id(&self) -> &iroha_data_model::ChainId {
                 &self.chain_id
+            }
+            fn network_id(&self) -> &iroha_data_model::NetworkId {
+                &self.network_id
+            }
+            fn axt_block_start_snapshot(&self) -> Option<&AxtBlockStartSnapshot> {
+                AxtBlockContextSource::block_start_axt_snapshot(self)
+            }
+            fn axt_execution_policy_snapshot(&self) -> Option<AxtPolicySnapshot> {
+                AxtBlockContextSource::execution_axt_policy_snapshot(self)
             }
             fn accounts_snapshot(&self) -> Arc<Vec<AccountId>> {
                 Arc::clone(self.accounts_snapshot_cache.get_or_init(|| {
@@ -48397,7 +48691,6 @@ macro_rules! impl_state_ro {
                 let validator_mode = self.nexus.staking.validator_mode(lane_id, &self.nexus.lane_catalog);
                 State::authoritative_lane_peer_ids_from_sources(
                     self.world(),
-                    self.chain_id(),
                     lane_id,
                     validator_mode,
                     self.lane_manifests.as_ref(),
@@ -48893,7 +49186,7 @@ pub(crate) fn sccp_local_sora_network_for_chain_id(
     use iroha_data_model::bridge::SccpNetworkV1;
 
     match chain_id.as_str() {
-        iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1 => Some(SccpNetworkV1::SoraTaira),
+        iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1 => Some(SccpNetworkV1::SoraTaira),
         _ => None,
     }
 }
@@ -49997,6 +50290,7 @@ fn validate_canonical_sccp_registry_wire(
 /// material: snapshot reconciliation can promote the latter back into the live
 /// state. The envelope therefore rejects missing or unknown fields and validates
 /// both registry versions before any snapshot becomes observable.
+#[cfg(test)]
 pub(crate) fn validate_sccp_registry_cell_json(
     value: &norito::json::Value,
 ) -> core::result::Result<(), String> {
@@ -50029,6 +50323,70 @@ pub(crate) fn validate_sccp_registry_cell_json(
     validate_value(blocks, "blocks")?;
     if !revert.is_null() {
         validate_value(revert, "revert")?;
+    }
+    Ok(())
+}
+
+/// Validate an SCCP registry cell directly from canonical Norito JSON bytes.
+///
+/// This is the production snapshot path: both MV roles are decoded into their
+/// final typed registry without first constructing an owned JSON tree.
+pub(crate) fn validate_sccp_registry_cell_json_str(
+    input: &str,
+) -> core::result::Result<(), String> {
+    let mut parser = norito::json::Parser::new(input);
+    let mut cell = norito::json::MapVisitor::new(&mut parser).map_err(|error| {
+        format!(
+            "snapshot SCCP registry must use the exact `{{revert,blocks}}` cell envelope: {error}"
+        )
+    })?;
+    let mut blocks = None;
+    let mut revert = None;
+    while let Some(field) = cell.next_key().map_err(|error| error.to_string())? {
+        match field.as_str() {
+            "blocks" => {
+                if blocks.is_some() {
+                    return Err("snapshot SCCP registry cell duplicates `blocks`".to_owned());
+                }
+                blocks = Some(
+                    cell.parse_value::<SccpOnChainRegistryV1>()
+                        .map_err(|error| {
+                            format!("snapshot SCCP registry blocks is invalid: {error}")
+                        })?,
+                );
+            }
+            "revert" => {
+                if revert.is_some() {
+                    return Err("snapshot SCCP registry cell duplicates `revert`".to_owned());
+                }
+                revert = Some(
+                    cell.parse_value::<Option<SccpOnChainRegistryV1>>()
+                        .map_err(|error| {
+                            format!("snapshot SCCP registry revert is invalid: {error}")
+                        })?,
+                );
+            }
+            field => {
+                return Err(format!(
+                    "snapshot SCCP registry cell contains unknown field `{field}`"
+                ));
+            }
+        }
+    }
+    cell.finish().map_err(|error| error.to_string())?;
+    parser.skip_ws();
+    if !parser.eof() {
+        return Err("snapshot SCCP registry cell has trailing bytes".to_owned());
+    }
+    let blocks =
+        blocks.ok_or_else(|| "snapshot SCCP registry cell is missing `blocks`".to_owned())?;
+    let revert =
+        revert.ok_or_else(|| "snapshot SCCP registry cell is missing `revert`".to_owned())?;
+    validate_canonical_sccp_registry_wire(&blocks)
+        .map_err(|error| format!("snapshot SCCP registry blocks is invalid: {error}"))?;
+    if let Some(revert) = revert {
+        validate_canonical_sccp_registry_wire(&revert)
+            .map_err(|error| format!("snapshot SCCP registry revert is invalid: {error}"))?;
     }
     Ok(())
 }
@@ -51460,6 +51818,12 @@ impl<'state> StateBlock<'state> {
         let lane_incarnation_lineage = self.lane_incarnation_lineage.clone();
         let lane_incarnation_activation_heights = self.lane_incarnation_activation_heights.clone();
         let lane_lifecycle_already_staged_in_block = self.pending_autoscale_lifecycle.is_some();
+        let axt_block_start_snapshot = Arc::clone(
+            self.axt_block_start_snapshot
+                .as_ref()
+                .expect("StateBlock constructors must freeze AXT authorization before use"),
+        );
+        let axt_next_handle_counters_after_block = self.axt_next_handle_counters.clone();
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
@@ -51507,6 +51871,7 @@ impl<'state> StateBlock<'state> {
             kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             settlement_accumulator: &mut self.settlement_accumulator,
             pending_settlement_records: BTreeMap::new(),
             pending_nexus_fee_records: BTreeMap::new(),
@@ -51550,11 +51915,13 @@ impl<'state> StateBlock<'state> {
             contract_lifecycle_transition_ordinal: 0,
             executor_fuel_remaining,
             replay_compatibility: self.replay_compatibility,
-            trust_committed_execution_results: self.trust_committed_execution_results,
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
             block_axt_envelopes: &mut self.axt_envelopes,
             pending_axt_envelopes: Vec::new(),
+            axt_block_start_snapshot,
+            block_axt_next_handle_counters: &mut self.axt_next_handle_counters,
+            axt_next_handle_counters_after_block,
             block_batch_transfer_outcomes: &mut self.batch_transfer_outcomes,
             pending_batch_transfer_outcomes: BTreeMap::new(),
             block_verified_lane_relay_records: &mut self.verified_lane_relay_records,
@@ -53353,7 +53720,7 @@ impl<'state> StateBlock<'state> {
         let commit_topology = self.commit_topology.iter().cloned().collect::<Vec<_>>();
         State::pin_new_autoscale_lane_committee_from_sources(
             &self.world,
-            &self.chain_id,
+            &self.network_id,
             self.lane_manifests.as_ref(),
             &self.nexus,
             &commit_topology,
@@ -53391,7 +53758,6 @@ impl<'state> StateBlock<'state> {
         let commit_topology: Vec<_> = self.commit_topology.iter().cloned().collect();
         let committee = State::authoritative_lane_peer_ids_from_sources(
             &self.world,
-            &self.chain_id,
             lane_id,
             validator_mode,
             self.lane_manifests.as_ref(),
@@ -53473,7 +53839,7 @@ impl<'state> StateBlock<'state> {
             })?;
         let intent = LaneDrainIntentV1 {
             version: 1,
-            chain_id_digest: crate::merge::merge_chain_id_digest(&self.chain_id),
+            chain_id_digest: crate::merge::merge_network_id_digest(&self.network_id),
             lane_id,
             dataspace_id: lane.dataspace_id,
             lane_incarnation,
@@ -53528,7 +53894,8 @@ impl<'state> StateBlock<'state> {
                 reason: "drain transition lane has no active incarnation",
             },
         )?;
-        if !autoscale_lane_drain_state_matches_context(lane, &state, &self.chain_id, incarnation) {
+        if !autoscale_lane_drain_state_matches_context(lane, &state, &self.network_id, incarnation)
+        {
             return Err(LaneLifecycleError::InvalidAutoscaleManagedLane {
                 lane: lane_id,
                 reason: "drain transition state does not match chain or incarnation",
@@ -53833,7 +54200,7 @@ impl<'state> StateBlock<'state> {
             if !autoscale_lane_drain_state_matches_context(
                 lane_config,
                 &drain_state,
-                &self.chain_id,
+                &self.network_id,
                 incarnation,
             ) || commitment.carrier_height >= block_height
                 || frontier != commitment.frontier
@@ -53854,7 +54221,7 @@ impl<'state> StateBlock<'state> {
             &self.lane_incarnations,
             &self.lane_incarnation_lineage,
             &self.lane_incarnation_activation_heights,
-            &self.chain_id,
+            &self.network_id,
             self._curr_block.hash(),
             plan,
             block_height,
@@ -54291,7 +54658,7 @@ impl<'state> StateBlock<'state> {
         if !autoscale_lane_drain_state_matches_context(
             lane,
             &drain_state,
-            &self.chain_id,
+            &self.network_id,
             incarnation,
         ) {
             return None;
@@ -55532,7 +55899,7 @@ mod state_commit_lock_order_tests {
             .expect("valid SCCP apply-without-execution fixture payload encodes");
         let record = crate::bridge::test_record_sccp_message(payload_bytes.clone());
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-duplicate"),
+            *DEFAULT_TEST_NETWORK_ID,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -55592,7 +55959,7 @@ mod state_commit_lock_order_tests {
         let record =
             crate::bridge::test_record_sccp_message(b"not a canonical SCCP payload".to_vec());
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-invalid-record"),
+            *DEFAULT_TEST_NETWORK_ID,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -55663,7 +56030,7 @@ mod state_commit_lock_order_tests {
                 .expect("valid SCCP apply-without-execution fixture payload encodes"),
         );
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-unbound-route"),
+            *DEFAULT_TEST_NETWORK_ID,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -55734,7 +56101,7 @@ mod state_commit_lock_order_tests {
                 .expect("valid SCCP apply-without-execution fixture payload encodes"),
         );
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-scoped-asset-alias"),
+            *DEFAULT_TEST_NETWORK_ID,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -55804,7 +56171,7 @@ mod state_commit_lock_order_tests {
             .expect("valid SCCP apply-without-execution fixture payload encodes");
         let record = crate::bridge::test_record_sccp_message(payload_bytes);
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-resultless"),
+            *DEFAULT_TEST_NETWORK_ID,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -55928,7 +56295,7 @@ mod committed_transaction_context_tests {
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         let signed = TransactionBuilder::new(
-            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            state.network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -55959,7 +56326,7 @@ mod tiered_snapshot_diff_tests {
 
     use crate::query::store::LiveQueryStore;
 
-    const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1;
+    const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
 
     fn authenticated_sccp_archive_kura() -> Arc<Kura> {
         let catalog = LaneCatalog::default();
@@ -55986,8 +56353,7 @@ mod tiered_snapshot_diff_tests {
             Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &catalog)
                 .expect("initialize authenticated SCCP archive Kura");
         let baseline = LaneLifecycleParameterV1::catalog_hash(&catalog);
-        let incarnations =
-            derive_static_lane_incarnations(&ChainId::from(SCCP_SNAPSHOT_CHAIN_ID), &catalog);
+        let incarnations = derive_static_lane_incarnations(&DEFAULT_TEST_NETWORK_ID, &catalog);
         let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
         kura.establish_or_verify_configured_primary_geometry_anchor(
             lane_config.primary(),
@@ -56115,7 +56481,7 @@ mod tiered_snapshot_diff_tests {
             .expect("derive exact SCCP transaction fixture key");
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut transaction = TransactionBuilder::new(
-            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            *DEFAULT_TEST_NETWORK_ID,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -56267,7 +56633,7 @@ mod tiered_snapshot_diff_tests {
         .expect("retained SCCP inventory payload validates");
 
         let transaction = TransactionBuilder::new(
-            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            *DEFAULT_TEST_NETWORK_ID,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -57388,7 +57754,7 @@ mod tiered_snapshot_diff_tests {
             World::default(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
         state
             .insert_sccp_outbound_message_for_testing(key, record.clone())
@@ -57459,7 +57825,7 @@ mod tiered_snapshot_diff_tests {
             World::default(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
         state
             .insert_sccp_outbound_message_for_testing(key, pending.clone())
@@ -57545,7 +57911,7 @@ mod tiered_snapshot_diff_tests {
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
 
         let error = state
@@ -57568,7 +57934,7 @@ mod tiered_snapshot_diff_tests {
             World::default(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
 
         let mut malformed = record.clone();
@@ -58734,7 +59100,7 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn hydrated_sccp_inbound_history_is_bound_to_retained_governance() {
-        let chain_id = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1;
+        let chain_id = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
         let (valid_world, _, valid_record, _, _) = world_with_valid_sccp_inbound_history();
         hydrate_sccp_profile_test_state(valid_world, chain_id)
             .expect("exact retained inbound governance must hydrate");
@@ -58827,7 +59193,7 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn hydrated_sccp_inbound_anchor_high_water_must_equal_recomputed_maxima() {
-        let chain_id = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1;
+        let chain_id = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
         let assert_rejected = |world: World, label: &str, expected: &str| {
             let error = match hydrate_sccp_profile_test_state(world, chain_id) {
                 Ok(_) => panic!("{label}: hostile inbound high-water index must fail hydration"),
@@ -58875,7 +59241,7 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn hydrated_sccp_outbound_history_is_bound_to_one_retained_route_and_lane() {
-        let chain_id = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1;
+        let chain_id = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
         let (valid, _, _, _, _, _) = world_with_valid_sccp_outbound_history();
         hydrate_sccp_profile_test_state(valid, chain_id)
             .expect("exact retained outbound governance must hydrate");
@@ -59122,7 +59488,7 @@ mod tiered_snapshot_diff_tests {
     fn sccp_local_profile_accepts_only_the_exact_taira_chain_id() {
         use iroha_data_model::bridge::SccpNetworkV1;
 
-        let taira = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+        let taira = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
             .parse()
             .expect("canonical Taira chain id");
         assert_eq!(
@@ -59899,7 +60265,6 @@ mod fastpq_tx_set_hash_tests {
 
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        ChainId,
         account::Account,
         block::BlockHeader,
         domain::Domain,
@@ -59932,11 +60297,8 @@ mod fastpq_tx_set_hash_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
 
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
         let mut builder = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -59945,7 +60307,7 @@ mod fastpq_tx_set_hash_tests {
             .with_instructions([Log::new(Level::INFO, "alpha".to_owned())])
             .sign(keypair.private_key());
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            state.network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -60193,7 +60555,6 @@ mod fastpq_tx_set_hash_tests {
 mod block_proof_tests {
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::{BlockHeader, BlockPayload, BlockResult, BlockSignature},
         transaction::{
@@ -60225,10 +60586,9 @@ mod block_proof_tests {
         HashOf<TransactionEntrypoint>,
     ) {
         let keypair = crate::state::checked_keypair();
-        let chain: ChainId = "block-proof-tests".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
-            chain,
+            *DEFAULT_TEST_NETWORK_ID,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -60558,11 +60918,11 @@ fn load_verified_v2_replay_artifact(
         .validate_for_header(&block.header())
         .map_err(|error| eyre!(error))
         .wrap_err_with(|| format!("v2 finality does not bind replayed block #{height}"))?;
-    if artifact.height_context.chain_id != state.chain_id {
+    if artifact.height_context.network_id != state.network_id {
         return Err(eyre!(
-            "replayed block #{height} v2 finality chain id {} differs from configured chain id {}",
-            artifact.height_context.chain_id,
-            state.chain_id
+            "replayed block #{height} v2 finality network id {} differs from configured network id {}",
+            artifact.height_context.network_id,
+            state.network_id
         ));
     }
     let proposal_wire_hash = block
@@ -61095,7 +61455,7 @@ pub fn preflight_v2_replay_body_availability(
 /// copied explicitly so the dry run evaluates the same rules as the live pass while retaining
 /// independent query and publication surfaces.
 fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> Result<State> {
-    let value = norito::json::to_value(state)
+    let snapshot_json = norito::json::to_json(state)
         .map_err(|error| eyre!(error))
         .wrap_err("failed to serialize State for atomic replay prevalidation")?;
     let mut isolated = deserialize::KuraSeed {
@@ -61104,7 +61464,7 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
         #[cfg(feature = "telemetry")]
         telemetry: crate::telemetry::StateTelemetry::default(),
     }
-    .into_state_from_json_without_durable_recovery(value)
+    .into_state_from_json_str_without_durable_recovery(&snapshot_json)
     .map_err(|error| eyre!(error))
     .wrap_err("failed to deserialize State for atomic replay prevalidation")?;
 
@@ -62155,7 +62515,13 @@ mod replay_validation_tests {
             .expect("store committed replay fixture block");
         let _events = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
         state_block.prepare_replay_checkpoint_preview();
+        let staged_reference = crate::snapshot::canonical_staged_state_snapshot_bytes(&state_block);
         let staged_hash = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+        assert_eq!(
+            staged_hash,
+            Hash::new(staged_reference),
+            "borrowed staged WSV hashing must match the canonical tree reference"
+        );
         state_block.commit().expect("commit replay fixture block");
         assert_eq!(
             staged_hash,
@@ -62316,8 +62682,7 @@ mod replay_validation_tests {
         let chain_id = ChainId::try_from(format!("iroha:test:missing-replay-checkpoint:{suffix}"))
             .expect("canonical replay-checkpoint test chain id");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let tx = TransactionBuilder::new(
-            chain_id.clone(),
+        let tx = TransactionBuilder::new_genesis(
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62402,13 +62767,11 @@ mod replay_validation_tests {
 
     #[test]
     fn replay_always_rejects_corrupted_genesis_signature() {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let genesis_account = iroha_data_model::account::AccountId::new(
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
         );
 
-        let tx = TransactionBuilder::new(
-            chain_id,
+        let tx = TransactionBuilder::new_genesis(
             genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62498,7 +62861,7 @@ mod replay_validation_tests {
             &topology,
             1,
             1,
-            ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
         )
         .expect("hash-only block covered by the restored state snapshot should be skipped");
 
@@ -62566,8 +62929,7 @@ mod replay_validation_tests {
         let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
         let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
+        let tx_genesis = TransactionBuilder::new_genesis(
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62581,7 +62943,7 @@ mod replay_validation_tests {
         );
 
         let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
+            *DEFAULT_TEST_NETWORK_ID,
             user_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62596,7 +62958,7 @@ mod replay_validation_tests {
         let signed_block2: SignedBlock = block2.into();
 
         let tx_block3 = TransactionBuilder::new(
-            chain_id.clone(),
+            *DEFAULT_TEST_NETWORK_ID,
             user_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62798,7 +63160,7 @@ mod replay_validation_tests {
         };
 
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            *DEFAULT_TEST_NETWORK_ID,
             user_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62982,7 +63344,7 @@ mod replay_validation_tests {
         configure_replay_fixture_parameters(&state);
 
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             user_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63156,8 +63518,7 @@ mod replay_validation_tests {
         let fallback_topology =
             crate::sumeragi::network_topology::Topology::new(fallback_peers.clone());
 
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
+        let tx_genesis = TransactionBuilder::new_genesis(
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63214,7 +63575,7 @@ mod replay_validation_tests {
         };
 
         let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             user_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63337,8 +63698,7 @@ mod replay_validation_tests {
         );
         configure_replay_fixture_parameters(&materialize_state);
 
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
+        let tx_genesis = TransactionBuilder::new_genesis(
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63361,7 +63721,7 @@ mod replay_validation_tests {
             .expect("store genesis");
 
         let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
+            materialize_state.network_id,
             user_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63470,8 +63830,7 @@ mod replay_validation_tests {
         );
         configure_replay_fixture_parameters(&materialize_state);
 
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
+        let tx_genesis = TransactionBuilder::new_genesis(
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63494,7 +63853,7 @@ mod replay_validation_tests {
             .expect("store genesis");
 
         let tx_block2 = TransactionBuilder::new(
-            chain_id.clone(),
+            materialize_state.network_id,
             user_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63631,8 +63990,7 @@ mod replay_validation_tests {
             )
         };
 
-        let tx_genesis = TransactionBuilder::new(
-            chain_id.clone(),
+        let tx_genesis = TransactionBuilder::new_genesis(
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63690,7 +64048,7 @@ mod replay_validation_tests {
             )),
         ];
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            original_state.network_id,
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -63736,7 +64094,7 @@ mod replay_validation_tests {
             )),
         ];
         let block3_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            original_state.network_id,
             genesis_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -64105,7 +64463,7 @@ mod permission_cache_tests {
             topology,
             1,
             1,
-            ConsensusMode::Permissioned,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
         )?;
         install_permission_cache_replay_parameters(state);
         if block_count > 1 {
@@ -64115,7 +64473,7 @@ mod permission_cache_tests {
                 topology,
                 2,
                 block_count,
-                ConsensusMode::Permissioned,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             )?;
         }
         Ok(())
@@ -64339,7 +64697,7 @@ mod permission_cache_tests {
         }
 
         let grant_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             owner.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -64494,7 +64852,7 @@ mod permission_cache_tests {
             );
         }
         let revoke_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             owner.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -64625,7 +64983,7 @@ mod permission_cache_tests {
             .add_permission(permission_execute.clone());
 
         let register_role_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             owner.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -64735,7 +65093,7 @@ mod permission_cache_tests {
         }
 
         let revoke_role_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             owner.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -64927,7 +65285,7 @@ impl StateTransaction<'_, '_> {
             &self.lane_incarnations,
             &self.lane_incarnation_lineage,
             &self.lane_incarnation_activation_heights,
-            &self.chain_id,
+            &self.network_id,
             self._curr_block.hash(),
             &payload.plan,
             block_height,
@@ -65715,23 +66073,6 @@ impl StateTransaction<'_, '_> {
         self.pending_verified_lane_relay_records.push(record);
     }
 
-    /// Authenticate a finalized lane relay against this transaction's exact consensus snapshot.
-    ///
-    /// This is the consensus boundary for contract-visible relay registration. The transaction
-    /// authority transports the proof but cannot replace Kura's immutable global CommitQC.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LaneRelayError`] when the compact artifact reference or exact
-    /// statement inclusion proof is invalid.
-    pub(crate) fn authenticate_finalized_lane_relay(
-        &self,
-        envelope: &LaneRelayEnvelope,
-    ) -> Result<(), LaneRelayError> {
-        self.finalized_lane_relay_execution_commitment(envelope)
-            .map(|_| ())
-    }
-
     /// Authenticate a relay and return the CommitQC-signed execution roots.
     pub(crate) fn finalized_lane_relay_execution_commitment(
         &self,
@@ -65748,26 +66089,61 @@ impl StateTransaction<'_, '_> {
         let mut advanced = BTreeMap::<DataSpaceId, AxtPolicyEntry>::new();
         for handle in &record.handles {
             let dsid = handle.intent.asset_dsid;
-            let policy = advanced
-                .get(&dsid)
-                .copied()
-                .or_else(|| self.world.axt_policies.get(&dsid).copied())
+            let frozen_policy = self
+                .axt_block_start_snapshot
+                .policy_snapshot()
+                .entries
+                .iter()
+                .find(|binding| binding.dsid == dsid)
+                .map(|binding| binding.policy)
                 .ok_or_else(|| {
                     Error::InvariantViolation(
                         format!(
-                            "AXT envelope references dataspace {} without a committed policy",
+                            "AXT envelope references dataspace {} without a block-start policy",
                             dsid.as_u64()
                         )
                         .into(),
                     )
                 })?;
+            let next_handle_counter = advanced
+                .get(&dsid)
+                .map_or_else(
+                    || {
+                        self.axt_next_handle_counters_after_block
+                            .get(&dsid)
+                            .copied()
+                    },
+                    |policy| Some(policy.next_handle_counter),
+                )
+                .ok_or_else(|| {
+                    Error::InvariantViolation(
+                        format!(
+                            "AXT envelope references dataspace {} without a block counter",
+                            dsid.as_u64()
+                        )
+                        .into(),
+                    )
+                })?;
+            let policy = AxtPolicyEntry {
+                next_handle_counter,
+                ..frozen_policy
+            };
             advanced.insert(
                 dsid,
                 advance_axt_policy_for_handle(policy, handle, current_slot)?,
             );
         }
         for (dsid, policy) in advanced {
-            self.world.axt_policies.insert(dsid, policy);
+            self.axt_next_handle_counters_after_block
+                .insert(dsid, policy.next_handle_counter);
+            if self
+                .world
+                .axt_policies
+                .get(&dsid)
+                .is_some_and(|current| axt_policy_identity_matches(current, &policy))
+            {
+                self.world.axt_policies.insert(dsid, policy);
+            }
         }
         Ok(())
     }
@@ -65913,6 +66289,8 @@ impl StateTransaction<'_, '_> {
             mut pending_transfer_transcripts,
             block_axt_envelopes,
             mut pending_axt_envelopes,
+            block_axt_next_handle_counters,
+            axt_next_handle_counters_after_block,
             block_batch_transfer_outcomes,
             pending_batch_transfer_outcomes,
             block_verified_lane_relay_records,
@@ -66010,6 +66388,7 @@ impl StateTransaction<'_, '_> {
         if !pending_axt_envelopes.is_empty() {
             block_axt_envelopes.append(&mut pending_axt_envelopes);
         }
+        *block_axt_next_handle_counters = axt_next_handle_counters_after_block;
         for (entrypoint_hash, mut outcomes) in pending_batch_transfer_outcomes {
             block_batch_transfer_outcomes
                 .entry(entrypoint_hash)
@@ -68117,12 +68496,220 @@ pub(crate) struct SnapshotSpaceDirectoryManifestSet {
 }
 
 pub(crate) mod deserialize {
-    use std::marker::PhantomData;
+    use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
 
-    use norito::codec::DecodeAll;
-    use norito::json::{self, JsonDeserialize};
+    use norito::codec::{DecodeAll, Encode};
+    use norito::json::{self, JsonDeserialize, JsonSerialize};
 
     use super::{default_oracle, *};
+
+    enum SnapshotJsonField<'a> {
+        Borrowed(&'a str),
+        #[cfg(test)]
+        Owned(json::Value),
+    }
+
+    impl<'a> SnapshotJsonField<'a> {
+        fn decode_canonical<T>(self, field: &str) -> Result<T, json::Error>
+        where
+            T: JsonDeserialize + JsonSerialize,
+        {
+            let decoded: Result<T, json::Error> = match self {
+                #[cfg(test)]
+                Self::Owned(value) => json::value::from_value(value),
+                Self::Borrowed(raw) => {
+                    let value = json::from_str::<T>(raw)?;
+                    // TODO: Teach Norito JSON serialization to target a comparison sink so
+                    // canonical verification does not need one field-sized temporary String.
+                    let canonical = json::to_json(&value)?;
+                    if canonical.as_bytes() != raw.as_bytes() {
+                        return Err(json::Error::InvalidField {
+                            field: field.to_owned(),
+                            message: "snapshot field is not canonically encoded".to_owned(),
+                        });
+                    }
+                    Ok(value)
+                }
+            };
+            decoded.map_err(|error| json::Error::InvalidField {
+                field: field.to_owned(),
+                message: error.to_string(),
+            })
+        }
+
+        fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
+            match self {
+                Self::Borrowed(raw) => SnapshotJsonMap::parse(raw, field),
+                #[cfg(test)]
+                Self::Owned(json::Value::Object(map)) => Ok(SnapshotJsonMap::from_owned(map)),
+                #[cfg(test)]
+                Self::Owned(_) => Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: "expected object".to_owned(),
+                }),
+            }
+        }
+
+        fn validate_sccp_registry(&self) -> Result<(), json::Error> {
+            match self {
+                Self::Borrowed(raw) => validate_sccp_registry_cell_json_str(raw),
+                #[cfg(test)]
+                Self::Owned(value) => validate_sccp_registry_cell_json(value),
+            }
+            .map_err(|message| json::Error::InvalidField {
+                field: "sccp_registry".to_owned(),
+                message,
+            })
+        }
+    }
+
+    struct SnapshotJsonMap<'a> {
+        fields: BTreeMap<String, SnapshotJsonField<'a>>,
+        source_order: Option<Vec<String>>,
+    }
+
+    impl<'a> SnapshotJsonMap<'a> {
+        #[cfg(test)]
+        fn from_owned(map: json::native::Map) -> Self {
+            Self {
+                fields: map
+                    .into_iter()
+                    .map(|(key, value)| (key, SnapshotJsonField::Owned(value)))
+                    .collect(),
+                source_order: None,
+            }
+        }
+
+        fn parse(input: &'a str, field: &str) -> Result<Self, json::Error> {
+            let mut parser = json::Parser::new(input);
+            parser
+                .expect(b'{')
+                .map_err(|error| json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: error.to_string(),
+                })?;
+            parser.skip_ws();
+            let mut fields = BTreeMap::new();
+            let mut source_order = Vec::new();
+            if parser.peek() == Some(b'}') {
+                parser.bump();
+            } else {
+                loop {
+                    let key = parser
+                        .parse_string()
+                        .map_err(|error| json::Error::InvalidField {
+                            field: field.to_owned(),
+                            message: error.to_string(),
+                        })?;
+                    parser
+                        .expect(b':')
+                        .map_err(|error| json::Error::InvalidField {
+                            field: field.to_owned(),
+                            message: error.to_string(),
+                        })?;
+                    parser.skip_ws();
+                    let start = parser.position();
+                    parser
+                        .skip_value()
+                        .map_err(|error| json::Error::InvalidField {
+                            field: field.to_owned(),
+                            message: error.to_string(),
+                        })?;
+                    let end = parser.position();
+                    if fields
+                        .insert(key.clone(), SnapshotJsonField::Borrowed(&input[start..end]))
+                        .is_some()
+                    {
+                        return Err(json::Error::InvalidField {
+                            field: field.to_owned(),
+                            message: format!("duplicate field `{key}`"),
+                        });
+                    }
+                    source_order.push(key);
+                    parser.skip_ws();
+                    match parser.bump() {
+                        Some(b',') => {}
+                        Some(b'}') => break,
+                        _ => {
+                            return Err(json::Error::InvalidField {
+                                field: field.to_owned(),
+                                message: "expected comma or object end".to_owned(),
+                            });
+                        }
+                    }
+                }
+            }
+            parser.skip_ws();
+            if !parser.eof() {
+                return Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: "trailing bytes after snapshot object".to_owned(),
+                });
+            }
+            Ok(Self {
+                fields,
+                source_order: Some(source_order),
+            })
+        }
+
+        fn remove(&mut self, key: &str) -> Option<SnapshotJsonField<'a>> {
+            self.fields.remove(key)
+        }
+
+        fn get(&self, key: &str) -> Option<&SnapshotJsonField<'a>> {
+            self.fields.get(key)
+        }
+
+        fn contains_key(&self, key: &str) -> bool {
+            self.fields.contains_key(key)
+        }
+
+        #[cfg(test)]
+        fn is_empty(&self) -> bool {
+            self.fields.is_empty()
+        }
+
+        fn first_key(&self) -> Option<&str> {
+            self.fields.keys().next().map(String::as_str)
+        }
+
+        fn require_source_order(&self, expected: &[&str], field: &str) -> Result<(), json::Error> {
+            let Some(actual) = self.source_order.as_ref() else {
+                return Ok(());
+            };
+            if let Some(unknown) = actual.iter().find(|key| !expected.contains(&key.as_str())) {
+                return Err(json::Error::InvalidField {
+                    field: format!("{field}.{unknown}"),
+                    message: "unknown field is not permitted in a signed first-release snapshot"
+                        .to_owned(),
+                });
+            }
+            if actual
+                .iter()
+                .map(String::as_str)
+                .eq(expected.iter().copied())
+            {
+                Ok(())
+            } else {
+                Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: "snapshot object fields are not in canonical schema order".to_owned(),
+                })
+            }
+        }
+    }
+
+    fn canonical_world_field_order() -> &'static [String] {
+        static ORDER: OnceLock<Vec<String>> = OnceLock::new();
+        ORDER.get_or_init(|| {
+            let encoded = json::to_json(&World::default())
+                .expect("default World must have a canonical JSON representation");
+            SnapshotJsonMap::parse(&encoded, "default world")
+                .expect("default World JSON must be a canonical object")
+                .source_order
+                .expect("borrowed default World JSON retains source order")
+        })
+    }
 
     #[derive(Clone, Copy)]
     pub struct IvmSeed<'e, T> {
@@ -68141,10 +68728,11 @@ pub(crate) mod deserialize {
 
     impl IvmSeed<'_, TriggerSet> {
         #[allow(clippy::unused_self)]
-        pub fn parse_trigger_set(self, value: &json::Value) -> Result<TriggerSet, json::Error> {
-            let json = json::to_json(value)?;
-            let mut parser = json::Parser::new(&json);
-            TriggerSet::json_deserialize(&mut parser)
+        fn parse_trigger_set(
+            self,
+            value: SnapshotJsonField<'_>,
+        ) -> Result<TriggerSet, json::Error> {
+            value.decode_canonical("triggers")
         }
     }
 
@@ -68156,8 +68744,19 @@ pub(crate) mod deserialize {
     }
 
     impl KuraSeed {
+        #[cfg(test)]
         pub fn into_state_from_json(self, value: json::Value) -> Result<State, json::Error> {
             self.into_state_from_json_with_recovery_mode(value, true)
+        }
+
+        /// Decode a canonical snapshot directly from its authenticated JSON bytes.
+        ///
+        /// The borrowed field map retains only schema keys and raw value slices;
+        /// each field is decoded into its final typed owner before the next field,
+        /// so restoration never constructs a recursive full-state JSON tree.
+        pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<State, json::Error> {
+            let map = SnapshotJsonMap::parse(input, "state")?;
+            self.into_state_from_snapshot_map(map, true)
         }
 
         /// Decode a State without loading, promoting, truncating, or otherwise
@@ -68166,32 +68765,81 @@ pub(crate) mod deserialize {
         /// Replay prevalidation uses this constructor for an isolated dry run;
         /// its in-memory merge and query authority is populated explicitly
         /// from the already authenticated live State.
-        pub(crate) fn into_state_from_json_without_durable_recovery(
+        /// Decode canonical snapshot bytes for isolated replay prevalidation.
+        pub(crate) fn into_state_from_json_str_without_durable_recovery(
             self,
-            value: json::Value,
+            input: &str,
         ) -> Result<State, json::Error> {
-            self.into_state_from_json_with_recovery_mode(value, false)
+            let map = SnapshotJsonMap::parse(input, "state")?;
+            self.into_state_from_snapshot_map(map, false)
         }
 
+        #[cfg(test)]
         fn into_state_from_json_with_recovery_mode(
             self,
             value: json::Value,
             allow_durable_recovery: bool,
         ) -> Result<State, json::Error> {
-            let json::Value::Object(mut map) = value else {
+            let json::Value::Object(map) = value else {
                 return Err(json::Error::InvalidField {
                     field: "state".into(),
                     message: "expected object".into(),
                 });
             };
+            self.into_state_from_snapshot_map(
+                SnapshotJsonMap::from_owned(map),
+                allow_durable_recovery,
+            )
+        }
+
+        fn into_state_from_snapshot_map(
+            self,
+            mut map: SnapshotJsonMap<'_>,
+            allow_durable_recovery: bool,
+        ) -> Result<State, json::Error> {
+            const WITHOUT_BOOTSTRAP: &[&str] = &[
+                "chain_id",
+                "network_id",
+                "world",
+                "nexus_runtime",
+                "block_hashes",
+                "transactions",
+                "public_lane_validators",
+                "public_lane_stake_shares",
+                "public_lane_rewards",
+                "public_lane_reward_claims",
+                "space_directory_manifests",
+                "commit_topology",
+                "prev_commit_topology",
+            ];
+            const WITH_BOOTSTRAP: &[&str] = &[
+                "chain_id",
+                "network_id",
+                "sumeragi_v2_bootstrap",
+                "world",
+                "nexus_runtime",
+                "block_hashes",
+                "transactions",
+                "public_lane_validators",
+                "public_lane_stake_shares",
+                "public_lane_rewards",
+                "public_lane_reward_claims",
+                "space_directory_manifests",
+                "commit_topology",
+                "prev_commit_topology",
+            ];
+            let expected_order = if map.contains_key("sumeragi_v2_bootstrap") {
+                WITH_BOOTSTRAP
+            } else {
+                WITHOUT_BOOTSTRAP
+            };
+            map.require_source_order(expected_order, "state")?;
 
             let world_value = map
                 .remove("world")
                 .ok_or_else(|| json::Error::missing_field("world"))?;
-            if world_value
-                .as_object()
-                .is_none_or(|world| !world.contains_key("contract_subject_bindings"))
-            {
+            let world_map = world_value.into_object("world")?;
+            if !world_map.contains_key("contract_subject_bindings") {
                 return Err(json::Error::missing_field(
                     "world.contract_subject_bindings",
                 ));
@@ -68201,7 +68849,7 @@ pub(crate) mod deserialize {
                 ivm: &ivm_runtime,
                 _marker: PhantomData,
             };
-            let mut world = parse_world(world_value, &ivm_seed)?;
+            let mut world = parse_world(world_map, &ivm_seed)?;
             let public_lane_validators: Vec<SnapshotNoritoBlob> =
                 take_required(&mut map, "public_lane_validators")?;
             let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
@@ -68212,17 +68860,11 @@ pub(crate) mod deserialize {
                 take_required(&mut map, "public_lane_reward_claims")?;
             let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
                 take_required(&mut map, "space_directory_manifests")?;
-            let snapshot_nexus_runtime: SnapshotNexusRuntime = map
-                .remove("nexus_runtime")
-                .ok_or_else(|| json::Error::missing_field("nexus_runtime"))
-                .and_then(|value| {
-                    json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-                        field: "nexus_runtime".to_owned(),
-                        message: err.to_string(),
-                    })
-                })?;
+            let snapshot_nexus_runtime: SnapshotNexusRuntime =
+                take_required(&mut map, "nexus_runtime")?;
 
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
+            let network_id: NetworkId = take_required(&mut map, "network_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
                 take_required(&mut map, "block_hashes")?;
             let committed_height =
@@ -68259,14 +68901,8 @@ pub(crate) mod deserialize {
             let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
             let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
-            let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> = map
-                .remove("sumeragi_v2_bootstrap")
-                .map(json::value::from_value)
-                .transpose()
-                .map_err(|err| json::Error::InvalidField {
-                    field: "sumeragi_v2_bootstrap".to_owned(),
-                    message: err.to_string(),
-                })?;
+            let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
+                take_optional(&mut map, "sumeragi_v2_bootstrap")?;
 
             reject_unknown(&map, "state")?;
 
@@ -68287,6 +68923,41 @@ pub(crate) mod deserialize {
                 decode_public_lane_validator_records(public_lane_validators)?;
             let public_lane_stake_share_records =
                 decode_public_lane_stake_share_records(public_lane_stake_shares)?;
+            let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
+                public_lane_rewards,
+                "public_lane_rewards",
+            )?;
+            validate_canonical_snapshot_record_order(
+                &public_lane_validator_records,
+                "public_lane_validators",
+                |record| (record.lane_id, record.validator.clone()),
+            )?;
+            validate_canonical_snapshot_record_order(
+                &public_lane_stake_share_records,
+                "public_lane_stake_shares",
+                |record| {
+                    (
+                        record.lane_id,
+                        record.validator.clone(),
+                        record.staker.clone(),
+                    )
+                },
+            )?;
+            validate_canonical_snapshot_record_order(
+                &public_lane_reward_records,
+                "public_lane_rewards",
+                |record| (record.lane_id, record.epoch),
+            )?;
+            validate_canonical_snapshot_record_order(
+                &public_lane_reward_claims,
+                "public_lane_reward_claims",
+                |record| (record.lane_id, record.account.clone(), record.asset.clone()),
+            )?;
+            validate_canonical_snapshot_record_order(
+                &space_directory_manifests,
+                "space_directory_manifests",
+                |record| record.uaid,
+            )?;
 
             world.public_lane_validators = public_lane_validator_records
                 .into_iter()
@@ -68305,13 +68976,10 @@ pub(crate) mod deserialize {
                     )
                 })
                 .collect();
-            world.public_lane_rewards = decode_snapshot_records::<PublicLaneRewardRecord>(
-                public_lane_rewards,
-                "public_lane_rewards",
-            )?
-            .into_iter()
-            .map(|record| ((record.lane_id, record.epoch), record))
-            .collect();
+            world.public_lane_rewards = public_lane_reward_records
+                .into_iter()
+                .map(|record| ((record.lane_id, record.epoch), record))
+                .collect();
             world.public_lane_reward_claims = public_lane_reward_claims
                 .into_iter()
                 .map(|record| {
@@ -68345,6 +69013,7 @@ pub(crate) mod deserialize {
                     lane_incarnation_lineage,
                     autoscale_sample_history,
                     chain_id,
+                    network_id,
                     snapshot_v2_bootstrap_candidate,
                     nexus_runtime_restored_from_snapshot,
                     kura: self.kura,
@@ -68415,6 +69084,26 @@ pub(crate) mod deserialize {
                     runtime.version,
                     SnapshotNexusRuntime::VERSION
                 ),
+            });
+        }
+        if runtime
+            .lanes
+            .windows(2)
+            .any(|pair| pair[0].id >= pair[1].id)
+        {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.lanes".to_owned(),
+                message: "lanes must be in strict canonical lane-id order".to_owned(),
+            });
+        }
+        if runtime
+            .lane_incarnation_lineage
+            .windows(2)
+            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+        {
+            return Err(json::Error::InvalidField {
+                field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
+                message: "lineage entries must be in strict canonical lane-id order".to_owned(),
             });
         }
         let autoscale_scale_out_window_blocks = std::num::NonZeroU16::new(
@@ -68743,7 +69432,7 @@ pub(crate) mod deserialize {
         field: &str,
     ) -> Result<Vec<T>, json::Error>
     where
-        T: DecodeAll,
+        T: DecodeAll + Encode,
     {
         records
             .into_iter()
@@ -68755,12 +69444,47 @@ pub(crate) mod deserialize {
                         message: format!("record {index} hex decode failed: {err}"),
                     })?;
                 let mut cursor = bytes.as_slice();
-                T::decode_all(&mut cursor).map_err(|err| json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!("record {index} norito decode failed: {err}"),
-                })
+                let decoded =
+                    T::decode_all(&mut cursor).map_err(|err| json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    })?;
+                if decoded.encode() != bytes {
+                    return Err(json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: format!("record {index} is not canonical Norito"),
+                    });
+                }
+                Ok(decoded)
             })
             .collect()
+    }
+
+    fn validate_canonical_snapshot_record_order<T, K>(
+        records: &[T],
+        field: &str,
+        key: impl Fn(&T) -> K,
+    ) -> Result<(), json::Error>
+    where
+        K: Ord,
+    {
+        let mut previous = None;
+        for (index, record) in records.iter().enumerate() {
+            let current = key(record);
+            if previous
+                .as_ref()
+                .is_some_and(|previous| previous >= &current)
+            {
+                return Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: format!(
+                        "record {index} is duplicated or not in canonical semantic key order"
+                    ),
+                });
+            }
+            previous = Some(current);
+        }
+        Ok(())
     }
 
     fn decode_public_lane_validator_records(
@@ -68774,14 +69498,20 @@ pub(crate) mod deserialize {
                     message: format!("record {index} hex decode failed: {err}"),
                 })?;
             let mut cursor = bytes.as_slice();
-            decoded.push(
+            let decoded_record =
                 PublicLaneValidatorRecord::decode_all(&mut cursor).map_err(|err| {
                     json::Error::InvalidField {
                         field: "public_lane_validators".to_owned(),
                         message: format!("record {index} norito decode failed: {err}"),
                     }
-                })?,
-            );
+                })?;
+            if decoded_record.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: "public_lane_validators".to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
+            }
+            decoded.push(decoded_record);
         }
         Ok(decoded)
     }
@@ -68797,14 +69527,19 @@ pub(crate) mod deserialize {
                     message: format!("record {index} hex decode failed: {err}"),
                 })?;
             let mut cursor = bytes.as_slice();
-            decoded.push(
-                PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
-                    json::Error::InvalidField {
-                        field: "public_lane_stake_shares".to_owned(),
-                        message: format!("record {index} norito decode failed: {err}"),
-                    }
-                })?,
-            );
+            let decoded_record = PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
+                json::Error::InvalidField {
+                    field: "public_lane_stake_shares".to_owned(),
+                    message: format!("record {index} norito decode failed: {err}"),
+                }
+            })?;
+            if decoded_record.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: "public_lane_stake_shares".to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
+            }
+            decoded.push(decoded_record);
         }
         Ok(decoded)
     }
@@ -68827,6 +69562,12 @@ pub(crate) mod deserialize {
                         message: format!("record {index} norito decode failed: {err}"),
                     }
                 })?;
+            if manifest_set.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
+            }
             if storage.insert(record.uaid, manifest_set).is_some() {
                 return Err(json::Error::InvalidField {
                     field: "space_directory_manifests".to_owned(),
@@ -68837,36 +69578,35 @@ pub(crate) mod deserialize {
         Ok(storage)
     }
 
-    fn take_required<T: JsonDeserialize>(
-        map: &mut json::native::Map,
-        key: &str,
-    ) -> Result<T, json::Error> {
+    fn take_required<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + JsonSerialize,
+    {
         let value = map
             .remove(key)
             .ok_or_else(|| json::Error::missing_field(key))?;
-        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-            field: key.to_owned(),
-            message: err.to_string(),
-        })
+        value.decode_canonical(key)
     }
 
-    fn take_optional_default<T>(map: &mut json::native::Map, key: &str) -> Result<T, json::Error>
+    fn take_optional<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<Option<T>, json::Error>
     where
-        T: JsonDeserialize + Default,
+        T: JsonDeserialize + JsonSerialize,
     {
-        map.remove(key).map_or_else(
-            || Ok(T::default()),
-            |value| {
-                json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-                    field: key.to_owned(),
-                    message: err.to_string(),
-                })
-            },
-        )
+        map.remove(key)
+            .map(|value| value.decode_canonical(key))
+            .transpose()
+    }
+
+    fn take_optional_default<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + JsonSerialize + Default,
+    {
+        map.remove(key)
+            .map_or_else(|| Ok(T::default()), |value| value.decode_canonical(key))
     }
 
     fn take_musubi_namespace_bindings(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
     ) -> Result<Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1>, json::Error> {
         let bindings: Storage<MusubiNamespaceV1, MusubiNamespaceBindingV1> =
             take_required(map, "musubi_namespace_bindings")?;
@@ -68891,7 +69631,7 @@ pub(crate) mod deserialize {
     }
 
     fn take_musubi_domain_ownership_generations(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
     ) -> Result<Storage<DomainId, u64>, json::Error> {
         let generations: Storage<DomainId, u64> =
             take_required(map, "musubi_domain_ownership_generations")?;
@@ -68909,7 +69649,7 @@ pub(crate) mod deserialize {
     }
 
     fn take_musubi_registry_policy(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
     ) -> Result<Cell<MusubiRegistryPolicyV1>, json::Error> {
         let policy: Cell<MusubiRegistryPolicyV1> = take_required(map, "musubi_registry_policy")?;
         policy
@@ -68924,7 +69664,7 @@ pub(crate) mod deserialize {
     }
 
     fn take_musubi_resolver_index_revision(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
     ) -> Result<Cell<MusubiResolverIndexRevisionV1>, json::Error> {
         let revision: Cell<MusubiResolverIndexRevisionV1> =
             take_required(map, "musubi_resolver_index_revision")?;
@@ -68938,13 +69678,13 @@ pub(crate) mod deserialize {
     }
 
     fn take_musubi_resolver_index_checkpoints(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
     ) -> Result<Storage<MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>, json::Error> {
         take_required(map, "musubi_resolver_index_checkpoints")
     }
 
     fn take_musubi_replication_shortfall_releases(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
     ) -> Result<Cell<u64>, json::Error> {
         take_required(map, "musubi_replication_shortfall_releases")
     }
@@ -69214,44 +69954,23 @@ pub(crate) mod deserialize {
     }
 
     fn take_ram_lfe_program_policies(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
     ) -> Result<Storage<RamLfeProgramId, RamLfeProgramPolicy>, json::Error> {
-        let value = map
-            .remove("ram_lfe_program_policies")
-            .ok_or_else(|| json::Error::missing_field("ram_lfe_program_policies"))?;
-        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-            field: "ram_lfe_program_policies".to_owned(),
-            message: err.to_string(),
-        })
+        take_required(map, "ram_lfe_program_policies")
     }
 
     fn take_parameters_cell(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
         key: &str,
     ) -> Result<Cell<Parameters>, json::Error> {
-        let value = map
-            .remove(key)
-            .ok_or_else(|| json::Error::missing_field(key))?;
-        json::value::from_value(value).map_err(|err| json::Error::InvalidField {
-            field: key.to_owned(),
-            message: err.to_string(),
-        })
+        take_required(map, key)
     }
 
     fn take_topology_cell(
-        map: &mut json::native::Map,
+        map: &mut SnapshotJsonMap<'_>,
         key: &str,
     ) -> Result<Cell<Vec<PeerId>>, json::Error> {
-        let value = map
-            .remove(key)
-            .ok_or_else(|| json::Error::missing_field(key))?;
-        match value {
-            json::Value::Array(_) => {
-                let peers: Vec<PeerId> = json::value::from_value(value)?;
-                Ok(Cell::new(peers))
-            }
-            other => json::value::from_value(other),
-        }
+        take_required(map, key)
     }
 
     fn reject_legacy_musubi_state(
@@ -70784,15 +71503,25 @@ pub(crate) mod deserialize {
 
     #[allow(clippy::too_many_lines)]
     fn parse_world(
-        value: json::Value,
+        mut map: SnapshotJsonMap<'_>,
         ivm_seed: &IvmSeed<'_, World>,
     ) -> Result<World, json::Error> {
-        let json::Value::Object(mut map) = value else {
-            return Err(json::Error::InvalidField {
-                field: "world".into(),
-                message: "expected object".into(),
-            });
-        };
+        if let Some(actual) = map.source_order.as_ref() {
+            let expected = canonical_world_field_order();
+            if let Some(unknown) = actual.iter().find(|key| !expected.contains(key)) {
+                return Err(json::Error::InvalidField {
+                    field: format!("world.{unknown}"),
+                    message: "unknown field is not permitted in a signed first-release snapshot"
+                        .to_owned(),
+                });
+            }
+            if actual != expected {
+                return Err(json::Error::InvalidField {
+                    field: "world".to_owned(),
+                    message: "snapshot world fields are not in canonical schema order".to_owned(),
+                });
+            }
+        }
 
         let parameters = take_parameters_cell(&mut map, "parameters")?;
         let peers: Cell<Peers> = take_required(&mut map, "peers")?;
@@ -70849,15 +71578,9 @@ pub(crate) mod deserialize {
         let viral_binding_claims = take_required(&mut map, "viral_binding_claims")?;
         let viral_escrows = take_required(&mut map, "viral_escrows")?;
         let viral_bonus_paid = take_required(&mut map, "viral_bonus_paid")?;
-        let registry_value = map
-            .get("sccp_registry")
-            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?;
-        validate_sccp_registry_cell_json(registry_value).map_err(|message| {
-            json::Error::InvalidField {
-                field: "sccp_registry".to_owned(),
-                message,
-            }
-        })?;
+        map.get("sccp_registry")
+            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?
+            .validate_sccp_registry()?;
         let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
             take_required(&mut map, "sccp_registry")?;
         let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
@@ -70900,7 +71623,7 @@ pub(crate) mod deserialize {
             .ok_or_else(|| json::Error::missing_field("triggers"))?;
         let triggers = ivm_seed
             .cast::<TriggerSet>()
-            .parse_trigger_set(&triggers_value)?;
+            .parse_trigger_set(triggers_value)?;
         let executor: Cell<Executor> = take_required(&mut map, "executor")?;
         let executor_data_model: Cell<ExecutorDataModel> =
             take_required(&mut map, "executor_data_model")?;
@@ -71488,6 +72211,7 @@ pub(crate) mod deserialize {
         lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
         autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,
         chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
         nexus_runtime_restored_from_snapshot: bool,
         kura: Arc<Kura>,
@@ -71513,6 +72237,7 @@ pub(crate) mod deserialize {
             lane_incarnation_activation_heights,
             autoscale_sample_history,
             chain_id,
+            network_id,
             snapshot_v2_bootstrap_candidate,
             nexus_runtime_restored_from_snapshot,
             kura,
@@ -71640,6 +72365,7 @@ pub(crate) mod deserialize {
             ),
             settlement_engine: SettlementEngine::new_roadmap_default(),
             chain_id,
+            network_id,
             snapshot_v2_bootstrap_candidate,
             authenticated_snapshot_v2_bootstrap: None,
             authenticated_snapshot_bootstrap_payload: None,
@@ -71944,8 +72670,8 @@ pub(crate) mod deserialize {
         }
     }
 
-    fn reject_unknown(map: &json::native::Map, context: &str) -> Result<(), json::Error> {
-        let Some(field) = map.keys().next() else {
+    fn reject_unknown(map: &SnapshotJsonMap<'_>, context: &str) -> Result<(), json::Error> {
+        let Some(field) = map.first_key() else {
             return Ok(());
         };
         Err(json::Error::InvalidField {
@@ -72823,10 +73549,67 @@ pub(crate) mod deserialize {
 
             let mut map = json::native::Map::new();
             map.insert("parameters".to_owned(), canonical);
+            let mut map = SnapshotJsonMap::from_owned(map);
 
             let parsed = take_parameters_cell(&mut map, "parameters")
                 .expect("canonical parameters MV envelope must be accepted");
             assert_eq!(parsed.view().get(), &expected);
+        }
+
+        #[test]
+        fn borrowed_snapshot_map_rejects_duplicates_and_noncanonical_order() {
+            let canonical = SnapshotJsonMap::parse(r#"{"first":0,"second":1}"#, "fixture")
+                .expect("borrowed fixture map");
+            canonical
+                .require_source_order(&["first", "second"], "fixture")
+                .expect("declared schema order must match");
+            assert!(
+                canonical
+                    .require_source_order(&["second", "first"], "fixture")
+                    .is_err()
+            );
+            assert!(
+                SnapshotJsonMap::parse(r#"{"first":0,"first":1}"#, "fixture").is_err(),
+                "duplicate signed snapshot fields must fail closed"
+            );
+        }
+
+        #[test]
+        fn snapshot_record_order_must_be_strict_and_duplicate_free() {
+            validate_canonical_snapshot_record_order(&[1_u8, 2, 3], "fixture", |value| *value)
+                .expect("strict order is canonical");
+            assert!(
+                validate_canonical_snapshot_record_order(&[2_u8, 1], "fixture", |value| *value)
+                    .is_err()
+            );
+            assert!(
+                validate_canonical_snapshot_record_order(&[1_u8, 1], "fixture", |value| *value)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn snapshot_norito_records_require_exact_canonical_bytes() {
+            let encoded = 7_u64.encode();
+            let record = SnapshotNoritoBlob {
+                encoded_hex: hex::encode(&encoded),
+            };
+            assert_eq!(
+                decode_snapshot_records::<u64>(vec![record], "fixture")
+                    .expect("canonical Norito record"),
+                [7]
+            );
+
+            let mut trailing = encoded;
+            trailing.push(0);
+            let error = decode_snapshot_records::<u64>(
+                vec![SnapshotNoritoBlob {
+                    encoded_hex: hex::encode(trailing),
+                }],
+                "fixture",
+            )
+            .expect_err("trailing or alternate Norito bytes must fail closed");
+            assert!(error.to_string().contains("fixture"));
         }
 
         #[test]
@@ -72838,6 +73621,7 @@ pub(crate) mod deserialize {
 
             let mut map = json::native::Map::new();
             map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
+            let mut map = SnapshotJsonMap::from_owned(map);
 
             let error = take_parameters_cell(&mut map, "parameters")
                 .err()
@@ -72872,6 +73656,7 @@ pub(crate) mod deserialize {
                 json::to_value(&world.musubi_provider_bundle_attestations)
                     .expect("serialize provider attestation snapshot store"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let parsed: Storage<
                 MusubiProviderBundleAttestationKeyV1,
                 MusubiProviderBundleAttestationRecordV1,
@@ -72886,7 +73671,7 @@ pub(crate) mod deserialize {
                     MusubiProviderBundleAttestationRecordV1,
                 >,
             >(
-                &mut json::native::Map::new(),
+                &mut SnapshotJsonMap::from_owned(json::native::Map::new()),
                 "musubi_provider_bundle_attestations",
             )
             .err()
@@ -72943,6 +73728,7 @@ pub(crate) mod deserialize {
                 "musubi_maintainer_directory".to_owned(),
                 json::to_value(&expected).expect("serialize maintainer directory snapshot store"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let parsed: Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1> =
                 take_required(&mut map, "musubi_maintainer_directory")
                     .expect("decode maintainer directory snapshot store");
@@ -72958,7 +73744,10 @@ pub(crate) mod deserialize {
 
             let error = take_required::<
                 Storage<MusubiMaintainerDirectoryKeyV1, MusubiMaintainerDirectoryEntryV1>,
-            >(&mut json::native::Map::new(), "musubi_maintainer_directory")
+            >(
+                &mut SnapshotJsonMap::from_owned(json::native::Map::new()),
+                "musubi_maintainer_directory",
+            )
             .err()
             .expect("missing maintainer directory snapshot store must fail");
             assert!(
@@ -72983,13 +73772,16 @@ pub(crate) mod deserialize {
                 "musubi_namespace_bindings".to_owned(),
                 json::to_value(&bindings).expect("serialize bindings"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let parsed =
                 take_musubi_namespace_bindings(&mut map).expect("canonical namespace binding map");
             assert_eq!(parsed.view().get(&namespace), Some(&binding));
 
-            let error = take_musubi_namespace_bindings(&mut json::native::Map::new())
-                .err()
-                .expect("missing namespace binding map must fail");
+            let error = take_musubi_namespace_bindings(&mut SnapshotJsonMap::from_owned(
+                json::native::Map::new(),
+            ))
+            .err()
+            .expect("missing namespace binding map must fail");
             assert!(
                 error.to_string().contains("musubi_namespace_bindings"),
                 "unexpected missing-field error: {error}"
@@ -73008,6 +73800,7 @@ pub(crate) mod deserialize {
                 "musubi_namespace_bindings".to_owned(),
                 json::to_value(&malformed).expect("serialize malformed binding"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let error = take_musubi_namespace_bindings(&mut map)
                 .err()
                 .expect("malformed namespace binding must fail");
@@ -73025,6 +73818,7 @@ pub(crate) mod deserialize {
                 "musubi_namespace_bindings".to_owned(),
                 json::to_value(&mismatched).expect("serialize mismatched binding"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let error = take_musubi_namespace_bindings(&mut map)
                 .err()
                 .expect("namespace key/value mismatch must fail");
@@ -73040,9 +73834,11 @@ pub(crate) mod deserialize {
         fn take_musubi_domain_generations_requires_canonical_persisted_values() {
             let domain = DomainId::try_new("packages", "universal").expect("domain id");
 
-            let error = take_musubi_domain_ownership_generations(&mut json::native::Map::new())
-                .err()
-                .expect("missing generation map must fail");
+            let error = take_musubi_domain_ownership_generations(&mut SnapshotJsonMap::from_owned(
+                json::native::Map::new(),
+            ))
+            .err()
+            .expect("missing generation map must fail");
             assert!(
                 error
                     .to_string()
@@ -73056,6 +73852,7 @@ pub(crate) mod deserialize {
                 "musubi_domain_ownership_generations".to_owned(),
                 json::to_value(&empty).expect("serialize empty generation map"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             assert!(
                 take_musubi_domain_ownership_generations(&mut map)
                     .expect("empty required map represents all generation-one domains")
@@ -73071,6 +73868,7 @@ pub(crate) mod deserialize {
                     "musubi_domain_ownership_generations".to_owned(),
                     json::to_value(&generations).expect("serialize invalid generation map"),
                 );
+                let mut map = SnapshotJsonMap::from_owned(map);
                 let error = take_musubi_domain_ownership_generations(&mut map)
                     .err()
                     .unwrap_or_else(|| panic!("persisted generation {generation} must fail"));
@@ -73087,6 +73885,7 @@ pub(crate) mod deserialize {
                 "musubi_domain_ownership_generations".to_owned(),
                 json::to_value(&generations).expect("serialize canonical generation map"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let parsed = take_musubi_domain_ownership_generations(&mut map)
                 .expect("persisted generation four is canonical");
             assert_eq!(parsed.view().get(&domain), Some(&4));
@@ -73100,6 +73899,7 @@ pub(crate) mod deserialize {
                 "musubi_registry_policy".to_owned(),
                 json::to_value(&Cell::new(policy.clone())).expect("serialize policy"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             assert_eq!(
                 take_musubi_registry_policy(&mut map)
                     .expect("canonical policy")
@@ -73115,6 +73915,7 @@ pub(crate) mod deserialize {
                 "musubi_registry_policy".to_owned(),
                 json::to_value(&Cell::new(invalid_policy)).expect("serialize invalid policy"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let error = take_musubi_registry_policy(&mut map)
                 .err()
                 .expect("invalid policy must fail");
@@ -73123,7 +73924,10 @@ pub(crate) mod deserialize {
                 "unexpected policy error: {error}"
             );
             assert!(
-                take_musubi_registry_policy(&mut json::native::Map::new()).is_err(),
+                take_musubi_registry_policy(&mut SnapshotJsonMap::from_owned(
+                    json::native::Map::new(),
+                ))
+                .is_err(),
                 "missing policy must fail"
             );
 
@@ -73133,6 +73937,7 @@ pub(crate) mod deserialize {
                 json::to_value(&Cell::new(MusubiResolverIndexRevisionV1::default()))
                     .expect("serialize resolver revision"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             assert_eq!(
                 take_musubi_resolver_index_revision(&mut map)
                     .expect("canonical resolver revision")
@@ -73148,6 +73953,7 @@ pub(crate) mod deserialize {
                 json::to_value(&Cell::new(MusubiResolverIndexRevisionV1(0)))
                     .expect("serialize zero resolver revision"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let error = take_musubi_resolver_index_revision(&mut map)
                 .err()
                 .expect("zero resolver revision must fail");
@@ -73156,7 +73962,10 @@ pub(crate) mod deserialize {
                 "unexpected resolver revision error: {error}"
             );
             assert!(
-                take_musubi_resolver_index_revision(&mut json::native::Map::new()).is_err(),
+                take_musubi_resolver_index_revision(&mut SnapshotJsonMap::from_owned(
+                    json::native::Map::new(),
+                ))
+                .is_err(),
                 "missing resolver revision must fail"
             );
 
@@ -73165,6 +73974,7 @@ pub(crate) mod deserialize {
                 "musubi_replication_shortfall_releases".to_owned(),
                 json::to_value(&Cell::new(7_u64)).expect("serialize shortfall count"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             assert_eq!(
                 *take_musubi_replication_shortfall_releases(&mut map)
                     .expect("canonical shortfall count")
@@ -73172,9 +73982,11 @@ pub(crate) mod deserialize {
                     .get(),
                 7
             );
-            let error = take_musubi_replication_shortfall_releases(&mut json::native::Map::new())
-                .err()
-                .expect("missing shortfall count must fail cleanly");
+            let error = take_musubi_replication_shortfall_releases(
+                &mut SnapshotJsonMap::from_owned(json::native::Map::new()),
+            )
+            .err()
+            .expect("missing shortfall count must fail cleanly");
             assert!(
                 error
                     .to_string()
@@ -73220,12 +74032,16 @@ pub(crate) mod deserialize {
                 "musubi_resolver_index_checkpoints".to_owned(),
                 json::to_value(&checkpoints).expect("serialize resolver checkpoints"),
             );
+            let mut map = SnapshotJsonMap::from_owned(map);
             let decoded = take_musubi_resolver_index_checkpoints(&mut map)
                 .expect("checkpoint store is required and decodable");
             validate_musubi_resolver_checkpoint_structure(&decoded, 1)
                 .expect("canonical sparse checkpoint structure");
             assert!(
-                take_musubi_resolver_index_checkpoints(&mut json::native::Map::new()).is_err(),
+                take_musubi_resolver_index_checkpoints(&mut SnapshotJsonMap::from_owned(
+                    json::native::Map::new(),
+                ))
+                .is_err(),
                 "the clean schema must reject snapshots without checkpoint history"
             );
 

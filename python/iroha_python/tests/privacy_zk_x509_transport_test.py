@@ -2,144 +2,42 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from types import SimpleNamespace
-from typing import Any, Callable, cast
 
 import pytest
 
 import iroha_python
 import iroha_python.client as client_module
 import iroha_python.crypto as crypto_module
-from iroha_python import SorafsAliasPolicy, TransactionConfig, TransactionDraft
-from iroha_python.client import ToriiClient
-from iroha_python.privacy_catalog import (
-    PRIVACY_PROTOCOL_IDS_V1,
-    PrivacyCapabilitySnapshotV1,
-    parse_privacy_capability_snapshot_v1,
-)
+from iroha_python import NetworkId, SorafsAliasPolicy, TransactionConfig, TransactionDraft
+from iroha_python.client import LocalSigningContext, ToriiClient
 
 X509_PROTOCOL = "iroha-zk-x509-stark-p256-v0"
 SIGNED_X509_WIRE = b"canonical-signed-x509-wire"
 SIGNED_OTHER_WIRE = b"canonical-signed-other-protocol-wire"
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
-
-
-def _tagged_protocol(protocol: str) -> dict[str, object]:
-    return {"protocol": protocol, "value": None}
-
-
-def _consensus_limits() -> dict[str, int]:
-    return {
-        "max_actions_per_transaction": 1,
-        "max_actions_per_block": 2,
-        "max_proof_bytes_per_action": 9 * 1024 * 1024,
-        "max_action_bytes": 9 * 1024 * 1024,
-        "max_privacy_bytes_per_transaction": 9 * 1024 * 1024,
-        "max_privacy_bytes_per_block": 18 * 1024 * 1024,
-        "max_statement_and_encrypted_output_bytes_per_transaction": 256 * 1024,
-        "max_nullifiers_per_action": 8,
-        "max_commitments_per_action": 8,
-        "retained_root_count": 2048,
-    }
-
-
-def _x509_profile() -> dict[str, object]:
-    return {
-        "protocol_id": _tagged_protocol(X509_PROTOCOL),
-        "proof_system_id": {
-            "proof_system": "stark-fri-sha256-goldilocks",
-            "value": None,
-        },
-        "engine_id": {"engine": "native-goldilocks-stark-fri", "value": None},
-        "parameter_id": [1] * 32,
-        "parameter_digest": [2] * 32,
-        "verifier_digest": [3] * 32,
-        "statement_schema_digest": [4] * 32,
-        "engine_manifest_digest": [5] * 32,
-        "protocol_limits": {"protocol": X509_PROTOCOL, "limits": None},
-    }
-
-
-def _capability_snapshot(
-    *,
-    compiled: bool = True,
-    activation: bool = True,
-    lifecycle: str = "active",
-) -> PrivacyCapabilitySnapshotV1:
-    rows: list[dict[str, object]] = [
-        {
-            "protocol_id": _tagged_protocol(protocol),
-            "compiled_profile": {
-                "status": "unavailable",
-                "value": {"reason": "engine-unavailable", "detail": None},
-            },
-            "activation": None,
-        }
-        for protocol in PRIVACY_PROTOCOL_IDS_V1
-    ]
-    x509_row = rows[PRIVACY_PROTOCOL_IDS_V1.index(X509_PROTOCOL)]
-    if compiled:
-        profile = _x509_profile()
-        x509_row["compiled_profile"] = {"status": "available", "value": profile}
-        if activation:
-            if lifecycle == "proposed":
-                lifecycle_value: dict[str, object] = {
-                    "state": "proposed",
-                    "record": {"proposed_at_height": 40, "activate_at_height": 50},
-                }
-            else:
-                lifecycle_value = {
-                    "state": lifecycle,
-                    "record": {
-                        "proposed_at_height": 1,
-                        "activated_at_height": 2,
-                        "state_since_height": 2 if lifecycle == "active" else 3,
-                    },
-                }
-            x509_row["activation"] = {
-                **deepcopy(profile),
-                "lifecycle": lifecycle_value,
-                "pending_protocol_limits_tightening": None,
-                "assurance": {"assurance": "experimental", "value": None},
-            }
-    return parse_privacy_capability_snapshot_v1(
-        {
-            "version": 1,
-            "committed_height": 42,
-            "consensus_policy": {
-                "current_limits": _consensus_limits(),
-                "pending_tightening": None,
-            },
-            "protocols": rows,
-        }
-    )
-
-
-def _duplicate_x509_row(snapshot: dict[str, Any]) -> None:
-    row = snapshot["protocols"][PRIVACY_PROTOCOL_IDS_V1.index(X509_PROTOCOL)]
-    snapshot["protocols"].append(deepcopy(row))
-
-
-def _mismatch_x509_compiled_binding(snapshot: dict[str, Any]) -> None:
-    row = snapshot["protocols"][PRIVACY_PROTOCOL_IDS_V1.index(X509_PROTOCOL)]
-    row["compiled_profile"]["value"]["protocol_id"]["protocol"] = (
-        "vega-existing-credential-zk-v0"
-    )
-
-
-def _mismatch_x509_activation_binding(snapshot: dict[str, Any]) -> None:
-    row = snapshot["protocols"][PRIVACY_PROTOCOL_IDS_V1.index(X509_PROTOCOL)]
-    row["activation"]["protocol_id"]["protocol"] = "vega-existing-credential-zk-v0"
+NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 
 
 class _FakeCrypto:
+    PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1 = 256 * 1024
+    NetworkId = NetworkId
+
     def __init__(self, events: list[str]) -> None:
         self.events = events
         self.envelope = SimpleNamespace(
             signed_transaction_versioned=SIGNED_X509_WIRE,
             hash=bytes([7]) * 32,
         )
+
+    def privacy_exact12_capability_manifest_v1(
+        self,
+        archive: object,
+    ) -> "_FakeManifest":
+        self.events.append("decode-capabilities")
+        if archive != b"canonical-exact12-manifest":
+            raise ValueError("wrong manifest bytes")
+        return _FakeManifest()
 
     def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
         self,
@@ -156,10 +54,32 @@ class _FakeCrypto:
     def signed_transaction_envelope_from_versioned_v1(
         self,
         wire: object,
+        network_id: object,
     ) -> SimpleNamespace:
         self.events.append("reconstruct")
         assert wire == SIGNED_X509_WIRE
+        assert network_id == NETWORK_ID
         return self.envelope
+
+
+class _FakeManifest:
+    def __init__(self, error: str | None = None) -> None:
+        self.error = error
+
+    def require_network_capability(self, protocol_id: str) -> dict[str, object]:
+        if self.error is not None:
+            raise RuntimeError(self.error)
+        if protocol_id != X509_PROTOCOL:
+            raise RuntimeError("wrong selected protocol")
+        return {
+            "protocol_id": X509_PROTOCOL,
+            "operation_schema": "zk_x509_identity_presentation_v1",
+            "execution_mode": "presentation_action",
+            "privacy_feature_mask": 2,
+            "readiness": "available",
+            "activation_state": "active",
+            "network_available": True,
+        }
 
 
 def _client_with_crypto(
@@ -179,10 +99,57 @@ def _client_with_crypto(
         governance_grace_secs=0,
     )
     return (
-        ToriiClient("http://torii.invalid", sorafs_alias_policy=alias_policy),
+        ToriiClient(
+            "http://torii.invalid",
+            sorafs_alias_policy=alias_policy,
+            local_signing_context=LocalSigningContext(NETWORK_ID),
+        ),
         fake_crypto,
         events,
     )
+
+
+def test_privacy_capabilities_fetches_and_preserves_exact_norito_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, events = _client_with_crypto(monkeypatch)
+    response = SimpleNamespace(
+        status_code=200,
+        headers={"Content-Type": "application/x-norito"},
+        content=b"canonical-exact12-manifest",
+        text="",
+    )
+    requests: list[tuple[str, str, object]] = []
+
+    def request(method: str, path: str, **kwargs: object) -> object:
+        requests.append((method, path, kwargs.get("headers")))
+        return response
+
+    monkeypatch.setattr(client, "_request", request)
+    manifest = client.privacy_capabilities_v1()
+
+    assert isinstance(manifest, _FakeManifest)
+    assert requests == [
+        ("GET", "/v1/privacy/capabilities", {"Accept": "application/x-norito"})
+    ]
+    assert events == ["decode-capabilities"]
+
+
+def test_privacy_capabilities_rejects_json_and_never_invokes_native_decoder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, events = _client_with_crypto(monkeypatch)
+    response = SimpleNamespace(
+        status_code=200,
+        headers={"Content-Type": "application/json"},
+        content=b"{}",
+        text="",
+    )
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(ValueError, match="application/x-norito"):
+        client.privacy_capabilities_v1()
+    assert events == []
 
 
 def test_crypto_x509_inspector_is_public_and_forwards_exact_genesis(
@@ -270,16 +237,15 @@ def test_transaction_draft_delegates_exact_x509_prepare_and_sign_inputs(
         def sign_privacy_zk_x509_identity_presentation_action_v1(
             self,
             private_key: bytes,
-            genesis_hash: bytes,
             statement: bytes,
             proof: bytes,
         ) -> object:
-            calls.append(("sign", private_key, genesis_hash, statement, proof))
+            calls.append(("sign", private_key, statement, proof))
             return signed_result
 
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="test-chain",
+            network_id=NETWORK_ID,
             authority="ed0120" + "11" * 32,
             fee_payment={
                 "payer": "authority",
@@ -298,7 +264,6 @@ def test_transaction_draft_delegates_exact_x509_prepare_and_sign_inputs(
     assert (
         draft.sign_privacy_zk_x509_identity_presentation_action_v1(
             b"private-key",
-            canonical_genesis_hash=CANONICAL_GENESIS_HASH,
             canonical_statement_archive=statement,
             credential_proof=proof,
         )
@@ -306,7 +271,7 @@ def test_transaction_draft_delegates_exact_x509_prepare_and_sign_inputs(
     )
     assert calls == [
         ("prepare", statement),
-        ("sign", b"private-key", CANONICAL_GENESIS_HASH, statement, proof),
+        ("sign", b"private-key", statement, proof),
     ]
 
 
@@ -315,7 +280,7 @@ def test_transaction_draft_rejects_x509_action_mixing_before_native_call(
 ) -> None:
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="test-chain",
+            network_id=NETWORK_ID,
             authority="ed0120" + "11" * 32,
             fee_payment={
                 "payer": "authority",
@@ -338,7 +303,6 @@ def test_transaction_draft_rejects_x509_action_mixing_before_native_call(
     with pytest.raises(ValueError, match="otherwise empty"):
         draft.sign_privacy_zk_x509_identity_presentation_action_v1(
             b"private-key",
-            canonical_genesis_hash=CANONICAL_GENESIS_HASH,
             canonical_statement_archive=b"statement",
             credential_proof=b"proof",
         )
@@ -350,11 +314,11 @@ def test_x509_transport_authenticates_live_gates_and_submits_exactly_once(
     client, fake_crypto, events = _client_with_crypto(monkeypatch)
     capability_calls = 0
 
-    def capabilities() -> PrivacyCapabilitySnapshotV1:
+    def capabilities() -> _FakeManifest:
         nonlocal capability_calls
         capability_calls += 1
         events.append("capabilities")
-        return _capability_snapshot()
+        return _FakeManifest()
 
     submissions: list[object] = []
 
@@ -386,9 +350,9 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
 ) -> None:
     client, fake_crypto, events = _client_with_crypto(monkeypatch)
 
-    def capabilities() -> PrivacyCapabilitySnapshotV1:
+    def capabilities() -> _FakeManifest:
         events.append("capabilities")
-        return _capability_snapshot()
+        return _FakeManifest()
 
     waits: list[tuple[object, dict[str, object]]] = []
 
@@ -456,23 +420,24 @@ def test_x509_transport_rejects_wrong_protocol_before_capability_fetch(
 
 
 @pytest.mark.parametrize(
-    ("mutate", "message"),
+    "message",
     (
-        (_duplicate_x509_row, "exactly one"),
-        (_mismatch_x509_compiled_binding, "compiled profile has a mismatched binding"),
-        (_mismatch_x509_activation_binding, "activation has a mismatched binding"),
+        "manifest row ordering mismatch",
+        "compiled profile tuple mismatch",
+        "activation projection mismatch",
     ),
     ids=("duplicate-row", "compiled-binding", "activation-binding"),
 )
 def test_x509_transport_rejects_malformed_capability_bindings_before_submission(
     monkeypatch: pytest.MonkeyPatch,
-    mutate: Callable[[dict[str, Any]], None],
     message: str,
 ) -> None:
     client, _, events = _client_with_crypto(monkeypatch)
-    snapshot = cast(dict[str, Any], deepcopy(_capability_snapshot()))
-    mutate(snapshot)
-    monkeypatch.setattr(client, "privacy_capabilities_v1", lambda: snapshot)
+    monkeypatch.setattr(
+        client,
+        "privacy_capabilities_v1",
+        lambda: _FakeManifest(message),
+    )
     monkeypatch.setattr(
         client,
         "submit_transaction_envelope",
@@ -489,23 +454,26 @@ def test_x509_transport_rejects_malformed_capability_bindings_before_submission(
 
 
 @pytest.mark.parametrize(
-    ("snapshot", "message"),
+    "message",
     (
-        (_capability_snapshot(compiled=False, activation=False), "compiled profile"),
-        (_capability_snapshot(activation=False), "no governed activation"),
-        (_capability_snapshot(lifecycle="proposed"), "not active"),
-        (_capability_snapshot(lifecycle="suspended"), "not active"),
-        (_capability_snapshot(lifecycle="retired"), "not active"),
+        "compiled profile unavailable",
+        "no governed activation",
+        "not active: proposed",
+        "not active: suspended",
+        "not active: retired",
     ),
     ids=("unavailable", "no-activation", "proposed", "suspended", "retired"),
 )
 def test_x509_transport_fails_closed_for_unavailable_or_inactive_capability(
     monkeypatch: pytest.MonkeyPatch,
-    snapshot: PrivacyCapabilitySnapshotV1,
     message: str,
 ) -> None:
     client, _, events = _client_with_crypto(monkeypatch)
-    monkeypatch.setattr(client, "privacy_capabilities_v1", lambda: snapshot)
+    monkeypatch.setattr(
+        client,
+        "privacy_capabilities_v1",
+        lambda: _FakeManifest(message),
+    )
     monkeypatch.setattr(
         client,
         "submit_transaction_envelope",

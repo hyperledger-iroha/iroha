@@ -29,6 +29,9 @@ const nexusFixture = JSON.parse(
     "utf8",
   ),
 );
+const nexusFixtureNetworkId = packageExports.NetworkId.parse(
+  nexusFixture.transfer_input.network_id,
+);
 
 const {
   PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1,
@@ -235,6 +238,7 @@ function mockNexusResponse(status, body = "", headers = {}) {
 test("package dist exposes the current general-purpose SDK entrypoint", () => {
   for (const name of [
     "AccountAddress",
+    "NetworkId",
     "ToriiClient",
     "ToriiBrowserClient",
     "buildTransaction",
@@ -572,7 +576,7 @@ test("package Nexus browser source and dist must remain exact", () => {
 test("package Nexus browser defaults build, finalize, and submit the shared canonical transfer", async () => {
   const submissions = [];
   const client = new PackageNexusAppClient({
-    chainId: nexusFixture.transfer_input.chain_id,
+    networkId: nexusFixtureNetworkId,
     authority: nexusFixture.transfer_input.authority,
     signingPublicKey: hexBytes(
       nexusFixture.connect.approval_frame.signing_public_key_hex,

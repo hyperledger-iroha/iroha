@@ -15,13 +15,14 @@ import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
  *
  * <p>The structure mirrors the Rust data model for encoding and signing native instructions,
  * deployed-contract calls, flat mixed batches, and IVM bytecode. The optional nonce uses a
- * {@link Long} carrier so the full nonzero unsigned 32-bit wire range remains representable.
- * Proof attachments are part of the signed payload and therefore affect both authorization
- * signatures and the canonical transaction identifier.
+ * {@link Long} carrier so the full nonzero unsigned 32-bit wire range remains representable. The
+ * network identity is the exact canonical hash of the genesis header. Proof attachments are part
+ * of the signed payload and therefore affect both authorization signatures and the canonical
+ * transaction identifier.
  */
 public final class TransactionPayload {
 
-  private final String chainId;
+  private final NetworkId networkId;
   private final String authority;
   private final long creationTimeMs;
   private final Executable executable;
@@ -32,7 +33,7 @@ public final class TransactionPayload {
   private final Optional<List<ProofAttachment>> attachments;
 
   private TransactionPayload(final Builder builder) {
-    this.chainId = builder.chainId;
+    this.networkId = builder.networkId;
     this.authority = builder.authority;
     this.creationTimeMs = builder.creationTimeMs;
     this.executable = builder.executable;
@@ -45,8 +46,9 @@ public final class TransactionPayload {
             value -> Collections.unmodifiableList(new ArrayList<>(value)));
   }
 
-  public String chainId() {
-    return chainId;
+  /** Returns the exact canonical hash identity of the transaction's network. */
+  public NetworkId networkId() {
+    return networkId;
   }
 
   public String authority() {
@@ -84,7 +86,7 @@ public final class TransactionPayload {
 
   public Builder toBuilder() {
     return builder()
-        .setChainId(chainId)
+        .setNetworkId(networkId)
         .setAuthority(authority)
         .setCreationTimeMs(creationTimeMs)
         .setExecutable(executable)
@@ -102,9 +104,7 @@ public final class TransactionPayload {
   public static final class Builder {
     private static final long MAX_U32 = 0xffff_ffffL;
     private static final long DEFAULT_TRANSACTION_TTL_MS = 100_000L;
-    private static final int MAX_CHAIN_ID_BYTES = 128;
-
-    private String chainId;
+    private NetworkId networkId;
     private String authority;
     private long creationTimeMs = System.currentTimeMillis();
     private Executable executable = Executable.ivm(new byte[0]);
@@ -114,8 +114,9 @@ public final class TransactionPayload {
     private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
     private Optional<List<ProofAttachment>> attachments = Optional.empty();
 
-    public Builder setChainId(final String chainId) {
-      this.chainId = requireCanonicalChainId(chainId);
+    /** Sets the exact canonical hash identity of the transaction's network. */
+    public Builder setNetworkId(final NetworkId networkId) {
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       return this;
     }
 
@@ -261,8 +262,8 @@ public final class TransactionPayload {
     }
 
     private TransactionPayload build(final boolean validateExecutableGas) {
-      if (chainId == null) {
-        throw new IllegalStateException("chainId must be set explicitly");
+      if (networkId == null) {
+        throw new IllegalStateException("networkId must be set explicitly");
       }
       if (authority == null) {
         throw new IllegalStateException("authority must be set explicitly");
@@ -292,35 +293,6 @@ public final class TransactionPayload {
         throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
       }
       return normalized;
-    }
-
-    private static String requireCanonicalChainId(final String value) {
-      if (value == null || value.isEmpty() || value.length() > MAX_CHAIN_ID_BYTES) {
-        throw new IllegalArgumentException(
-            "chainId must contain 1.." + MAX_CHAIN_ID_BYTES + " ASCII bytes");
-      }
-      if (!isAsciiLetterOrDigit(value.charAt(0))
-          || !isAsciiLetterOrDigit(value.charAt(value.length() - 1))) {
-        throw new IllegalArgumentException(
-            "chainId must begin and end with an ASCII alphanumeric character");
-      }
-      for (int index = 0; index < value.length(); index++) {
-        final char character = value.charAt(index);
-        if (!isAsciiLetterOrDigit(character)
-            && character != '.'
-            && character != '_'
-            && character != ':'
-            && character != '-') {
-          throw new IllegalArgumentException("chainId contains a non-canonical character");
-        }
-      }
-      return value;
-    }
-
-    private static boolean isAsciiLetterOrDigit(final char value) {
-      return (value >= 'a' && value <= 'z')
-          || (value >= 'A' && value <= 'Z')
-          || (value >= '0' && value <= '9');
     }
 
   }

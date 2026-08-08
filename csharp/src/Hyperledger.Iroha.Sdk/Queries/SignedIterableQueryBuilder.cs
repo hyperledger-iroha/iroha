@@ -23,6 +23,7 @@ public sealed class SignedIterableQueryBuilder
     private ulong? fetchSize;
     private string? sortByMetadataKey;
     private bool descendingSort;
+    private string? entrypointHashHex;
 
     public SignedIterableQueryBuilder(string authorityAccountId, string networkId)
     {
@@ -96,6 +97,19 @@ public sealed class SignedIterableQueryBuilder
         Reset();
         requestMode = RequestMode.Start;
         iterableQueryKind = ManagedIterableQueryKind.FindTransactions;
+        return this;
+    }
+
+    /// <summary>Selects the exact canonical <c>FindTransactions</c> query accepted by the
+    /// authorized transaction-details endpoint.</summary>
+    /// <remarks>The predicate binds exactly one entrypoint hash. Projection, pagination,
+    /// sorting, and continuation parameters remain at their canonical defaults.</remarks>
+    public SignedIterableQueryBuilder FindTransactionDetails(string entrypointHashHex)
+    {
+        Reset();
+        requestMode = RequestMode.Start;
+        iterableQueryKind = ManagedIterableQueryKind.FindTransactions;
+        this.entrypointHashHex = NormalizeEntrypointHash(entrypointHashHex, nameof(entrypointHashHex));
         return this;
     }
 
@@ -289,7 +303,7 @@ public sealed class SignedIterableQueryBuilder
         var payloadHash = IrohaHash.Hash(payloadBytes);
         var signatureBytes = Ed25519Signer.Sign(payloadHash, privateKeySeed);
 
-        var signedQuery = new OfflineNoritoWriter();
+        var signedQuery = new CanonicalNoritoWriter();
         signedQuery.WriteField(context.EncodeConstVec(signatureBytes));
         signedQuery.WriteField(payloadBytes);
         var signedQueryBytes = signedQuery.ToArray();
@@ -333,15 +347,41 @@ public sealed class SignedIterableQueryBuilder
         {
             throw new InvalidOperationException("Iterable start requests must select a query before signing.");
         }
+        if (entrypointHashHex is not null
+            && (limit.HasValue
+                || offset != 0
+                || fetchSize.HasValue
+                || sortByMetadataKey is not null
+                || descendingSort))
+        {
+            throw new InvalidOperationException(
+                "Transaction-details queries require canonical default query parameters.");
+        }
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(Array.Empty<byte>());
         writer.WriteField(EncodeByteVector(EncodeIterableQueryPayload(context)));
         writer.WriteField(EncodeFieldlessEnumVariant(GetQueryItemKindDiscriminant(iterableQueryKind.Value)));
-        writer.WriteField(EncodeByteVector(EncodeFieldlessEnumVariant(0)));
+        writer.WriteField(EncodeByteVector(EncodePredicate()));
         writer.WriteField(EncodeByteVector(Array.Empty<byte>()));
         writer.WriteField(EncodeQueryParams(context));
         return writer.ToArray();
+    }
+
+    private byte[] EncodePredicate()
+    {
+        if (entrypointHashHex is null)
+        {
+            return EncodeFieldlessEnumVariant(0);
+        }
+
+        // CompoundPredicateWire::TxPredicate(CommittedTxPredicate::EntryEq(hash)).
+        const uint compoundTransactionPredicateDiscriminant = 2;
+        const uint entrypointEqualsDiscriminant = 21;
+        var entrypointEquals = EncodeEnumVariant(
+            entrypointEqualsDiscriminant,
+            Convert.FromHexString(entrypointHashHex));
+        return EncodeEnumVariant(compoundTransactionPredicateDiscriminant, entrypointEquals);
     }
 
     private byte[] EncodeIterableQueryPayload(TransactionEncodingContext context)
@@ -376,7 +416,7 @@ public sealed class SignedIterableQueryBuilder
 
     private byte[] EncodeQueryParams(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(EncodePagination(context));
         writer.WriteField(EncodeSorting(context));
         writer.WriteField(EncodeFetchSize(context));
@@ -385,7 +425,7 @@ public sealed class SignedIterableQueryBuilder
 
     private byte[] EncodePagination(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeOption(limit, context.EncodeUInt64));
         writer.WriteField(context.EncodeUInt64(offset));
         return writer.ToArray();
@@ -393,7 +433,7 @@ public sealed class SignedIterableQueryBuilder
 
     private byte[] EncodeSorting(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeOptionalString(sortByMetadataKey));
         writer.WriteField(sortByMetadataKey is null || !descendingSort
             ? new byte[] { 0 }
@@ -403,14 +443,14 @@ public sealed class SignedIterableQueryBuilder
 
     private byte[] EncodeFetchSize(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeOption(fetchSize, context.EncodeUInt64));
         return writer.ToArray();
     }
 
     private byte[] EncodeForwardCursor(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeString(RequireSelected(continueQueryId, nameof(continueQueryId))));
         writer.WriteField(context.EncodeUInt64(continueCursor));
         writer.WriteField(context.EncodeOption(continueGasBudget, context.EncodeUInt64));
@@ -436,6 +476,22 @@ public sealed class SignedIterableQueryBuilder
         fetchSize = null;
         sortByMetadataKey = null;
         descendingSort = false;
+        entrypointHashHex = null;
+    }
+
+    private static string NormalizeEntrypointHash(string value, string paramName)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
+        if (value.Length != 64 || value.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')))
+        {
+            throw new ArgumentException(
+                "Entrypoint hash must be an exact lowercase 32-byte hexadecimal string.",
+                paramName);
+        }
+        return value;
     }
 
     private static string NormalizeRequiredValue(string value, string paramName)
@@ -472,7 +528,7 @@ public sealed class SignedIterableQueryBuilder
 
     private static byte[] EncodeSingleFieldStruct(byte[] field)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(field);
         return writer.ToArray();
     }
@@ -484,7 +540,7 @@ public sealed class SignedIterableQueryBuilder
 
     private static byte[] EncodeEnumVariant(uint discriminant, params byte[][] fields)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteUInt32LittleEndian(discriminant);
         foreach (var field in fields)
         {
@@ -496,8 +552,8 @@ public sealed class SignedIterableQueryBuilder
 
     private static byte[] EncodeByteVector(ReadOnlySpan<byte> bytes)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteLength((ulong)bytes.Length);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength((ulong)bytes.Length);
         writer.WriteBytes(bytes);
         return writer.ToArray();
     }

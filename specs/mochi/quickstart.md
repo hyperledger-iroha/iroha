@@ -155,15 +155,20 @@ manual tweaks alongside MOCHI-managed values.
 The **Maintenance** controls expose the reset flows you use when iterating on a local network:
 
 - **Export snapshot** — copies peer storage/config/logs and the current genesis manifest into
-  `snapshots/<label>` under the active data root. Labels are sanitized automatically.
-- **Restore snapshot** — rehydrates integrity-checked peer storage (including snapshot roots), configs, logs, and the genesis
-  manifest from an existing bundle. `Supervisor::restore_snapshot` accepts either an absolute path or
-  the sanitised `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore
-  can replay evidence bundles without touching files manually.
+  `snapshots/<label>` under the active data root and binds it to the selected immutable generation.
+  Labels are sanitized automatically.
+- **Restore snapshot** — verifies the selected generation plus the snapshot's config/genesis audit
+  copies, then rehydrates only integrity-checked peer storage (including snapshot roots) and logs.
+  It refuses snapshots from another generation and never overwrites published config or genesis
+  artifacts. `Supervisor::restore_snapshot` accepts either an absolute path or the sanitised
+  `snapshots/<label>` folder name; the UI mirrors this flow so Maintenance → Restore can replay
+  evidence bundles without touching files manually.
 - **Reset lane** — submits a signed retire/add lifecycle replacement for a configured Nexus lane;
   Kura owns the authenticated storage-incarnation transition.
-- **Wipe & re-genesis** — stops running peers, removes storage directories, regenerates genesis via
-  Kagami, and restarts peers when the wipe completes.
+- **Wipe & re-genesis** — prepares and validates a complete immutable config/genesis generation and
+  fresh generation-scoped storage while the current network remains usable, then briefly stops the
+  peers, atomically selects the new generation, and restarts them. Pre-commit failures preserve the
+  prior selection and storage; published generations remain available for audit.
 
 Both flows are covered by regression tests (`export_snapshot_captures_storage_and_metadata`,
 `wipe_and_regenerate_resets_storage_and_genesis`) to guarantee deterministic outputs.

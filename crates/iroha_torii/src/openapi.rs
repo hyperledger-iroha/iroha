@@ -2782,7 +2782,7 @@ fn transaction_paths() -> Map {
     let mut pipeline_status = json_get_operation(
         "Transactions",
         "Fetch pipeline transaction status.",
-        "Return the latest typed pipeline status for a signed transaction hash. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
+        "Return only non-sensitive status metadata for a signed transaction hash. Rejection diagnostics, trigger completions, transaction identities, instructions, amounts, and batch outcomes are deliberately excluded. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
         "#/components/schemas/PipelineTransactionStatusResponse",
         vec![
             required_string_query_param("hash", "Transaction hash (hex)."),
@@ -2813,8 +2813,19 @@ fn transaction_paths() -> Map {
         }
     }
     paths.insert(
-        "/v1/pipeline/transactions/status".to_owned(),
+        uri::TRANSACTION_STATUS.to_owned(),
         Value::Object(pipeline_status),
+    );
+    paths.insert(
+        uri::TRANSACTION_DETAILS.to_owned(),
+        Value::Object(versioned_dual_format_post_operation(
+            "Transactions",
+            "Fetch authorized transaction details.",
+            "Submit a canonical one-shot SignedQuery containing FindTransactions with exactly one entrypoint_hash equality predicate and default selector/parameters. Torii verifies the exact NetworkId, freshness, signature, and nonce before ledger access, then permits only the transaction authority, a batch source/destination account, or an operator carrying CanReadAllLedgerData.",
+            "#/components/schemas/VersionedSignedQueryJson",
+            "#/components/schemas/PipelineTransactionDetailsResponse",
+            200,
+        )),
     );
     paths.insert(
         "/v1/transactions/history".to_owned(),
@@ -3813,14 +3824,21 @@ fn zk_paths() -> Map {
     );
     paths.insert(
         "/v1/zk/ivm/prove".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Prove IVM execution (job).",
-            "Execute and prove ZK-mode IVM bytecode asynchronously. POST returns only a job identifier; canonical proved and compact proof attachment material are available from the terminal GET state.",
-            "#/components/schemas/ZkIvmProveRequest",
-            "#/components/schemas/ZkIvmProveJobCreated",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_post_operation(
+                "ZK",
+                "Prove IVM execution (job).",
+                "Authenticate the request authority, then execute and prove ZK-mode IVM bytecode asynchronously under owner-scoped count and byte quotas. POST returns only an owner-bound job identifier; canonical proved and compact proof attachment material are available only to that owner from the terminal GET state.",
+                "#/components/schemas/ZkIvmProveRequest",
+                "#/components/schemas/ZkIvmProveJobCreated",
+                canonical_request_auth_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("post") {
+                insert_canonical_request_auth_contract(operation);
+                insert_private_no_store_response_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         "/v1/zk/ivm/prove/{job_id}".to_owned(),
@@ -3828,24 +3846,32 @@ fn zk_paths() -> Map {
             let get_op = json_get_operation(
                 "ZK",
                 "Fetch an IVM prove job.",
-                "Fetch one state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64.",
+                "Fetch one owner-isolated state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64. Missing and foreign jobs share the same response.",
                 "#/components/schemas/ZkIvmProveJob",
-                vec![patterned_string_path_param(
-                    "job_id",
-                    "Proof generation job identifier.",
-                    "^[0-9a-f]{32}$",
-                )],
+                {
+                    let mut parameters = vec![patterned_string_path_param(
+                        "job_id",
+                        "Proof generation job identifier.",
+                        "^[0-9a-f]{32}$",
+                    )];
+                    parameters.extend(canonical_request_auth_header_parameters());
+                    parameters
+                },
             );
             let delete_op = json_delete_operation(
                 "ZK",
                 "Delete an IVM prove job.",
-                "Cancel and delete an IVM proof generation job entry. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
+                "Cancel and delete an IVM proof generation job owned by the authenticated account. Missing and foreign jobs share the same response. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
                 "#/components/schemas/ZkIvmProveJobCreated",
-                vec![patterned_string_path_param(
-                    "job_id",
-                    "Proof generation job identifier.",
-                    "^[0-9a-f]{32}$",
-                )],
+                {
+                    let mut parameters = vec![patterned_string_path_param(
+                        "job_id",
+                        "Proof generation job identifier.",
+                        "^[0-9a-f]{32}$",
+                    )];
+                    parameters.extend(canonical_request_auth_header_parameters());
+                    parameters
+                },
             );
             let mut methods = Map::new();
             if let Some(get_value) = get_op.get("get") {
@@ -3853,6 +3879,12 @@ fn zk_paths() -> Map {
             }
             if let Some(delete_value) = delete_op.get("delete") {
                 methods.insert("delete".to_owned(), delete_value.clone());
+            }
+            for method in ["get", "delete"] {
+                if let Some(Value::Object(operation)) = methods.get_mut(method) {
+                    insert_canonical_request_auth_contract(operation);
+                    insert_private_no_store_response_contract(operation);
+                }
             }
             methods
         }),
@@ -4617,8 +4649,8 @@ fn runtime_paths() -> Map {
         Value::Object(json_get_operation(
             "Runtime",
             "Fetch committed privacy capabilities.",
-            "Return the exact closed privacy protocol registry, locally compiled profiles, governed activations, and singleton consensus policy from one authoritative committed state view.",
-            "#/components/schemas/PrivacyCapabilitySnapshotV1",
+            "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, governed activation state, explicit readiness and limitations, and singleton consensus policy from one authoritative committed state view.",
+            "#/components/schemas/PrivacyExact12CapabilityManifestV1",
             Vec::new(),
         )),
     );
@@ -8234,10 +8266,45 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/pin".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Fetch pin registry.",
-            "Fetch the SoraFS pin registry.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Fetch a finalized pin-manifest page.",
+            "Return `PinManifestPageV1`: bounded summaries in canonical digest order, an exclusive keyset cursor, O(1) consensus-maintained live count/byte totals, and the finalized height/hash shared by every page. `limit` and `max_bytes` are hard ceilings; `after_digest_hex` is exclusive. A supplied finalized anchor must contain both fields and returns 409 when stale. Offset pagination, full-record materialization, alias proofs, and lineage expansion are retired; use the bounded detail route for one exact manifest.",
+            "#/components/schemas/PinManifestPageV1",
+            vec![
+                bounded_integer_query_param(
+                    "expected_finalized_height",
+                    "Optional non-zero finalized block height. Must be supplied together with expected_finalized_block_hash_hex.",
+                    Some("uint64"),
+                    1,
+                    None,
+                ),
+                canonical_nonzero_digest_query_param(
+                    "expected_finalized_block_hash_hex",
+                    "Optional canonical lowercase finalized block hash. Must be supplied together with expected_finalized_height.",
+                ),
+                bounded_integer_query_param(
+                    "limit",
+                    "Optional summary count (default 50, hard maximum 256).",
+                    Some("uint32"),
+                    1,
+                    Some(256),
+                ),
+                bounded_integer_query_param(
+                    "max_bytes",
+                    "Optional canonical encoded page-byte ceiling (default 262144).",
+                    Some("uint32"),
+                    1024,
+                    Some(262_144),
+                ),
+                canonical_nonzero_digest_query_param(
+                    "after_digest_hex",
+                    "Optional exclusive canonical lowercase manifest-digest cursor.",
+                ),
+                enum_string_query_param(
+                    "status",
+                    "Optional exact lowercase lifecycle filter backed by the authenticated status index.",
+                    &["pending", "approved", "retired"],
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -10571,7 +10638,7 @@ fn reputation_get_operation(
         json_get_operation("SoraFS", summary, description, response_schema_ref, params);
     if let Some(Value::Object(operation)) = methods.get_mut("get") {
         operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
-        insert_reputation_auth_contract(operation);
+        insert_canonical_request_auth_contract(operation);
         insert_reputation_query_contract(operation, allowed_query_parameters);
         if let Some(Value::Object(responses)) = operation.get_mut("responses") {
             if let Some(Value::Object(ok)) = responses.get_mut("200") {
@@ -10593,7 +10660,7 @@ fn reputation_get_operation(
     methods
 }
 
-fn insert_reputation_auth_contract(operation: &mut Map) {
+fn insert_canonical_request_auth_contract(operation: &mut Map) {
     operation.insert(
         "security".into(),
         norito::json!([
@@ -10639,6 +10706,20 @@ fn insert_reputation_auth_contract(operation: &mut Map) {
     );
 }
 
+fn insert_private_no_store_response_contract(operation: &mut Map) {
+    let Some(Value::Object(responses)) = operation.get_mut("responses") else {
+        return;
+    };
+    for response in responses.values_mut() {
+        if let Value::Object(response) = response {
+            response.insert(
+                "headers".into(),
+                Value::Object(private_no_store_response_headers()),
+            );
+        }
+    }
+}
+
 fn reputation_cache_response_headers() -> Map {
     let mut headers = Map::new();
     headers.insert(
@@ -10679,12 +10760,12 @@ fn reputation_cache_response_headers() -> Map {
     headers
 }
 
-fn reputation_private_no_store_response_headers() -> Map {
+fn private_no_store_response_headers() -> Map {
     let mut headers = Map::new();
     headers.insert(
         "Cache-Control".into(),
         norito::json!({
-            "description": "Authenticated reputation responses which must never be retained.",
+            "description": "Authenticated responses which must never be retained.",
             "required": true,
             "schema": {
                 "type": "string",
@@ -10779,7 +10860,7 @@ fn reputation_error_response(description: &str) -> Value {
     json_response_with_headers(
         description,
         schema_ref("SorafsReputationApiErrorV1"),
-        reputation_private_no_store_response_headers(),
+        private_no_store_response_headers(),
     )
 }
 
@@ -10794,7 +10875,7 @@ fn reputation_auth_required_response() -> Value {
     );
     response.insert(
         "headers".into(),
-        Value::Object(reputation_private_no_store_response_headers()),
+        Value::Object(private_no_store_response_headers()),
     );
     Value::Object(response)
 }
@@ -10904,7 +10985,7 @@ fn reputation_sse_operation() -> Map {
         "parameters".into(),
         Value::Array(reputation_stream_parameters()),
     );
-    insert_reputation_auth_contract(&mut operation);
+    insert_canonical_request_auth_contract(&mut operation);
     insert_reputation_query_contract(&mut operation, &["since", "limit"]);
     operation.insert(
         "x-iroha-forbidden-request-headers-v1".into(),
@@ -10915,7 +10996,7 @@ fn reputation_sse_operation() -> Map {
         "200".into(),
         norito::json!({
             "description": "Authenticated server-sent committed reputation event stream.",
-            "headers": (reputation_private_no_store_response_headers()),
+            "headers": (private_no_store_response_headers()),
             "content": {
                 "text/event-stream": {
                     "schema": {
@@ -10965,7 +11046,7 @@ fn reputation_websocket_operation() -> Map {
         "parameters".into(),
         Value::Array(reputation_stream_parameters()),
     );
-    insert_reputation_auth_contract(&mut operation);
+    insert_canonical_request_auth_contract(&mut operation);
     insert_reputation_query_contract(&mut operation, &["since", "limit"]);
     operation.insert(
         "x-iroha-websocket-text-frame-schema".into(),
@@ -10976,7 +11057,7 @@ fn reputation_websocket_operation() -> Map {
         "101".into(),
         norito::json!({
             "description": "Authenticated WebSocket upgrade accepted.",
-            "headers": (reputation_private_no_store_response_headers())
+            "headers": (private_no_store_response_headers())
         }),
     );
     insert_reputation_error_responses(&mut responses);
@@ -11473,7 +11554,7 @@ fn sorafs_pin_register_operation() -> Map {
     let mut methods = versioned_dual_format_post_operation(
         "SoraFS",
         "Register paid pin manifest.",
-        "Submit a caller-signed, versioned `SignedTransaction` containing exactly one native `RegisterPinManifest` instruction. The transaction signature binds the authority, canonical manifest bytes, submitted epoch, alias, predecessor digest, and fee intent. Torii validates the signature and instruction shape, queues the original transaction unchanged, and returns HTTP 202 with `status = submitted`, its admission hash, and the submitted manifest digest. Submitted never means committed or finalized. The response is not a finality, fee, custody, or pin-status receipt; Torii never accepts or handles a private key.",
+        "Submit a caller-signed, versioned `SignedTransaction` containing exactly one native `RegisterPinManifest` instruction. The transaction signature binds the authority, canonical manifest bytes, alias, predecessor digest, and fee intent; Core derives the recorded submission epoch exclusively from consensus block time. Torii validates the signature and instruction shape, queues the original transaction unchanged, and returns HTTP 202 with `status = submitted`, its admission hash, and the submitted manifest digest. Submitted never means committed or finalized. The response is not a finality, fee, custody, or pin-status receipt; Torii never accepts or handles a private key.",
         "#/components/schemas/VersionedSignedTransactionJson",
         "#/components/schemas/SorafsPinRegisterResponseV1",
         202,
@@ -14914,14 +14995,14 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             norito::json!({
                 "type": "object",
                 "required": [
-                    "context_id", "chain_id", "protocol_version", "height", "epoch",
+                    "context_id", "network_id", "protocol_version", "height", "epoch",
                     "epoch_end_height", "mode", "nexus_amx_context_hash",
                     "execution_policy_hash", "da_layout", "leader_seed"
                 ],
                 "additionalProperties": false,
                 "properties": {
                     "context_id": { "$ref": "#/components/schemas/SumeragiV2HeightContextId" },
-                    "chain_id": { "type": "string", "minLength": 1 },
+                    "network_id": { "$ref": "#/components/schemas/Hash" },
                     "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                     "height": { "type": "integer", "format": "uint64", "minimum": 1 },
                     "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -16315,11 +16396,11 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
         "SccpSoraSettlementV1".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["asset_definition_id", "custody_account_id", "payload_amount_scale"],
+            "required": ["asset_definition_id", "custody_owner", "payload_amount_scale"],
             "additionalProperties": false,
             "properties": {
                 "asset_definition_id": { "const": "6TEAJqbb8oEPmLncoNiMRbLEK6tw" },
-                "custody_account_id": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "custody_owner": { "$ref": "#/components/schemas/SccpTairaI105Account" },
                 "payload_amount_scale": { "type": "integer", "enum": [9] }
             }
         }),
@@ -17962,13 +18043,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "chain_id", "protocol_version", "height", "epoch", "epoch_end_height",
+                "network_id", "protocol_version", "height", "epoch", "epoch_end_height",
                 "mode", "roster", "quorum", "nexus_amx_context_hash",
                 "execution_policy_hash", "da_layout", "leader_seed"
             ],
             "additionalProperties": false,
             "properties": {
-                "chain_id": { "type": "string", "minLength": 1 },
+                "network_id": { "$ref": "#/components/schemas/Hash" },
                 "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                 "height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
@@ -18131,14 +18212,14 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "version", "challenge", "chain_id", "node_id", "node_fingerprint",
+                "version", "challenge", "network_id", "node_id", "node_fingerprint",
                 "genesis_block_hash", "genesis_finality_proof", "status", "finality_proof"
             ],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint8", "enum": [1] },
                 "challenge": { "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray" },
-                "chain_id": { "type": "string", "minLength": 1 },
+                "network_id": { "$ref": "#/components/schemas/Hash" },
                 "node_id": {
                     "type": "string",
                     "description": "Canonical PeerId of the BLS node key which signed this attestation."
@@ -18175,10 +18256,10 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "BridgeCommitment".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["chain_id", "height_context_id", "block_height", "block_hash"],
+            "required": ["network_id", "height_context_id", "block_height", "block_hash"],
             "additionalProperties": false,
             "properties": {
-                "chain_id": { "type": "string", "minLength": 1 },
+                "network_id": { "$ref": "#/components/schemas/Hash" },
                 "height_context_id": {
                     "$ref": "#/components/schemas/SumeragiV2HeightContextId"
                 },
@@ -20444,6 +20525,100 @@ fn insert_sorafs_pin_manifest_readback_schemas(schemas: &mut Map) {
                 "manifest": { "$ref": "#/components/schemas/PinManifestRecord" }
             },
             "description": "Exact native Norito JSON response for one chain-authoritative pin manifest at one finalized block."
+        }),
+    );
+    schemas.insert(
+        "PinResourceUsage".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["manifest_count", "content_bytes"],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "content_bytes": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                }
+            },
+            "description": "Consensus-maintained O(1) count and content-byte totals for currently charged pin manifests."
+        }),
+    );
+    schemas.insert(
+        "PinManifestSummaryV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "digest",
+                "submitted_by",
+                "submitted_epoch",
+                "content_length",
+                "retention_epoch",
+                "status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "digest": { "$ref": "#/components/schemas/ManifestDigest" },
+                "submitted_by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 account identifier charged for this manifest."
+                },
+                "submitted_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "content_length": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "retention_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "status": { "$ref": "#/components/schemas/PinStatus" },
+                "successor_of": { "$ref": "#/components/schemas/ManifestDigest" }
+            },
+            "description": "Bounded list projection excluding metadata, alias proofs, council envelopes, fee details, and lineage expansion."
+        }),
+    );
+    schemas.insert(
+        "PinManifestPageV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "finalized_cursor",
+                "charged_usage",
+                "manifests",
+                "has_more"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "finalized_cursor": {
+                    "$ref": "#/components/schemas/PinManifestFinalizedCursorV1"
+                },
+                "charged_usage": { "$ref": "#/components/schemas/PinResourceUsage" },
+                "manifests": {
+                    "type": "array",
+                    "maxItems": 256,
+                    "items": { "$ref": "#/components/schemas/PinManifestSummaryV1" }
+                },
+                "has_more": { "type": "boolean" },
+                "next_after_digest": { "$ref": "#/components/schemas/ManifestDigest" }
+            },
+            "description": "Finalized exclusive-keyset page whose canonical Norito encoding is additionally bounded to 262144 bytes."
         }),
     );
 }
@@ -27800,10 +27975,6 @@ fn openapi_schemas() -> Map {
                     "format": "uint64",
                     "description": "Block height reported for the status when available."
                 },
-                "rejection_reason": {
-                    "$ref": "#/components/schemas/JsonValue",
-                    "description": "Structured rejection reason when `kind` is `Rejected`."
-                }
             }
         }),
     );
@@ -27830,6 +28001,28 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "enum": ["cache", "queue", "state"],
                     "description": "Source used by Torii to resolve the status."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PipelineTransactionDetailsResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["hash", "transaction", "trigger_completions"],
+            "additionalProperties": false,
+            "properties": {
+                "hash": {
+                    "type": "string",
+                    "description": "Canonical signed transaction hash (hex, lowercase)."
+                },
+                "transaction": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact committed transaction with authenticated entrypoint, result, and durable batch receipts."
+                },
+                "trigger_completions": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/JsonValue" }
                 }
             }
         }),
@@ -28151,7 +28344,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "body": {
                     "$ref": "#/components/schemas/JsonValue",
-                    "description": "Canonical versioned plan body containing the authority, chain, block anchor, ordered resources and frames, exact totals, diagnostics, and expiry."
+                    "description": "Canonical versioned plan body containing the authority, exact genesis-derived NetworkId, block anchor, ordered resources and frames, exact totals, diagnostics, and expiry. Legacy chain_id fields are rejected."
                 },
                 "plan_hash": {
                     "type": "string",
@@ -28199,7 +28392,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "body": {
                     "$ref": "#/components/schemas/JsonValue",
-                    "description": "Canonical versioned lifecycle plan body containing the authority, chain, block anchor, exact operation, disposition, optional frame/quote, totals, diagnostics, and expiry."
+                    "description": "Canonical versioned lifecycle plan body containing the authority, exact genesis-derived NetworkId, block anchor, exact operation, disposition, optional frame/quote, totals, diagnostics, and expiry. Legacy chain_id fields are rejected."
                 },
                 "plan_hash": {
                     "type": "string",
@@ -29474,10 +29667,14 @@ fn openapi_schemas() -> Map {
         "FeeSponsorProgram".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["id", "lifecycle"],
+            "required": ["id", "payout_account", "lifecycle"],
             "additionalProperties": false,
             "properties": {
                 "id": {"$ref": "#/components/schemas/FeeSponsorProgramId"},
+                "payout_account": {
+                    "type": "string",
+                    "description": "Immutable registered bare I105 account receiving vault withdrawals."
+                },
                 "lifecycle": {
                     "type": "object",
                     "required": ["state", "value"],
@@ -32978,12 +33175,12 @@ fn axt_error_details_schema() -> Value {
                 "minimum": 0,
                 "description": "Lane id involved in the rejection."
             },
-            "next_min_handle_era": {
+            "active_handle_era": {
                 "type": "integer",
                 "minimum": 0,
                 "description": "Minimum handle era a client should use for retry."
             },
-            "next_min_sub_nonce": {
+            "next_handle_counter": {
                 "type": "integer",
                 "minimum": 0,
                 "description": "Minimum sub-nonce a client should use for retry."
@@ -33253,6 +33450,35 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         "native-fcmp-plus-plus",
         "native-lantern-lnp22",
     ];
+    const OPERATION_SCHEMA_LABELS: [&str; 12] = [
+        "zk_ace_authorization_action_v1",
+        "anonymous_pgc_payment_action_v1",
+        "verange_range_proof_v1",
+        "zk_ams_admission_and_provisioning_v1",
+        "vega_credential_presentation_v1",
+        "zk_x509_identity_presentation_v1",
+        "jindo_polynomial_evaluation_v1",
+        "bootle_lantern_credential_presentation_v1",
+        "orchard_note_action_v1",
+        "fcmp_membership_payment_v1",
+        "ivm_private_note_action_v1",
+        "pq_masp_note_action_v1",
+    ];
+    const EXECUTION_MODE_LABELS: [&str; 12] = [
+        "authorization_action",
+        "payment_action",
+        "component",
+        "admission_action",
+        "presentation_action",
+        "presentation_action",
+        "component",
+        "presentation_action",
+        "note_action",
+        "payment_action",
+        "note_action",
+        "note_action",
+    ];
+    const PRIVACY_FEATURE_MASKS: [u8; 12] = [0, 6, 1, 2, 2, 2, 0, 2, 7, 2, 7, 31];
 
     schemas.insert(
         "PrivacyProtocolIdV1".to_owned(),
@@ -33684,17 +33910,113 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
-        "PrivacyCapabilityRowV1".to_owned(),
+        "PrivacyOperationSchemaV1".to_owned(),
+        privacy_closed_tagged_unit_schema("operation_schema", "value", &OPERATION_SCHEMA_LABELS),
+    );
+    schemas.insert(
+        "PrivacyExecutionModeV1".to_owned(),
+        privacy_closed_tagged_unit_schema(
+            "execution_mode",
+            "value",
+            &[
+                "authorization_action",
+                "payment_action",
+                "component",
+                "admission_action",
+                "presentation_action",
+                "note_action",
+            ],
+        ),
+    );
+    schemas.insert(
+        "PrivacyFeatureMaskV1".to_owned(),
+        norito::json!({
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 31,
+            "description": "Exact feature bits: hidden amount=1, sender=2, receiver=4, asset type=8, post-quantum=16."
+        }),
+    );
+    let readiness_variants = vec![
+        privacy_tagged_variant_schema(
+            "readiness",
+            "available",
+            "detail",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "readiness",
+            "available-experimental",
+            "detail",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "readiness",
+            "unavailable",
+            "detail",
+            privacy_schema_ref("PrivacyCompiledProfileUnavailableReasonV1"),
+        ),
+    ];
+    schemas.insert(
+        "PrivacyCapabilityReadinessV1".to_owned(),
+        norito::json!({ "oneOf": (readiness_variants) }),
+    );
+    schemas.insert(
+        "PrivacyCapabilityActivationStateV1".to_owned(),
+        privacy_closed_tagged_unit_schema(
+            "activation_state",
+            "detail",
+            &[
+                "not-registered",
+                "proposed",
+                "active",
+                "suspended",
+                "retired",
+            ],
+        ),
+    );
+    schemas.insert(
+        "PrivacyCapabilityLimitationV1".to_owned(),
+        privacy_closed_tagged_unit_schema(
+            "limitation",
+            "detail",
+            &["missing-distribution-wide-knowledge-soundness-evidence"],
+        ),
+    );
+    schemas.insert(
+        "PrivacyExact12CapabilityRowV1".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["protocol_id", "compiled_profile", "activation"],
+            "required": [
+                "protocol_id",
+                "operation_schema",
+                "execution_mode",
+                "privacy_feature_mask",
+                "compiled_profile",
+                "readiness",
+                "activation_state",
+                "activation",
+                "limitation"
+            ],
             "properties": {
                 "protocol_id": { "$ref": "#/components/schemas/PrivacyProtocolIdV1" },
+                "operation_schema": { "$ref": "#/components/schemas/PrivacyOperationSchemaV1" },
+                "execution_mode": { "$ref": "#/components/schemas/PrivacyExecutionModeV1" },
+                "privacy_feature_mask": { "$ref": "#/components/schemas/PrivacyFeatureMaskV1" },
                 "compiled_profile": { "$ref": "#/components/schemas/PrivacyCompiledProfileResultV1" },
+                "readiness": { "$ref": "#/components/schemas/PrivacyCapabilityReadinessV1" },
+                "activation_state": { "$ref": "#/components/schemas/PrivacyCapabilityActivationStateV1" },
                 "activation": {
                     "oneOf": [
                         { "$ref": "#/components/schemas/PrivacyProtocolActivationRecordV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "limitation": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/PrivacyCapabilityLimitationV1" },
                         { "type": "null" }
                     ]
                 }
@@ -33704,14 +34026,48 @@ fn privacy_capability_schemas(schemas: &mut Map) {
 
     let ordered_protocol_rows = PROTOCOL_LABELS
         .into_iter()
-        .map(|label| {
+        .enumerate()
+        .map(|(index, label)| {
+            let operation_schema = privacy_tagged_variant_schema(
+                "operation_schema",
+                OPERATION_SCHEMA_LABELS[index],
+                "value",
+                norito::json!({ "type": "null" }),
+            );
+            let execution_mode = privacy_tagged_variant_schema(
+                "execution_mode",
+                EXECUTION_MODE_LABELS[index],
+                "value",
+                norito::json!({ "type": "null" }),
+            );
+            let limitation = if index == 6 {
+                privacy_tagged_variant_schema(
+                    "limitation",
+                    "missing-distribution-wide-knowledge-soundness-evidence",
+                    "detail",
+                    norito::json!({ "type": "null" }),
+                )
+            } else {
+                norito::json!({ "type": "null" })
+            };
             norito::json!({
                 "allOf": [
-                    { "$ref": "#/components/schemas/PrivacyCapabilityRowV1" },
+                    { "$ref": "#/components/schemas/PrivacyExact12CapabilityRowV1" },
                     {
                         "type": "object",
+                        "required": [
+                            "protocol_id",
+                            "operation_schema",
+                            "execution_mode",
+                            "privacy_feature_mask",
+                            "limitation"
+                        ],
                         "properties": {
-                            "protocol_id": (privacy_protocol_id_const_schema(label))
+                            "protocol_id": (privacy_protocol_id_const_schema(label)),
+                            "operation_schema": (operation_schema),
+                            "execution_mode": (execution_mode),
+                            "privacy_feature_mask": { "const": (PRIVACY_FEATURE_MASKS[index]) },
+                            "limitation": (limitation)
                         }
                     }
                 ]
@@ -33719,11 +34075,17 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         })
         .collect::<Vec<_>>();
     schemas.insert(
-        "PrivacyCapabilitySnapshotV1".to_owned(),
+        "PrivacyExact12CapabilityManifestV1".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["version", "committed_height", "consensus_policy", "protocols"],
+            "required": [
+                "version",
+                "committed_height",
+                "consensus_policy",
+                "protocols",
+                "manifest_digest"
+            ],
             "properties": {
                 "version": { "type": "integer", "format": "uint32", "const": 1 },
                 "committed_height": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -33734,7 +34096,8 @@ fn privacy_capability_schemas(schemas: &mut Map) {
                     "maxItems": 12,
                     "prefixItems": (ordered_protocol_rows),
                     "items": false
-                }
+                },
+                "manifest_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" }
             }
         }),
     );
@@ -35244,6 +35607,87 @@ mod tests {
                     description.contains("listener-wide API-token enforcement is disabled")
                         && description.contains("client label is diagnostic")
                 })
+        );
+    }
+
+    #[test]
+    fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
+        const PATH: &str = "/v1/sorafs/pin";
+        let document = generate_spec();
+        let operation = openapi_operation(&document, PATH, "get");
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", PATH),
+            "#/components/schemas/PinManifestPageV1"
+        );
+        let description = operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("pin-list operation description");
+        assert!(
+            description.contains("exclusive keyset cursor")
+                && description.contains("O(1) consensus-maintained")
+                && description.contains("Offset pagination")
+                && description.contains("bounded detail route"),
+            "pin-list operation must document the finalized bounded hard cut"
+        );
+
+        let parameters = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("pin-list parameters");
+        assert_eq!(
+            parameters
+                .iter()
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "after_digest_hex",
+                "expected_finalized_block_hash_hex",
+                "expected_finalized_height",
+                "limit",
+                "max_bytes",
+                "status",
+            ])
+        );
+        assert!(
+            parameters
+                .iter()
+                .all(|parameter| parameter.get("name").and_then(Value::as_str) != Some("offset"))
+        );
+
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "PinManifestPageV1",
+            &["finalized_cursor", "charged_usage", "manifests", "has_more"],
+            &["next_after_digest"],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PinManifestSummaryV1",
+            &[
+                "digest",
+                "submitted_by",
+                "submitted_epoch",
+                "content_length",
+                "retention_epoch",
+                "status",
+            ],
+            &["successor_of"],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PinResourceUsage",
+            &["manifest_count", "content_bytes"],
+            &[],
+        );
+        assert_eq!(
+            property_ref(schemas, "PinManifestPageV1", "finalized_cursor"),
+            "#/components/schemas/PinManifestFinalizedCursorV1"
+        );
+        assert_eq!(
+            property_ref(schemas, "PinManifestPageV1", "charged_usage"),
+            "#/components/schemas/PinResourceUsage"
         );
     }
 
@@ -41458,7 +41902,7 @@ mod tests {
             component_required(schemas, "OfflineTopUpFinalityHeightContext"),
             [
                 "context_id",
-                "chain_id",
+                "network_id",
                 "protocol_version",
                 "height",
                 "epoch",
@@ -44832,7 +45276,7 @@ mod tests {
             &schemas,
             "SumeragiV2HeightContext",
             &[
-                "chain_id",
+                "network_id",
                 "protocol_version",
                 "height",
                 "epoch",
@@ -44846,7 +45290,7 @@ mod tests {
                 "leader_seed",
             ],
             &[
-                "chain_id",
+                "network_id",
                 "protocol_version",
                 "height",
                 "epoch",
@@ -44973,15 +45417,41 @@ mod tests {
         );
         assert_closed_shape(
             &schemas,
+            "BridgeFinalityAttestationBodyV1",
+            &[
+                "version",
+                "challenge",
+                "network_id",
+                "node_id",
+                "node_fingerprint",
+                "genesis_block_hash",
+                "genesis_finality_proof",
+                "status",
+                "finality_proof",
+            ],
+            &[
+                "version",
+                "challenge",
+                "network_id",
+                "node_id",
+                "node_fingerprint",
+                "genesis_block_hash",
+                "genesis_finality_proof",
+                "status",
+                "finality_proof",
+            ],
+        );
+        assert_closed_shape(
+            &schemas,
             "BridgeCommitment",
             &[
-                "chain_id",
+                "network_id",
                 "height_context_id",
                 "block_height",
                 "block_hash",
             ],
             &[
-                "chain_id",
+                "network_id",
                 "height_context_id",
                 "block_height",
                 "block_hash",
@@ -48117,15 +48587,34 @@ mod tests {
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str);
         assert_eq!(request_ref, Some("#/components/schemas/ZkIvmProveRequest"));
+        assert!(prove_post.get("security").is_some(), "prove POST auth");
+        assert_eq!(
+            prove_post
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("headers"))
+                .and_then(Value::as_object)
+                .and_then(|headers| headers.get("Cache-Control"))
+                .and_then(Value::as_object)
+                .and_then(|header| header.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("private, no-store")
+        );
         let job_path = paths
             .get("/v1/zk/ivm/prove/{job_id}")
             .and_then(Value::as_object)
             .expect("prove job path");
         for method in ["get", "delete"] {
-            let pattern = job_path
+            let operation = job_path
                 .get(method)
                 .and_then(Value::as_object)
-                .and_then(|operation| operation.get("parameters"))
+                .expect("prove job operation");
+            let pattern = operation
+                .get("parameters")
                 .and_then(Value::as_array)
                 .and_then(|parameters| parameters.first())
                 .and_then(Value::as_object)
@@ -48134,6 +48623,24 @@ mod tests {
                 .and_then(|schema| schema.get("pattern"))
                 .and_then(Value::as_str);
             assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{method} path id");
+            assert!(operation.get("security").is_some(), "{method} job auth");
+            assert_eq!(
+                operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .and_then(|responses| responses.get("200"))
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .and_then(|headers| headers.get("Cache-Control"))
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("private, no-store"),
+                "{method} cache policy"
+            );
         }
 
         let schemas = doc

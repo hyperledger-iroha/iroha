@@ -17,7 +17,7 @@ use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::numeric::{Quantity, XorQuantity};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     escrow::{AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     isi::{
@@ -448,7 +448,9 @@ pub enum AppealFinanceTransactionKindV1 {
 /// Finalized context required to admit one operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppealFinanceTransactionContextV1 {
-    /// Exact active chain.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Finalized block anchor for the authoritative projection.
     pub finalized_cursor: AppealFinanceFinalizedCursorV1,
@@ -478,7 +480,9 @@ impl AppealFinanceTransactionContextV1 {
 pub struct AppealFinanceTransactionSigningRequestV1 {
     /// Stable semantic operation identity.
     pub operation_id: [u8; 32],
-    /// Exact active chain.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact transaction authority.
     pub authority: AccountId,
@@ -663,6 +667,7 @@ struct StoredPendingV1 {
     identity_scope: StoredIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     operation: AppealFinanceOperationV1,
@@ -693,6 +698,7 @@ impl StoredPendingV1 {
     fn request(&self) -> AppealFinanceTransactionSigningRequestV1 {
         AppealFinanceTransactionSigningRequestV1 {
             operation_id: self.operation_id,
+            network_id: self.network_id,
             chain_id: self.chain_id.clone(),
             authority: self.authority.clone(),
             operation: self.operation.clone(),
@@ -1011,6 +1017,7 @@ impl AppealFinanceTransactionForwarder {
     {
         context.validate()?;
         let prepared = PreparedOperation::new_bounded(
+            context.network_id,
             context.chain_id.clone(),
             authority,
             operation,
@@ -1064,6 +1071,7 @@ impl AppealFinanceTransactionForwarder {
             identity_scope: prepared.identity_scope,
             identity_digest: prepared.identity_digest,
             semantic_digest: prepared.semantic_digest,
+            network_id: prepared.network_id,
             chain_id: prepared.chain_id,
             authority: prepared.authority,
             operation: prepared.operation,
@@ -1194,6 +1202,7 @@ impl AppealFinanceTransactionForwarder {
         let entry = find_pending_mut(&mut candidate, operation_id)?;
         let prepared = PreparedOperation::decode_signed_transaction(
             signed_transaction_bytes,
+            &entry.network_id,
             &entry.chain_id,
             &entry.authority,
             entry.expected_record.clone(),
@@ -1204,6 +1213,7 @@ impl AppealFinanceTransactionForwarder {
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.authority != entry.authority
             || prepared.operation != entry.operation
         {
@@ -1642,6 +1652,7 @@ struct PreparedOperation {
     identity_scope: StoredIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     operation: AppealFinanceOperationV1,
@@ -1651,6 +1662,7 @@ struct PreparedOperation {
 
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PreparedOperationMaterialV1 {
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     operation: AppealFinanceOperationV1,
@@ -1667,6 +1679,7 @@ struct DrawdownIdentityMaterialV1 {
 
 impl PreparedOperation {
     fn new(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         operation: AppealFinanceOperationV1,
@@ -1683,6 +1696,7 @@ impl PreparedOperation {
         validate_operation(&operation, &authority, expected_record.as_ref())?;
         let (identity_scope, identity_digest) = operation_identity(&operation)?;
         let semantic_digest = semantic_digest(
+            &network_id,
             &chain_id,
             &authority,
             &operation,
@@ -1693,6 +1707,7 @@ impl PreparedOperation {
             identity_scope,
             identity_digest,
             semantic_digest,
+            network_id,
             chain_id,
             authority,
             operation,
@@ -1702,6 +1717,7 @@ impl PreparedOperation {
     }
 
     fn new_bounded(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         operation: AppealFinanceOperationV1,
@@ -1710,6 +1726,7 @@ impl PreparedOperation {
         max_transaction_bytes: usize,
     ) -> Result<Self, AppealFinanceTransactionForwarderError> {
         let prepared = Self::new(
+            network_id,
             chain_id,
             authority,
             operation,
@@ -1717,6 +1734,7 @@ impl PreparedOperation {
             reconciliation_context,
         )?;
         let encoded = norito::to_bytes(&PreparedOperationMaterialV1 {
+            network_id: prepared.network_id,
             chain_id: prepared.chain_id.clone(),
             authority: prepared.authority.clone(),
             operation: prepared.operation.clone(),
@@ -1732,6 +1750,7 @@ impl PreparedOperation {
 
     fn decode_signed_transaction(
         bytes: &[u8],
+        expected_network_id: &NetworkId,
         expected_chain_id: &ChainId,
         expected_authority: &AccountId,
         expected_record: Option<AssetEscrowRecord>,
@@ -1755,7 +1774,7 @@ impl PreparedOperation {
             .map_err(AppealFinanceTransactionForwarderError::CanonicalEncoding)?
             != bytes
             || transaction.verify_signature().is_err()
-            || transaction.chain() != expected_chain_id
+            || transaction.network_id() != Some(expected_network_id)
             || transaction.authority() != expected_authority
             || transaction.attachments().is_some()
             || transaction.multisig_signatures().is_some()
@@ -1781,6 +1800,7 @@ impl PreparedOperation {
             return Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction);
         };
         Self::new_bounded(
+            *expected_network_id,
             expected_chain_id.clone(),
             transaction.authority().clone(),
             operation,
@@ -2022,6 +2042,7 @@ fn operation_identity(
 }
 
 fn semantic_digest(
+    network_id: &NetworkId,
     chain_id: &ChainId,
     authority: &AccountId,
     operation: &AppealFinanceOperationV1,
@@ -2029,6 +2050,7 @@ fn semantic_digest(
     reconciliation_context: &[u8],
 ) -> Result<[u8; 32], AppealFinanceTransactionForwarderError> {
     let bytes = norito::to_bytes(&PreparedOperationMaterialV1 {
+        network_id: *network_id,
         chain_id: chain_id.clone(),
         authority: authority.clone(),
         operation: operation.clone(),
@@ -2210,6 +2232,7 @@ fn validate_checkpoint(
     let mut previous_sequence = 0;
     for entry in &checkpoint.pending {
         let prepared = PreparedOperation::new_bounded(
+            entry.network_id,
             entry.chain_id.clone(),
             entry.authority.clone(),
             entry.operation.clone(),
@@ -2227,6 +2250,7 @@ fn validate_checkpoint(
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.operation_id() != entry.operation_id
             || !validate_delivery(entry, policy.max_attempts)
             || !identities.insert((entry.identity_scope, entry.identity_digest))
@@ -2237,6 +2261,7 @@ fn validate_checkpoint(
         if let Some(bytes) = entry.signed_transaction_bytes.as_deref() {
             let signed = PreparedOperation::decode_signed_transaction(
                 bytes,
+                &entry.network_id,
                 &entry.chain_id,
                 &entry.authority,
                 entry.expected_record.clone(),
@@ -2245,6 +2270,7 @@ fn validate_checkpoint(
             )
             .map_err(|_| AppealFinanceTransactionForwarderError::InvalidCheckpoint)?;
             if signed.operation_id() != entry.operation_id
+                || signed.network_id != entry.network_id
                 || signed.authority != entry.authority
                 || signed.operation != entry.operation
             {
@@ -2812,9 +2838,11 @@ mod tests {
 
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::numeric::Quantity;
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        NetworkId,
         asset::AssetDefinitionId,
+        block::BlockHeader,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
@@ -2997,6 +3025,16 @@ mod tests {
         }
     }
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; 32]),
+        ))
+    }
+
+    fn test_network_id() -> NetworkId {
+        network_id(0xA1)
+    }
+
     fn policy() -> AppealFinanceTransactionForwarderPolicyV1 {
         AppealFinanceTransactionForwarderPolicyV1 {
             max_pending: 8,
@@ -3042,6 +3080,7 @@ mod tests {
 
     fn drawdown_context() -> AppealFinanceTransactionContextV1 {
         AppealFinanceTransactionContextV1 {
+            network_id: test_network_id(),
             chain_id: ChainId::from("appeal-finance-forwarder-test"),
             finalized_cursor: cursor(7, 7),
             expected_record: Some(active_record()),
@@ -3064,6 +3103,7 @@ mod tests {
             .parse()
             .expect("generic quantity permits scale ten");
         let open_context = AppealFinanceTransactionContextV1 {
+            network_id: test_network_id(),
             chain_id: ChainId::from("appeal-finance-forwarder-test"),
             finalized_cursor: cursor(7, 7),
             expected_record: None,
@@ -3155,8 +3195,17 @@ mod tests {
         authority: AccountId,
         operation: AppealFinanceOperationV1,
     ) -> Vec<u8> {
+        signed_bytes_on_network(test_network_id(), signer, authority, operation)
+    }
+
+    fn signed_bytes_on_network(
+        network_id: NetworkId,
+        signer: &KeyPair,
+        authority: AccountId,
+        operation: AppealFinanceOperationV1,
+    ) -> Vec<u8> {
         let transaction = TransactionBuilder::new(
-            ChainId::from("appeal-finance-forwarder-test"),
+            network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3215,9 +3264,20 @@ mod tests {
             Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
         ));
 
+        let wrong_network_bytes = signed_bytes_on_network(
+            network_id(0xF1),
+            &signer,
+            authority.clone(),
+            drawdown_operation(),
+        );
+        assert!(matches!(
+            forwarder.store_signed_transaction(operation_id, &wrong_network_bytes),
+            Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
+        ));
+
         let mismatched_signature = {
             let transaction = TransactionBuilder::new(
-                ChainId::from("appeal-finance-forwarder-test"),
+                test_network_id(),
                 AccountId::new(wrong.public_key().clone()),
                 FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -3257,7 +3317,7 @@ mod tests {
 
         let transaction_builder = || {
             TransactionBuilder::new(
-                ChainId::from("appeal-finance-forwarder-test"),
+                test_network_id(),
                 authority.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -3419,6 +3479,7 @@ mod tests {
         let record = active_record();
         let drawdown = AppealFinanceTransactionSigningRequestV1 {
             operation_id: [1; 32],
+            network_id: test_network_id(),
             chain_id: ChainId::from("appeal-finance-forwarder-test"),
             authority: account(4),
             operation: drawdown_operation(),
@@ -3451,6 +3512,7 @@ mod tests {
 
         let cancel = AppealFinanceTransactionSigningRequestV1 {
             operation_id: [2; 32],
+            network_id: drawdown.network_id,
             chain_id: drawdown.chain_id.clone(),
             authority: record.seller.clone(),
             operation: AppealFinanceOperationV1::Cancel(CancelAssetLock::new(
@@ -3479,6 +3541,7 @@ mod tests {
         forged_expected.closed_at_ms = Some(7);
         let forged = AppealFinanceTransactionSigningRequestV1 {
             operation_id: [3; 32],
+            network_id: drawdown.network_id,
             chain_id: drawdown.chain_id,
             authority: account(4),
             operation: drawdown_operation(),

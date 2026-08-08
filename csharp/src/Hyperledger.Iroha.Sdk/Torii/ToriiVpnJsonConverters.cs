@@ -561,9 +561,14 @@ internal static class ToriiVpnJson
         string field,
         bool allowEmpty = false)
     {
-        if (allowEmpty && value.Length == 0)
+        if (value.Length == 0)
         {
-            return;
+            if (allowEmpty)
+            {
+                return;
+            }
+
+            throw new JsonException($"{field} must be a non-empty string.");
         }
 
         var parts = value.Split('/', StringSplitOptions.None);
@@ -880,6 +885,8 @@ internal static class ToriiVpnJson
             nameof(ToriiVpnQuote.SessionIdHex) => "session_id_hex",
             nameof(ToriiVpnQuote.PaymentReference) => "payment_reference",
             nameof(ToriiVpnQuote.AccountId) => "account_id",
+            nameof(ToriiVpnQuote.FeeAssetId) => "fee_asset_id",
+            nameof(ToriiVpnQuote.EscrowAccountId) => "escrow_account_id",
             nameof(ToriiVpnQuote.ExitClass) => "exit_class",
             nameof(ToriiVpnQuote.QuoteExpiresAtMilliseconds) => "quote_expires_at_ms",
             nameof(ToriiVpnQuote.MeteringPublicKeyHex) => "metering_public_key_hex",
@@ -1132,6 +1139,10 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
+                ToriiVpnJson.RequireRequiredProperties(
+                    seen,
+                    context,
+                    ["relay_tls_spki_sha256_hex"]);
                 var profile = ToriiVpnJson.CreateWithDirectMetadataContext(() => new ToriiVpnProfile
                 {
                     Available = ToriiVpnJson.RequireBool(available, context, "available"),
@@ -1401,6 +1412,10 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
+                ToriiVpnJson.RequireRequiredProperties(
+                    seen,
+                    context,
+                    ["relay_tls_spki_sha256_hex", "open_lease_instruction"]);
                 var quote = ToriiVpnJson.CreateWithDirectMetadataContext(() => new ToriiVpnQuote
                 {
                     QuoteId = ToriiVpnJson.RequireString(quoteId, $"{context}.quote_id"),
@@ -1708,6 +1723,10 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
         {
             if (reader.TokenType == JsonTokenType.EndObject)
             {
+                ToriiVpnJson.RequireRequiredProperties(
+                    seen,
+                    context,
+                    ["relay_tls_spki_sha256_hex"]);
                 var session = ToriiVpnJson.CreateWithDirectMetadataContext(() => new ToriiVpnSession
                 {
                     SessionId = ToriiVpnJson.RequireString(sessionId, $"{context}.session_id"),

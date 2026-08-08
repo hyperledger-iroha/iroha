@@ -31,7 +31,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
         case .proofWorkerBusy:
             return "Another Kagemusha proof operation is active; retry after it completes."
         case .finalityTrustUnavailable:
-            return "Kagemusha top-up finality is unavailable until the authenticated release trust root is wired and recursive init consumes its result."
+            return "Kagemusha top-up finality requires an authenticated ABI-21 release and matching validator roster."
         case .hardwareAssertionUnavailable:
             return "The requested physical hardware assertion service is unavailable on this device."
         }

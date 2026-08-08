@@ -33,7 +33,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         let first = NoritoRpcFixtureLoader.Entry(
             name: "duplicate",
             authority: "authority",
-            chain: "00000001",
+            networkId: FixtureConstants.networkId,
             creationTimeMs: 1,
             timeToLiveMs: 100_000,
             nonce: nil,
@@ -56,7 +56,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         let second = NoritoRpcFixtureLoader.Entry(
             name: "other",
             authority: first.authority,
-            chain: first.chain,
+            networkId: first.networkId,
             creationTimeMs: first.creationTimeMs,
             timeToLiveMs: first.timeToLiveMs,
             nonce: first.nonce,
@@ -79,7 +79,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         let renamedClone = NoritoRpcFixtureLoader.Entry(
             name: "renamed-clone",
             authority: first.authority,
-            chain: first.chain,
+            networkId: first.networkId,
             creationTimeMs: first.creationTimeMs,
             timeToLiveMs: first.timeToLiveMs,
             nonce: first.nonce,
@@ -103,7 +103,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             let invalid = NoritoRpcFixtureLoader.Entry(
                 name: "invalid-base64",
                 authority: first.authority,
-                chain: first.chain,
+                networkId: first.networkId,
                 creationTimeMs: first.creationTimeMs,
                 timeToLiveMs: first.timeToLiveMs,
                 nonce: first.nonce,
@@ -130,7 +130,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             var fixture: [String: Any] = [
                 "name": "ttl-fixture",
                 "authority": "authority",
-                "chain": "00000001",
+                "network_id": FixtureConstants.networkId,
                 "creation_time_ms": 1,
                 "nonce": NSNull(),
                 "encoded_file": "ttl-fixture.norito",
@@ -169,6 +169,100 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         for (label, value) in invalidValues {
             XCTAssertThrowsError(try loadFixture(ttl: value), label)
         }
+    }
+
+    func testFixtureLoaderRequiresCanonicalNetworkId() {
+        let invalid = NoritoRpcFixtureLoader.Entry(
+            name: "invalid-network",
+            authority: "authority",
+            networkId: FixtureConstants.networkId.lowercased(),
+            creationTimeMs: 1,
+            timeToLiveMs: 100_000,
+            nonce: nil,
+            encodedFile: "invalid-network.norito",
+            encodedLen: 1,
+            signedLen: 1,
+            payloadBase64: "AA==",
+            signedBase64: "AQ==",
+            payloadHash: "payload-hash",
+            signedHash: "signed-hash"
+        )
+        XCTAssertThrowsError(try NoritoRpcFixtureLoader.validatedEntries([invalid])) { error in
+            guard case FixtureError.invalidNetworkId = error else {
+                return XCTFail("unexpected network identity error: \(error)")
+            }
+        }
+    }
+
+    func testFixtureSchemasRejectLegacyChainField() throws {
+        var manifestFixture: [String: Any] = [
+            "name": "legacy-manifest",
+            "authority": "authority",
+            "network_id": FixtureConstants.networkId,
+            "creation_time_ms": 1,
+            "time_to_live_ms": 100_000,
+            "nonce": NSNull(),
+            "encoded_file": "legacy-manifest.norito",
+            "encoded_len": 1,
+            "signed_len": 1,
+            "payload_base64": "AA==",
+            "signed_base64": "AQ==",
+            "payload_hash": "payload-hash",
+            "signed_hash": "signed-hash",
+        ]
+        manifestFixture["chain"] = manifestFixture.removeValue(forKey: "network_id")
+        let manifestData = try JSONSerialization.data(
+            withJSONObject: ["fixtures": [manifestFixture]]
+        )
+        XCTAssertThrowsError(
+            try StrictFixtureJSON.decode(
+                NoritoRpcFixtureLoader.Manifest.self,
+                from: manifestData,
+                using: JSONDecoder(),
+                context: "legacy transaction manifest"
+            )
+        )
+
+        let sharedPayload: [String: Any] = [
+            "authority": "authority",
+            "network_id": FixtureConstants.networkId,
+            "creation_time_ms": 1,
+            "executable": ["Instructions": []],
+            "fee_payment": [
+                "payer": "authority",
+                "value": ["charge_limits": []],
+            ],
+            "metadata": [:],
+            "nonce": NSNull(),
+            "time_to_live_ms": 100_000,
+        ]
+        var descriptor: [String: Any] = [
+            "name": "legacy-descriptor",
+            "authority": "authority",
+            "network_id": FixtureConstants.networkId,
+            "creation_time_ms": 1,
+            "time_to_live_ms": 100_000,
+            "nonce": NSNull(),
+            "payload": sharedPayload,
+            "payload_base64": "AA==",
+            "signed_base64": "AQ==",
+            "payload_hash": "payload-hash",
+            "signed_hash": "signed-hash",
+        ]
+        descriptor["chain"] = descriptor.removeValue(forKey: "network_id")
+        let descriptorData = try JSONSerialization.data(withJSONObject: [descriptor])
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(descriptorData)
+        )
+
+        descriptor["network_id"] = descriptor.removeValue(forKey: "chain")
+        var legacyPayload = sharedPayload
+        legacyPayload["chain"] = legacyPayload.removeValue(forKey: "network_id")
+        descriptor["payload"] = legacyPayload
+        let nestedData = try JSONSerialization.data(withJSONObject: [descriptor])
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatePayloadDocumentForTesting(nestedData)
+        )
     }
 
     func testMixedExecutableBatchFixturePreservesItemOrder() throws {
@@ -278,8 +372,13 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         assertAuthorityMatches(decodedAuthority,
                                expected: expectedAuthority,
                                name: name)
-        let decodedChain = payload["chain"] as? String
-        XCTAssertEqual(decodedChain, fixture.entry.chain, "chain mismatch in decode for \(name)")
+        let decodedDomain = try XCTUnwrap(payload["domain"] as? [String: Any])
+        XCTAssertEqual(decodedDomain["kind"] as? String, "network")
+        XCTAssertEqual(
+            decodedDomain["value"] as? String,
+            fixture.entry.networkId,
+            "network_id mismatch in decode for \(name)"
+        )
         if let creation = payload["creation_time_ms"] as? NSNumber {
             XCTAssertEqual(
                 creation.uint64Value,
@@ -328,7 +427,7 @@ private struct NoritoRpcFixtureLoader {
     struct Entry: Decodable {
         let name: String
         let authority: String
-        let chain: String
+        let networkId: String
         let creationTimeMs: UInt64
         let timeToLiveMs: UInt64
         let nonce: UInt32?
@@ -343,7 +442,7 @@ private struct NoritoRpcFixtureLoader {
         enum CodingKeys: String, CodingKey {
             case name
             case authority
-            case chain
+            case networkId = "network_id"
             case creationTimeMs = "creation_time_ms"
             case timeToLiveMs = "time_to_live_ms"
             case nonce
@@ -359,7 +458,7 @@ private struct NoritoRpcFixtureLoader {
         init(
             name: String,
             authority: String,
-            chain: String,
+            networkId: String,
             creationTimeMs: UInt64,
             timeToLiveMs: UInt64,
             nonce: UInt32?,
@@ -373,7 +472,7 @@ private struct NoritoRpcFixtureLoader {
         ) {
             self.name = name
             self.authority = authority
-            self.chain = chain
+            self.networkId = networkId
             self.creationTimeMs = creationTimeMs
             self.timeToLiveMs = timeToLiveMs
             self.nonce = nonce
@@ -390,7 +489,7 @@ private struct NoritoRpcFixtureLoader {
             try requireExactFixtureKeys(
                 decoder,
                 [
-                    "authority", "chain", "creation_time_ms", "encoded_file",
+                    "authority", "network_id", "creation_time_ms", "encoded_file",
                     "encoded_len", "name", "nonce", "payload_base64", "payload_hash",
                     "signed_base64", "signed_hash", "signed_len", "time_to_live_ms",
                 ],
@@ -399,7 +498,14 @@ private struct NoritoRpcFixtureLoader {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             name = try container.decode(String.self, forKey: .name)
             authority = try container.decode(String.self, forKey: .authority)
-            chain = try container.decode(String.self, forKey: .chain)
+            networkId = try container.decode(String.self, forKey: .networkId)
+            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .networkId,
+                    in: container,
+                    debugDescription: "network_id must be an exact canonical NetworkId hash literal"
+                )
+            }
             creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
             timeToLiveMs = try container.decode(UInt64.self, forKey: .timeToLiveMs)
             nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
@@ -416,7 +522,7 @@ private struct NoritoRpcFixtureLoader {
     private struct PayloadDocumentEntry: Decodable {
         let name: String
         let authority: String
-        let chain: String
+        let networkId: String
         let creationTimeMs: UInt64
         let timeToLiveMs: UInt64
         let nonce: UInt32?
@@ -429,7 +535,7 @@ private struct NoritoRpcFixtureLoader {
         private enum CodingKeys: String, CodingKey {
             case name
             case authority
-            case chain
+            case networkId = "network_id"
             case creationTimeMs = "creation_time_ms"
             case timeToLiveMs = "time_to_live_ms"
             case nonce
@@ -444,7 +550,7 @@ private struct NoritoRpcFixtureLoader {
             try requireExactFixtureKeys(
                 decoder,
                 [
-                    "authority", "chain", "creation_time_ms", "name", "nonce", "payload",
+                    "authority", "network_id", "creation_time_ms", "name", "nonce", "payload",
                     "payload_base64", "payload_hash", "signed_base64", "signed_hash",
                     "time_to_live_ms",
                 ],
@@ -453,7 +559,14 @@ private struct NoritoRpcFixtureLoader {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             name = try container.decode(String.self, forKey: .name)
             authority = try container.decode(String.self, forKey: .authority)
-            chain = try container.decode(String.self, forKey: .chain)
+            networkId = try container.decode(String.self, forKey: .networkId)
+            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .networkId,
+                    in: container,
+                    debugDescription: "network_id must be an exact canonical NetworkId hash literal"
+                )
+            }
             creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
             timeToLiveMs = try container.decode(UInt64.self, forKey: .timeToLiveMs)
             nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
@@ -467,7 +580,7 @@ private struct NoritoRpcFixtureLoader {
 
     private struct SharedPayload: Decodable {
         let authority: String
-        let chain: String
+        let networkId: String
         let creationTimeMs: UInt64
         let timeToLiveMs: UInt64
         let nonce: UInt32?
@@ -476,7 +589,7 @@ private struct NoritoRpcFixtureLoader {
 
         private enum CodingKeys: String, CodingKey {
             case authority
-            case chain
+            case networkId = "network_id"
             case creationTimeMs = "creation_time_ms"
             case timeToLiveMs = "time_to_live_ms"
             case nonce
@@ -489,14 +602,21 @@ private struct NoritoRpcFixtureLoader {
             try requireExactFixtureKeys(
                 decoder,
                 [
-                    "authority", "chain", "creation_time_ms", "executable", "fee_payment",
+                    "authority", "network_id", "creation_time_ms", "executable", "fee_payment",
                     "metadata", "nonce", "time_to_live_ms",
                 ],
                 context: "shared transaction payload"
             )
             let container = try decoder.container(keyedBy: CodingKeys.self)
             authority = try container.decode(String.self, forKey: .authority)
-            chain = try container.decode(String.self, forKey: .chain)
+            networkId = try container.decode(String.self, forKey: .networkId)
+            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .networkId,
+                    in: container,
+                    debugDescription: "network_id must be an exact canonical NetworkId hash literal"
+                )
+            }
             creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
             timeToLiveMs = try container.decode(UInt64.self, forKey: .timeToLiveMs)
             guard timeToLiveMs > 0 else {
@@ -798,6 +918,9 @@ private struct NoritoRpcFixtureLoader {
         var signedHashes = Set<String>()
         var signedBytesValues = Set<Data>()
         for entry in fixtures {
+            guard ToriiNativeAmxWire.isCanonicalHash(entry.networkId) else {
+                throw FixtureError.invalidNetworkId(entry.networkId)
+            }
             guard entry.timeToLiveMs > 0 else {
                 throw FixtureError.invalidTimeToLiveMs(entry.name)
             }
@@ -859,8 +982,12 @@ private struct NoritoRpcFixtureLoader {
             guard entries[entry.name] == nil else {
                 throw FixtureError.duplicateFixtureName(entry.name)
             }
+            guard ToriiNativeAmxWire.isCanonicalHash(entry.networkId),
+                  ToriiNativeAmxWire.isCanonicalHash(entry.payload.networkId) else {
+                throw FixtureError.invalidNetworkId(entry.networkId)
+            }
             guard entry.authority == entry.payload.authority,
-                  entry.chain == entry.payload.chain,
+                  entry.networkId == entry.payload.networkId,
                   entry.creationTimeMs == entry.payload.creationTimeMs,
                   entry.timeToLiveMs == entry.payload.timeToLiveMs,
                   entry.nonce == entry.payload.nonce else {
@@ -871,12 +998,22 @@ private struct NoritoRpcFixtureLoader {
         return entries
     }
 
+    static func validatePayloadDocumentForTesting(_ data: Data) throws {
+        let fixtures = try StrictFixtureJSON.decode(
+            [PayloadDocumentEntry].self,
+            from: data,
+            using: JSONDecoder(),
+            context: "test transaction payload descriptor"
+        )
+        _ = try validatedPayloadEntries(fixtures)
+    }
+
     private static func validateDescriptorParity(
         _ payload: PayloadDocumentEntry,
         manifest: Entry
     ) throws {
         guard payload.authority == manifest.authority,
-              payload.chain == manifest.chain,
+              payload.networkId == manifest.networkId,
               payload.creationTimeMs == manifest.creationTimeMs,
               payload.timeToLiveMs == manifest.timeToLiveMs,
               payload.nonce == manifest.nonce,
@@ -949,6 +1086,8 @@ private struct NoritoRpcFixture {
 private enum FixtureConstants {
     static let networkPrefix: UInt16 = 753
     static let signedTransactionVersion: UInt8 = 1
+    static let networkId =
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 }
 
 private func versionedSignedTransaction(_ bareSignedTransaction: Data) -> Data {
@@ -1061,6 +1200,7 @@ private enum FixtureError: Error {
     case invalidTimeToLiveMs(String)
     case invalidEncodedFile(String)
     case invalidNonce(String)
+    case invalidNetworkId(String)
     case invalidLength(String)
     case payloadMetadataMismatch(String)
     case manifestPayloadMismatch(String)

@@ -32,10 +32,11 @@ use iroha::{
             Quantity, QueryBuilderExt,
         },
         privacy::{
-            PrivacyActiveLifecycleV1, PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
-            PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-            PrivacyConsensusLimitsV1, PrivacyPoolIdV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
+            PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyPoolIdV1,
+            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -116,9 +117,9 @@ fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
 }
 
 fn protocol_row(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
-) -> Result<PrivacyCapabilityRowV1> {
+) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
         .iter()
@@ -128,7 +129,7 @@ fn protocol_row(
 }
 
 fn assert_protocol_expectations(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     expectations: &[ProtocolExpectationV1],
     context: &str,
 ) -> Result<()> {
@@ -159,7 +160,7 @@ async fn wait_for_all_peer_protocols(
     minimum_height: u64,
     expectations: &[ProtocolExpectationV1],
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
     let mut last_observed = Vec::new();
     loop {

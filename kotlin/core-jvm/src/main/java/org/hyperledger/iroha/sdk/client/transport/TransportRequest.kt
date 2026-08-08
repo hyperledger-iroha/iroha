@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.client.transport
 
 import java.net.URI
 import java.time.Duration
+import java.util.Locale
 
 /** SDK-owned transport request wrapper to decouple callers from `java.net.http.HttpRequest`. */
 class TransportRequest(
@@ -16,6 +17,10 @@ class TransportRequest(
 ) {
     private val _headers: Map<String, List<String>> = copyHeaders(headers)
     private val _body: ByteArray = body.copyOf()
+
+    /** Replay policy derived from the immutable request method, headers, and body. */
+    @JvmField
+    val replayPolicy: RequestReplayPolicy = deriveReplayPolicy(method, _headers, _body)
 
     init {
         require(maximumResponseBytes == null || maximumResponseBytes in 1..Int.MAX_VALUE.toLong()) {
@@ -51,6 +56,30 @@ class TransportRequest(
                 copy[key] = value.toList()
             }
             return copy
+        }
+
+        private fun deriveReplayPolicy(
+            method: String,
+            headers: Map<String, List<String>>,
+            body: ByteArray,
+        ): RequestReplayPolicy {
+            val normalizedMethod = method.uppercase(Locale.ROOT)
+            val readOnlyMethod = normalizedMethod == "GET" ||
+                normalizedMethod == "HEAD" ||
+                normalizedMethod == "OPTIONS"
+            val carriesOneShotHeader = headers.keys.any { name ->
+                when (name.lowercase(Locale.ROOT)) {
+                    "x-iroha-signature",
+                    "x-iroha-nonce",
+                    "x-iroha-onboarding-token" -> true
+                    else -> false
+                }
+            }
+            return if (readOnlyMethod && body.isEmpty() && !carriesOneShotHeader) {
+                RequestReplayPolicy.RETRY_SAFE
+            } else {
+                RequestReplayPolicy.ONE_SHOT
+            }
         }
     }
 

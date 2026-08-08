@@ -28,10 +28,12 @@ import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.model.ContractInvocation;
 import org.hyperledger.iroha.android.model.ExecutableBatchItem;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.testing.SimpleJson;
+import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -65,7 +67,7 @@ public final class TransactionFixtureManifestTests {
       fieldSet(
           "name",
           "authority",
-          "chain",
+          "network_id",
           "creation_time_ms",
           "encoded_file",
           "encoded_len",
@@ -79,7 +81,6 @@ public final class TransactionFixtureManifestTests {
   private static final byte VERSION_BYTE = 0x01;
   private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
-  private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
   private static final TypeAdapter<String> JSON_ADAPTER = new JsonAdapter();
   private static final TypeAdapter<Long> UINT64_ADAPTER = NoritoAdapters.uint(64);
   private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
@@ -170,6 +171,51 @@ public final class TransactionFixtureManifestTests {
     unexpectedFixtureEntries.set(0, unexpectedFixture);
     unexpectedFixtureManifest.put("fixtures", unexpectedFixtureEntries);
     assertManifestShapeRejected(unexpectedFixtureManifest, manifestPath, "unexpected=[encoded]");
+
+    final Map<String, Object> legacyChainFixture =
+        new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
+    legacyChainFixture.put("chain", "legacy");
+    final Map<String, Object> legacyChainManifest = new LinkedHashMap<>(manifest);
+    final List<Object> legacyChainEntries = new ArrayList<>(fixtures);
+    legacyChainEntries.set(0, legacyChainFixture);
+    legacyChainManifest.put("fixtures", legacyChainEntries);
+    assertManifestShapeRejected(legacyChainManifest, manifestPath, "unexpected=[chain]");
+  }
+
+  @Test
+  public void transactionFixtureManifestRejectsLegacyChainKeys() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+    final List<Object> fixtures = asList(manifest.get("fixtures"), "fixtures");
+    for (final String legacyField : Arrays.asList("chain", "chainId", "chain_id")) {
+      final Map<String, Object> legacyFixture =
+          new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
+      legacyFixture.put(legacyField, "legacy");
+      final Map<String, Object> mutatedManifest = new LinkedHashMap<>(manifest);
+      final List<Object> mutatedEntries = new ArrayList<>(fixtures);
+      mutatedEntries.set(0, legacyFixture);
+      mutatedManifest.put("fixtures", mutatedEntries);
+      assertManifestShapeRejected(
+          mutatedManifest, manifestPath, "unexpected=[" + legacyField + "]");
+    }
+  }
+
+  @Test
+  public void rejectNonCanonicalNetworkIdentity() throws Exception {
+    final Path manifestPath = resolveFixturePath("transaction_fixtures.manifest.json");
+    final Map<String, Object> manifest = loadManifest(manifestPath);
+    final List<Object> fixtures = asList(manifest.get("fixtures"), "fixtures");
+    final Map<String, Object> nonCanonical =
+        new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
+    final String networkId =
+        requireString(nonCanonical.get("network_id"), "fixture.network_id");
+    nonCanonical.put("network_id", networkId.toLowerCase(java.util.Locale.ROOT));
+    assertFixtureMutationRejected(
+        manifest,
+        fixtures,
+        nonCanonical,
+        manifestPath,
+        "exact canonical hash encoding");
   }
 
   @Test
@@ -411,7 +457,8 @@ public final class TransactionFixtureManifestTests {
 
     final long encodedLen = requireNumber(map.get("encoded_len"), name + ".encoded_len");
     final long signedLen = requireNumber(map.get("signed_len"), name + ".signed_len");
-    final String chain = requireString(map.get("chain"), name + ".chain");
+    final String networkId =
+        requireNetworkId(map.get("network_id"), name + ".network_id");
     final String authority = requireString(map.get("authority"), name + ".authority");
     final long creationTimeMs = requireNumber(map.get("creation_time_ms"), name + ".creation_time_ms");
     final Long ttl =
@@ -474,9 +521,13 @@ public final class TransactionFixtureManifestTests {
         payloadFixture.payloadBase64());
     final TransactionPayload payload = payloadFixture.toPayload();
     assertEquals(
-        name + ": chain mismatch vs transaction_payloads",
-        chain,
-        payload.chainId());
+        name + ": manifest network_id mismatch vs transaction_payloads entry",
+        networkId,
+        payloadFixture.networkId().literal());
+    assertEquals(
+        name + ": network_id mismatch vs transaction_payloads payload",
+        networkId,
+        payload.networkId().literal());
     assertEquals(
         name + ": authority mismatch vs transaction_payloads",
         normalizeAuthority(authority),
@@ -496,7 +547,7 @@ public final class TransactionFixtureManifestTests {
         name,
         payloadBytes,
         signedBytes,
-        chain,
+        networkId,
         authority,
         creationTimeMs,
         ttl,
@@ -566,6 +617,7 @@ public final class TransactionFixtureManifestTests {
       final Map<String, Object> fixture = asMap(fixtures.get(index), field);
       requireExactFields(fixture, FIXTURE_FIELDS, field);
       final String name = requireString(fixture.get("name"), field + ".name");
+      requireNetworkId(fixture.get("network_id"), field + ".network_id");
       final String encodedFile =
           requireString(fixture.get("encoded_file"), field + ".encoded_file");
       resolveEncodedPath(manifestPath, name, encodedFile);
@@ -706,7 +758,7 @@ public final class TransactionFixtureManifestTests {
       final String name,
       final byte[] payloadBytes,
       final byte[] signedBytes,
-      final String chain,
+      final String networkId,
       final String authority,
       final long creationTimeMs,
       final Long ttl,
@@ -714,9 +766,9 @@ public final class TransactionFixtureManifestTests {
       final SigningKey signingKey) {
     final RawPayload raw = decodePayloadRaw(name, payloadBytes);
     assertEquals(
-        name + ": chain mismatch vs payload bytes",
-        chain,
-        raw.chainId());
+        name + ": network_id mismatch vs payload bytes",
+        networkId,
+        raw.networkId());
     assertEquals(
         name + ": authority mismatch vs payload bytes",
         normalizeAuthority(authority),
@@ -738,9 +790,9 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(name + ": failed to decode payload", ex);
     }
     assertEquals(
-        name + ": chain mismatch vs decoded payload",
-        chain,
-        payload.chainId());
+        name + ": network_id mismatch vs decoded payload",
+        networkId,
+        payload.networkId().literal());
     assertEquals(
         name + ": authority mismatch vs decoded payload",
         normalizeAuthority(authority),
@@ -958,7 +1010,7 @@ public final class TransactionFixtureManifestTests {
 
   private static RawPayload decodePayloadRaw(final String name, final byte[] payloadBytes) {
     final NoritoDecoder decoder = canonicalDecoder(payloadBytes);
-    final byte[] chainField = readField(decoder, name + ".payload.chain_id");
+    final byte[] networkIdField = readField(decoder, name + ".payload.network_id");
     final byte[] authorityField = readField(decoder, name + ".payload.authority");
     final byte[] creationField = readField(decoder, name + ".payload.creation_time_ms");
     final byte[] executableField = readField(decoder, name + ".payload.executable");
@@ -970,7 +1022,26 @@ public final class TransactionFixtureManifestTests {
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(name + ": payload has trailing bytes");
     }
-    final String chainId = decodeFieldPayload(chainField, CHAIN_ID_ADAPTER, name + ".payload.chain_id");
+    final NoritoDecoder transactionDomainDecoder = canonicalDecoder(networkIdField);
+    final long transactionDomainTag = UINT32_ADAPTER.decode(transactionDomainDecoder);
+    if (transactionDomainTag != 0L) {
+      throw new IllegalStateException(
+          name + ": ordinary fixture must use TransactionDomain::Network");
+    }
+    final byte[] networkIdPayload =
+        readField(transactionDomainDecoder, name + ".payload.network_id.value");
+    if (transactionDomainDecoder.remaining() != 0) {
+      throw new IllegalStateException(name + ": transaction domain has trailing bytes");
+    }
+    final byte[] networkIdBytes =
+        decodeFieldPayload(
+            networkIdPayload,
+            FIXED_HASH_ADAPTER,
+            name + ".payload.network_id.value");
+    if ((networkIdBytes[networkIdBytes.length - 1] & 1) != 1) {
+      throw new IllegalStateException(name + ": payload network_id hash marker bit must be set");
+    }
+    final String networkId = HashLiteral.canonicalize(networkIdBytes);
     final String authority = decodeAuthorityField(authorityField, name + ".payload.authority");
     final long creationTimeMs =
         decodeFieldPayload(creationField, UINT64_ADAPTER, name + ".payload.creation_time_ms");
@@ -985,7 +1056,7 @@ public final class TransactionFixtureManifestTests {
     }
     validateMetadataField(metadataField, name + ".payload.metadata");
     decodeOptionField(name + ".payload.attachments", attachmentsField);
-    return new RawPayload(chainId, authority, creationTimeMs, ttl, nonce, executable);
+    return new RawPayload(networkId, authority, creationTimeMs, ttl, nonce, executable);
   }
 
   private static ExecutableEnvelope decodeExecutableEnvelope(
@@ -1350,7 +1421,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static final class RawPayload {
-    private final String chainId;
+    private final String networkId;
     private final String authority;
     private final long creationTimeMs;
     private final Optional<Long> timeToLiveMs;
@@ -1358,13 +1429,13 @@ public final class TransactionFixtureManifestTests {
     private final ExecutableEnvelope executable;
 
     private RawPayload(
-        final String chainId,
+        final String networkId,
         final String authority,
         final long creationTimeMs,
         final Optional<Long> timeToLiveMs,
         final Optional<Long> nonce,
         final ExecutableEnvelope executable) {
-      this.chainId = chainId;
+      this.networkId = networkId;
       this.authority = authority;
       this.creationTimeMs = creationTimeMs;
       this.timeToLiveMs = timeToLiveMs;
@@ -1372,8 +1443,8 @@ public final class TransactionFixtureManifestTests {
       this.executable = executable;
     }
 
-    private String chainId() {
-      return chainId;
+    private String networkId() {
+      return networkId;
     }
 
     private String authority() {
@@ -1842,18 +1913,6 @@ public final class TransactionFixtureManifestTests {
     }
   }
 
-  private static final class ChainIdAdapter implements TypeAdapter<String> {
-    @Override
-    public void encode(final NoritoEncoder encoder, final String value) {
-      encodeSizedField(encoder, STRING_ADAPTER, value);
-    }
-
-    @Override
-    public String decode(final NoritoDecoder decoder) {
-      return decodeSizedField(decoder, STRING_ADAPTER, "chain_id.inner");
-    }
-  }
-
   private static final class JsonAdapter implements TypeAdapter<String> {
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
@@ -1962,6 +2021,25 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(field + " must be a non-empty string");
     }
     return (String) value;
+  }
+
+  private static String requireNetworkId(final Object value, final String field) {
+    final String networkId = requireString(value, field);
+    final String canonical;
+    try {
+      canonical = HashLiteral.canonicalize(HashLiteral.decode(networkId));
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalStateException(field + " must be a canonical network hash identity", ex);
+    }
+    if (!canonical.equals(networkId)) {
+      throw new IllegalStateException(field + " must use its exact canonical hash encoding");
+    }
+    try {
+      NetworkId.parse(networkId);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalStateException(field + " must be a canonical network hash identity", ex);
+    }
+    return networkId;
   }
 
   private static long requireNumber(final Object value, final String field) {

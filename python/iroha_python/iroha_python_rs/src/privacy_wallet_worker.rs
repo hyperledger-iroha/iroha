@@ -31,7 +31,8 @@ use crate::{
     privacy_native_actions::{
         PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1, PrivacyActionTransactionContextV1,
         SignedPrivacyActionV1, build_signed_privacy_native_action_v1,
-        inspect_signed_privacy_native_action_v1, privacy_native_action_capability_for_protocol_v1,
+        inspect_signed_privacy_native_action_v1, network_id_from_genesis_hash_bytes,
+        privacy_native_action_capability_for_protocol_v1,
     },
     privacy_wallet_bundle::{
         InspectedPrivacyWalletExecutionBundleV1, PrivacyWalletExecutionBundleManifestV1,
@@ -834,6 +835,7 @@ fn execute_native_action_v1(
     )?;
     let manifest = lease.manifest;
     let expected_public_action = plan.public_action;
+    let chain_id = plan.context.chain_id.to_string();
     let canonical_genesis_hash = request.binding.genesis_digest;
     let signed = vault
         .consume_with(request.handle, &request.binding, |material| {
@@ -857,12 +859,13 @@ fn execute_native_action_v1(
         .map_err(|error| match error {
             ConsumeError::Custody(error) | ConsumeError::Operation(error) => error,
         })?;
-    signed_action_response_v1(signed, &manifest)
+    signed_action_response_v1(signed, &manifest, &chain_id)
 }
 
 fn signed_action_response_v1(
     signed: SignedPrivacyActionV1,
     manifest: &PrivacyWalletExecutionBundleManifestV1,
+    chain_id: &str,
 ) -> Result<SignedActionResponseV1, WorkerError> {
     let inspected = inspect_signed_privacy_native_action_v1(signed.signed_transaction())
         .map_err(|_| WorkerError::NativeSelfInspectionFailed)?;
@@ -906,7 +909,7 @@ fn signed_action_response_v1(
     Ok(SignedActionResponseV1 {
         protocol_id: manifest.protocol_id.canonical_label().to_owned(),
         operation_schema: manifest.operation_schema.to_owned(),
-        chain_id: signed.signed_transaction().chain().to_string(),
+        chain_id: chain_id.to_owned(),
         authority: manifest.authority.to_string(),
         authority_public_key: manifest.public_key.to_string(),
         adaptive_signed_transaction,
@@ -1212,6 +1215,22 @@ fn validate_expected_binding(
 fn retained_protocol(protocol: &str) -> Result<PrivacyProtocolIdV1, WorkerError> {
     let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol)
         .ok_or(WorkerError::UnsupportedProtocol)?;
+    match protocol_id {
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
+        | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
+        | PrivacyProtocolIdV1::IrohaZkAmsV1
+        | PrivacyProtocolIdV1::VegaExistingCredentialZkV0
+        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+        | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+        | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+        | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
+        | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+        | PrivacyProtocolIdV1::PqMaspStarkV0 => {}
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+            return Err(WorkerError::UnsupportedProtocol);
+        }
+    }
     privacy_native_action_capability_for_protocol_v1(protocol_id)
         .ok_or(WorkerError::UnsupportedProtocol)?;
     Ok(protocol_id)
@@ -1468,6 +1487,7 @@ fn validate_execution_plan_v1(
     }
     Ok(ValidatedExecutionPlanV1 {
         context: PrivacyActionTransactionContextV1 {
+            network_id: network_id_from_genesis_hash_bytes(genesis),
             chain_id,
             authority,
             creation_time: Duration::from_millis(creation_time_ms),
@@ -1754,6 +1774,29 @@ mod tests {
 
     fn execution_bundle_file(directory: &TempDir, name: &str, protocol_witness: &[u8]) -> PathBuf {
         credential_file(directory, name, &execution_bundle(protocol_witness))
+    }
+
+    #[test]
+    fn generic_worker_registry_rejects_the_separate_zk_x509_path() {
+        assert!(matches!(
+            retained_protocol("iroha-zk-x509-stark-p256-v0"),
+            Err(WorkerError::UnsupportedProtocol)
+        ));
+        for protocol in [
+            "zk-ace-pq-authorization-v0",
+            "anonymous-pgc-k-out-of-n-v1",
+            "verange-transparent-range-v1",
+            "iroha-zk-ams-v1",
+            "vega-existing-credential-zk-v0",
+            "iroha-jindo-polynomial-commitment-v0",
+            "iroha-bootle-lantern-anoncred-v1",
+            "orchard-halo2-actions-v1",
+            "monero-fcmp-plus-plus-v1",
+            "iroha-ivm-private-note-stark-v1",
+            "pq-masp-stark-v0",
+        ] {
+            assert!(retained_protocol(protocol).is_ok(), "{protocol}");
+        }
     }
 
     fn canonical_execution_plan() -> Vec<u8> {

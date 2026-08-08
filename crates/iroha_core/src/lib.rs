@@ -199,9 +199,8 @@ pub use ivm::encode_argument_record_from_json;
 pub fn validate_genesis_block(
     block: &iroha_data_model::block::SignedBlock,
     genesis_account: &iroha_data_model::account::AccountId,
-    expected_chain_id: &iroha_data_model::ChainId,
 ) -> Result<(), block::InvalidGenesisError> {
-    block::check_genesis_block(block, genesis_account, expected_chain_id)
+    block::check_genesis_block(block, genesis_account)
 }
 
 #[cfg(test)]
@@ -247,6 +246,7 @@ pub const TX_RETRIEVAL_INTERVAL: Duration = Duration::from_millis(100);
 /// `irohad` before the vote reaches the Sumeragi actor queue.
 pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN_VOTE_BYTES;
 const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 4;
+const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 20;
 const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
 // A canonical 128-member BLS committee needs just over 256 KiB under Norito's
 // conservative nested alignment-copy accounting. Keep deterministic headroom
@@ -566,6 +566,9 @@ pub enum NetworkMessage {
     /// Norito Streaming control-plane frame.
     #[codec(index = 19)]
     StreamingControl(Box<ControlFrame>),
+    /// Certified QueuePlan admission disseminated to every live authoritative validator.
+    #[codec(index = 20)]
+    QueuePlanAdmissionPublication(Arc<torii_proxy::QueuePlanAdmissionPublicationV1>),
 }
 
 impl NetworkMessage {
@@ -579,6 +582,7 @@ impl NetworkMessage {
                 | Self::SoracloudLocalReadProxyResponse(_)
                 | Self::ToriiProxyRequest(_)
                 | Self::ToriiProxyResponse(_)
+                | Self::QueuePlanAdmissionPublication(_)
         )
     }
 }
@@ -673,6 +677,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::ToriiProxyRequest(_)
             | NetworkMessage::ToriiProxyResponse(_)
+            | NetworkMessage::QueuePlanAdmissionPublication(_)
             | NetworkMessage::StreamingControl(_) => T::Control,
             // The global v1 control-flow and block-sync envelopes are likewise
             // decode-only. Send admission, serialization, and daemon ingress
@@ -698,7 +703,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             Self::SoracloudLocalReadProxyRequest(_)
             | Self::SoracloudLocalReadProxyResponse(_)
             | Self::ToriiProxyRequest(_)
-            | Self::ToriiProxyResponse(_) => SubscriberRoute::ToriiProxy,
+            | Self::ToriiProxyResponse(_)
+            | Self::QueuePlanAdmissionPublication(_) => SubscriberRoute::ToriiProxy,
             Self::Connect(_) => SubscriberRoute::Connect,
             _ => SubscriberRoute::General,
         }
@@ -739,7 +745,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             }
             return Ok(Some(Topic::Health));
         }
-        let field = if matches!(tag, 0 | 5 | 8) {
+        let field = if matches!(tag, 0 | 5 | 8 | 20) {
             inbound_owned_enum_field(remaining, flags)?
         } else {
             inbound_enum_field(remaining, flags)?
@@ -753,7 +759,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             9 => Topic::PeerGossip,
             10 => Topic::TrustGossip,
             12..=14 => Topic::Health,
-            15..=19 => Topic::Control,
+            15..=20 => Topic::Control,
             _ => {
                 return Err(norito::core::Error::Message(
                     "unknown core network-message discriminant".to_owned(),
@@ -773,24 +779,44 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             .ok_or(norito::core::Error::LengthMismatch)?;
         let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
         discriminant_bytes.copy_from_slice(discriminant);
-        if u32::from_le_bytes(discriminant_bytes) != NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG {
-            return Ok(None);
-        }
+        match u32::from_le_bytes(discriminant_bytes) {
+            NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG => {
+                if framed_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES {
+                    return Err(norito::core::Error::ArchiveLengthExceeded {
+                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                        limit: u64::try_from(MAX_LANE_DRAIN_VOTE_WIRE_BYTES).unwrap_or(u64::MAX),
+                    });
+                }
 
-        if framed_len > MAX_LANE_DRAIN_VOTE_WIRE_BYTES {
-            return Err(norito::core::Error::ArchiveLengthExceeded {
-                length: u64::try_from(framed_len).unwrap_or(u64::MAX),
-                limit: u64::try_from(MAX_LANE_DRAIN_VOTE_WIRE_BYTES).unwrap_or(u64::MAX),
-            });
+                Ok(Some(norito::DecodeLimits::new(
+                    lane_consensus::MAX_LANE_BLOCK_VALIDATORS,
+                    MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
+                    MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS,
+                    MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES,
+                    MAX_LANE_DRAIN_VOTE_DECODE_DEPTH,
+                )))
+            }
+            NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG => {
+                const WIRE_OVERHEAD_BYTES: usize = 64 * 1024;
+                const MAX_CERTIFICATE_BYTES: usize =
+                    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+                const MAX_WIRE_BYTES: usize = MAX_CERTIFICATE_BYTES + WIRE_OVERHEAD_BYTES;
+                if framed_len > MAX_WIRE_BYTES {
+                    return Err(norito::core::Error::ArchiveLengthExceeded {
+                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                        limit: u64::try_from(MAX_WIRE_BYTES).unwrap_or(u64::MAX),
+                    });
+                }
+                Ok(Some(norito::DecodeLimits::new(
+                    MAX_CERTIFICATE_BYTES,
+                    MAX_CERTIFICATE_BYTES,
+                    MAX_CERTIFICATE_BYTES,
+                    MAX_WIRE_BYTES.saturating_mul(2),
+                    16,
+                )))
+            }
+            _ => Ok(None),
         }
-
-        Ok(Some(norito::DecodeLimits::new(
-            lane_consensus::MAX_LANE_BLOCK_VALIDATORS,
-            MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
-            MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS,
-            MAX_LANE_DRAIN_VOTE_DECODE_ALLOCATED_BYTES,
-            MAX_LANE_DRAIN_VOTE_DECODE_DEPTH,
-        )))
     }
 
     fn is_outbound_allowed(&self) -> bool {
@@ -938,7 +964,7 @@ mod tests {
     use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
     use iroha_data_model::transaction::TransactionBuilder;
-    use iroha_data_model::{ChainId, Level, isi::Log};
+    use iroha_data_model::{Level, NetworkId, isi::Log};
     use iroha_p2p::{
         ClassifyTopic,
         network::message::{SubscriberRoute, Topic as NetworkTopic},
@@ -967,12 +993,19 @@ mod tests {
             },
         },
         torii_proxy::{
+            QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionPublicationV1,
             TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
             ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
     };
+
+    fn test_network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            label,
+        )))
+    }
 
     fn checked_topic_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked network topic keypair")
@@ -1916,17 +1949,25 @@ mod tests {
                 body: Vec::new(),
             },
         }));
+        let queue_plan_publication = NetworkMessage::QueuePlanAdmissionPublication(Arc::new(
+            QueuePlanAdmissionPublicationV1 {
+                schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+                certificate: vec![0x16],
+            },
+        ));
 
         assert!(soracloud_request.is_torii_proxy_control_message());
         assert!(soracloud_response.is_torii_proxy_control_message());
         assert!(torii_request.is_torii_proxy_control_message());
         assert!(torii_response.is_torii_proxy_control_message());
+        assert!(queue_plan_publication.is_torii_proxy_control_message());
         assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
         for (message, expected_tag) in [
             (&soracloud_request, 15),
             (&soracloud_response, 16),
             (&torii_request, 17),
             (&torii_response, 18),
+            (&queue_plan_publication, 20),
         ] {
             assert_eq!(raw_network_tag(message), expected_tag);
             assert_eq!(message.topic(), NetworkTopic::Control);
@@ -2228,11 +2269,9 @@ mod tests {
     #[test]
     fn network_message_roundtrip_cached_transaction_gossip() {
         let (account, keypair) = gen_account_in("wonderland");
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
+        let network_id = test_network_id(b"cached-transaction-gossip");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -2284,11 +2323,9 @@ mod tests {
     #[test]
     fn network_message_roundtrip_cached_transaction_gossip_is_context_free() {
         let (account, keypair) = gen_account_in("wonderland");
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
+        let network_id = test_network_id(b"context-free-cached-transaction-gossip");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

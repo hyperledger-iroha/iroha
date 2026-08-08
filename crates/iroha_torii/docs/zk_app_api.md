@@ -109,6 +109,9 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Retention controls for the in-memory prove job cache used by `/v1/zk/ivm/prove/{job_id}`.
   - The default aggregate retained-byte cap is 128 MiB. Terminal responses are compact JSON cached once; GET clones immutable bytes and charges exact egress before refreshing LRU state.
   - Jobs older than `zk_ivm_prove_job_ttl_secs` are evicted. Started blocking work is discard-only on cancellation and keeps its capacity/memory reservation until physical completion.
+- `torii.zk_ivm_prove_job_max_entries_per_owner` / `torii.zk_ivm_prove_job_max_retained_bytes_per_owner`
+  - Per-account retained-job caps (defaults: 32 entries and 32 MiB). Admission and terminal-result growth may evict only terminal entries belonging to the same account, never another tenant's result.
+  - IVM prove POST/GET/DELETE require canonical account authentication. The POST signer must match the request authority; the stored owner alone may read or delete the job, and foreign/missing identifiers share `404`.
 - `torii.max_content_len` (bytes)
   - Global HTTP request body limit; applies to attachments uploads as an upper bound.
 - `confidential.tree_roots_history_len` (non-zero usize)

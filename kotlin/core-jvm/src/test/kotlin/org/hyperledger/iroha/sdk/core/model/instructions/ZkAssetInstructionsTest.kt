@@ -21,6 +21,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.crypto.NativeSignedTransaction
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
@@ -243,7 +244,7 @@ class ZkAssetInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
                 NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                     SigningAlgorithm.ED25519,
-                    "chain",
+                    TestNetworkIds.canonical(),
                     AccountAddress.DEFAULT_I105_DISCRIMINANT,
                     "alice",
                 0,
@@ -300,10 +301,10 @@ class ZkAssetInstructionsTest {
     @Test
     fun nativeSignerRegisterZkAssetBindsFeePaymentWhenBridgeAvailable() {
         assertEquals(22, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
-        assertEquals(4, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
+        assertEquals(5, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 22 native-signer contract revision 4 is required",
+            "connect_norito_bridge ABI 22 native-signer contract revision 5 is required",
         )
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
@@ -324,7 +325,7 @@ class ZkAssetInstructionsTest {
         assertNativeFeePayment(
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
-                chainId = "00000042",
+                networkId = TestNetworkIds.canonical(),
                 chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = authority,
                 creationTimeMs = 1_736_000_000_000,

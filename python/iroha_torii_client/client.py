@@ -723,7 +723,6 @@ __all__ = [
     "GovernanceProposalDraft",
     "ContractOperationReceipt",
     "ContractCallResponse",
-    "PipelineDiagnostic",
     "PipelineTransactionStatus",
     "PipelineTransactionStatusResponse",
     "MultisigResponse",
@@ -4679,8 +4678,8 @@ class OfflineAxtErrorDetails:
     snapshot_version: Optional[int] = None
     dataspace: Optional[int] = None
     lane: Optional[int] = None
-    next_min_handle_era: Optional[int] = None
-    next_min_sub_nonce: Optional[int] = None
+    active_handle_era: Optional[int] = None
+    next_handle_counter: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -4855,6 +4854,10 @@ def _offline_queue_error_details(value: Any, context: str) -> OfflineQueueErrorD
 
 def _offline_axt_error_details(value: Any, context: str) -> OfflineAxtErrorDetails:
     record = _offline_mapping(value, context)
+    retired_fields = {"next_min_handle_era", "next_min_sub_nonce"}.intersection(record)
+    if retired_fields:
+        retired = ", ".join(sorted(retired_fields))
+        raise RuntimeError(f"{context} uses retired AXT fields: {retired}")
     return OfflineAxtErrorDetails(
         code=_offline_optional_error_string(record, "code", context),
         reason=_offline_optional_error_string(record, "reason", context),
@@ -4865,11 +4868,11 @@ def _offline_axt_error_details(value: Any, context: str) -> OfflineAxtErrorDetai
             record, "dataspace", context, _OFFLINE_MAX_U64
         ),
         lane=_offline_optional_error_unsigned(record, "lane", context, _OFFLINE_MAX_U32),
-        next_min_handle_era=_offline_optional_error_unsigned(
-            record, "next_min_handle_era", context, _OFFLINE_MAX_U64
+        active_handle_era=_offline_optional_error_unsigned(
+            record, "active_handle_era", context, _OFFLINE_MAX_U64
         ),
-        next_min_sub_nonce=_offline_optional_error_unsigned(
-            record, "next_min_sub_nonce", context, _OFFLINE_MAX_U64
+        next_handle_counter=_offline_optional_error_unsigned(
+            record, "next_handle_counter", context, _OFFLINE_MAX_U64
         ),
     )
 
@@ -6943,45 +6946,25 @@ class GovernanceProposalDraft:
 
 
 @dataclass(frozen=True)
-class PipelineDiagnostic:
-    """Structured diagnostic inside a pipeline status envelope."""
-
-    category: str
-    message: str
-    code: Optional[str]
-    decoded_reason: Optional[str]
-    contract: Optional[str]
-    entrypoint: Optional[str]
-    trigger_id: Optional[str]
-    step_index: Optional[int]
-    vm_pc: Optional[int]
-    function: Optional[str]
-    source: Optional[str]
-    opcode: Optional[str]
-    syscall: Optional[str]
-    raw_reason: Optional[str]
-
-
-@dataclass(frozen=True)
 class PipelineTransactionStatus:
-    """Status details inside a pipeline status envelope."""
+    """Non-sensitive status metadata inside a public pipeline response."""
 
     kind: str
     block_height: Optional[int]
-    rejection_reason: Any
 
 
 @dataclass(frozen=True)
 class PipelineTransactionStatusResponse:
-    """Canonical transaction outcome envelope returned by pipeline-aware endpoints."""
+    """Metadata-only public pipeline response.
+
+    Transaction contents, rejection diagnostics, trigger completions, and batch
+    details require the separately authorized signed transaction-details query.
+    """
 
     hash: str
     status: PipelineTransactionStatus
-    summary: Optional[str]
-    diagnostics: List[PipelineDiagnostic]
-    scope: Optional[str]
-    resolved_from: Optional[str]
-    raw: Dict[str, Any]
+    scope: str
+    resolved_from: str
 
     @property
     def is_terminal(self) -> bool:
@@ -6994,12 +6977,6 @@ class PipelineTransactionStatusResponse:
     @property
     def is_rejected(self) -> bool:
         return self.status.kind == "Rejected"
-
-    @property
-    def primary_diagnostic(self) -> Optional[PipelineDiagnostic]:
-        return self.diagnostics[0] if self.diagnostics else None
-
-
 
 @dataclass(frozen=True)
 class ContractOperationReceipt:
@@ -13682,6 +13659,15 @@ class ToriiClient:
             raise RuntimeError(
                 "fee sponsor program response.id does not match the requested program"
             )
+        try:
+            self._require_exact_i105_account_id(
+                response.get("payout_account"),
+                "fee sponsor program response.payout_account",
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "fee sponsor program response.payout_account is not canonical"
+            ) from exc
         return response
 
     def prepare_contract_call(
@@ -19264,70 +19250,64 @@ class ToriiClient:
         )
 
     @staticmethod
-    def _parse_pipeline_diagnostic(payload: Any, *, context: str) -> PipelineDiagnostic:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return PipelineDiagnostic(
-            category=ToriiClient._require_non_empty_string(record.get("category"), f"{context}.category"),
-            message=ToriiClient._require_non_empty_string(record.get("message"), f"{context}.message"),
-            code=ToriiClient._coerce_optional_string(record.get("code"), context=f"{context}.code"),
-            decoded_reason=ToriiClient._coerce_optional_string(
-                record.get("decoded_reason"),
-                context=f"{context}.decoded_reason",
-            ),
-            contract=ToriiClient._coerce_optional_string(record.get("contract"), context=f"{context}.contract"),
-            entrypoint=ToriiClient._coerce_optional_string(record.get("entrypoint"), context=f"{context}.entrypoint"),
-            trigger_id=ToriiClient._coerce_optional_string(record.get("trigger_id"), context=f"{context}.trigger_id"),
-            step_index=ToriiClient._coerce_optional_unsigned(
-                record.get("step_index"),
-                context=f"{context}.step_index",
-            ),
-            vm_pc=ToriiClient._coerce_optional_unsigned(record.get("vm_pc"), context=f"{context}.vm_pc"),
-            function=ToriiClient._coerce_optional_string(record.get("function"), context=f"{context}.function"),
-            source=ToriiClient._coerce_optional_string(record.get("source"), context=f"{context}.source"),
-            opcode=ToriiClient._coerce_optional_string(record.get("opcode"), context=f"{context}.opcode"),
-            syscall=ToriiClient._coerce_optional_string(record.get("syscall"), context=f"{context}.syscall"),
-            raw_reason=ToriiClient._coerce_optional_string(record.get("raw_reason"), context=f"{context}.raw_reason"),
-        )
-
-    @staticmethod
     def _parse_pipeline_status_response(
         payload: Any,
         *,
         context: str,
     ) -> PipelineTransactionStatusResponse:
         record = ToriiClient._ensure_mapping(payload, context)
+        ToriiClient._validate_exact_fields(
+            record,
+            {"hash", "status", "scope", "resolved_from"},
+            context,
+        )
         status_record = ToriiClient._ensure_mapping(record.get("status"), f"{context}.status")
-        diagnostics_value = record.get("diagnostics") or []
-        if not isinstance(diagnostics_value, list):
-            raise RuntimeError(f"{context}.diagnostics must be a list")
-        raw_hash = record.get("hash", record.get("tx_hash_hex"))
-        return PipelineTransactionStatusResponse(
-            hash=ToriiClient._require_non_empty_string(raw_hash, f"{context}.hash"),
-            status=PipelineTransactionStatus(
-                kind=ToriiClient._require_non_empty_string(
-                    status_record.get("kind"),
-                    f"{context}.status.kind",
-                ),
-                block_height=ToriiClient._coerce_optional_unsigned(
-                    status_record.get("block_height"),
-                    context=f"{context}.status.block_height",
-                ),
-                rejection_reason=status_record.get("rejection_reason"),
-            ),
-            summary=ToriiClient._coerce_optional_string(record.get("summary"), context=f"{context}.summary"),
-            diagnostics=[
-                ToriiClient._parse_pipeline_diagnostic(
-                    entry,
-                    context=f"{context}.diagnostics[{index}]",
+        ToriiClient._reject_unknown_fields(
+            status_record,
+            {"kind", "block_height"},
+            f"{context}.status",
+        )
+        if "kind" not in status_record:
+            raise RuntimeError(f"{context}.status is missing required field kind")
+        status_kind = ToriiClient._require_non_empty_string(
+            status_record.get("kind"),
+            f"{context}.status.kind",
+        )
+        if status_kind not in {"Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"}:
+            raise RuntimeError(f"{context}.status.kind is unsupported")
+        scope = ToriiClient._require_non_empty_string(record.get("scope"), f"{context}.scope")
+        if scope not in {"local", "auto", "global"}:
+            raise RuntimeError(f"{context}.scope is unsupported")
+        resolved_from = ToriiClient._require_non_empty_string(
+            record.get("resolved_from"),
+            f"{context}.resolved_from",
+        )
+        if resolved_from not in {"cache", "queue", "state"}:
+            raise RuntimeError(f"{context}.resolved_from is unsupported")
+        block_height = None
+        if "block_height" in status_record:
+            raw_block_height = status_record["block_height"]
+            if (
+                isinstance(raw_block_height, bool)
+                or not isinstance(raw_block_height, int)
+                or raw_block_height <= 0
+            ):
+                raise RuntimeError(
+                    f"{context}.status.block_height must be a positive integer"
                 )
-                for index, entry in enumerate(diagnostics_value)
-            ],
-            scope=ToriiClient._coerce_optional_string(record.get("scope"), context=f"{context}.scope"),
-            resolved_from=ToriiClient._coerce_optional_string(
-                record.get("resolved_from"),
-                context=f"{context}.resolved_from",
+            block_height = raw_block_height
+        return PipelineTransactionStatusResponse(
+            hash=ToriiClient._require_exact_lower_hex_string(
+                record.get("hash"),
+                context=f"{context}.hash",
+                expected_length=64,
             ),
-            raw=dict(record),
+            status=PipelineTransactionStatus(
+                kind=status_kind,
+                block_height=block_height,
+            ),
+            scope=scope,
+            resolved_from=resolved_from,
         )
 
     @staticmethod

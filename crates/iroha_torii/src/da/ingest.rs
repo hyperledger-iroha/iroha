@@ -11,7 +11,7 @@ use std::{
 };
 
 use axum::{
-    extract::{Path as AxumPath, State},
+    extract::{Extension, Path as AxumPath, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::Response,
 };
@@ -229,6 +229,7 @@ fn compute_da_manifest_artifacts(
 /// HTTP handler for `/v1/da/ingest`.
 pub async fn handler_post_da_ingest(
     State(app): State<SharedAppState>,
+    Extension(_verified_principal): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: HeaderMap,
     utils::extractors::JsonOnly(request): utils::extractors::JsonOnly<DaIngestRequest>,
 ) -> Result<Response, ResponseError> {

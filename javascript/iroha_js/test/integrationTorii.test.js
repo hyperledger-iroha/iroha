@@ -8,6 +8,7 @@ import {
   ToriiClient,
   ToriiHttpError,
   IsoMessageTimeoutError,
+  NetworkId,
   bootstrapConnectPreviewSession,
   extractToriiFeatureConfig,
   buildRegisterDomainTransaction,
@@ -124,6 +125,10 @@ const GOVERNANCE_BALLOT_OPTIONS = parseJsonEnv(
 );
 const CHAIN_ID =
   process.env.IROHA_TORII_INTEGRATION_CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
+const NETWORK_ID = NetworkId.parse(
+  process.env.IROHA_TORII_INTEGRATION_NETWORK_ID ??
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const AUTHORITY_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
   "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -932,7 +937,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -985,7 +990,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -1054,7 +1059,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction: domainTx, hash: domainHash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -1074,7 +1079,7 @@ test(
     const accountId = randomAccountId(domainId);
     const { signedTransaction: accountTx, hash: accountHash } =
       buildRegisterAccountAndTransferTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId,
@@ -1097,7 +1102,7 @@ test(
     const assetId = composeAssetId(assetDefinitionId, AUTHORITY_ACCOUNT_ID);
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
@@ -1143,7 +1148,7 @@ test(
 
     const { signedTransaction: extraMintTx, hash: extraMintHash } =
       buildMintAssetTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         assetId,
         quantity: "3",
@@ -1252,7 +1257,7 @@ test(
     const remainingQuantity = (BigInt(mintedQuantity) - BigInt(transferQuantity)).toString();
 
     const { signedTransaction: domainTx, hash: domainHash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -1270,7 +1275,7 @@ test(
 
     const { signedTransaction: senderTx, hash: senderHash } =
       buildRegisterAccountAndTransferTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: senderAccountId,
@@ -1292,7 +1297,7 @@ test(
 
     const { signedTransaction: receiverTx, hash: receiverHash } =
       buildRegisterAccountAndTransferTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: receiverAccountId,
@@ -1314,7 +1319,7 @@ test(
 
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
@@ -1341,7 +1346,7 @@ test(
     assert.equal(mintedAsset.quantity, mintedQuantity);
 
     const { signedTransaction: transferTx, hash: transferHash } = buildTransferAssetTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       sourceAssetId: senderAssetId,
       destinationAccountId: receiverAccountId,
@@ -1993,7 +1998,7 @@ test(
 
     const blockEventPromise = waitForPipelineBlockEvent(client, controller.signal);
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -2056,7 +2061,7 @@ test(
     const domainId = randomDomainId();
     const streamPromise = waitForSumeragiStatusEvent(client, controller.signal);
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -2111,7 +2116,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {

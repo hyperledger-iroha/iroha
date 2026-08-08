@@ -483,6 +483,29 @@ fn rekey_account_id(
             .into(),
         ));
     }
+    if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
+        state_transaction,
+        old_account,
+    ) || crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(
+        state_transaction,
+        old_account,
+    ) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: it is deterministic SCCP route protocol escrow or an immutable route custody owner"
+            )
+            .into(),
+        ));
+    }
+    if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
+        state_transaction,
+        old_account,
+    )? {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("cannot rekey account {old_account}: it is deterministic FX protocol escrow")
+                .into(),
+        ));
+    }
     if crate::smartcontracts::isi::vpn::is_active_vpn_client(state_transaction, old_account) {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -1289,8 +1312,6 @@ fn replace_account_id_in_settlements(
             }
             if let Some(fx_corridor) = receipt.fx_corridor.as_mut() {
                 replace_account_id(&mut fx_corridor.source_account, old, new);
-                replace_account_id(&mut fx_corridor.source_sink, old, new);
-                replace_account_id(&mut fx_corridor.destination_reserve, old, new);
                 replace_account_id(&mut fx_corridor.recipient, old, new);
             }
         }
@@ -3332,11 +3353,13 @@ mod tests {
             SetKeyValue,
             alias_setup::EnsureAlias,
             settlement::{
-                FxCorridorSettlementDetails, SettlementKind, SettlementLeg, SettlementLegRole,
-                SettlementLegSnapshot, SettlementPlan, SettlementReceipt,
+                FxCorridorOracleEvidence, FxCorridorSettlementDetails, SettlementKind,
+                SettlementLeg, SettlementLegRole, SettlementLegSnapshot, SettlementPlan,
+                SettlementReceipt,
             },
         },
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
+        oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
         prelude::{Domain, InstructionBox, Quantity, Register},
         transaction::IvmBytecode,
@@ -5850,6 +5873,17 @@ mod tests {
         );
         let settlement_id: iroha_data_model::isi::settlement::SettlementId =
             "fx_rekey_receipt".parse().expect("settlement id");
+        let request_hash = Hash::new(b"fx-rekey-receipt-oracle-request");
+        let oracle_event = FeedEvent {
+            feed_id: "fx_rate".parse().expect("feed id"),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 1,
+            request_hash,
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(1, 0),
+                entries: Vec::new(),
+            }),
+        };
         let receipt = SettlementReceipt {
             kind: SettlementKind::FxCorridor,
             authority: old_account.clone(),
@@ -5885,11 +5919,18 @@ mod tests {
                 policy_revision: 1,
                 source_dataspace: DataSpaceId::new(1),
                 destination_dataspace: DataSpaceId::new(2),
-                rate_numerator: 1,
-                rate_denominator: 1,
+                owner: old_account.clone(),
+                oracle_evidence: FxCorridorOracleEvidence {
+                    feed_id: oracle_event.feed_id.clone(),
+                    feed_config_version: oracle_event.feed_config_version,
+                    slot: oracle_event.slot,
+                    request_hash: oracle_event.request_hash,
+                    event_hash: HashOf::new(&oracle_event),
+                },
+                oracle_recorded_at_ms: 1,
+                oracle_rate: ObservationValue::new(1, 0),
                 source_account: old_account.clone(),
-                source_sink: old_account.clone(),
-                destination_reserve: old_account.clone(),
+                destination_escrow: old_account.clone(),
                 recipient: old_account.clone(),
                 source_asset_definition_id,
                 destination_asset_definition_id,
@@ -5916,9 +5957,9 @@ mod tests {
         assert_eq!(receipt.legs[1].leg.to(), &new_account);
         let details = receipt.fx_corridor.as_ref().expect("FX receipt details");
         assert_eq!(details.source_account, new_account);
-        assert_eq!(details.source_sink, new_account);
-        assert_eq!(details.destination_reserve, new_account);
         assert_eq!(details.recipient, new_account);
+        assert_eq!(details.owner, old_account);
+        assert_eq!(details.destination_escrow, old_account);
     }
 
     #[test]

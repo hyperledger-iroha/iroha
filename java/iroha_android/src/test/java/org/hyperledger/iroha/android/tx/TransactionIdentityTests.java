@@ -96,7 +96,7 @@ public final class TransactionIdentityTests {
       final Map<String, JsonValue> metadata, final List<ProofAttachment> attachments) {
     return TransactionPayload.builder()
         .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
-        .setChainId("00000001")
+        .setNetworkId(org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(1L))
         .setAuthority(TestAccountIds.ed25519Authority(0x2C))
         .setCreationTimeMs(1_735_369_000_000L)
         .setInstructionBytes(new byte[] {0x01, 0x02})

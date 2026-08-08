@@ -1242,12 +1242,12 @@ fn instruction_skeleton_for_sccp_route_governance_propose(
 }
 
 fn build_signable_transaction_b64(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     authority: &iroha_data_model::account::AccountId,
     instructions: Vec<iroha_data_model::isi::InstructionBox>,
 ) -> String {
     let builder = iroha_data_model::transaction::signed::TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1326,9 +1326,9 @@ fn compute_proposal_id(
 }
 
 fn compute_sccp_route_governance_proposal_id(
-    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
+    anchor: &iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1,
 ) -> Result<[u8; 32], crate::Error> {
-    let canonical = action.encode();
+    let canonical = anchor.encode();
     let action_len: u32 = canonical.len().try_into().map_err(|_| {
         crate::routing::conversion_error(
             "SCCP route governance action length exceeds 2^32 bytes".into(),
@@ -1917,7 +1917,7 @@ pub async fn handle_gov_protected_set(
             CONTEXT_GOV_PROTECTED_AUTHORITY,
         )?;
         Some(build_signable_transaction_b64(
-            chain_id.as_ref(),
+            state.network_id_ref(),
             &authority_id,
             vec![instruction],
         ))
@@ -2256,6 +2256,7 @@ pub async fn handle_gov_propose_deploy(
 /// # Errors
 /// Returns `crate::Error::Query` when the request options fail validation.
 pub async fn handle_gov_propose_sccp_route_governance(
+    state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<ProposeSccpRouteGovernanceDto>,
 ) -> Result<JsonBody<ProposeSccpRouteGovernanceResponse>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
@@ -2283,12 +2284,15 @@ pub async fn handle_gov_propose_sccp_route_governance(
     })?;
 
     let instr = gov::ProposeSccpRouteGovernance {
-        action: body.action,
+        anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            network_id: *state.network_id_ref(),
+            action: body.action,
+        },
         window,
         mode,
     };
 
-    let proposal_id = hex::encode(compute_sccp_route_governance_proposal_id(&instr.action)?);
+    let proposal_id = hex::encode(compute_sccp_route_governance_proposal_id(&instr.anchor)?);
 
     Ok(JsonBody(ProposeSccpRouteGovernanceResponse {
         ok: true,
@@ -2336,7 +2340,7 @@ pub async fn handle_ministry_agenda_proposal_draft(
     };
     let tx_instructions = vec![tx_instr_from_box(instr.clone().into())];
     let signable_transaction_b64 = build_signable_transaction_b64(
-        chain_id.as_ref(),
+        state.network_id_ref(),
         &authority_id,
         vec![iroha_data_model::isi::InstructionBox::from(instr)],
     );
@@ -3031,7 +3035,7 @@ seiyaku GovernedReadFixture {
             .map(decode_tx_instruction)
             .collect::<Vec<_>>();
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-            (*harness.chain_id).clone(),
+            *harness.state.network_id_ref(),
             harness.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3040,7 +3044,7 @@ seiyaku GovernedReadFixture {
         let params = harness.state.view().world().parameters().clone();
         let accepted = iroha_core::tx::AcceptedTransaction::accept(
             tx,
-            harness.chain_id.as_ref(),
+            harness.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             harness.state.crypto().as_ref(),
@@ -3107,7 +3111,7 @@ seiyaku GovernedReadFixture {
             amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-            (*harness.chain_id).clone(),
+            *harness.state.network_id_ref(),
             harness.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3116,7 +3120,7 @@ seiyaku GovernedReadFixture {
         let params = harness.state.view().world().parameters().clone();
         let accepted = iroha_core::tx::AcceptedTransaction::accept(
             tx,
-            harness.chain_id.as_ref(),
+            harness.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             harness.state.crypto().as_ref(),
@@ -3163,7 +3167,7 @@ seiyaku GovernedReadFixture {
             amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-            (*harness.chain_id).clone(),
+            *harness.state.network_id_ref(),
             harness.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3172,7 +3176,7 @@ seiyaku GovernedReadFixture {
         let params = harness.state.view().world().parameters().clone();
         let accepted = iroha_core::tx::AcceptedTransaction::accept(
             tx,
-            harness.chain_id.as_ref(),
+            harness.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             harness.state.crypto().as_ref(),
@@ -3467,20 +3471,27 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn propose_sccp_route_governance_builds_exact_instruction_and_proposal_id() {
+        let (state, _queue, _chain_id) = mk_basic_context();
         let action = sample_sccp_route_governance_action();
-        let expected_id = compute_sccp_route_governance_proposal_id(&action).expect("proposal id");
-        let response =
-            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+        let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            network_id: *state.network_id_ref(),
+            action: action.clone(),
+        };
+        let expected_id = compute_sccp_route_governance_proposal_id(&anchor).expect("proposal id");
+        let response = handle_gov_propose_sccp_route_governance(
+            state,
+            NoritoJson(ProposeSccpRouteGovernanceDto {
                 action: action.clone(),
                 window: Some(AtWindowDto {
                     lower: 10,
                     upper: 20,
                 }),
                 mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
-            }))
-            .await
-            .expect("valid SCCP governance draft")
-            .0;
+            }),
+        )
+        .await
+        .expect("valid SCCP governance draft")
+        .0;
 
         assert!(response.ok);
         assert_eq!(response.proposal_id, hex::encode(expected_id));
@@ -3490,7 +3501,7 @@ seiyaku GovernedReadFixture {
             .as_any()
             .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
             .expect("exact SCCP governance instruction");
-        assert_eq!(decoded.action, action);
+        assert_eq!(decoded.anchor, anchor);
         assert_eq!(
             decoded.window,
             Some(AtWindow {
@@ -3506,6 +3517,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn propose_sccp_route_governance_rejects_invalid_action_before_drafting() {
+        let (state, _queue, _chain_id) = mk_basic_context();
         let mut action = sample_sccp_route_governance_action();
         let iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(key) = &mut action
         else {
@@ -3513,14 +3525,16 @@ seiyaku GovernedReadFixture {
         };
         key.revision = 0;
 
-        let error =
-            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+        let error = handle_gov_propose_sccp_route_governance(
+            state,
+            NoritoJson(ProposeSccpRouteGovernanceDto {
                 action,
                 window: None,
                 mode: None,
-            }))
-            .await
-            .expect_err("invalid SCCP action must fail before returning a skeleton");
+            }),
+        )
+        .await
+        .expect_err("invalid SCCP action must fail before returning a skeleton");
         assert!(
             format!("{error:?}").contains("invalid SCCP route governance action"),
             "unexpected error: {error:?}"
@@ -3529,6 +3543,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn propose_sccp_route_governance_rejects_mode_aliases_and_reversed_window() {
+        let (state, _queue, _chain_id) = mk_basic_context();
         let action = sample_sccp_route_governance_action();
         let canonical = norito::json::to_json(&ProposeSccpRouteGovernanceDto {
             action: action.clone(),
@@ -3552,17 +3567,19 @@ seiyaku GovernedReadFixture {
             );
         }
 
-        let error =
-            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+        let error = handle_gov_propose_sccp_route_governance(
+            state,
+            NoritoJson(ProposeSccpRouteGovernanceDto {
                 action,
                 window: Some(AtWindowDto {
                     lower: 21,
                     upper: 20,
                 }),
                 mode: None,
-            }))
-            .await
-            .expect_err("reversed SCCP governance window must reject");
+            }),
+        )
+        .await
+        .expect_err("reversed SCCP governance window must reject");
         assert!(format!("{error:?}").contains("window.upper"));
     }
 

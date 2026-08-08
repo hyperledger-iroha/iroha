@@ -82,7 +82,7 @@ use iroha_crypto::{
 #[cfg(test)]
 use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
-    ChainId, HasMetadata,
+    ChainId, HasMetadata, NetworkId,
     account::{
         Account, AccountId, NewAccount,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
@@ -125,7 +125,8 @@ use iroha_data_model::{
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
         },
         settlement::{
-            DvpIsi, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
+            DvpIsi, FundFxCorridorEscrow, FxCorridorOracleEvidence, PvpIsi, RefundFxCorridorEscrow,
+            SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
         },
         smart_contract_code::{
             ActivateContractInstance, CancelSmartContractCodeUpload, DeactivateContractInstance,
@@ -156,7 +157,8 @@ use iroha_data_model::{
     permission::Permission,
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
-        PrivacyCompiledProfileCatalogV1, PrivacyProtocolIdV1,
+        PrivacyCompiledProfileCatalogV1, PrivacyExact12CapabilityManifestV1, PrivacyProtocolIdV1,
+        validate_privacy_capability_archive_v1,
     },
     proof::{ProofAttachment, ProofAttachmentList},
     role::{NewRole, Role, RoleId},
@@ -10244,7 +10246,7 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
     if variants.len() != 1 {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            "Settlement instruction must contain exactly one of Dvp, Pvp, SetFxCorridorPolicy, or SettleFxCorridor",
+            "Settlement instruction must contain exactly one supported settlement variant",
         ));
     }
 
@@ -10265,6 +10267,27 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
             }
             SettlementInstructionBox::SetFxCorridorPolicy(set)
         }
+        "FundFxCorridorEscrow" => {
+            let fund = json::from_value::<FundFxCorridorEscrow>(payload).map_err(norito_to_napi)?;
+            if fund.amount.is_zero() {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "FundFxCorridorEscrow.amount must be positive",
+                ));
+            }
+            SettlementInstructionBox::FundFxCorridorEscrow(fund)
+        }
+        "RefundFxCorridorEscrow" => {
+            let refund =
+                json::from_value::<RefundFxCorridorEscrow>(payload).map_err(norito_to_napi)?;
+            if refund.amount.is_zero() {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "RefundFxCorridorEscrow.amount must be positive",
+                ));
+            }
+            SettlementInstructionBox::RefundFxCorridorEscrow(refund)
+        }
         "SettleFxCorridor" => {
             exact_json_object_fields(
                 &payload,
@@ -10276,6 +10299,8 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
                     "settlement_id",
                     "recipient",
                     "source_amount",
+                    "expected_destination_amount",
+                    "oracle_evidence",
                 ],
                 "SettleFxCorridor",
             )?;
@@ -10459,6 +10484,14 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             }
             SettlementInstructionBox::SetFxCorridorPolicy(value) => (
                 "SetFxCorridorPolicy",
+                json::to_value(value).map_err(norito_to_napi)?,
+            ),
+            SettlementInstructionBox::FundFxCorridorEscrow(value) => (
+                "FundFxCorridorEscrow",
+                json::to_value(value).map_err(norito_to_napi)?,
+            ),
+            SettlementInstructionBox::RefundFxCorridorEscrow(value) => (
+                "RefundFxCorridorEscrow",
                 json::to_value(value).map_err(norito_to_napi)?,
             ),
             SettlementInstructionBox::SettleFxCorridor(value) => (
@@ -11801,7 +11834,7 @@ fn parse_fee_payment_intent(fee_payment_json: &str) -> napi::Result<FeePaymentIn
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_executable_transaction(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     executable: Executable,
     fee_payment: FeePaymentIntent,
@@ -11814,7 +11847,7 @@ fn assemble_executable_transaction(
     algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(chain_id, authority, fee_payment).with_executable(executable),
+        TransactionBuilder::new(network_id, authority, fee_payment).with_executable(executable),
         metadata,
         attachments,
         creation_time_ms,
@@ -11836,7 +11869,7 @@ fn assemble_executable_transaction(
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_transaction(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     instructions: Vec<InstructionBox>,
     fee_payment: FeePaymentIntent,
@@ -11855,7 +11888,7 @@ fn assemble_transaction(
     }
 
     assemble_executable_transaction(
-        chain_id,
+        network_id,
         authority,
         Executable::from(instructions),
         fee_payment,
@@ -12002,28 +12035,18 @@ pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String
 
 /// Re-sign a Norito-serialized transaction with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
+/// Genesis-domain payloads are rejected because this host signs runtime transactions only.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<Buffer> {
     let tx = decode_signed_transaction(bytes.as_ref())?;
-    let mut builder = TransactionBuilder::new(
-        tx.chain().clone(),
-        tx.authority().clone(),
-        tx.fee_payment_intent().clone(),
-    )
-    .with_executable(tx.instructions().clone())
-    .with_metadata(tx.metadata().clone());
-
-    if let Some(nonce) = tx.nonce() {
-        builder.set_nonce(nonce);
+    if tx.network_id().is_none() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "JavaScript host cannot re-sign a genesis-domain transaction",
+        ));
     }
-    builder.set_creation_time(tx.creation_time());
-    if let Some(ttl) = tx.time_to_live() {
-        builder.set_ttl(ttl);
-    }
-    if let Some(attachments) = tx.attachments() {
-        builder = builder.with_attachments(attachments.clone());
-    }
+    let builder = TransactionBuilder::from_payload(tx.payload().clone()).map_err(norito_to_napi)?;
 
     let private_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, secret.as_ref()).map_err(norito_to_napi)?;
@@ -12096,6 +12119,109 @@ pub fn privacy_compiled_profile_catalog_v1() -> napi::Result<Buffer> {
 /// Validate an archive as this binary's exact canonical compiled-profile catalog.
 pub fn privacy_validate_compiled_profile_catalog_v1(archive: Uint8Array) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive.as_ref()).code()
+}
+
+fn decode_privacy_exact12_capability_manifest_v1(
+    archive: &[u8],
+) -> napi::Result<PrivacyExact12CapabilityManifestV1> {
+    let status = validate_privacy_capability_archive_v1(archive);
+    if !status.is_valid() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "invalid canonical Exact12 capability manifest archive (native status {})",
+                status.code()
+            ),
+        ));
+    }
+    let manifest: PrivacyExact12CapabilityManifestV1 =
+        norito::decode_from_bytes(archive).map_err(|_| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "native Exact12 capability manifest validation/decode disagreement",
+            )
+        })?;
+    let canonical = manifest.canonical_bytes().map_err(|_| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            "native Exact12 capability manifest validation/re-encoding disagreement",
+        )
+    })?;
+    if canonical.as_slice() != archive {
+        return Err(napi::Error::new(
+            napi::Status::GenericFailure,
+            "native Exact12 capability manifest bytes changed after validation",
+        ));
+    }
+    Ok(manifest)
+}
+
+#[napi(js_name = "privacyValidateExact12CapabilityManifestV1")]
+/// Validate an archive as the exact canonical public Exact12 capability manifest.
+pub fn privacy_validate_exact12_capability_manifest_v1(archive: Uint8Array) -> i32 {
+    validate_privacy_capability_archive_v1(archive.as_ref()).code()
+}
+
+#[napi(js_name = "privacyExact12CapabilityManifestJsonV1")]
+/// Decode a validated canonical Exact12 manifest to its lossless typed JSON projection.
+pub fn privacy_exact12_capability_manifest_json_v1(archive: Uint8Array) -> napi::Result<String> {
+    let manifest = decode_privacy_exact12_capability_manifest_v1(archive.as_ref())?;
+    json::to_json(&manifest).map_err(norito_to_napi)
+}
+
+#[napi(js_name = "privacyRequireExact12CapabilityTupleV1")]
+/// Require active committed admission and exact equality with this binary's local profile row.
+pub fn privacy_require_exact12_capability_tuple_v1(
+    archive: Uint8Array,
+    protocol_id: String,
+) -> napi::Result<bool> {
+    let protocol_id = PrivacyProtocolIdV1::from_canonical_label(&protocol_id).ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "protocol_id must be one exact retained Exact12 identifier; aliases and retired identifiers are rejected",
+        )
+    })?;
+    let manifest = decode_privacy_exact12_capability_manifest_v1(archive.as_ref())?;
+    let network_row = manifest
+        .protocols
+        .iter()
+        .find(|row| row.protocol_id == protocol_id)
+        .ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "validated Exact12 manifest omitted its selected canonical row",
+            )
+        })?;
+    if !network_row.is_network_available() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "privacy protocol {} is not available in the committed Exact12 manifest",
+                protocol_id.canonical_label()
+            ),
+        ));
+    }
+    let local_catalog = privacy_compiled_profile_catalog()?;
+    let local_row = local_catalog
+        .protocols
+        .iter()
+        .find(|row| row.protocol_id == protocol_id)
+        .ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                "validated local compiled-profile catalog omitted its selected canonical row",
+            )
+        })?;
+    if network_row.compiled_profile != local_row.compiled_profile {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "local native profile for {} does not match the committed Exact12 capability tuple",
+                protocol_id.canonical_label()
+            ),
+        ));
+    }
+    Ok(true)
 }
 
 /// Result of signing a transaction via the native helper.
@@ -12394,19 +12520,23 @@ fn parse_confidential_unshield_outputs_v3(
 
 const EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES: usize = 1024 * 1024;
 const EXTERNAL_TRANSACTION_METADATA_MAX_BYTES: usize = 64 * 1024;
-const EXTERNAL_TRANSACTION_CHAIN_ID_MAX_BYTES: usize = 1024;
 
-fn validate_external_transaction_chain_id(chain_id: &str) -> napi::Result<()> {
-    if chain_id.is_empty()
-        || chain_id.len() > EXTERNAL_TRANSACTION_CHAIN_ID_MAX_BYTES
-        || chain_id.chars().any(char::is_control)
-    {
-        return Err(napi::Error::new(
+fn parse_transaction_network_id_bytes(value: &[u8]) -> napi::Result<NetworkId> {
+    let bytes: [u8; Hash::LENGTH] = value.try_into().map_err(|_| {
+        napi::Error::new(
             napi::Status::InvalidArg,
-            "chain id must contain 1..=1024 non-control UTF-8 bytes",
-        ));
-    }
-    Ok(())
+            "networkId must contain exactly 32 genesis-header hash bytes",
+        )
+    })?;
+    let hash = hex::encode(bytes).parse::<Hash>().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("networkId must contain a marked Iroha hash: {error}"),
+        )
+    })?;
+    Ok(NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(hash),
+    ))
 }
 
 fn require_matching_i105_discriminant(
@@ -12428,7 +12558,7 @@ fn require_matching_i105_discriminant(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_transfer_asset_payload(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     source_asset_holding_id: String,
     quantity: String,
@@ -12439,7 +12569,7 @@ pub fn build_transfer_asset_payload(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<JsTransactionPayload> {
-    validate_external_transaction_chain_id(&chain_id)?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     if authority.trim() != authority || destination_account_id.trim() != destination_account_id {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -12522,14 +12652,9 @@ pub fn build_transfer_asset_payload(
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let instruction: InstructionBox =
         Transfer::asset_quantity(source, quantity, destination).into();
-    let chain_id = chain_id.parse::<ChainId>().map_err(|error| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid canonical chain id: {error}"),
-        )
-    })?;
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(chain_id, authority, fee_payment).with_instructions([instruction]),
+        TransactionBuilder::new(network_id, authority, fee_payment)
+            .with_instructions([instruction]),
         metadata,
         None,
         creation_time_ms,
@@ -12642,7 +12767,7 @@ pub fn finalize_signed_transaction(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
 pub fn build_register_domain_transaction(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     domain_id: String,
     fee_payment_json: String,
@@ -12653,9 +12778,7 @@ pub fn build_register_domain_transaction(
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let authority = parse_account_id(&authority, "authority account id")?;
     let domain_id = DomainId::parse_fully_qualified(&domain_id).map_err(|err| {
         napi::Error::new(
@@ -12669,7 +12792,7 @@ pub fn build_register_domain_transaction(
     let instruction: InstructionBox = Register::<Domain>::domain(new_domain).into();
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     assemble_transaction(
-        chain_id,
+        network_id,
         authority,
         vec![instruction],
         fee_payment,
@@ -12684,7 +12807,7 @@ pub fn build_register_domain_transaction(
 
 #[allow(clippy::too_many_arguments)] // helper mirrors the JS surface for clarity
 fn build_transaction_from_instructions_json(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     instructions_json: Vec<String>,
     fee_payment_json: String,
@@ -12700,7 +12823,7 @@ fn build_transaction_from_instructions_json(
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     assemble_transaction(
-        chain_id,
+        network_id,
         authority,
         instructions,
         fee_payment,
@@ -12715,7 +12838,7 @@ fn build_transaction_from_instructions_json(
 
 #[allow(clippy::too_many_arguments)]
 fn build_transaction_payload_from_instructions_json(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     instructions_json: Vec<String>,
     fee_payment_json: String,
@@ -12734,7 +12857,7 @@ fn build_transaction_payload_from_instructions_json(
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(chain_id, authority, fee_payment).with_instructions(instructions),
+        TransactionBuilder::new(network_id, authority, fee_payment).with_instructions(instructions),
         metadata,
         None,
         creation_time_ms,
@@ -12758,7 +12881,7 @@ fn build_transaction_payload_from_instructions_json(
 
 #[allow(clippy::too_many_arguments)]
 fn build_transaction_payload_from_batch_json(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     entries_json: Vec<String>,
     fee_payment_json: String,
@@ -12772,7 +12895,7 @@ fn build_transaction_payload_from_batch_json(
     let executable = checked_batch_executable(entries, &fee_payment)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(chain_id, authority, fee_payment).with_executable(executable),
+        TransactionBuilder::new(network_id, authority, fee_payment).with_executable(executable),
         metadata,
         None,
         creation_time_ms,
@@ -12798,7 +12921,7 @@ fn build_transaction_payload_from_batch_json(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_transaction_payload(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     instructions_json: Vec<String>,
     fee_payment_json: String,
@@ -12807,13 +12930,11 @@ pub fn build_transaction_payload(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
     build_transaction_payload_from_instructions_json(
-        chain_id,
+        network_id,
         authority,
         instructions_json,
         fee_payment_json,
@@ -12828,7 +12949,7 @@ pub fn build_transaction_payload(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_executable_batch_transaction_payload(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     entries_json: Vec<String>,
     fee_payment_json: String,
@@ -12837,13 +12958,11 @@ pub fn build_executable_batch_transaction_payload(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
     build_transaction_payload_from_batch_json(
-        chain_id,
+        network_id,
         authority,
         entries_json,
         fee_payment_json,
@@ -12949,7 +13068,7 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
 pub fn build_transaction(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     instructions_json: Vec<String>,
     fee_payment_json: String,
@@ -12960,14 +13079,12 @@ pub fn build_transaction(
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
 
     build_transaction_from_instructions_json(
-        chain_id,
+        network_id,
         authority,
         instructions_json,
         fee_payment_json,
@@ -12984,7 +13101,7 @@ pub fn build_transaction(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_executable_batch_transaction(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     entries_json: Vec<String>,
     fee_payment_json: String,
@@ -12995,9 +13112,7 @@ pub fn build_executable_batch_transaction(
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
     let entries = parse_executable_batch_payloads(entries_json)?;
@@ -13005,7 +13120,7 @@ pub fn build_executable_batch_transaction(
     let executable = checked_batch_executable(entries, &fee_payment)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     assemble_executable_transaction(
-        chain_id,
+        network_id,
         authority,
         executable,
         fee_payment,
@@ -13026,7 +13141,7 @@ pub fn build_executable_batch_transaction(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 pub fn build_ivm_proved_transaction_payload(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     proved_json: String,
     attachment_json: String,
@@ -13036,9 +13151,7 @@ pub fn build_ivm_proved_transaction_payload(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<JsTransactionPayloadDraft> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
     let proved: IvmProved = json::from_json(&proved_json).map_err(|err| {
@@ -13056,7 +13169,7 @@ pub fn build_ivm_proved_transaction_payload(
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(chain_id, authority, fee_payment)
+        TransactionBuilder::new(network_id, authority, fee_payment)
             .with_executable(Executable::IvmProved(proved)),
         metadata,
         Some(ProofAttachmentList::try_from(vec![attachment]).map_err(norito_to_napi)?),
@@ -13083,7 +13196,7 @@ pub fn build_ivm_proved_transaction_payload(
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
 pub fn build_ivm_proved_transaction(
-    chain_id: String,
+    network_id: Uint8Array,
     authority: String,
     proved_json: String,
     attachment_json: String,
@@ -13095,9 +13208,7 @@ pub fn build_ivm_proved_transaction(
     secret: Uint8Array,
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
-    })?;
+    let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
     let proved: IvmProved = json::from_json(&proved_json).map_err(|err| {
@@ -13116,7 +13227,7 @@ pub fn build_ivm_proved_transaction(
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
 
     assemble_executable_transaction(
-        chain_id,
+        network_id,
         authority,
         Executable::IvmProved(proved),
         fee_payment,
@@ -13218,6 +13329,40 @@ pub fn build_precommit_trigger_action(
 
 #[cfg(test)]
 mod tests {
+    fn test_network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            label,
+        )))
+    }
+
+    fn test_network_id_bytes(label: &[u8]) -> Uint8Array {
+        Uint8Array::from(test_network_id(label).as_bytes().to_vec())
+    }
+
+    #[test]
+    fn transaction_network_id_requires_exact_marked_32_bytes() {
+        let expected = test_network_id(b"js-network-id-boundary");
+        assert_eq!(
+            parse_transaction_network_id_bytes(expected.as_bytes())
+                .expect("canonical network id bytes"),
+            expected
+        );
+
+        for invalid in [vec![], vec![0; Hash::LENGTH - 1], vec![0; Hash::LENGTH + 1]] {
+            assert!(
+                parse_transaction_network_id_bytes(&invalid).is_err(),
+                "network id byte length {} must be rejected",
+                invalid.len()
+            );
+        }
+        let mut unmarked = *expected.as_bytes();
+        unmarked[Hash::LENGTH - 1] &= !1;
+        assert!(
+            parse_transaction_network_id_bytes(&unmarked).is_err(),
+            "an unmarked digest must not be normalized into a NetworkId"
+        );
+    }
+
     #[test]
     fn axt_touch_manifest_trims_drops_and_orders_unicode_paths() {
         let bmp_private_use = "\u{e000}/bmp-private-use";
@@ -13339,7 +13484,7 @@ mod tests {
     fn transaction_builder_for_number_boundary() -> TransactionBuilder {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         TransactionBuilder::new(
-            ChainId::from("js-number-boundary"),
+            test_network_id(b"js-number-boundary"),
             AccountId::new(keypair.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -14436,6 +14581,105 @@ seiyaku Privacy {
             privacy_validate_compiled_profile_catalog_v1(Uint8Array::from(substituted)),
             iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::InvalidCatalog
                 .code()
+        );
+    }
+
+    fn active_exact12_capability_manifest_archive() -> (PrivacyProtocolIdV1, Vec<u8>) {
+        use iroha_data_model::privacy::{
+            PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyActiveLifecycleV1,
+            PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
+            PrivacyProtocolLifecycleV1,
+        };
+
+        let active_protocol = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
+        let protocols = catalog
+            .protocols
+            .into_iter()
+            .map(|row| {
+                let activation = (row.protocol_id == active_protocol).then(|| {
+                    iroha_core::privacy_profiles::compiled_privacy_profile_v1(active_protocol)
+                        .expect("selected native profile is available")
+                        .activation_record(PrivacyProtocolLifecycleV1::Active(
+                            PrivacyActiveLifecycleV1 {
+                                proposed_at_height: 1,
+                                activated_at_height: 2,
+                                state_since_height: 2,
+                            },
+                        ))
+                });
+                PrivacyCapabilityRowV1 {
+                    protocol_id: row.protocol_id,
+                    compiled_profile: row.compiled_profile,
+                    activation,
+                }
+            })
+            .collect();
+        let manifest = PrivacyCapabilitySnapshotV1 {
+            version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+            committed_height: 3,
+            consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+            protocols,
+        }
+        .exact12_capability_manifest_v1()
+        .expect("active Exact12 capability manifest");
+        (
+            active_protocol,
+            manifest
+                .canonical_bytes()
+                .expect("canonical manifest bytes"),
+        )
+    }
+
+    #[test]
+    fn privacy_exact12_manifest_napi_validates_decodes_and_requires_local_tuple() {
+        let (active_protocol, archive) = active_exact12_capability_manifest_archive();
+        assert_eq!(
+            privacy_validate_exact12_capability_manifest_v1(Uint8Array::from(archive.clone())),
+            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
+        let json = privacy_exact12_capability_manifest_json_v1(Uint8Array::from(archive.clone()))
+            .expect("decode canonical Exact12 manifest JSON");
+        assert!(json.contains("manifest_digest"));
+        assert!(json.contains("operation_schema"));
+        assert!(json.contains("available-experimental"));
+        assert!(json.contains("missing-distribution-wide-knowledge-soundness-evidence"));
+        assert!(
+            privacy_require_exact12_capability_tuple_v1(
+                Uint8Array::from(archive.clone()),
+                active_protocol.canonical_label().to_owned(),
+            )
+            .expect("exact active local tuple")
+        );
+        assert!(
+            privacy_require_exact12_capability_tuple_v1(
+                Uint8Array::from(archive.clone()),
+                PrivacyProtocolIdV1::IrohaZkAmsV1
+                    .canonical_label()
+                    .to_owned(),
+            )
+            .is_err(),
+            "local compilation without committed Active state must not authorize"
+        );
+        for retired in [
+            "jindo-lattice-pcs-zk-v0",
+            "sis-with-hints",
+            "zk-ams-recursive-admission-v0",
+        ] {
+            assert!(
+                privacy_require_exact12_capability_tuple_v1(
+                    Uint8Array::from(archive.clone()),
+                    retired.to_owned(),
+                )
+                .is_err(),
+                "accepted retired or aliased protocol {retired}"
+            );
+        }
+        let mut suffixed = archive;
+        suffixed.push(0);
+        assert_ne!(
+            privacy_validate_exact12_capability_manifest_v1(Uint8Array::from(suffixed)),
+            iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
         );
     }
 
@@ -18420,7 +18664,7 @@ seiyaku Privacy {
         )
         .expect("instruction JSON");
         let draft = build_transaction_payload(
-            "quote-flow-chain".to_owned(),
+            test_network_id_bytes(b"quote-flow-network"),
             authority_i105,
             vec![instruction_json],
             authority_fee_payment_json(),
@@ -18515,7 +18759,7 @@ seiyaku Privacy {
         let source = AssetId::new(definition, authority.clone()).canonical_literal();
 
         let built = build_transfer_asset_payload(
-            "browser-native-parity".to_owned(),
+            test_network_id_bytes(b"browser-native-parity"),
             authority_i105.clone(),
             source,
             "1.25".to_owned(),
@@ -18597,7 +18841,7 @@ seiyaku Privacy {
 
         assert!(
             build_transfer_asset_payload(
-                "browser-native-adversarial".to_owned(),
+                test_network_id_bytes(b"browser-native-adversarial"),
                 authority_i105.clone(),
                 source.clone(),
                 "1".to_owned(),
@@ -18619,7 +18863,7 @@ seiyaku Privacy {
         ] {
             assert!(
                 build_transfer_asset_payload(
-                    "browser-native-adversarial".to_owned(),
+                    test_network_id_bytes(b"browser-native-adversarial"),
                     authority_i105.clone(),
                     source.clone(),
                     invalid_quantity.clone(),
@@ -18636,7 +18880,7 @@ seiyaku Privacy {
         }
         assert!(
             build_transfer_asset_payload(
-                "browser-native-adversarial".to_owned(),
+                test_network_id_bytes(b"browser-native-adversarial"),
                 authority_i105.clone(),
                 other_source,
                 "1".to_owned(),
@@ -18651,7 +18895,7 @@ seiyaku Privacy {
         );
         assert!(
             build_transfer_asset_payload(
-                "browser-native-adversarial".to_owned(),
+                test_network_id_bytes(b"browser-native-adversarial"),
                 authority_i105.clone(),
                 source.clone(),
                 "0".to_owned(),
@@ -18666,7 +18910,7 @@ seiyaku Privacy {
         );
 
         let built = build_transfer_asset_payload(
-            "browser-native-adversarial".to_owned(),
+            test_network_id_bytes(b"browser-native-adversarial"),
             authority_i105.clone(),
             source,
             "1".to_owned(),
@@ -18729,9 +18973,9 @@ seiyaku Privacy {
     fn decode_signed_transaction_accepts_versioned_bytes() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id(b"versioned-transaction");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -18750,7 +18994,7 @@ seiyaku Privacy {
     fn sign_js_transaction_checked_signing_verifies() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id(b"checked-js-signing");
         let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
@@ -18762,7 +19006,7 @@ seiyaku Privacy {
 
         let tx = sign_js_transaction(
             TransactionBuilder::new(
-                chain_id,
+                network_id,
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -18781,7 +19025,7 @@ seiyaku Privacy {
     fn sign_transaction_preserves_exact_fee_payment_intent() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "fee-intent-preservation".parse().expect("valid chain id");
+        let network_id = test_network_id(b"fee-intent-preservation");
         let fee_asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("fees", "universal").expect("fee domain"),
             "xor".parse().expect("fee asset name"),
@@ -18794,7 +19038,7 @@ seiyaku Privacy {
             )],
             NonZeroU64::new(9_000),
         );
-        let mut builder = TransactionBuilder::new(chain_id, authority, intent.clone());
+        let mut builder = TransactionBuilder::new(network_id, authority, intent.clone());
         builder.set_creation_time(Duration::from_millis(1));
         let original = builder.sign(keypair.private_key());
         let (_, secret) = keypair.private_key().to_bytes();
@@ -18811,6 +19055,30 @@ seiyaku Privacy {
         decoded
             .verify_signature()
             .expect("re-signed transaction verifies");
+    }
+
+    #[test]
+    fn sign_transaction_rejects_genesis_domain() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
+        let (_, secret) = keypair.private_key().to_bytes();
+
+        let error = sign_transaction(
+            Uint8Array::from(Encode::encode(&transaction)),
+            Uint8Array::from(secret),
+        )
+        .expect_err("JavaScript host must reject the genesis transaction domain");
+
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert_eq!(
+            error.reason,
+            "JavaScript host cannot re-sign a genesis-domain transaction"
+        );
     }
 
     #[test]
@@ -18971,7 +19239,7 @@ seiyaku Privacy {
         )
         .expect("contract address");
         let transaction = TransactionBuilder::new(
-            ChainId::from("js-contract-call"),
+            test_network_id(b"js-contract-call"),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -19006,7 +19274,7 @@ seiyaku Privacy {
     fn build_transaction_from_instructions_json_roundtrip() {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id(b"instruction-json-roundtrip");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
@@ -19027,7 +19295,7 @@ seiyaku Privacy {
         let (_, secret_bytes) = keypair.private_key().to_bytes();
 
         let result = build_transaction_from_instructions_json(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             vec![instruction_json],
             authority_fee_payment_json(),
@@ -19042,7 +19310,7 @@ seiyaku Privacy {
 
         let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
         assert_eq!(tx.authority(), &authority);
-        assert_eq!(tx.chain(), &chain_id);
+        assert_eq!(tx.network_id(), Some(&network_id));
         tx.verify_signature()
             .expect("assembled transaction signature should verify");
         match tx.instructions() {
@@ -19094,7 +19362,7 @@ seiyaku Privacy {
         let (_, secret) = keypair.private_key().to_bytes();
 
         let result = build_executable_batch_transaction(
-            "mixed-batch-chain".to_owned(),
+            test_network_id_bytes(b"mixed-batch-network"),
             account_json_literal(&authority),
             vec![instruction_entry.clone(), call_entry, instruction_entry],
             authority_fee_payment_json_with_gas(10_000),
@@ -19149,7 +19417,7 @@ seiyaku Privacy {
     fn build_ivm_proved_transaction_roundtrip() {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id(b"ivm-proved-roundtrip");
         let authority = AccountId::new(keypair.public_key().clone());
         let proved = IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![0x4e, 0x52, 0x54, 0x30]),
@@ -19170,7 +19438,7 @@ seiyaku Privacy {
         let (_, secret_bytes) = keypair.private_key().to_bytes();
 
         let draft = build_ivm_proved_transaction_payload(
-            chain_id.to_string(),
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             account_json_literal(&authority),
             proved_json.clone(),
             attachment_json.clone(),
@@ -19229,7 +19497,7 @@ seiyaku Privacy {
             .expect("quoted transaction signature verifies");
 
         let result = build_ivm_proved_transaction(
-            chain_id.to_string(),
+            Uint8Array::from(network_id.as_bytes().to_vec()),
             account_json_literal(&authority),
             proved_json,
             attachment_json,
@@ -19245,7 +19513,7 @@ seiyaku Privacy {
 
         let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
         assert_eq!(tx.authority(), &authority);
-        assert_eq!(tx.chain(), &chain_id);
+        assert_eq!(tx.network_id(), Some(&network_id));
         match tx.instructions() {
             Executable::IvmProved(decoded) => {
                 assert_eq!(decoded, &proved);
@@ -19386,11 +19654,11 @@ seiyaku Privacy {
     fn build_transaction_with_empty_instructions_fails() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id(b"empty-instructions");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
 
         let result = build_transaction_from_instructions_json(
-            chain_id,
+            network_id,
             authority,
             Vec::new(),
             authority_fee_payment_json(),
@@ -19558,6 +19826,19 @@ seiyaku Privacy {
 
     #[test]
     fn settlement_instruction_json_is_explicit_and_canonical() {
+        let request_hash = Hash::new(b"js-host-fx-oracle-request");
+        let oracle_event = iroha_data_model::oracle::FeedEvent {
+            feed_id: "aed_pkr_rate".parse().expect("feed id"),
+            feed_config_version: iroha_data_model::oracle::FeedConfigVersion(1),
+            slot: 7,
+            request_hash,
+            outcome: iroha_data_model::oracle::FeedEventOutcome::Success(
+                iroha_data_model::oracle::FeedSuccess {
+                    value: iroha_data_model::oracle::ObservationValue::new(76, 0),
+                    entries: Vec::new(),
+                },
+            ),
+        };
         let settle = SettleFxCorridor {
             policy_id: "aed_pkr".parse().expect("policy name"),
             expected_policy_revision: 3,
@@ -19576,6 +19857,14 @@ seiyaku Privacy {
                     .clone(),
             ),
             source_amount: Quantity::from(5_u32),
+            expected_destination_amount: Quantity::from(380_u32),
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: oracle_event.feed_id.clone(),
+                feed_config_version: oracle_event.feed_config_version,
+                slot: oracle_event.slot,
+                request_hash: oracle_event.request_hash,
+                event_hash: HashOf::new(&oracle_event),
+            },
         };
         let input = norito_json!({
             "Settlement": norito_json!({

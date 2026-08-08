@@ -269,7 +269,11 @@ fn resolve_profile_settings(
     let mut chain = chain_id
         .cloned()
         .or_else(|| profile_defaults.map(|d| d.chain_id.clone()))
-        .unwrap_or_else(|| ChainId::from("00000000-0000-0000-0000-000000000000"));
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "genesis generation requires either `--profile` or an explicit `--chain-id`"
+            )
+        })?;
     let mut consensus_mode = consensus_mode;
     let mut public_xor_asset_definition_id = None;
     let profile_vrf_seed = if let Some(profile) = profile {
@@ -784,6 +788,22 @@ mod consensus_manifest_tests {
             .any(|(authority, permission)| {
                 authority == expected_authority && permission == &expected_permission
             })
+    }
+
+    #[test]
+    fn genesis_generation_requires_an_explicit_display_chain_without_a_profile() {
+        let error = resolve_profile_settings(
+            None,
+            None,
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+            None,
+        )
+        .expect_err("unprofiled genesis generation must name its display chain");
+
+        assert!(error.to_string().contains("--chain-id"));
     }
 
     #[test]

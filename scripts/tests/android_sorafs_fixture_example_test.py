@@ -9,8 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTER_PIN_EXAMPLE = (
     REPO_ROOT
-    / "docs"
-    / "source"
+    / "specs"
     / "sdk"
     / "android"
     / "generated"
@@ -39,10 +38,8 @@ def test_fixture_example_matches_metadata() -> None:
         entry["digest_blake3"] for entry in plan["chunk_fetch_specs"]
     ]
     assert fixture_example["chunk_digests_blake3"] == plan_digests
-    assert instruction["submitted_epoch"] == metadata["now_unix_secs"]
     assert set(instruction) == {
         "manifest_payload_base64",
-        "submitted_epoch",
         "alias",
         "successor_of",
     }

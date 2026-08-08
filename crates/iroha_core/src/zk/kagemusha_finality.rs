@@ -307,10 +307,12 @@ impl KagemushaTopUpFinalityVerifier {
         let context = &proof.commit_qc.height_context;
         let certificate = &proof.commit_qc.certificate;
         if expected_anchor.chain_id != manifest.chain_id
-            || context.chain_id != manifest.chain_id
             || roster_artifact.chain_id != manifest.chain_id
         {
             return Err(KagemushaTopUpFinalityVerifyError::ChainMismatch);
+        }
+        if context.network_id != roster_artifact.network_id {
+            return Err(KagemushaTopUpFinalityVerifyError::RosterContextMismatch);
         }
         if expected_anchor.asset.definition() != &manifest.asset {
             return Err(KagemushaTopUpFinalityVerifyError::AssetMismatch);
@@ -362,9 +364,6 @@ impl KagemushaTopUpFinalityVerifier {
             .commit_qc
             .validate_for_roster_window(window)
             .map_err(|_| KagemushaTopUpFinalityVerifyError::RosterContextMismatch)?;
-        if complete_context.chain_id != expected_anchor.chain_id {
-            return Err(KagemushaTopUpFinalityVerifyError::ChainMismatch);
-        }
         verify_anchor_inclusion(proof)?;
 
         self.validate_roster_cryptography(roster_artifact, roster_reference.sha256)?;
@@ -577,13 +576,16 @@ mod tests {
     // Adversarial coverage is kept in this module because it needs direct
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
-        AccountId, ChainId,
+        AccountId, ChainId, NetworkId,
         asset::{AssetDefinitionId, AssetId},
-        block::consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-            QuorumCertificate, ValidatorPower,
-            finality::{FinalizedNextEpochSnapshot, V2FinalityArtifact},
+        block::{
+            BlockHeader,
+            consensus_v2::{
+                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+                QuorumCertificate, ValidatorPower,
+                finality::{FinalizedNextEpochSnapshot, V2FinalityArtifact},
+            },
         },
         domain::DomainId,
         offline::{
@@ -803,6 +805,10 @@ mod tests {
             .map(|(_, _, key)| key)
             .collect::<Vec<_>>();
         let chain_id = ChainId::from("kagemusha-finality-chain");
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"kagemusha-finality-test-network",
+            )));
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("asset domain"),
             "rose".parse().expect("asset name"),
@@ -821,6 +827,7 @@ mod tests {
         let mut roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             chain_id: chain_id.clone(),
+            network_id,
             artifact_generation: "release-generation-1".to_owned(),
             windows: vec![window],
         };
@@ -932,7 +939,7 @@ mod tests {
         .expect("bounded commitment")
         .expect("top-up commitment");
         let context = HeightContext {
-            chain_id: chain_id.clone(),
+            network_id: roster.network_id,
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -1047,7 +1054,7 @@ mod tests {
         finality_artifact.verify().expect("live finality artifact");
         let projection = KagemushaTopUpFinalityHeightContextV2 {
             context_id: context.id(),
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             protocol_version: context.protocol_version,
             height: context.height,
             epoch: context.epoch,
@@ -1169,7 +1176,7 @@ mod tests {
         let mut proof = fixture.proof.clone();
         proof.commit_qc.height_context = KagemushaTopUpFinalityHeightContextV2 {
             context_id: context.id(),
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             protocol_version: context.protocol_version,
             height: context.height,
             epoch: context.epoch,
@@ -1412,6 +1419,24 @@ mod tests {
     fn rejects_context_roster_power_signature_and_path_substitution_before_cache_fill() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
         let fixture = fixture();
+
+        let mut network = fixture.proof.clone();
+        network.commit_qc.height_context.network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"other-kagemusha-finality-network",
+            )));
+        assert_eq!(
+            verifier
+                .verify_v4(
+                    &network,
+                    &fixture.roster,
+                    &fixture.anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .unwrap_err(),
+            KagemushaTopUpFinalityVerifyError::RosterContextMismatch
+        );
 
         let mut context = fixture.proof.clone();
         context.commit_qc.height_context.leader_seed[0] ^= 1;

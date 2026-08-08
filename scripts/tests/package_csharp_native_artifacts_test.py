@@ -49,12 +49,17 @@ def write_inputs(root: Path) -> dict[str, bytes]:
             "artifact_sha256": hashlib.sha256(payload).hexdigest(),
             "artifact_size": len(payload),
             "bridge_abi_version": artifact_checker.REQUIRED_BRIDGE_ABI_VERSION,
+            "privacy_c_exports": list(
+                artifact_checker.APPROVED_PRIVACY_C_EXPORTS
+            ),
+            "privacy_c_exports_inspected": True,
             "required_symbols": list(artifact_checker.REQUIRED_SYMBOLS["csharp"]),
             "schema": artifact_checker.SCHEMA,
             "sdk": "csharp",
             "source_commit": SOURCE_COMMIT,
             "source_tree_clean": True,
             "target": asset.target,
+            "workspace_source_manifest_sha256": "b" * 64,
         }
         (target_root / packager.EVIDENCE_MANIFEST_NAME).write_bytes(
             artifact_checker.canonical_manifest_bytes(manifest)

@@ -5869,20 +5869,10 @@ mod trigger {
                     "block_height",
                     json_utils::json_value(&status.block_height)?,
                 ));
-                pairs.push((
-                    "rejection_reason",
-                    json_utils::json_value(&status.rejection_reason)?,
-                ));
                 pairs.push(("scope", json_utils::json_value(&status.scope)?));
                 pairs.push((
                     "resolved_from",
                     json_utils::json_value(&status.resolved_from)?,
-                ));
-                pairs.push(("summary", json_utils::json_value(&status.summary)?));
-                pairs.push(("diagnostics", json_utils::json_value(&status.diagnostics)?));
-                pairs.push((
-                    "trigger_completions",
-                    json_utils::json_value(&status.trigger_completions)?,
                 ));
                 if self.trace {
                     let trace = if let Some(height) = status.block_height {
@@ -7257,13 +7247,15 @@ mod settlement {
         isi::{
             InstructionBox,
             settlement::{
-                DvpIsi, FxCorridorPolicy, FxCorridorSource, PvpIsi, SetFxCorridorPolicy,
-                SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
-                SettlementInstructionBox, SettlementLeg, SettlementPlan,
+                DvpIsi, FundFxCorridorEscrow, FxCorridorOracleEvidence, FxCorridorPolicy, PvpIsi,
+                RefundFxCorridorEscrow, SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity,
+                SettlementExecutionOrder, SettlementId, SettlementInstructionBox, SettlementLeg,
+                SettlementPlan,
             },
         },
         metadata::Metadata,
         nexus::DataSpaceId,
+        oracle::{FeedConfigVersion, FeedEvent, FeedId},
         prelude::{AssetDefinitionId, Name},
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
@@ -7276,6 +7268,10 @@ mod settlement {
         Pvp(PvpArgs),
         /// Register or replace a governed native FX corridor policy
         SetFxCorridorPolicy(SetFxCorridorPolicyArgs),
+        /// Fund a corridor's isolated reserve from its immutable owner
+        FundFxCorridorEscrow(FxCorridorEscrowArgs),
+        /// Refund an inactive corridor reserve to its immutable owner
+        RefundFxCorridorEscrow(FxCorridorEscrowArgs),
         /// Execute one policy-backed native FX corridor settlement
         SettleFxCorridor(SettleFxCorridorArgs),
         /// Read one governed native FX corridor policy
@@ -7284,20 +7280,14 @@ mod settlement {
         ListFxCorridorPolicies,
     }
 
-    #[derive(Clone, Copy, Debug, ValueEnum)]
-    pub enum FxCorridorSourceMode {
-        /// Debit one fixed policy account; that account must authorize settlement.
-        FixedAccount,
-        /// Debit the signed transaction authority without a corridor-settle grant.
-        TransactionAuthority,
-    }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             match self {
                 Command::Dvp(args) => args.run(context),
                 Command::Pvp(args) => args.run(context),
                 Command::SetFxCorridorPolicy(args) => args.run(context),
+                Command::FundFxCorridorEscrow(args) => args.run_fund(context),
+                Command::RefundFxCorridorEscrow(args) => args.run_refund(context),
                 Command::SettleFxCorridor(args) => args.run(context),
                 Command::GetFxCorridorPolicy(args) => args.run(context),
                 Command::ListFxCorridorPolicies => {
@@ -7318,27 +7308,18 @@ mod settlement {
         /// Monotonic policy revision (first revision is 1)
         #[arg(long)]
         pub revision: u64,
+        /// Immutable owner that funds reserve liquidity and receives source currency
+        #[arg(long)]
+        pub owner: String,
         /// Private dataspace holding the source balance
         #[arg(long)]
         pub source_dataspace: DataSpaceId,
-        /// Select the source-account resolution policy.
-        #[arg(long, value_enum)]
-        pub source_mode: FxCorridorSourceMode,
-        /// Fixed account funding the source leg (required only in fixed-account mode).
-        #[arg(long)]
-        pub source_account: Option<String>,
         /// Source-currency asset definition
         #[arg(long)]
         pub source_asset: AssetDefinitionId,
-        /// Fixed account receiving collected source currency
-        #[arg(long)]
-        pub source_sink: String,
         /// Private dataspace holding the destination reserve
         #[arg(long)]
         pub destination_dataspace: DataSpaceId,
-        /// Fixed reserve funding destination payouts
-        #[arg(long)]
-        pub destination_reserve: String,
         /// Destination-currency asset definition
         #[arg(long)]
         pub destination_asset: AssetDefinitionId,
@@ -7349,12 +7330,30 @@ mod settlement {
             value_parser = parse_domain_id_literal
         )]
         pub allowed_destination_alias_domains: Vec<DomainId>,
-        /// Destination/source rate numerator
+        /// Governed oracle feed supplying the destination/source rate
         #[arg(long)]
-        pub rate_numerator: u64,
-        /// Destination/source rate denominator
+        pub oracle_feed_id: FeedId,
+        /// Maximum accepted oracle-event age in milliseconds
         #[arg(long)]
-        pub rate_denominator: u64,
+        pub max_oracle_age_ms: u64,
+        /// Maximum source amount per settlement
+        #[arg(long)]
+        pub max_source_amount_per_settlement: iroha_primitives::numeric::Quantity,
+        /// Maximum destination amount per settlement
+        #[arg(long)]
+        pub max_destination_amount_per_settlement: iroha_primitives::numeric::Quantity,
+        /// Fixed velocity-window length in milliseconds
+        #[arg(long)]
+        pub velocity_window_ms: u64,
+        /// Maximum settlements per velocity window
+        #[arg(long)]
+        pub max_settlements_per_window: u64,
+        /// Maximum source amount per velocity window
+        #[arg(long)]
+        pub max_source_amount_per_window: iroha_primitives::numeric::Quantity,
+        /// Maximum destination amount per velocity window
+        #[arg(long)]
+        pub max_destination_amount_per_window: iroha_primitives::numeric::Quantity,
         /// Register the policy disabled
         #[arg(long)]
         pub disabled: bool,
@@ -7378,27 +7377,6 @@ mod settlement {
 
     impl SetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let source = match (self.source_mode, self.source_account.as_deref()) {
-                (FxCorridorSourceMode::FixedAccount, Some(account)) => {
-                    FxCorridorSource::FixedAccount(
-                        resolve_account_id(context, account)
-                            .wrap_err("failed to resolve --source-account")?,
-                    )
-                }
-                (FxCorridorSourceMode::FixedAccount, None) => {
-                    return Err(eyre!(
-                        "--source-account is required with --source-mode fixed-account"
-                    ));
-                }
-                (FxCorridorSourceMode::TransactionAuthority, None) => {
-                    FxCorridorSource::TransactionAuthority
-                }
-                (FxCorridorSourceMode::TransactionAuthority, Some(_)) => {
-                    return Err(eyre!(
-                        "--source-account is not allowed with --source-mode transaction-authority"
-                    ));
-                }
-            };
             let allowed_domain_count = self.allowed_destination_alias_domains.len();
             let allowed_destination_alias_domains = self
                 .allowed_destination_alias_domains
@@ -7412,24 +7390,67 @@ mod settlement {
             let policy = FxCorridorPolicy {
                 policy_id: self.policy_id,
                 revision: self.revision,
+                owner: resolve_account_id(context, &self.owner)
+                    .wrap_err("failed to resolve --owner")?,
                 source_dataspace: self.source_dataspace,
-                source,
                 source_asset_definition_id: self.source_asset,
-                source_sink: resolve_account_id(context, &self.source_sink)
-                    .wrap_err("failed to resolve --source-sink")?,
                 destination_dataspace: self.destination_dataspace,
-                destination_reserve: resolve_account_id(context, &self.destination_reserve)
-                    .wrap_err("failed to resolve --destination-reserve")?,
                 destination_asset_definition_id: self.destination_asset,
                 allowed_destination_alias_domains,
-                rate_numerator: self.rate_numerator,
-                rate_denominator: self.rate_denominator,
+                oracle_feed_id: self.oracle_feed_id,
+                max_oracle_age_ms: self.max_oracle_age_ms,
+                max_source_amount_per_settlement: self.max_source_amount_per_settlement,
+                max_destination_amount_per_settlement: self.max_destination_amount_per_settlement,
+                velocity_window_ms: self.velocity_window_ms,
+                max_settlements_per_window: self.max_settlements_per_window,
+                max_source_amount_per_window: self.max_source_amount_per_window,
+                max_destination_amount_per_window: self.max_destination_amount_per_window,
                 enabled: !self.disabled,
             };
             if let Some(error) = policy.invariant_error() {
                 return Err(eyre!(error));
             }
             let instruction: SettlementInstructionBox = SetFxCorridorPolicy { policy }.into();
+            context.finish([InstructionBox::from(instruction)])
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct FxCorridorEscrowArgs {
+        /// Stable corridor policy identifier
+        #[arg(long)]
+        pub policy_id: Name,
+        /// Exact active policy revision
+        #[arg(long)]
+        pub expected_policy_revision: u64,
+        /// Exact destination asset from the active policy
+        #[arg(long)]
+        pub destination_asset: AssetDefinitionId,
+        /// Positive reserve quantity
+        #[arg(long)]
+        pub amount: iroha_primitives::numeric::Quantity,
+    }
+
+    impl FxCorridorEscrowArgs {
+        fn run_fund<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let instruction: SettlementInstructionBox = FundFxCorridorEscrow {
+                policy_id: self.policy_id,
+                expected_policy_revision: self.expected_policy_revision,
+                destination_asset_definition_id: self.destination_asset,
+                amount: self.amount,
+            }
+            .into();
+            context.finish([InstructionBox::from(instruction)])
+        }
+
+        fn run_refund<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let instruction: SettlementInstructionBox = RefundFxCorridorEscrow {
+                policy_id: self.policy_id,
+                expected_policy_revision: self.expected_policy_revision,
+                destination_asset_definition_id: self.destination_asset,
+                amount: self.amount,
+            }
+            .into();
             context.finish([InstructionBox::from(instruction)])
         }
     }
@@ -7457,6 +7478,24 @@ mod settlement {
         /// Positive source-currency quantity
         #[arg(long)]
         pub source_amount: iroha_primitives::numeric::Quantity,
+        /// Exact destination amount expected from the selected oracle event
+        #[arg(long)]
+        pub expected_destination_amount: iroha_primitives::numeric::Quantity,
+        /// Exact oracle feed identifier
+        #[arg(long)]
+        pub oracle_feed_id: FeedId,
+        /// Exact active oracle feed configuration version
+        #[arg(long)]
+        pub oracle_feed_config_version: u32,
+        /// Exact oracle slot
+        #[arg(long)]
+        pub oracle_slot: u64,
+        /// Exact oracle request hash
+        #[arg(long)]
+        pub oracle_request_hash: Hash,
+        /// Typed hash of the complete retained oracle event
+        #[arg(long)]
+        pub oracle_event_hash: HashOf<FeedEvent>,
     }
 
     impl SettleFxCorridorArgs {
@@ -7478,6 +7517,14 @@ mod settlement {
                 recipient: resolve_account_id(context, &self.recipient)
                     .wrap_err("failed to resolve --recipient")?,
                 source_amount: self.source_amount,
+                expected_destination_amount: self.expected_destination_amount,
+                oracle_evidence: FxCorridorOracleEvidence {
+                    feed_id: self.oracle_feed_id,
+                    feed_config_version: FeedConfigVersion(self.oracle_feed_config_version),
+                    slot: self.oracle_slot,
+                    request_hash: self.oracle_request_hash,
+                    event_hash: self.oracle_event_hash,
+                },
             };
             let instruction: SettlementInstructionBox = instruction.into();
             context.finish([InstructionBox::from(instruction)])

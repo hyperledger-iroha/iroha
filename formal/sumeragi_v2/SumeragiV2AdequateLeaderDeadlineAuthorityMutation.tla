@@ -37,15 +37,15 @@ ReceiptOwnsFrozenRosterWindow(deadline) ==
 
 NoPrematureExit ==
   \A deadline \in ReceiptDeadlines:
-    /\ ReceiptOwnsFrozenRosterWindow(deadline)
-    /\ now < deadline
-    /\ ~decided
+    (  /\ ReceiptOwnsFrozenRosterWindow(deadline)
+       /\ now < deadline
+       /\ ~decided)
       => corridor
 
 Init ==
   /\ now = 0
-  /\ corridor
-  /\ ~decided
+  /\ corridor = TRUE
+  /\ decided = FALSE
 
 TickWithinWindow ==
   /\ corridor

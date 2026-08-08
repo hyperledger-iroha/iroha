@@ -830,6 +830,7 @@ mod tests {
         };
         let policy_digest = policy.digest().expect("policy digest");
         OrderbookTransactionContextV1 {
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from(CHAIN),
             policy_record: OrderbookAdmissionPolicyRecord {
                 policy,

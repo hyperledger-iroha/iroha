@@ -15,7 +15,10 @@ public abstract record class TransactionInstruction
 
     internal virtual byte[] EncodeFramedPayload(TransactionEncodingContext context)
     {
-        return NoritoCodec.Encode(TypeName, EncodePayload(context));
+        return NoritoCodec.Encode(
+            TypeName,
+            EncodePayload(context),
+            NoritoCodec.CanonicalLayoutFlags);
     }
 
     public byte[] EncodeInstructionBox(string authorityAccountId)
@@ -25,7 +28,8 @@ public abstract record class TransactionInstruction
         var context = new TransactionEncodingContext(authorityAccountId);
         return Hyperledger.Iroha.Norito.NoritoCodec.EncodeWithSchemaHash(
             InstructionBoxSchemaHash,
-            context.EncodeInstruction(this));
+            context.EncodeInstruction(this),
+            NoritoCodec.CanonicalLayoutFlags);
     }
 
     public string EncodeInstructionBoxBase64(string authorityAccountId)

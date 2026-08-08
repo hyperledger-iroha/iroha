@@ -2,12 +2,14 @@
 
 #[path = "fixtures/axt_golden.rs"]
 mod axt_golden;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::nexus::{
-    AssetHandle, AxtBinding, AxtDescriptor, AxtHandleFragment, AxtPolicyBinding, AxtPolicyEntry,
-    AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec, AxtValidationError, DataSpaceId,
-    GroupBinding, HandleBudget, HandleSubject, LaneId, RemoteSpendIntent, SpendOp, TouchManifest,
-    validate_descriptor,
+    AssetHandle, AxtBinding, AxtDescriptor, AxtHandleFragment, AxtHandleIssuerContextV1,
+    AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec,
+    AxtValidationError, DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId,
+    RemoteSpendIntent, SpendOp, TouchManifest, UniversalAccountId, validate_descriptor,
 };
+use iroha_data_model::{NetworkId, block::BlockHeader};
 use iroha_primitives::numeric::Quantity;
 use ivm::axt;
 
@@ -72,6 +74,20 @@ fn encoded_account(public_key_hex: &str) -> String {
         .to_string()
 }
 
+fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
+    AxtHandleIssuerContextV1 {
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"axt-policy-vectors-network"),
+        )),
+        asset_dsid: DataSpaceId::new(7),
+        issuer: UniversalAccountId::from_hash(Hash::new(b"axt-policy-vectors-issuer")),
+        issuer_manifest_root: [0x22; 32],
+        code_root: Hash::new(b"axt-policy-vectors-code").into(),
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+    }
+}
+
 fn sample_handle(binding: AxtBinding) -> AssetHandle {
     AssetHandle {
         scope: vec!["register".into(), "transfer".into()],
@@ -96,7 +112,8 @@ fn sample_handle(binding: AxtBinding) -> AssetHandle {
         manifest_view_root: [0x22; 32],
         expiry_slot: 77,
         max_clock_skew_ms: Some(15),
-        issuer_signature: None,
+        issuer_context: sample_issuer_context(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     }
 }
 
@@ -106,8 +123,8 @@ fn sample_policy_snapshot() -> AxtPolicySnapshot {
         policy: AxtPolicyEntry {
             manifest_root: [0x22; 32],
             target_lane: LaneId::new(5),
-            min_handle_era: 3,
-            min_sub_nonce: 5,
+            active_handle_era: 3,
+            next_handle_counter: 5,
             current_slot: 55,
         },
     }];

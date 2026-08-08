@@ -2541,11 +2541,10 @@ fn make_signed_block(
     prev_hash: Option<HashOf<BlockHeader>>,
 ) -> (SignedBlock, HashOf<TransactionEntrypoint>) {
     let keypair = checked_torii_test_ed25519_keypair(0x24, "derive Torii block-header fixture key");
-    let chain: ChainId = "block-header-tests".parse().expect("chain id");
     let authority = AccountId::new(keypair.public_key().clone());
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
-            chain,
+            signed_query_test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
@@ -2593,11 +2592,10 @@ fn make_persisted_data_trigger_completion_block(
 ) -> PersistedDataTriggerCompletionBlock {
     let keypair =
         checked_torii_test_ed25519_keypair(0x25, "derive Torii trigger-completion fixture key");
-    let chain: ChainId = "trigger-completion-tests".parse().expect("chain id");
     let authority = AccountId::new(keypair.public_key().clone());
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
-            chain,
+            signed_query_test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
@@ -2663,11 +2661,11 @@ fn make_sealed_reveal_block(
 ) -> (SignedBlock, HashOf<TransactionEntrypoint>) {
     let keypair =
         checked_torii_test_ed25519_keypair(0x26, "derive Torii sealed-reveal fixture key");
-    let chain: ChainId = "block-header-tests".parse().expect("chain id");
+    let network_id = signed_query_test_network_id();
     let authority = AccountId::new(keypair.public_key().clone());
     let tx = checked_torii_test_transaction(
         TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
@@ -2675,7 +2673,7 @@ fn make_sealed_reveal_block(
         "sign Torii sealed-reveal fixture transaction",
     );
     let salt = [0xA7; 32];
-    let commitment = compute_sealed_transaction_commitment(&chain, &tx, salt, height + 2);
+    let commitment = compute_sealed_transaction_commitment(&network_id, &tx, salt, height + 2);
     let reveal = SealedTransactionReveal::new(commitment, tx.clone(), salt);
     let entrypoint = TransactionEntrypoint::SealedReveal(reveal);
     let entry_hash = entrypoint.hash();

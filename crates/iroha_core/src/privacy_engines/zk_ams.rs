@@ -25,7 +25,7 @@ use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::ChainId,
+    prelude::{ChainId, NetworkId},
     privacy::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PRIVACY_MAX_CHAIN_ID_BYTES_V1,
         PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyPolicyDigestV1,
@@ -49,6 +49,15 @@ use iroha_zkp_halo2::vega::{
     ZkAmsAdmissionRelationWitnessV1, ZkAmsProofContextV1, prove_zk_ams_admission_relation_v1,
     verify_zk_ams_admission_relation_v1,
 };
+
+#[cfg(test)]
+fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(hash),
+        ),
+    )
+}
 use p256::{
     AffinePoint as P256AffinePoint, FieldBytes as P256FieldBytes,
     ProjectivePoint as P256ProjectivePoint, Scalar as P256Scalar,
@@ -164,6 +173,8 @@ const RELATION_PROOF_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:relation-p
 /// Exact signature-bound transaction fields for one direct ZK-AMS action.
 #[derive(Clone, Debug)]
 pub struct ZkAmsPrivacyActionTransactionContextV1 {
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Exact chain identifier.
     pub chain_id: ChainId,
     /// Exact transaction authority.
@@ -443,6 +454,9 @@ pub enum ZkAmsPrivacyActionBuildErrorV1 {
     /// The all-zero genesis sentinel is never a canonical chain binding.
     #[error("ZK-AMS action requires a non-zero canonical genesis hash")]
     ZeroGenesisHash,
+    /// The signed transaction domain does not equal the supplied canonical genesis hash.
+    #[error("ZK-AMS action transaction network does not match the canonical genesis hash")]
+    NetworkIdMismatch,
     /// The typed statement could not derive its canonical digest.
     #[error("ZK-AMS action statement digest derivation failed")]
     StatementDigest,
@@ -615,7 +629,7 @@ fn validate_zk_ams_transaction_context_v1(
     }
 
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -655,7 +669,7 @@ fn zk_ams_transaction_payload_v1(
     envelope: PrivacyProofEnvelopeV1,
 ) -> Result<TransactionPayload, ZkAmsPrivacyActionIntentErrorV1> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -1117,6 +1131,9 @@ where
     if canonical_genesis_hash == [0; 32] {
         return Err(ZkAmsPrivacyActionBuildErrorV1::ZeroGenesisHash);
     }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(ZkAmsPrivacyActionBuildErrorV1::NetworkIdMismatch);
+    }
     let profile =
         crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
             .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
@@ -1189,6 +1206,9 @@ where
     if canonical_genesis_hash == [0; 32] {
         return Err(ZkAmsPrivacyActionBuildErrorV1::ZeroGenesisHash);
     }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(ZkAmsPrivacyActionBuildErrorV1::NetworkIdMismatch);
+    }
     let profile =
         crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
             .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
@@ -1217,6 +1237,9 @@ fn prepare_zk_ams_provision_privacy_action_with_rng_and_profile_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(ZkAmsPrivacyActionBuildErrorV1::NetworkIdMismatch);
+    }
     let statement = prepare_zk_ams_privacy_action_transaction_intent_with_profile_v1(
         &context,
         governance,
@@ -3940,6 +3963,7 @@ mod tests {
         nonce: u32,
     ) -> ZkAmsPrivacyActionTransactionContextV1 {
         ZkAmsPrivacyActionTransactionContextV1 {
+            network_id: network_id_from_genesis_hash_bytes([0x11; 32]),
             chain_id: ChainId::from("taira-zk-ams-transaction-intent-v1"),
             authority: account(60),
             creation_time: Duration::from_millis(creation_time_ms),

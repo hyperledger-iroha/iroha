@@ -28,6 +28,7 @@ use iroha_data_model::{
     },
     sorafs::{
         capacity::ProviderId,
+        pricing::ProviderCreditRecord,
         reserve::{
             RESERVE_COMMITTED_EVENT_MAX_BYTES_V1, RESERVE_MAX_REASON_BYTES_V1,
             RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1, RESERVE_QUERY_MAX_ITEMS_V1,
@@ -42,7 +43,7 @@ use iroha_data_model::{
     },
     state_path::StatePath,
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::deal::XorQuantity;
@@ -79,6 +80,68 @@ struct ReserveEventJournalHeadV1 {
 struct ReserveStateV1 {
     policy: ReserveAuthorityPolicyRecordV1,
     journal_head: ReserveEventJournalHeadV1,
+}
+
+/// Non-reusable proof that the reserve state machine approved one exact
+/// provider withdrawal from protocol custody.
+pub(in crate::smartcontracts::isi) struct VerifiedSorafsReserveWithdrawal {
+    provider_id: ProviderId,
+    movement_id: [u8; 32],
+    policy_digest: [u8; 32],
+    expected_provider_revision: u64,
+    decision_authority: AccountId,
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedSorafsReserveWithdrawal {
+    fn new(
+        provider_id: ProviderId,
+        movement_id: [u8; 32],
+        policy_digest: [u8; 32],
+        expected_provider_revision: u64,
+        decision_authority: AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            provider_id,
+            movement_id,
+            policy_digest,
+            expected_provider_revision,
+            decision_authority,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    /// Consume the proof into the exact retained-state and balance binding.
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (
+        ProviderId,
+        [u8; 32],
+        [u8; 32],
+        u64,
+        AccountId,
+        AssetId,
+        AssetId,
+        Quantity,
+    ) {
+        (
+            self.provider_id,
+            self.movement_id,
+            self.policy_digest,
+            self.expected_provider_revision,
+            self.decision_authority,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
 }
 
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
@@ -617,6 +680,85 @@ fn read_policy(
     Ok(read_reserve_state(world)?.map(|state| state.policy))
 }
 
+/// Return whether `asset_id` is the exact asset held by active SoraFS reserve
+/// custody.
+pub(super) fn is_reserve_custody_asset(
+    world: &impl WorldReadOnly,
+    asset_id: &AssetId,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(read_policy(world)?.is_some_and(|record| {
+        record.policy.asset_definition == *asset_id.definition()
+            && record.policy.custody_account == *asset_id.account()
+    }))
+}
+
+/// Return whether `account_id` is the active SoraFS reserve custody account.
+pub(super) fn is_reserve_custody_account(
+    world: &impl WorldReadOnly,
+    account_id: &AccountId,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(read_policy(world)?.is_some_and(|record| record.policy.custody_account == *account_id))
+}
+
+/// Return whether `definition_id` backs the active SoraFS reserve ledger.
+pub(super) fn is_reserve_asset_definition(
+    world: &impl WorldReadOnly,
+    definition_id: &iroha_data_model::asset::AssetDefinitionId,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(read_policy(world)?.is_some_and(|record| record.policy.asset_definition == *definition_id))
+}
+
+/// Revalidate a sealed withdrawal against the still-pending authoritative
+/// movement and provider records immediately before custody is debited.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_verified_reserve_withdrawal(
+    world: &impl WorldReadOnly,
+    provider_id: ProviderId,
+    movement_id: [u8; 32],
+    policy_digest: [u8; 32],
+    expected_provider_revision: u64,
+    decision_authority: &AccountId,
+    source_id: &AssetId,
+    destination_id: &AssetId,
+    amount: &Quantity,
+) -> Result<(), InstructionExecutionError> {
+    let policy = read_policy(world)?
+        .ok_or_else(|| corrupt_state("verified reserve withdrawal has no active policy"))?;
+    if policy.policy_digest != policy_digest
+        || policy.policy.decision_authority != *decision_authority
+        || policy.policy.asset_definition != *source_id.definition()
+        || policy.policy.custody_account != *source_id.account()
+    {
+        return Err(corrupt_state(
+            "verified reserve withdrawal does not match active policy custody",
+        ));
+    }
+    let account = read_provider(world, provider_id)?
+        .ok_or_else(|| corrupt_state("verified reserve withdrawal has no provider account"))?;
+    if account.policy_digest != policy_digest
+        || account.revision != expected_provider_revision
+        || destination_id.definition() != source_id.definition()
+        || account.terms.provider_account != *destination_id.account()
+    {
+        return Err(corrupt_state(
+            "verified reserve withdrawal does not match the provider revision and owner",
+        ));
+    }
+    let movement = read_movement(world, movement_id)?
+        .ok_or_else(|| corrupt_state("verified reserve withdrawal has no retained movement"))?;
+    if movement.provider_id != provider_id
+        || movement.policy_digest != policy_digest
+        || movement.kind != ReserveMovementKindV1::Withdrawal
+        || movement.status != ReserveMovementStatusV1::Pending
+        || movement.amount.as_quantity() != amount
+    {
+        return Err(corrupt_state(
+            "verified reserve withdrawal does not match the pending retained movement",
+        ));
+    }
+    Ok(())
+}
+
 fn read_reserve_state(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ReserveStateV1>, InstructionExecutionError> {
@@ -745,6 +887,269 @@ pub(super) fn read_provider(
         return Ok(None);
     };
     decode_provider_record(bytes, provider_id).map(Some)
+}
+
+fn total_reserved_custody(
+    world: &impl WorldReadOnly,
+) -> Result<XorQuantity, InstructionExecutionError> {
+    let start =
+        StatePath::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid");
+    let mut total = XorQuantity::zero();
+    for (key, payload) in world.smart_contract_state().range(start..) {
+        if !key.to_string().starts_with(PROVIDER_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ReserveProviderAccountV1 =
+            decode_state(payload, "reserve provider account")?;
+        let provider_id = candidate.terms.provider_id;
+        if provider_key(provider_id) != *key {
+            return Err(corrupt_state(
+                "authoritative reserve provider key does not match its account",
+            ));
+        }
+        let account = decode_provider_record(payload, provider_id)?;
+        total = total
+            .checked_add(&account.reserve_balance)
+            .map_err(|error| corrupt_state(format!("reserve custody total overflow: {error}")))?;
+    }
+    Ok(total)
+}
+
+/// Resolve collateral that is backed by the native owner-funded reserve flow.
+///
+/// The returned balance is not an administrator-authored credit projection.
+/// It is the provider's reserve partition minus any outstanding treasury-funded
+/// credit principal. Native custody must also cover the sum of every provider
+/// partition, preventing the same custody balance from backing multiple bonds.
+pub(super) fn verified_provider_bond(
+    world: &impl WorldReadOnly,
+    provider_id: ProviderId,
+    expected_owner: &AccountId,
+    committed_capacity_gib: u64,
+) -> Result<XorQuantity, InstructionExecutionError> {
+    let policy = read_policy(world)?
+        .ok_or_else(|| invalid_parameter("SoraFS reserve policy is not configured"))?;
+    let account = read_provider(world, provider_id)?.ok_or_else(|| {
+        invalid_parameter(format!(
+            "provider {provider_id} has no owner-funded reserve account"
+        ))
+    })?;
+    if account.terms.provider_account != *expected_owner {
+        return Err(invalid_parameter(format!(
+            "provider {provider_id} reserve account is bound to {}, not the governed owner {expected_owner}",
+            account.terms.provider_account
+        )));
+    }
+    if account.terms.capacity_gib < committed_capacity_gib {
+        return Err(invalid_parameter(format!(
+            "provider {provider_id} reserve account covers {} GiB, below the declared {committed_capacity_gib} GiB",
+            account.terms.capacity_gib
+        )));
+    }
+    let custody_balance =
+        provider_spendable_balance(world, &policy.policy, &policy.policy.custody_account)?;
+    let reserved_custody = total_reserved_custody(world)?;
+    if custody_balance < reserved_custody {
+        return Err(corrupt_state(format!(
+            "aggregate provider reserve partitions exceed the native custody asset balance while verifying provider {provider_id}"
+        )));
+    }
+    account
+        .reserve_balance
+        .checked_sub(&account.debt_principal)
+        .map_err(|error| {
+            corrupt_state(format!(
+                "provider {provider_id} owner-funded reserve underflow: {error}"
+            ))
+        })
+}
+
+fn credit_after_verified_reserve_withdrawal(
+    world: &impl WorldReadOnly,
+    provider_id: ProviderId,
+    current_reserve: &XorQuantity,
+    remaining_reserve: &XorQuantity,
+    debt_principal: &XorQuantity,
+) -> Result<Option<ProviderCreditRecord>, InstructionExecutionError> {
+    let Some(mut credit) = world.provider_credit_ledger().get(&provider_id).cloned() else {
+        return Ok(None);
+    };
+    let current_owner_funded = current_reserve
+        .checked_sub(debt_principal)
+        .map_err(|error| {
+            corrupt_state(format!(
+                "provider {provider_id} owner-funded reserve underflow before withdrawal: {error}"
+            ))
+        })?;
+    let bonded = XorQuantity::try_from_quantity(credit.bonded.clone()).map_err(|error| {
+        corrupt_state(format!(
+            "provider {provider_id} bonded credit projection is invalid: {error}"
+        ))
+    })?;
+    let slashed = XorQuantity::try_from_quantity(credit.slashed.clone()).map_err(|error| {
+        corrupt_state(format!(
+            "provider {provider_id} slash-lien projection is invalid: {error}"
+        ))
+    })?;
+    let committed = bonded.checked_add(&slashed).map_err(|error| {
+        corrupt_state(format!(
+            "provider {provider_id} custody commitment overflow: {error}"
+        ))
+    })?;
+    if committed > current_owner_funded {
+        return Err(corrupt_state(format!(
+            "provider {provider_id} bonded-plus-slashed credit commitment exceeds native reserve custody"
+        )));
+    }
+
+    let remaining_owner_funded = remaining_reserve.checked_sub(debt_principal).map_err(
+        |error| {
+            invalid_parameter(format!(
+                "provider {provider_id} withdrawal would consume treasury-funded principal: {error}"
+            ))
+        },
+    )?;
+    let next_bonded = remaining_owner_funded.checked_sub(&slashed).map_err(|_| {
+        invalid_parameter(format!(
+            "provider {provider_id} withdrawal would release custody subject to a slash lien"
+        ))
+    })?;
+    if next_bonded.as_quantity() < &credit.required_bond {
+        return Err(invalid_parameter(format!(
+            "provider {provider_id} withdrawal would reduce unslashed bond {} below required {}",
+            next_bonded.as_quantity(),
+            credit.required_bond
+        )));
+    }
+    if let Some(record) = world.capacity_declarations().get(&provider_id) {
+        let declaration = super::sorafs::decode_capacity_declaration_payload(&record.declaration)
+            .map_err(|error| {
+            corrupt_state(format!(
+                "provider {provider_id} capacity declaration payload is invalid: {error}"
+            ))
+        })?;
+        let declared_stake = declaration.stake.stake_amount.as_quantity();
+        if next_bonded.as_quantity() < declared_stake {
+            return Err(invalid_parameter(format!(
+                "provider {provider_id} withdrawal would reduce unslashed bond {} below declared stake {declared_stake}",
+                next_bonded.as_quantity(),
+            )));
+        }
+    }
+    credit.bonded = next_bonded.into_quantity();
+    Ok(Some(credit))
+}
+
+#[cfg(test)]
+pub(super) fn seed_verified_provider_bond_for_test(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    provider_id: ProviderId,
+    owner: &AccountId,
+    capacity_gib: u64,
+    bonded: iroha_primitives::numeric::Quantity,
+) -> Result<(), InstructionExecutionError> {
+    use iroha_data_model::{IntoKeyValue, account::Account, asset::Asset};
+
+    let policy = if let Some(policy) = read_policy(state_transaction.world())? {
+        policy
+    } else {
+        let custody_account = AccountId::new(iroha_crypto::derive_non_signing_ed25519_public_key(
+            b"iroha:sorafs:test-reserve-custody:v1",
+            &[],
+        ));
+        if state_transaction
+            .world
+            .accounts()
+            .get(&custody_account)
+            .is_none()
+        {
+            let account = Account::new(custody_account.clone()).build(&custody_account);
+            let (account_id, account) = account.into_key_value();
+            state_transaction.world.accounts.insert(account_id, account);
+        }
+        let treasury_account = owner.clone();
+        let policy = ReserveAuthorityPolicyV1 {
+            version: iroha_data_model::sorafs::reserve::RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: iroha_data_model::sorafs::reserve::ReservePolicyV1::default(),
+            asset_definition: state_transaction.gov.sorafs_pin_fee_asset_id.clone(),
+            custody_account,
+            treasury_account,
+            operations_authority: owner.clone(),
+            decision_authority: owner.clone(),
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
+                .expect("bounded test reserve debt"),
+            max_pending_movements_per_provider: 4,
+            max_open_appeals_per_provider: 2,
+        };
+        let policy_digest = policy.digest().map_err(|error| {
+            corrupt_state(format!("test reserve policy digest failed: {error}"))
+        })?;
+        let record = ReserveAuthorityPolicyRecordV1 {
+            policy,
+            policy_digest,
+            activated_by: owner.clone(),
+            activated_at_unix: 1,
+        };
+        emit_reserve_policy_activation(state_transaction, record.clone(), owner, 1)?;
+        record
+    };
+    if policy.policy.custody_account == *owner {
+        return Err(corrupt_state(
+            "test reserve provider owner must differ from protocol custody",
+        ));
+    }
+
+    let reserve_balance = XorQuantity::try_from_quantity(bonded)
+        .map_err(|error| corrupt_state(format!("test reserve bond is invalid: {error}")))?;
+    let account = ReserveProviderAccountV1 {
+        terms: iroha_data_model::sorafs::reserve::ReserveProviderTermsV1 {
+            provider_id,
+            provider_account: owner.clone(),
+            tier: ReserveTier::TierA,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
+            duration: iroha_data_model::sorafs::reserve::ReserveDuration::Monthly,
+            capacity_gib,
+        },
+        policy_digest: policy.policy_digest,
+        revision: 1,
+        reserve_balance: reserve_balance.clone(),
+        debt_principal: XorQuantity::zero(),
+        accrued_interest: XorQuantity::zero(),
+        credit_cap: XorQuantity::zero(),
+        lifecycle_stage: ReserveLifecycleStage::Active,
+        days_past_due: 0,
+        pending_movements: 0,
+        open_appeals: 0,
+        rent_charged_through_unix: 1,
+        interest_accrued_at_unix: 1,
+        updated_at_unix: 1,
+    };
+    state_transaction.world.smart_contract_state.insert(
+        provider_key(provider_id),
+        encode_state(&account, "test reserve provider account")?,
+    );
+
+    let custody_asset_id = AssetId::of(
+        policy.policy.asset_definition,
+        policy.policy.custody_account,
+    );
+    let current = state_transaction
+        .world
+        .assets
+        .get(&custody_asset_id)
+        .map_or_else(iroha_primitives::numeric::Quantity::zero, |value| {
+            value.as_ref().clone()
+        });
+    let next = current
+        .checked_add(reserve_balance.as_quantity())
+        .map_err(|error| corrupt_state(format!("test reserve custody overflow: {error}")))?;
+    let (asset_id, asset) = Asset::new(custody_asset_id, next).into_key_value();
+    state_transaction.world.assets.insert(asset_id, asset);
+    Ok(())
 }
 
 fn decode_provider_record(
@@ -1108,6 +1513,11 @@ impl Execute for RegisterSorafsReserveAccount {
                 "reserve account capacity must be non-zero",
             ));
         }
+        if self.terms.provider_account == policy.policy.custody_account {
+            return Err(invalid_parameter(
+                "reserve provider account must differ from protocol custody",
+            ));
+        }
         let owner = registered_provider_owner(state_transaction.world(), self.terms.provider_id)?;
         if owner.subject_id() != self.terms.provider_account.subject_id() {
             return Err(invalid_parameter(
@@ -1252,6 +1662,7 @@ impl Execute for DecideSorafsReserveMovement {
             .checked_sub(1)
             .ok_or_else(|| corrupt_state("reserve pending-movement counter underflow"))?;
 
+        let mut updated_credit = None;
         if self.approve {
             match movement.kind {
                 ReserveMovementKindV1::TopUp => {
@@ -1306,6 +1717,13 @@ impl Execute for DecideSorafsReserveMovement {
                             "reserve withdrawal would breach underwriting",
                         ));
                     }
+                    updated_credit = credit_after_verified_reserve_withdrawal(
+                        state_transaction.world(),
+                        movement.provider_id,
+                        &account.reserve_balance,
+                        &remaining,
+                        &account.debt_principal,
+                    )?;
                     account.reserve_balance = remaining;
                 }
             }
@@ -1331,13 +1749,30 @@ impl Execute for DecideSorafsReserveMovement {
                     &policy.policy.custody_account,
                     &movement.amount,
                 )?,
-                ReserveMovementKindV1::Withdrawal => transfer(
-                    state_transaction,
-                    &policy.policy,
-                    &policy.policy.custody_account,
-                    &account.terms.provider_account,
-                    &movement.amount,
-                )?,
+                ReserveMovementKindV1::Withdrawal => {
+                    let source_id = AssetId::of(
+                        policy.policy.asset_definition.clone(),
+                        policy.policy.custody_account.clone(),
+                    );
+                    let destination_id = AssetId::of(
+                        policy.policy.asset_definition.clone(),
+                        account.terms.provider_account.clone(),
+                    );
+                    let authorization = VerifiedSorafsReserveWithdrawal::new(
+                        movement.provider_id,
+                        movement.movement_id,
+                        policy.policy_digest,
+                        self.expected_provider_revision,
+                        authority.clone(),
+                        source_id,
+                        destination_id,
+                        movement.amount.clone().into_quantity(),
+                    );
+                    super::asset::isi::execute_verified_sorafs_reserve_withdrawal(
+                        state_transaction,
+                        authorization,
+                    )?;
+                }
             }
         }
         state_transaction
@@ -1348,6 +1783,12 @@ impl Execute for DecideSorafsReserveMovement {
             .world
             .smart_contract_state
             .insert(movement_key(movement.movement_id), encoded_movement);
+        if let Some(credit) = updated_credit {
+            state_transaction
+                .world
+                .provider_credit_ledger
+                .insert(movement.provider_id, credit);
+        }
         emit_reserve_event(
             state_transaction,
             if movement.status == ReserveMovementStatusV1::Approved {
@@ -2577,6 +3018,7 @@ mod tests {
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::{Domain, DomainId},
+        isi::{Burn, Transfer, Unregister},
         permission::{Permission, Permissions},
         sorafs::{
             pin_registry::StorageClass,
@@ -2775,6 +3217,137 @@ mod tests {
     }
 
     #[test]
+    fn reserve_custody_rejects_user_debits_but_allows_exact_approved_withdrawal() {
+        let governance = account(&keypair(0x51));
+        let provider = account(&keypair(0x52));
+        let custody = account(&keypair(0x53));
+        let treasury = account(&keypair(0x54));
+        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
+        let top_up = xor_micro(50_000_000);
+        let slash_lien = xor_micro(10_000_000);
+        let withdrawal = xor_micro(1);
+
+        transact(&mut state, 1, NOW, |transaction| {
+            transaction.tx_call_hash = Some(Hash::prehashed([0x52; Hash::LENGTH]));
+            let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
+            let policy_digest = configured.digest().expect("reserve policy digest");
+            SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
+            RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
+                .execute(&governance, transaction)?;
+            RequestSorafsReserveMovement::new(
+                [0x53; 32],
+                PROVIDER_ID,
+                ReserveMovementKindV1::TopUp,
+                top_up.clone(),
+                1,
+                policy_digest,
+            )
+            .execute(&provider, transaction)?;
+            DecideSorafsReserveMovement::new(
+                [0x53; 32],
+                2,
+                policy_digest,
+                true,
+                "fund native reserve custody".to_owned(),
+            )
+            .execute(&governance, transaction)?;
+
+            let custody_asset = AssetId::of(asset_definition(), custody.clone());
+            let transfer_error = Transfer::asset_quantity(
+                custody_asset.clone(),
+                quantity_micro(1),
+                provider.clone(),
+            )
+            .execute(&custody, transaction)
+            .expect_err("ordinary transfer must not debit reserve custody");
+            assert!(
+                transfer_error
+                    .to_string()
+                    .contains("SoraFS reserve custody")
+            );
+            let burn_error = Burn::asset_quantity(quantity_micro(1), custody_asset)
+                .execute(&custody, transaction)
+                .expect_err("ordinary burn must not debit reserve custody");
+            assert!(burn_error.to_string().contains("SoraFS reserve custody"));
+            let account_error = Unregister::account(custody.clone())
+                .execute(&governance, transaction)
+                .expect_err("active reserve custody account must remain registered");
+            assert!(account_error.to_string().contains("SoraFS reserve custody"));
+            let definition_error = Unregister::asset_definition(asset_definition())
+                .execute(&governance, transaction)
+                .expect_err("active reserve asset definition must remain registered");
+            assert!(
+                definition_error
+                    .to_string()
+                    .contains("SoraFS reserve custody")
+            );
+
+            let mut credit = ProviderCreditRecord::new(
+                PROVIDER_ID,
+                Quantity::zero(),
+                top_up.clone().into_quantity(),
+                Quantity::zero(),
+                Quantity::zero(),
+                0,
+                0,
+                iroha_data_model::metadata::Metadata::default(),
+            );
+            credit
+                .apply_penalty(&slash_lien.clone().into_quantity(), 1)
+                .expect("apply custody-backed slash lien");
+            transaction
+                .world
+                .provider_credit_ledger
+                .insert(PROVIDER_ID, credit);
+
+            RequestSorafsReserveMovement::new(
+                [0x54; 32],
+                PROVIDER_ID,
+                ReserveMovementKindV1::Withdrawal,
+                withdrawal.clone(),
+                3,
+                policy_digest,
+            )
+            .execute(&provider, transaction)?;
+            DecideSorafsReserveMovement::new(
+                [0x54; 32],
+                4,
+                policy_digest,
+                true,
+                "release exact approved withdrawal".to_owned(),
+            )
+            .execute(&governance, transaction)?;
+            Ok(())
+        })
+        .expect("reserve custody flow");
+
+        assert_eq!(
+            reserve_asset_balance(&state, &custody),
+            top_up.checked_sub(&withdrawal).expect("bounded withdrawal")
+        );
+        assert_eq!(
+            verified_provider_bond(state.view().world(), PROVIDER_ID, &provider, 10)
+                .expect("remaining native reserve stays verified"),
+            top_up.checked_sub(&withdrawal).expect("bounded withdrawal")
+        );
+        let view = state.view();
+        let credit = view
+            .world()
+            .provider_credit_ledger()
+            .get(&PROVIDER_ID)
+            .expect("credit projection remains");
+        assert_eq!(credit.slashed, slash_lien.clone().into_quantity());
+        assert_eq!(
+            credit.bonded,
+            top_up
+                .checked_sub(&slash_lien)
+                .and_then(|bonded| bonded.checked_sub(&withdrawal))
+                .expect("unslashed withdrawal projection")
+                .into_quantity()
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn pending_operations_survive_concurrency_and_policy_rotation() {
         let governance = account(&keypair(0x71));
@@ -2918,6 +3491,11 @@ mod tests {
         assert_eq!(before_cap_reduction.revision, 11);
         assert_eq!(before_cap_reduction.policy_digest, second_digest);
         assert_eq!(before_cap_reduction.reserve_balance, xor_micro(30_000_000));
+        assert_eq!(
+            verified_provider_bond(stx.world(), PROVIDER_ID, &provider, 10)
+                .expect("approved native custody top-ups are verified collateral"),
+            xor_micro(30_000_000)
+        );
         assert_eq!(before_cap_reduction.open_appeals, 0);
         assert_eq!(
             FindSorafsReserveAppealById::new([0x91; 32])
@@ -2930,6 +3508,11 @@ mod tests {
         DrawSorafsReserveCredit::new(PROVIDER_ID, 11, xor_micro(10_000_000), second_digest)
             .execute(&governance, &mut stx)
             .expect("draw credit before cap reduction");
+        assert_eq!(
+            verified_provider_bond(stx.world(), PROVIDER_ID, &provider, 10)
+                .expect("treasury-funded credit is held in custody but is not provider stake"),
+            xor_micro(30_000_000)
+        );
         let mut unsafe_apr_change = policy(
             3,
             Some(second_digest),
@@ -2980,23 +3563,38 @@ mod tests {
         assert_eq!(final_account.reserve_balance, xor_micro(40_000_000));
         assert_eq!(final_account.debt_principal, XorQuantity::zero());
         assert_eq!(final_account.credit_cap, xor_micro(1_000_000));
+        assert_eq!(
+            verified_provider_bond(stx.world(), PROVIDER_ID, &provider, 10)
+                .expect("repaid principal becomes owner-funded reserve"),
+            xor_micro(40_000_000)
+        );
 
         let provider_balance = stx
             .world
             .assets
-            .get(&AssetId::of(asset_definition(), provider))
+            .get(&AssetId::of(asset_definition(), provider.clone()))
             .expect("provider asset")
             .as_ref()
             .clone();
+        let custody_asset_id = AssetId::of(asset_definition(), custody);
         let custody_balance = stx
             .world
             .assets
-            .get(&AssetId::of(asset_definition(), custody))
+            .get(&custody_asset_id)
             .expect("custody asset")
             .as_ref()
             .clone();
         assert_eq!(provider_balance, quantity_micro(60_000_000));
         assert_eq!(custody_balance, quantity_micro(40_000_000));
+
+        stx.world.assets.remove(custody_asset_id);
+        let error = verified_provider_bond(stx.world(), PROVIDER_ID, &provider, 10)
+            .expect_err("an unfunded reserve partition must not qualify as bonded stake");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("aggregate provider reserve partitions exceed")
+        ));
     }
 
     #[test]

@@ -376,6 +376,64 @@ function requireTransactionBytes(value, context) {
   return bytes;
 }
 
+function normalizePublicPipelineStatusEnvelope(value, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be a pipeline status object`);
+  }
+  const rootFields = new Set(["hash", "status", "scope", "resolved_from"]);
+  const unexpectedRootFields = Object.keys(value).filter(
+    (field) => !rootFields.has(field),
+  );
+  if (unexpectedRootFields.length > 0) {
+    throw new TypeError(
+      `${context} contains retired or unsupported fields: ${unexpectedRootFields.join(", ")}`,
+    );
+  }
+  const hash = requireExactHashHex(value.hash, `${context}.hash`);
+  if (!isPlainObject(value.status)) {
+    throw new TypeError(`${context}.status must be an object`);
+  }
+  const statusFields = new Set(["kind", "block_height"]);
+  const unexpectedStatusFields = Object.keys(value.status).filter(
+    (field) => !statusFields.has(field),
+  );
+  if (unexpectedStatusFields.length > 0) {
+    throw new TypeError(
+      `${context}.status contains retired or unsupported fields: ${unexpectedStatusFields.join(", ")}`,
+    );
+  }
+  if (
+    typeof value.status.kind !== "string" ||
+    !PIPELINE_STATUS_VALUES.has(value.status.kind)
+  ) {
+    throw new TypeError(`${context}.status.kind is not a current pipeline status`);
+  }
+  const status = { kind: value.status.kind };
+  if (value.status.block_height !== undefined) {
+    if (
+      !Number.isSafeInteger(value.status.block_height) ||
+      value.status.block_height < 1
+    ) {
+      throw new TypeError(
+        `${context}.status.block_height must be a positive safe integer`,
+      );
+    }
+    status.block_height = value.status.block_height;
+  }
+  if (!["local", "auto", "global"].includes(value.scope)) {
+    throw new TypeError(`${context}.scope is not a current status scope`);
+  }
+  if (!PIPELINE_STATUS_RESOLUTION_VALUES.has(value.resolved_from)) {
+    throw new TypeError(`${context}.resolved_from is not a current status source`);
+  }
+  return Object.freeze({
+    hash,
+    status: Object.freeze(status),
+    scope: value.scope,
+    resolved_from: value.resolved_from,
+  });
+}
+
 function classifyGlobalPipelineStatusEnvelope(value, requestedHash, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be a pipeline status object`);
@@ -386,9 +444,6 @@ function classifyGlobalPipelineStatusEnvelope(value, requestedHash, context) {
   }
   if (value.scope !== "global") {
     throw new Error(`${context}.scope must be global`);
-  }
-  if (typeof value.summary !== "string") {
-    throw new TypeError(`${context}.summary must be a string`);
   }
   if (!isPlainObject(value.status) || typeof value.status.kind !== "string") {
     throw new TypeError(`${context}.status.kind must be a string`);
@@ -1454,6 +1509,12 @@ export class ToriiBrowserClient {
       headers,
       signal,
     };
+    const hasCanonicalNonce = Object.keys(headers).some(
+      (name) => name.toLowerCase() === "x-iroha-nonce",
+    );
+    if (normalizedOptions.oneShot === true || hasCanonicalNonce) {
+      init.redirect = "error";
+    }
     if (normalizedOptions.rawBody !== undefined) {
       init.body = normalizedOptions.rawBody;
       init.headers = {
@@ -1585,6 +1646,7 @@ export class ToriiBrowserClient {
       rawBody: signed.body || undefined,
       contentType: body === undefined ? undefined : "application/json",
       headers: signed.headers,
+      oneShot: true,
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? successStatuses,
     });
@@ -1606,6 +1668,7 @@ export class ToriiBrowserClient {
         Accept: "application/json",
         ...(opts.headers ?? {}),
       },
+      oneShot: true,
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200, 201, 202, 204],
       responseObserver: (response) => {
@@ -1637,7 +1700,7 @@ export class ToriiBrowserClient {
       "getTransactionStatus options.scope",
     );
     try {
-      return await this._json("GET", "/v1/pipeline/transactions/status", {
+      const payload = await this._json("GET", "/v1/pipeline/transactions/status", {
         params: {
           hash,
           scope,
@@ -1646,6 +1709,10 @@ export class ToriiBrowserClient {
         signal: signalFrom(opts),
         successStatuses: [200],
       });
+      return normalizePublicPipelineStatusEnvelope(
+        payload,
+        "pipeline transaction status",
+      );
     } catch (error) {
       if (error instanceof ToriiBrowserHttpError && error.status === 404) {
         return null;
@@ -1824,6 +1891,7 @@ export class ToriiBrowserClient {
         rawBody: signed.body,
         contentType: "application/json",
         headers: signed.headers,
+        oneShot: true,
         signal: signalFrom(opts),
         successStatuses: opts.successStatuses ?? [200],
       });

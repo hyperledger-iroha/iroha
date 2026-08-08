@@ -85,9 +85,6 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
         activations = [f"activation-{index}".encode() for index in range(12)]
         policy_instruction = b"issuer-policy"
         plan = self.load_plan()
-        plan["genesis_registration"]["instruction_norito_sha256"] = [
-            hashlib.sha256(value).hexdigest() for value in activations
-        ]
         bootle = plan["bootle_lantern_issuer"]
         provider_digest = hashlib.sha256(b"provider-policy").hexdigest()
         bootle["runtime_provider"]["qualification_policy_digest_hex"] = provider_digest
@@ -209,7 +206,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
 
     def test_auto_mode_rejects_hybrid_partial_material(self) -> None:
         plan = self.load_plan()
-        plan["genesis_registration"]["instruction_norito_sha256"] = ["11" * 32]
+        plan["governance_rollout"]["activation_state"] = "partially-executed"
         self.write_plan(plan)
         errors = io.StringIO()
         with contextlib.redirect_stderr(errors):
@@ -230,8 +227,9 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("failed in both modes", errors.getvalue())
 
-    def test_release_rejects_missing_activation_inventory(self) -> None:
-        self.assert_rejected("exactly 12 activation", release=True)
+    def test_release_keeps_activation_out_of_genesis(self) -> None:
+        self.materialize_release_public_inputs()
+        target.validate(self.paths, release=True)
 
     def test_reordered_protocols_are_rejected(self) -> None:
         plan = self.load_plan()
@@ -254,21 +252,21 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
 
     def test_activation_delay_cannot_be_shortened(self) -> None:
         plan = self.load_plan()
-        plan["genesis_registration"]["activate_at_height"] = 300
+        plan["governance_rollout"]["notice_interval_blocks"] = 299
         self.write_plan(plan)
-        self.assert_rejected("height 301")
+        self.assert_rejected("notice and observation")
 
-    def test_genesis_lifecycle_must_start_proposed(self) -> None:
+    def test_rollout_must_not_claim_executed_state(self) -> None:
         plan = self.load_plan()
-        plan["genesis_registration"]["lifecycle"] = "Active"
+        plan["governance_rollout"]["activation_state"] = "active"
         self.write_plan(plan)
-        self.assert_rejected("Proposed")
+        self.assert_rejected("unexecuted four-wave")
 
-    def test_partial_activation_inventory_is_rejected(self) -> None:
+    def test_genesis_activation_inventory_field_is_rejected(self) -> None:
         plan = self.load_plan()
-        plan["genesis_registration"]["instruction_norito_sha256"] = ["11" * 32]
+        plan["governance_rollout"]["instruction_norito_sha256"] = ["11" * 32]
         self.write_plan(plan)
-        self.assert_rejected("partial activation")
+        self.assert_rejected("fields differ")
 
     def test_provider_slot_substitution_is_rejected(self) -> None:
         plan = self.load_plan()
@@ -412,28 +410,30 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
 
     def test_materialized_validator_private_key_is_rejected_from_public_config(self) -> None:
         config = self.config.read_text(encoding="utf-8").replace(
-            "REPLACE_WITH_VALIDATOR_PRIVATE_KEY", "materialized-private-key", 1
+            'private_key_file = "/run/secrets/iroha/taira-validator-private-key"',
+            'private_key = "materialized-private-key"',
+            1,
         )
         self.config.write_text(config, encoding="utf-8")
-        self.assert_rejected("must not materialize a validator private key")
+        self.assert_rejected("must use the validator runtime key file")
 
     def test_materialized_soranet_transport_identity_is_rejected_from_public_config(self) -> None:
-        for placeholder, materialized in (
+        for configured, materialized in (
             (
                 "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY",
                 "ed01200000000000000000000000000000000000000000000000000000000000000000",
             ),
             (
-                "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
-                "802620000000000000000000000000000000000000000000000000000000000000000000",
+                'soranet_transport_private_key_file = "/run/secrets/iroha/taira-soranet-transport-private-key"',
+                'soranet_transport_private_key = "802620000000000000000000000000000000000000000000000000000000000000000000"',
             ),
         ):
-            with self.subTest(placeholder=placeholder):
+            with self.subTest(configured=configured):
                 original = self.config.read_text(encoding="utf-8")
                 self.config.write_text(
-                    original.replace(placeholder, materialized, 1), encoding="utf-8"
+                    original.replace(configured, materialized, 1), encoding="utf-8"
                 )
-                self.assert_rejected("must retain every runtime-identity placeholder")
+                self.assert_rejected("runtime key-file handles")
                 self.config.write_text(original, encoding="utf-8")
 
     def test_unrelated_config_extension_is_rejected(self) -> None:
@@ -485,7 +485,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
             base64.b64encode(b"unverified").decode("ascii")
         )
         self.write_genesis(genesis)
-        self.assert_rejected("unverified partial encoded bootstrap")
+        self.assert_rejected("forbidden in genesis")
 
     def test_decoded_privacy_instruction_is_rejected_in_staging(self) -> None:
         genesis = self.load_genesis()
@@ -527,22 +527,12 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
 
     def test_release_requires_provider_qualification_after_exact12(self) -> None:
         plan = self.load_plan()
-        plan["genesis_registration"]["instruction_norito_sha256"] = [
-            hashlib.sha256(f"activation-{index}".encode()).hexdigest()
-            for index in range(12)
-        ]
         plan["bootle_lantern_issuer"]["public_export_sha256"] = "22" * 32
         self.write_plan(plan)
         self.assert_rejected("provider qualification digest", release=True)
 
     def test_release_requires_explicit_broker_public_path(self) -> None:
-        activations, policy_instruction = self.materialize_release_public_inputs()
-        genesis = self.load_genesis()
-        genesis["transactions"][-1]["instructions"].extend(
-            [base64.b64encode(value).decode("ascii") for value in activations]
-            + [base64.b64encode(policy_instruction).decode("ascii")]
-        )
-        self.write_genesis(genesis)
+        self.materialize_release_public_inputs()
         without_broker = target.ValidationPaths(
             self.plan, self.config, self.genesis, self.matrix, None
         )
@@ -570,28 +560,27 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
         self.write_broker(broker, rebind_plan=True)
         self.assert_rejected("structured issuer policy", release=True)
 
-    def test_release_rejects_missing_encoded_genesis_after_public_inputs(self) -> None:
+    def test_release_accepts_canonical_genesis_without_privacy_rows(self) -> None:
         self.materialize_release_public_inputs()
-        self.assert_rejected("exactly 12 activations", release=True)
+        target.validate(self.paths, release=True)
 
-    def test_release_rejects_noncanonical_base64_instruction(self) -> None:
-        activations, policy_instruction = self.materialize_release_public_inputs()
+    def test_release_rejects_encoded_privacy_instruction_even_if_canonical(self) -> None:
+        activations, _policy_instruction = self.materialize_release_public_inputs()
         genesis = self.load_genesis()
-        encoded = [base64.b64encode(value).decode("ascii") for value in activations]
-        encoded.append(base64.b64encode(policy_instruction).decode("ascii"))
-        encoded[0] = encoded[0] + "="
-        genesis["transactions"][-1]["instructions"].extend(encoded)
+        genesis["transactions"][-1]["instructions"].append(
+            base64.b64encode(activations[0]).decode("ascii")
+        )
         self.write_genesis(genesis)
-        self.assert_rejected("canonical base64", release=True)
+        self.assert_rejected("forbidden in genesis", release=True)
 
-    def test_release_rejects_encoded_instruction_digest_substitution(self) -> None:
-        activations, policy_instruction = self.materialize_release_public_inputs()
+    def test_release_rejects_encoded_issuer_policy_instruction(self) -> None:
+        _activations, policy_instruction = self.materialize_release_public_inputs()
         genesis = self.load_genesis()
-        encoded = [base64.b64encode(value).decode("ascii") for value in activations]
-        encoded.append(base64.b64encode(policy_instruction + b"-substituted").decode("ascii"))
-        genesis["transactions"][-1]["instructions"].extend(encoded)
+        genesis["transactions"][-1]["instructions"].append(
+            base64.b64encode(policy_instruction).decode("ascii")
+        )
         self.write_genesis(genesis)
-        self.assert_rejected("digest inventory", release=True)
+        self.assert_rejected("forbidden in genesis", release=True)
 
 
 if __name__ == "__main__":

@@ -82,8 +82,8 @@ struct NftRecord {
 pub struct DataspaceAxtPolicy {
     pub manifest_root: [u8; 32],
     pub target_lane: LaneId,
-    pub min_handle_era: u64,
-    pub min_sub_nonce: u64,
+    pub active_handle_era: u64,
+    pub next_handle_counter: u64,
     pub current_slot: u64,
 }
 
@@ -92,8 +92,8 @@ impl DataspaceAxtPolicy {
         AxtPolicyEntry {
             manifest_root: self.manifest_root,
             target_lane: self.target_lane,
-            min_handle_era: self.min_handle_era,
-            min_sub_nonce: self.min_sub_nonce,
+            active_handle_era: self.active_handle_era,
+            next_handle_counter: self.next_handle_counter,
             current_slot: self.current_slot,
         }
     }
@@ -102,8 +102,8 @@ impl DataspaceAxtPolicy {
         Self {
             manifest_root: entry.manifest_root,
             target_lane: entry.target_lane,
-            min_handle_era: entry.min_handle_era,
-            min_sub_nonce: entry.min_sub_nonce,
+            active_handle_era: entry.active_handle_era,
+            next_handle_counter: entry.next_handle_counter,
             current_slot: entry.current_slot,
         }
     }
@@ -239,10 +239,10 @@ impl AxtPolicy for SpaceDirectoryAxtPolicy {
         if usage.handle.manifest_view_root.as_slice() != policy.manifest_root.as_slice() {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.handle_era != policy.min_handle_era {
+        if usage.handle.handle_era != policy.active_handle_era {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.sub_nonce != policy.min_sub_nonce {
+        if usage.handle.sub_nonce != policy.next_handle_counter {
             return Err(VMError::PermissionDenied);
         }
         Ok(())
@@ -2010,17 +2010,17 @@ impl WsvHost {
         self.refresh_axt_policy();
     }
 
-    /// Configure the minimum allowed handle era for a dataspace (Space Directory policy).
-    pub fn set_axt_min_handle_era(&mut self, dsid: DataSpaceId, era: u64) {
+    /// Configure the exact active handle era for a dataspace (Space Directory policy).
+    pub fn set_axt_active_handle_era(&mut self, dsid: DataSpaceId, era: u64) {
         let entry = self.wsv.axt_policies.entry(dsid).or_default();
-        entry.min_handle_era = era;
+        entry.active_handle_era = era;
         self.refresh_axt_policy();
     }
 
-    /// Configure the minimum allowed sub-nonce for a dataspace (Space Directory policy).
-    pub fn set_axt_min_sub_nonce(&mut self, dsid: DataSpaceId, sub_nonce: u64) {
+    /// Configure the exact next handle counter for a dataspace (Space Directory policy).
+    pub fn set_axt_next_handle_counter(&mut self, dsid: DataSpaceId, counter: u64) {
         let entry = self.wsv.axt_policies.entry(dsid).or_default();
-        entry.min_sub_nonce = sub_nonce;
+        entry.next_handle_counter = counter;
         self.refresh_axt_policy();
     }
 
@@ -2057,15 +2057,15 @@ impl WsvHost {
         self
     }
 
-    /// Builder-style helper to set the minimum handle era.
-    pub fn with_axt_min_handle_era(mut self, dsid: DataSpaceId, era: u64) -> Self {
-        self.set_axt_min_handle_era(dsid, era);
+    /// Builder-style helper to set the exact active handle era.
+    pub fn with_axt_active_handle_era(mut self, dsid: DataSpaceId, era: u64) -> Self {
+        self.set_axt_active_handle_era(dsid, era);
         self
     }
 
-    /// Builder-style helper to set the minimum sub-nonce.
-    pub fn with_axt_min_sub_nonce(mut self, dsid: DataSpaceId, sub_nonce: u64) -> Self {
-        self.set_axt_min_sub_nonce(dsid, sub_nonce);
+    /// Builder-style helper to set the exact next handle counter.
+    pub fn with_axt_next_handle_counter(mut self, dsid: DataSpaceId, sub_nonce: u64) -> Self {
+        self.set_axt_next_handle_counter(dsid, sub_nonce);
         self
     }
 
@@ -5050,8 +5050,8 @@ mod tests_axt_policy_snapshot {
             DataspaceAxtPolicy {
                 manifest_root: [0x11; 32],
                 target_lane: LaneId::new(3),
-                min_handle_era: 5,
-                min_sub_nonce: 9,
+                active_handle_era: 5,
+                next_handle_counter: 9,
                 current_slot: 42,
             },
         );
@@ -5061,8 +5061,8 @@ mod tests_axt_policy_snapshot {
         let entry = &snapshot.entries[0];
         assert_eq!(entry.dsid, dsid);
         assert_eq!(entry.policy.target_lane.as_u32(), 3);
-        assert_eq!(entry.policy.min_handle_era, 5);
-        assert_eq!(entry.policy.min_sub_nonce, 9);
+        assert_eq!(entry.policy.active_handle_era, 5);
+        assert_eq!(entry.policy.next_handle_counter, 9);
         assert_eq!(entry.policy.current_slot, 42);
 
         let mut wsv_loaded = MockWorldStateView::new();
@@ -5072,8 +5072,8 @@ mod tests_axt_policy_snapshot {
         let policies = wsv_loaded.axt_policy_snapshot();
         let loaded = policies.get(&dsid).expect("policy present");
         assert_eq!(loaded.target_lane.as_u32(), 3);
-        assert_eq!(loaded.min_handle_era, 5);
-        assert_eq!(loaded.min_sub_nonce, 9);
+        assert_eq!(loaded.active_handle_era, 5);
+        assert_eq!(loaded.next_handle_counter, 9);
         assert_eq!(loaded.current_slot, 42);
         assert_eq!(loaded.manifest_root, [0x11; 32]);
     }
@@ -5087,8 +5087,8 @@ mod tests_axt_policy_snapshot {
             DataspaceAxtPolicy {
                 manifest_root: [0x11; 32],
                 target_lane: LaneId::new(3),
-                min_handle_era: 5,
-                min_sub_nonce: 9,
+                active_handle_era: 5,
+                next_handle_counter: 9,
                 current_slot: 42,
             },
         );
@@ -5118,8 +5118,8 @@ mod tests_axt_policy_snapshot {
             DataspaceAxtPolicy {
                 manifest_root: [0x22; 32],
                 target_lane: LaneId::new(1),
-                min_handle_era: 1,
-                min_sub_nonce: 1,
+                active_handle_era: 1,
+                next_handle_counter: 1,
                 current_slot: 0,
             },
         );

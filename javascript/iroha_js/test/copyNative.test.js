@@ -64,6 +64,9 @@ function nativeProbeFixtureSource({
       if (name === "privacyValidateCompiledProfileCatalogV1") {
         return `${name}(archive) { ${validatorBody} }`;
       }
+      if (name === "privacyValidateExact12CapabilityManifestV1") {
+        return `${name}() { return 8; }`;
+      }
       const result = REQUIRED_NATIVE_EXPORT_RESULTS[name];
       return `${name}() {${
         result === undefined ? "" : ` return ${JSON.stringify(result)};`
@@ -1583,7 +1586,10 @@ test("required-export probe accepts a complete module and rejects missing symbol
         REQUIRED_NATIVE_EXPORTS,
         REQUIRED_NATIVE_BRIDGE_ABI_VERSION - 2,
       ),
-    /ABI mismatch.*expected 19.*found 21/u,
+    new RegExp(
+      `ABI mismatch.*expected ${REQUIRED_NATIVE_BRIDGE_ABI_VERSION - 2}.*found ${REQUIRED_NATIVE_BRIDGE_ABI_VERSION}`,
+      "u",
+    ),
   );
 });
 
@@ -1593,7 +1599,10 @@ test("required-export probe rejects missing privacy and authenticated-finality s
 
   for (const missing of [
     "privacyCompiledProfileCatalogV1",
+    "privacyExact12CapabilityManifestJsonV1",
+    "privacyRequireExact12CapabilityTupleV1",
     "privacyValidateCompiledProfileCatalogV1",
+    "privacyValidateExact12CapabilityManifestV1",
     "blockProofsVerifyAuthenticatedV1",
   ]) {
     const fixture = path.join(root, `${missing}.cjs`);

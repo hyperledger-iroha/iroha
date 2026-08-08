@@ -424,6 +424,50 @@ final class SccpV1Tests: XCTestCase {
         ))
     }
 
+    func testSubmitRejectsGenesisUnknownLegacyAndUnmarkedTransactionDomains() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x57, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        func domain(kind: UInt32, value: Data? = nil, trailing: Data = Data()) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt32LE(kind)
+            if let value {
+                writer.writeField(value)
+            }
+            writer.writeBytes(trailing)
+            return writer.data
+        }
+        var unmarked = TestNetworkIds.canonical.bytes
+        unmarked[unmarked.index(before: unmarked.endIndex)] &= 0xfe
+        var legacyChain = CompactNoritoWriter()
+        legacyChain.writeField(CompactNorito.encodeString("sccp-test"))
+        let invalidDomains = [
+            domain(kind: 1),
+            domain(kind: 2),
+            legacyChain.data,
+            domain(kind: 0, value: unmarked),
+            domain(
+                kind: 0,
+                value: TestNetworkIds.canonical.bytes,
+                trailing: Data([0])
+            ),
+        ]
+
+        for invalidDomain in invalidDomains {
+            let payload = try canonicalSccpTransactionPayload(
+                authority: authority,
+                creationTimeMs: 7,
+                domainOverride: invalidDomain
+            )
+            XCTAssertThrowsError(try SccpSubmitValidation.canonicalTransactionPayload(
+                payload,
+                creationTimeMs: 7,
+                expectedAuthority: authority,
+                expectedFeePayment: nil
+            ))
+        }
+    }
+
     func testSubmitRejectsNonNfcSponsorProgramNameInRawCompactTransaction() throws {
         let authority = try AccountAddress
             .fromAccount(publicKey: Data(repeating: 0x55, count: 32))
@@ -916,7 +960,7 @@ final class SccpV1Tests: XCTestCase {
         ).toI105(networkPrefix: 753)
         mutateRoute(&defaultDiscriminantCustody) { route in
             var settlement = route["settlement"] as! [String: Any]
-            settlement["custody_account_id"] = custody753
+            settlement["custody_owner"] = custody753
             route["settlement"] = settlement
         }
         XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(defaultDiscriminantCustody)))
@@ -1530,7 +1574,7 @@ final class SccpV1Tests: XCTestCase {
             "destination": ["family": isTron ? "tron" : "evm", "deployment": destination],
             "settlement": [
                 "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_account_id": custody,
+                "custody_owner": custody,
                 "payload_amount_scale": 9,
             ],
         ]
@@ -1967,13 +2011,15 @@ final class SccpV1Tests: XCTestCase {
         authority: String,
         creationTimeMs: UInt64,
         feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil),
-        timeToLiveMs: UInt64? = 100_000
+        timeToLiveMs: UInt64? = 100_000,
+        domainOverride: Data? = nil
     ) throws -> Data {
         try canonicalSccpTransactionPayload(
             authority: authority,
             creationTimeMs: creationTimeMs,
             rawFeePayment: feePayment.compactNorito(),
-            timeToLiveMs: timeToLiveMs
+            timeToLiveMs: timeToLiveMs,
+            domainOverride: domainOverride
         )
     }
 
@@ -1981,10 +2027,12 @@ final class SccpV1Tests: XCTestCase {
         authority: String,
         creationTimeMs: UInt64,
         rawFeePayment: Data,
-        timeToLiveMs: UInt64? = 100_000
+        timeToLiveMs: UInt64? = 100_000,
+        domainOverride: Data? = nil
     ) throws -> Data {
-        var chain = CompactNoritoWriter()
-        chain.writeField(CompactNorito.encodeString("sccp-test"))
+        var networkDomain = CompactNoritoWriter()
+        networkDomain.writeUInt32LE(0)
+        networkDomain.writeField(TestNetworkIds.canonical.bytes)
         let address = try AccountAddress.parseEncoded(
             authority,
             expectedPrefix: SccpV1.tairaI105DiscriminantV1
@@ -1995,7 +2043,7 @@ final class SccpV1Tests: XCTestCase {
         emptyMetadata.writeLength(0)
 
         var payload = CompactNoritoWriter()
-        payload.writeField(chain.data)
+        payload.writeField(domainOverride ?? networkDomain.data)
         payload.writeField(try address.compactNoritoAccountControllerPayload())
         payload.writeField(creation.data)
         payload.writeField(Data([1]))

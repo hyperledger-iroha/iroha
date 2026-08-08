@@ -32,6 +32,14 @@ implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1.0")
 
 ### Transaction identity
 
+Every ordinary `TransactionPayload` requires a nominal, immutable `NetworkId` parsed from the
+exact canonical checksummed 32-byte genesis-header hash literal. The Norito codec emits it only as
+`TransactionDomain::Network`; the genesis-only domain is not constructible through the SDK and is
+rejected while decoding. JSON transaction surfaces use
+`"domain":{"kind":"network","value":"<canonical NetworkId>"}` and reject the retired `chain`,
+`chainId`, and `chain_id` identity fields. Protocol-specific chain identifiers used by Connect,
+privacy, Musubi, or SCCP remain separate and are never substituted for `NetworkId`.
+
 `SignedTransactionHasher` computes the first-release external transaction ID
 from `TransactionEntrypoint::External` plus the canonical signed
 `TransactionPayload`. Authorization signatures and multisig proofs remain in
@@ -39,6 +47,28 @@ the submitted `SignedTransaction` wire but do not create alternate IDs for the
 same intent. Proof attachments are carried by `TransactionPayload.attachments`,
 so adding, removing, or replacing an attachment changes the signature preimage
 and transaction ID.
+
+### One-shot signed HTTP requests
+
+Signed transactions, signed queries, transaction batches, and every request carrying an Iroha
+nonce are dispatched at most once. The default URLConnection transport does not follow 307/308
+redirects or retry connection/status failures. Custom `HttpTransportExecutor` implementations must
+honor `TransportRequest.replayPolicy`: only unsigned, bodyless `GET`, `HEAD`, and `OPTIONS` requests
+are `RETRY_SAFE`; all other requests are `ONE_SHOT`.
+
+If `submitTransaction` cannot obtain an authoritative admission result, it fails with
+`AmbiguousTransactionSubmissionException`. Use its `hashHex` or `reconcileWith(client)` to query
+pipeline status. Never resend the same signed bytes. `RetryPolicy` applies only to caller-managed
+replay-safe reads, and configured pending queues are explicit local staging: submission neither
+fills nor drains them.
+
+Public pipeline status contains only the canonical transaction hash, closed status kind,
+optional committed height, read scope, and resolution source. The parser rejects rejection
+text, diagnostics, trigger completions, batch outcomes, unknown kinds, and noncanonical
+metadata. Detailed transaction reads require an involved account or operator to send a
+one-shot canonical signed `FindTransactions` query bound to the exact genesis-derived
+`NetworkId`; Kotlin intentionally exposes no details helper until its generated signed-query
+surface supports that contract.
 
 ### DA commitment and pin-intent proofs
 
@@ -638,13 +668,15 @@ signature to the transaction payload and use the standard transaction ingress.
 The `ClientConfig` used by the transport must include an immutable
 `LocalSigningContext`; read-only clients may omit it, but draft-producing
 mutation routes fail before network I/O when it is absent. The draft parser
-rejects non-canonical Norito, another chain or authority, extra/substituted
+binds the exact canonical genesis-derived `NetworkId` and rejects
+non-canonical Norito, another network or authority, extra/substituted
 instructions, any mismatch in the complete verifying-key record, and signing
 messages that do not match the payload prehash:
 
 ```kotlin
+val networkId = NetworkId.parse("<canonical_network_id_hash_literal>")
 val config = ClientConfig.builder()
-    .setLocalSigningContext(LocalSigningContext("production-chain"))
+    .setLocalSigningContext(LocalSigningContext(networkId))
     // Configure the Torii endpoint and other client policy here.
     .build()
 val transport = HttpClientTransport.withExecutor(executor, config)

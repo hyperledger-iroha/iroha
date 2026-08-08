@@ -24,17 +24,21 @@ maturin develop --release
 from iroha_python import (
     ToriiClient,
     Instruction,
+    NetworkId,
     build_signed_transaction,
     derive_ed25519_keypair_from_seed,
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
 authority = pair.default_account_id("wonderland")  # Canonical I105 account id
+network_id = NetworkId.parse(
+    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+)
 instruction = Instruction.register_domain("wonderland")
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 envelope, status = client.build_and_submit_transaction(
-    chain_id="local",
+    network_id=network_id,
     authority=authority,
     private_key=pair.private_key,
     instructions=[instruction],
@@ -130,16 +134,22 @@ request/build/verify dispatcher and no legacy algorithm alias.
 non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
 and malformed nested policy or profile data.
 
+The eleven generic privacy protocols are constructed only by the admitted
+Rust `iroha_privacy_wallet_worker`. `PrivacyWalletWorkerControllerV1` is the
+top-level Python controller: it sends an owner-only credential path to Rust,
+then uses only an opaque handle plus canonical public intent and execution-plan
+bytes. Python and PyO3 expose no generic owner-bundle, witness, polynomial,
+blinding, or secret constructor. ZK-X509 retains its separate authenticated
+profile-owned transport.
+
 Reserve-backed ZK-ACE, Orchard, and private-IVM actions always bind one exact
-transparent balance bucket. The direct
-`TransactionDraft.sign_privacy_zk_ace_transfer_action_v1` call requires the
-keyword `public_balance_scope`; Orchard and private-IVM owner-bundle public JSON
-requires the field with the same name. Its only accepted spellings are
+transparent balance bucket. Their worker-owned public action requires
+`public_balance_scope`; its only accepted spellings are
 `"global"` and `"dataspace:<id>"`, where `<id>` is a canonical positive decimal
 `u64`. Dataspace zero is the universal coordinator route and is never a balance
 partition. Whitespace, case variants, leading zeroes, aliases, and unknown JSON
-fields fail before proving. Native build and authenticated inspection results
-return `public_balance_scope` in that same canonical spelling.
+fields fail before proving. Authenticated inspection returns
+`public_balance_scope` in that same canonical spelling.
 
 ### Exact12 typed fixture bundles
 
@@ -255,12 +265,16 @@ required `authority`, height ranges, and inline verifier-key commitments before
 requesting an unsigned transaction draft from Torii:
 
 ```python
-from iroha_python import LocalSigningContext, ToriiClient
+from iroha_python import LocalSigningContext, NetworkId, ToriiClient
+
+network_id = NetworkId.parse(
+    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+)
 
 signing_client = ToriiClient(
     "https://taira.sora.org",
     # Immutable local-signing context. Read-only clients may omit this.
-    local_signing_context=LocalSigningContext("production-chain"),
+    local_signing_context=LocalSigningContext(network_id),
 )
 
 register_draft = signing_client.register_zk_verifying_key({
@@ -297,10 +311,10 @@ transaction. Both helpers return canonical padded-base64
 entirely inside the client wallet. Draft validation caps the transaction
 payload at 16 MiB and requires the 32-byte signing message to equal the
 canonical marker-adjusted Blake2b-256 Iroha hash of that payload. The native
-decoder then requires canonical Norito, the configured chain ID, the requested
+decoder then requires canonical Norito, the configured exact NetworkId, the requested
 authority, exactly one requested register/update instruction, and exact
 equality of all 17 verifying-key record fields. Register/update fail before the
-request when `local_signing_context` is absent; there is no raw chain-ID,
+request when `local_signing_context` is absent; there is no label, bare-hash,
 per-call, or server-derived fallback.
 
 Kagemusha-capable assets can be registered without shelling out to JavaScript
@@ -308,13 +322,13 @@ tooling. The `register_fee_payment` below is the recommended intent returned by
 `/v1/fees/quote` for that exact unsigned payload:
 
 ```python
-client.register_zk_asset_and_wait(
-    chain_id="local",
+signing_client.register_zk_asset_and_wait(
     authority="<asset-owner>",
     fee_payment=register_fee_payment,
     private_key_hex="<64-hex-private-key>",
     asset_definition_id="ds#wonderland.is",
     vk_unshield="halo2/ipa:vk_unshield",
+    vk_shield="halo2/ipa:vk_shield",
 )
 ```
 
@@ -322,8 +336,9 @@ The first-release SDK exposes no generic confidential transfer or withdrawal
 instruction. Public-to-confidential ingress and public redemption use the
 proof-bound Kagemusha V4 top-up/redemption protocol so escrow provenance and
 drawdown remain inseparable from settlement. Asset registration binds only the
-optional shield and unshield verifier roles; Kagemusha owns its global
-transfer-v2 verifier independently.
+optional shield and unshield verifier roles: `vk_shield` names the Kagemusha
+top-up verifier, and `vk_unshield` names its redemption verifier. Kagemusha
+owns its global transfer-v2 verifier independently.
 
 ## Dataspace lifecycle helpers
 
@@ -332,7 +347,18 @@ scripts. Planning is pure Python: it returns the manifest, config snippet, and
 rollout summary, and writing is explicit.
 
 ```python
-from iroha_python import DataspaceSpec, ToriiClient, plan_dataspace, write_dataspace_plan
+from iroha_python import (
+    DataspaceSpec,
+    LocalSigningContext,
+    NetworkId,
+    ToriiClient,
+    plan_dataspace,
+    write_dataspace_plan,
+)
+
+network_id = NetworkId.parse(
+    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+)
 
 spec = DataspaceSpec(
     dataspace_alias="boi",
@@ -348,7 +374,10 @@ spec = DataspaceSpec(
 plan = plan_dataspace(spec)
 write_dataspace_plan(plan, "build/dataspaces", force=True)
 
-client = ToriiClient("http://127.0.0.1:8080")
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    local_signing_context=LocalSigningContext(network_id),
+)
 status = client.smoke_dataspace("boi")
 print(status.dataspace_id, status.ready)
 ```
@@ -389,7 +418,6 @@ asset_id = client.compose_asset_id(
 )
 
 client.mint_asset_and_wait(
-    chain_id="local",
     authority="<asset-owner>",
     fee_payment=mint_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -398,7 +426,6 @@ client.mint_asset_and_wait(
 )
 
 client.transfer_assets_and_wait(
-    chain_id="local",
     authority="<payer>",
     fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -427,11 +454,13 @@ register/merge, lifecycle controls, and per-lot metadata updates.
 ```python
 from decimal import Decimal
 
-from iroha_python import TransactionConfig, TransactionDraft, authority_fee_payment
+from iroha_python import NetworkId, TransactionConfig, TransactionDraft, authority_fee_payment
 
 draft = TransactionDraft(
     TransactionConfig(
-        chain_id="local",
+        network_id=NetworkId.parse(
+            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        ),
         authority="<canonical_i105_account_id>",
         # The payer and gas bound are fixed before quoting; Torii supplies the
         # exact charge maxima for this payload.
@@ -882,6 +911,7 @@ caller-owned wallet/keystore.
 ```python
 from iroha_python import (
     Ed25519KeyPair,
+    NetworkId,
     ToriiCanonicalRequestAuth,
     VpnQuoteCreateRequest,
     VpnSessionCreateRequest,
@@ -922,20 +952,32 @@ the optional `settle_lease_instruction` field.
 ## Transaction helpers
 
 Build transactions with ergonomic helpers that wrap the low-level `Instruction` APIs:
+Every signing configuration takes one typed, canonical `NetworkId` derived from
+the genesis-header hash. Ordinary transaction APIs reject operator-selected
+chain labels and bare hash bytes.
 
 ```python
 from iroha_python import (
     Ed25519KeyPair,
+    LocalSigningContext,
+    NetworkId,
+    ToriiClient,
     TransactionConfig,
     TransactionDraft,
     authority_fee_payment,
 )
 
 config = TransactionConfig(
-    chain_id="dev-chain",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     fee_payment=authority_fee_payment(charge_limits=[]),
     ttl_ms=120_000,
+)
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    local_signing_context=LocalSigningContext(config.network_id),
 )
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
@@ -960,15 +1002,36 @@ if isinstance(receipt, dict):
     print("Submitted tx:", receipt.get("payload", {}).get("tx_hash"))
 ```
 
+Public pipeline status is metadata-only. `get_transaction_status(...)` returns exactly the
+canonical hash, closed status kind, optional committed height, scope, and resolution source;
+retired rejection, diagnostic, trigger, and batch fields are rejected. An involved account or
+operator can request the committed transaction and trigger completions with a canonical signed
+query:
+
+```python
+details = client.get_pipeline_transaction_details(
+    transaction_hash,
+    authority=authority_account_id,
+    private_key=pair.private_key,
+)
+```
+
+The client uses its immutable typed `NetworkId` for the signed query and sends
+the nonce-bearing body once, with redirects and transport retries disabled. Torii verifies the
+exact transaction predicate, signature, freshness, nonce, and involved-account/operator
+authorization.
+
 Native instructions and deployed-contract calls can share one ordered, atomic
 batch. Any batch containing a contract call must bind a positive `gas_limit`
 in its fee intent:
 
 ```python
-from iroha_python import Instruction, TransactionConfig, TransactionDraft, authority_fee_payment
+from iroha_python import Instruction, NetworkId, TransactionConfig, TransactionDraft, authority_fee_payment
 
 mixed = TransactionDraft(TransactionConfig(
-    chain_id="dev-chain",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority=authority_account_id,
     fee_payment=authority_fee_payment(charge_limits=[], gas_limit=500_000),
 ))
@@ -999,7 +1062,9 @@ requested_fee_payment = sponsor_fee_payment(
 )
 
 config = TransactionConfig(
-    chain_id="dev-chain",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority=authority_account_id,
     fee_payment=requested_fee_payment,
     ttl_ms=120_000,
@@ -1036,7 +1101,6 @@ Create and operate native asset locks for escrow-style conditional payments:
 
 ```python
 client.open_asset_lock_and_wait(
-    chain_id="dev-chain",
     authority="<source-account-id>",
     private_key_hex="<source-private-key-hex>",
     escrow_id="merchant-lock-001",
@@ -1047,7 +1111,6 @@ client.open_asset_lock_and_wait(
     expires_at_ms=1_704_000_000_000,
 )
 client.drawdown_asset_lock_and_wait(
-    chain_id="dev-chain",
     authority="<trusted-release-account-id>",
     private_key_hex="<trusted-release-private-key-hex>",
     escrow_id="merchant-lock-001",
@@ -1055,7 +1118,6 @@ client.drawdown_asset_lock_and_wait(
     expected_remaining_amount="2500",
 )
 client.cancel_asset_lock_and_wait(
-    chain_id="dev-chain",
     authority="<source-account-id>",
     private_key_hex="<source-private-key-hex>",
     escrow_id="merchant-lock-001",
@@ -1662,7 +1724,7 @@ NX-16 rollout with deterministic parsing.
 ## Trigger lifecycle walkthrough
 
 ```python
-from iroha_python import Instruction, ToriiClient
+from iroha_python import Instruction, NetworkId, ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
 trigger_id = "hourly-reward"
@@ -1682,9 +1744,11 @@ register = Instruction.register_time_trigger(
 
 # 2) Submit the transaction and wait for confirmation.
 envelope, status = client.build_and_submit_transaction(
-    chain_id="local",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    private_key="ed25519:...",
+    private_key=bytes.fromhex("11" * 32),
     instructions=[register],
     wait=True,
 )

@@ -10,6 +10,7 @@ import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
@@ -22,6 +23,7 @@ public final class AliasLifecyclePlanApply {
   public static TransactionPayload buildTransactionPayload(
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
@@ -32,6 +34,7 @@ public final class AliasLifecyclePlanApply {
         plan,
         DefaultAliasLifecyclePlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasLifecycleInstructionFrameCodec.INSTANCE,
+        networkId,
         chainDiscriminant,
         feePayment,
         creationTimeMs,
@@ -45,6 +48,7 @@ public final class AliasLifecyclePlanApply {
       final AliasLifecycleTransactionPlanV1 plan,
       final AliasLifecyclePlanBodyNoritoEncoder bodyEncoder,
       final AliasLifecycleInstructionFrameCodec frameCodec,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
@@ -54,10 +58,15 @@ public final class AliasLifecyclePlanApply {
         || plan == null
         || bodyEncoder == null
         || frameCodec == null
+        || networkId == null
         || feePayment == null) {
       throw new IllegalArgumentException("alias lifecycle apply arguments must not be null");
     }
     if (creationTimeMs < 0) throw new IllegalArgumentException("creationTimeMs must not be negative");
+    if (!plan.body().networkId().equals(networkId)) {
+      throw new IllegalArgumentException(
+          "alias lifecycle plan NetworkId does not match the trusted transaction network");
+    }
     if (plan.body().validUntilMs() <= creationTimeMs) {
       throw new IllegalArgumentException("alias lifecycle plan has expired");
     }
@@ -76,7 +85,7 @@ public final class AliasLifecyclePlanApply {
       throw new IllegalArgumentException("executable alias lifecycle plan is missing its instruction");
     }
     return TransactionPayload.builder()
-        .setChainId(plan.body().chainId())
+        .setNetworkId(networkId)
         .setAuthority(plan.body().authority())
         .setCreationTimeMs(creationTimeMs)
         .setInstructions(
@@ -94,6 +103,7 @@ public final class AliasLifecyclePlanApply {
       final IrohaClient client,
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
+      final NetworkId networkId,
       final AliasLifecyclePlanBodyNoritoEncoder bodyEncoder,
       final AliasLifecycleInstructionFrameCodec frameCodec,
       final int chainDiscriminant,
@@ -113,6 +123,7 @@ public final class AliasLifecyclePlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            networkId,
             chainDiscriminant,
             feePayment,
             creationTimeMs,
@@ -126,6 +137,7 @@ public final class AliasLifecyclePlanApply {
       final IrohaClient client,
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
@@ -138,6 +150,7 @@ public final class AliasLifecyclePlanApply {
         client,
         request,
         plan,
+        networkId,
         DefaultAliasLifecyclePlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasLifecycleInstructionFrameCodec.INSTANCE,
         chainDiscriminant,

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::BlockHeader,
     da::commitment::DaProofScheme,
     merge::{
@@ -24,7 +24,7 @@ const MERGE_REDUCE_DOMAIN_TAG: &[u8] = b"iroha:merge:reduce:v1\0";
 /// Domain separator applied to merge-committee signature payloads.
 const MERGE_QC_DOMAIN_TAG: &[u8] = b"iroha:merge:qc:v2\0";
 /// Domain separator for the chain identity embedded into durable merge QCs.
-const MERGE_CHAIN_ID_DOMAIN_TAG: &[u8] = b"iroha:merge:chain-id:v1\0";
+const MERGE_NETWORK_ID_DOMAIN_TAG: &[u8] = b"iroha:merge:network-id:v1\0";
 /// Domain separator for exact lane-incarnation activation commitments.
 const MERGE_ACTIVATION_ROOT_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-activations:v1\0";
 /// Domain separator for individual lane configuration commitments.
@@ -221,14 +221,14 @@ struct MergeLedgerSignPayload {
 /// Compute the deterministic message digest for merge-committee signatures.
 #[must_use]
 pub fn merge_qc_message_digest(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     candidate: &MergeLedgerCandidate,
     validator_set_hash_version: u16,
     validator_set_hash: HashOf<Vec<PeerId>>,
 ) -> Hash {
     let payload = MergeLedgerSignPayload {
         version: candidate.version,
-        chain_id_digest: merge_chain_id_digest(chain_id),
+        chain_id_digest: merge_network_id_digest(network_id),
         validator_set_hash_version,
         validator_set_hash,
         view: candidate.view,
@@ -247,18 +247,18 @@ pub fn merge_qc_message_digest(
     };
     let payload_bytes = payload.encode();
     let mut preimage = Vec::with_capacity(
-        MERGE_QC_DOMAIN_TAG.len() + chain_id.as_str().len() + payload_bytes.len(),
+        MERGE_QC_DOMAIN_TAG.len() + network_id.as_bytes().len() + payload_bytes.len(),
     );
     preimage.extend_from_slice(MERGE_QC_DOMAIN_TAG);
-    preimage.extend_from_slice(chain_id.as_str().as_bytes());
+    preimage.extend_from_slice(network_id.as_bytes());
     preimage.extend_from_slice(&payload_bytes);
     Hash::new(preimage)
 }
 
-/// Compute the stable chain identity embedded in every durable merge QC.
+/// Compute the stable exact-network identity embedded in every durable merge QC.
 #[must_use]
-pub fn merge_chain_id_digest(chain_id: &ChainId) -> Hash {
-    Hash::new_from_chunks(&[MERGE_CHAIN_ID_DOMAIN_TAG, chain_id.as_str().as_bytes()])
+pub fn merge_network_id_digest(network_id: &NetworkId) -> Hash {
+    Hash::new_from_chunks(&[MERGE_NETWORK_ID_DOMAIN_TAG, network_id.as_bytes()])
 }
 
 /// Compute the canonical activation root for an already canonical incarnation list.
@@ -821,17 +821,19 @@ mod tests {
                 "merge candidate identity must ignore the caller's ambient Norito layout"
             );
         }
-        let chain_id: ChainId = "nexus-merge".parse().expect("chain id parses");
+        let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"nexus-merge-genesis"),
+        ));
         let validator_set = Vec::<PeerId>::new();
         let validator_set_hash = HashOf::new(&validator_set);
-        let digest_a = merge_qc_message_digest(&chain_id, &candidate, 1, validator_set_hash);
-        let digest_b = merge_qc_message_digest(&chain_id, &candidate, 1, validator_set_hash);
+        let digest_a = merge_qc_message_digest(&network_id, &candidate, 1, validator_set_hash);
+        let digest_b = merge_qc_message_digest(&network_id, &candidate, 1, validator_set_hash);
         assert_eq!(digest_a, digest_b);
         let mut other_version = candidate.clone();
         other_version.version = MergeLedgerCandidate::VERSION + 1;
         assert_ne!(
             digest_a,
-            merge_qc_message_digest(&chain_id, &other_version, 1, validator_set_hash),
+            merge_qc_message_digest(&network_id, &other_version, 1, validator_set_hash),
             "the entry layout version must be bound into the merge QC signature payload"
         );
 
@@ -842,7 +844,7 @@ mod tests {
         ];
         assert_ne!(
             digest_a,
-            merge_qc_message_digest(&chain_id, &with_queue_plan_admission, 1, validator_set_hash,),
+            merge_qc_message_digest(&network_id, &with_queue_plan_admission, 1, validator_set_hash,),
             "exact queue-plan admission bytes must be bound into the merge QC signature payload"
         );
 
@@ -858,7 +860,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    chain_id_digest: merge_chain_id_digest(&chain_id),
+                    chain_id_digest: merge_network_id_digest(&network_id),
                     lane_id,
                     dataspace_id,
                     lane_incarnation,
@@ -894,10 +896,10 @@ mod tests {
         drain_candidate.global_state_root = reduce_merge_hint_roots(&[]);
         drain_candidate.lane_drain_certificates = vec![certificate];
         let drain_digest =
-            merge_qc_message_digest(&chain_id, &drain_candidate, 1, validator_set_hash);
+            merge_qc_message_digest(&network_id, &drain_candidate, 1, validator_set_hash);
         drain_candidate.lane_drain_certificates[0].aggregate_signature[0] ^= 0xFF;
         assert_ne!(
-            merge_qc_message_digest(&chain_id, &drain_candidate, 1, validator_set_hash,),
+            merge_qc_message_digest(&network_id, &drain_candidate, 1, validator_set_hash,),
             drain_digest,
             "the merge QC digest must bind every carried drain-certificate byte"
         );

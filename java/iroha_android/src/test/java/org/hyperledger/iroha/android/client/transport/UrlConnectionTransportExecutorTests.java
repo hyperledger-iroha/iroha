@@ -69,7 +69,12 @@ public final class UrlConnectionTransportExecutorTests {
   }
 
   @Test
-  public void redirectsAreReturnedWithoutForwardingSensitiveHeaders() throws Exception {
+  public void permanentRedirectsAreReturnedWithoutForwardingSensitiveHeaders() throws Exception {
+    assertRedirectIsNotFollowed(307);
+    assertRedirectIsNotFollowed(308);
+  }
+
+  private static void assertRedirectIsNotFollowed(final int status) throws Exception {
     try (ServerSocket server = new ServerSocket(0)) {
       server.setSoTimeout(1_000);
       final int port = server.getLocalPort();
@@ -81,7 +86,7 @@ public final class UrlConnectionTransportExecutorTests {
                   readHeaders(socket.getInputStream());
                   final OutputStream output = socket.getOutputStream();
                   output.write(
-                      ("HTTP/1.1 302 Found\r\n"
+                      ("HTTP/1.1 " + status + " Redirect\r\n"
                               + "Location: http://127.0.0.1:"
                               + port
                               + "/redirected\r\n"
@@ -116,7 +121,7 @@ public final class UrlConnectionTransportExecutorTests {
       final TransportResponse response =
           new UrlConnectionTransportExecutor().execute(request).get();
 
-      assertEquals(302, response.statusCode());
+      assertEquals(status, response.statusCode());
       serverThread.join(3_000);
       assertEquals(
           "redirect target must not receive a second request", null, redirectedRequest.get());

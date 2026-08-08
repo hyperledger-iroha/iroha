@@ -41,6 +41,7 @@ mod protocol {
     compile_error!("the V1 runtime-provider broker requires a 64-bit address space");
 
     use iroha_config::parameters::defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults;
+    use iroha_data_model::NetworkId;
     use norito::{
         DecodeLimits, NoritoDeserialize, NoritoSerialize,
         codec::{Decode, Encode},
@@ -6767,19 +6768,21 @@ mod protocol {
 
     #[cfg(test)]
     fn validate_operation_request(request: &OperationRequestV1) -> Result<(), BrokerError> {
-        validate_operation_request_with_session_chain(request, None)
+        validate_operation_request_with_session(request, None, None)
     }
 
     fn validate_operation_request_for_session(
         request: &OperationRequestV1,
         session_chain_id: &str,
+        session_network_id: Option<&NetworkId>,
     ) -> Result<(), BrokerError> {
-        validate_operation_request_with_session_chain(request, Some(session_chain_id))
+        validate_operation_request_with_session(request, Some(session_chain_id), session_network_id)
     }
 
-    fn validate_operation_request_with_session_chain(
+    fn validate_operation_request_with_session(
         request: &OperationRequestV1,
         session_chain_id: Option<&str>,
+        session_network_id: Option<&NetworkId>,
     ) -> Result<(), BrokerError> {
         if request.session_id == [0; 32]
             || request.request_id == 0
@@ -6803,7 +6806,7 @@ mod protocol {
         if operation_request_digest(&fields)? != request.request_digest {
             return Err(BrokerError::Protocol);
         }
-        validate_operation_payload(request, session_chain_id)?;
+        validate_operation_payload(request, session_chain_id, session_network_id)?;
         Ok(())
     }
 
@@ -8892,12 +8895,12 @@ mod protocol {
         Ok(())
     }
 
-    fn ensure_transaction_session_chain(
+    fn ensure_transaction_session_network(
         payload: &iroha_data_model::transaction::TransactionPayload,
-        session_chain_id: &str,
+        session_network_id: Option<&NetworkId>,
     ) -> Result<(), BrokerError> {
-        validate_provider_ingest_chain_id(session_chain_id)?;
-        if payload.chain().as_str() != session_chain_id {
+        let expected_network_id = session_network_id.ok_or(BrokerError::BindingMismatch)?;
+        if payload.network_id() != Some(expected_network_id) {
             return Err(BrokerError::BindingMismatch);
         }
         Ok(())
@@ -8906,9 +8909,9 @@ mod protocol {
     fn ensure_provider_ingest_completion_payload(
         payload: &iroha_data_model::transaction::TransactionPayload,
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
-        session_chain_id: &str,
+        session_network_id: Option<&NetworkId>,
     ) -> Result<(), BrokerError> {
-        ensure_transaction_session_chain(payload, session_chain_id)?;
+        ensure_transaction_session_network(payload, session_network_id)?;
         ensure_provider_ingest_completion_payload_context(payload, context)
     }
 
@@ -8960,12 +8963,12 @@ mod protocol {
     fn ensure_provider_ingest_completion_transaction(
         transaction: &iroha_data_model::transaction::SignedTransaction,
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
-        session_chain_id: &str,
+        session_network_id: Option<&NetworkId>,
     ) -> Result<(), BrokerError> {
         ensure_provider_ingest_completion_payload(
             transaction.payload(),
             context,
-            session_chain_id,
+            session_network_id,
         )?;
         if transaction.attachments().is_some()
             || transaction.multisig_signatures().is_some()
@@ -9506,6 +9509,7 @@ mod protocol {
     fn validate_operation_payload(
         request: &OperationRequestV1,
         session_chain_id: Option<&str>,
+        session_network_id: Option<&NetworkId>,
     ) -> Result<(), BrokerError> {
         let moderation_quarantine_slot =
             IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id();
@@ -9759,7 +9763,10 @@ mod protocol {
             (slot, OPERATION_NATIVE_TRANSACTION_SIGN_V1)
                 if slot == moderation_transaction_signer_slot =>
             {
-                decode_native_transaction_payload(&request.payload)?;
+                let payload = decode_native_transaction_payload(&request.payload)?;
+                if session_chain_id.is_some() {
+                    ensure_transaction_session_network(&payload, session_network_id)?;
+                }
             }
             (slot, OPERATION_MODERATION_HANDOFF_DELIVER_ONCE_V1)
                 if slot == moderation_settlement_handoff_slot
@@ -10029,6 +10036,9 @@ mod protocol {
             {
                 let expected = native_transaction_signer_binding_from_wire(&request.binding)?;
                 let payload = decode_native_transaction_payload(&request.payload)?;
+                if session_chain_id.is_some() {
+                    ensure_transaction_session_network(&payload, session_network_id)?;
+                }
                 if payload.authority() != expected.authority() {
                     return Err(BrokerError::Rejected);
                 }
@@ -10038,6 +10048,9 @@ mod protocol {
             {
                 let expected = soracloud_runtime_signer_binding_from_wire(&request.binding)?;
                 let payload = decode_native_transaction_payload(&request.payload)?;
+                if session_chain_id.is_some() {
+                    ensure_transaction_session_network(&payload, session_network_id)?;
+                }
                 if payload.authority() != expected.authority() {
                     return Err(BrokerError::Rejected);
                 }
@@ -10097,6 +10110,9 @@ mod protocol {
                     &request.payload,
                     MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1,
                 )?;
+                if session_chain_id.is_some() {
+                    ensure_transaction_session_network(&payload, session_network_id)?;
+                }
                 if payload.authority() != &exact.authority {
                     return Err(BrokerError::Rejected);
                 }
@@ -10450,8 +10466,8 @@ mod protocol {
             (slot, OPERATION_PROVIDER_INGEST_SIGN_V1) if slot == provider_ingest_signer_slot => {
                 let (context, _expected, payload) = decode_provider_ingest_sign_operation(request)?;
                 ensure_provider_ingest_completion_payload_context(&payload, &context)?;
-                if let Some(expected_chain_id) = session_chain_id {
-                    ensure_transaction_session_chain(&payload, expected_chain_id)?;
+                if session_chain_id.is_some() {
+                    ensure_transaction_session_network(&payload, session_network_id)?;
                 }
             }
             (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1)
@@ -12395,6 +12411,7 @@ mod protocol {
         #[derive(Clone)]
         struct BrokerServerStateV1 {
             chain_id: String,
+            network_id: Option<NetworkId>,
             catalog: Vec<ProviderBindingWireV1>,
             observations: Vec<ProviderObservationWireV1>,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -14021,6 +14038,7 @@ mod protocol {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BrokerServerStateV1 {
                 chain_id: bindings.chain_id().to_owned(),
+                network_id: bindings.network_id().copied(),
                 catalog,
                 observations,
                 backends,
@@ -14061,6 +14079,7 @@ mod protocol {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BrokerServerStateV1 {
                 chain_id: bindings.chain_id().to_owned(),
+                network_id: bindings.network_id().copied(),
                 catalog,
                 observations,
                 backends,
@@ -16561,7 +16580,7 @@ mod protocol {
                         &request.payload,
                         MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1,
                     )?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, state.network_id.as_ref())?;
                     let expected = payload.clone();
                     let exact = request
                         .binding
@@ -17536,7 +17555,7 @@ mod protocol {
                     if slot == moderation_transaction_signer_slot =>
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, state.network_id.as_ref())?;
                     let signed = sign_moderation_transaction(state, payload)?;
                     qualify_server_binding(
                         state,
@@ -17635,7 +17654,7 @@ mod protocol {
                     if native_transaction_signer_role_for_slot(slot).is_some() =>
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, state.network_id.as_ref())?;
                     let signed = sign_native_transaction(state, &request.binding, payload)?;
                     qualify_server_binding(
                         state,
@@ -17650,7 +17669,7 @@ mod protocol {
                     if slot == soracloud_runtime_signer_slot =>
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, state.network_id.as_ref())?;
                     let signer = qualified_soracloud_runtime_signer(state, &request.binding)?;
                     let signed = signer
                         .sign_transaction(payload)
@@ -17991,7 +18010,11 @@ mod protocol {
                             .ok_or(BrokerError::BindingMismatch)?,
                     )
                     .map_err(|_| BrokerError::Rejected)?;
-                    ensure_provider_ingest_completion_payload(&payload, &context, &state.chain_id)?;
+                    ensure_provider_ingest_completion_payload(
+                        &payload,
+                        &context,
+                        state.network_id.as_ref(),
+                    )?;
                     let signer = resolved_provider_signer(state, context.clone())?
                         .ok_or(BrokerError::Rejected)?;
                     validate_resolved_provider_signer(
@@ -18020,7 +18043,7 @@ mod protocol {
                     ensure_provider_ingest_completion_transaction(
                         &signed,
                         &context,
-                        &state.chain_id,
+                        state.network_id.as_ref(),
                     )?;
                     qualify_server_binding(
                         state,
@@ -19475,7 +19498,11 @@ mod protocol {
                     FRAME_KIND_OPERATION_REQUEST_V1,
                     announced_operation,
                 )?;
-                validate_operation_request_for_session(&request, &state.chain_id)?;
+                validate_operation_request_for_session(
+                    &request,
+                    &state.chain_id,
+                    state.network_id.as_ref(),
+                )?;
                 if request.binding.slot != announced_slot
                     || request.operation != announced_operation
                     || request.session_id != session_id
@@ -20186,6 +20213,7 @@ mod protocol {
         struct BrokerSession {
             connection: Mutex<BrokerConnection>,
             chain_id: String,
+            network_id: Option<NetworkId>,
             endpoint: EndpointPolicy,
             requested_catalog: Vec<ProviderBindingWireV1>,
         }
@@ -20251,6 +20279,7 @@ mod protocol {
             fn connect(
                 policy: &EndpointPolicy,
                 chain_id: &str,
+                network_id: Option<NetworkId>,
                 requested_catalog: Vec<ProviderBindingWireV1>,
             ) -> Result<(Arc<Self>, Vec<ProviderObservationWireV1>), BrokerError> {
                 let (connection, observations) =
@@ -20259,6 +20288,7 @@ mod protocol {
                     Arc::new(Self {
                         connection: Mutex::new(connection),
                         chain_id: chain_id.to_owned(),
+                        network_id,
                         endpoint: policy.clone(),
                         requested_catalog,
                     }),
@@ -21838,7 +21868,11 @@ mod protocol {
                 iroha_torii::SoraFsAppealFinanceSigningError,
             > {
                 if payload.authority() != &self.authority
-                    || ensure_transaction_session_chain(&payload, &self.session.chain_id).is_err()
+                    || ensure_transaction_session_network(
+                        &payload,
+                        self.session.network_id.as_ref(),
+                    )
+                    .is_err()
                 {
                     return Err(iroha_torii::SoraFsAppealFinanceSigningError::Refused);
                 }
@@ -24333,7 +24367,7 @@ mod protocol {
                 iroha_data_model::transaction::SignedTransaction,
                 iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1,
             > {
-                ensure_transaction_session_chain(&payload, &self.session.chain_id)
+                ensure_transaction_session_network(&payload, self.session.network_id.as_ref())
                     .map_err(moderation_signing_error)?;
                 self.live_qualification()
                     .map_err(moderation_signing_error)?;
@@ -24686,7 +24720,7 @@ mod protocol {
                 if payload.authority() != self.exact_binding.authority() {
                     return Err(BrokerError::Rejected);
                 }
-                ensure_transaction_session_chain(&payload, &self.session.chain_id)?;
+                ensure_transaction_session_network(&payload, self.session.network_id.as_ref())?;
                 let payload = encode_native_transaction_payload(&payload)?;
                 let result = self.session.call(
                     &self.binding,
@@ -25034,7 +25068,7 @@ mod protocol {
                             InputAuthorityMismatch,
                     );
                 }
-                ensure_transaction_session_chain(&payload, &self.session.chain_id)
+                ensure_transaction_session_network(&payload, self.session.network_id.as_ref())
                     .map_err(|error| self.signing_error(error))?;
                 let payload = encode_native_transaction_payload(&payload)
                     .map_err(|error| self.signing_error(error))?;
@@ -26801,7 +26835,7 @@ mod protocol {
                 ensure_provider_ingest_completion_payload(
                     &transaction_payload,
                     &self.resolution_context,
-                    &self.session.chain_id,
+                    self.session.network_id.as_ref(),
                 )
                 .map_err(provider_ingest_signer_error)?;
                 self.live_resolver_state()
@@ -26852,7 +26886,7 @@ mod protocol {
                 if ensure_provider_ingest_completion_transaction(
                     &signed,
                     &self.resolution_context,
-                    &self.session.chain_id,
+                    self.session.network_id.as_ref(),
                 )
                 .is_err()
                 {
@@ -29643,9 +29677,13 @@ mod protocol {
                         ),
                 ));
             }
-            let (session, observations) =
-                BrokerSession::connect(endpoint, bindings.chain_id(), requested_catalog.clone())
-                    .map_err(registry_error)?;
+            let (session, observations) = BrokerSession::connect(
+                endpoint,
+                bindings.chain_id(),
+                bindings.network_id().copied(),
+                requested_catalog.clone(),
+            )
+            .map_err(registry_error)?;
 
             let mut dependencies = IrohaRuntimeDeps::default();
             let mut appeal_finance_signers: Vec<
@@ -30810,6 +30848,18 @@ mod protocol {
                 "transparency://sorafs/evidence-viewer/publisher-primary";
             const SERVER_TEST_BOOTLE_LANTERN_HANDLE: &str =
                 "hsm://privacy/bootle-lantern/issuer-primary";
+
+            fn test_network_id(byte: u8) -> NetworkId {
+                NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([byte; iroha_crypto::Hash::LENGTH]),
+                ))
+            }
+
+            fn server_test_network_id() -> NetworkId {
+                test_network_id(0x15)
+            }
 
             struct ServerTestBootleLanternBackend {
                 revision: AtomicU64,
@@ -32996,9 +33046,7 @@ mod protocol {
                         ServerTestModerationTransactionSignerMode::SubstitutedPayload => {
                             let substituted =
                                 iroha_data_model::transaction::TransactionBuilder::new(
-                                    iroha_data_model::ChainId::from(
-                                        "server-test-chain-substituted",
-                                    ),
+                                    test_network_id(0x16),
                                     payload.authority().clone(),
                                     iroha_data_model::transaction::FeePaymentIntent::authority(
                                         Vec::new(),
@@ -34057,6 +34105,7 @@ mod protocol {
                         ),
                     ],
                 )
+                .with_network_id_for_test(server_test_network_id())
             }
 
             fn proof_native_signer_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
@@ -34070,6 +34119,7 @@ mod protocol {
                         signer.binding(),
                     )],
                 )
+                .with_network_id_for_test(server_test_network_id())
             }
 
             fn native_signer_test_backends() -> RuntimeProviderBrokerBackendsV1 {
@@ -34090,14 +34140,12 @@ mod protocol {
                     )))
             }
 
-            fn native_signer_test_payload_for_chain(
-                chain_id: &str,
+            fn native_signer_test_payload_for_network(
+                network_id: NetworkId,
                 authority: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::transaction::TransactionPayload {
                 iroha_data_model::transaction::TransactionBuilder::new(
-                    chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .expect("native signer test chain id must be canonical"),
+                    network_id,
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -34108,7 +34156,7 @@ mod protocol {
             fn native_signer_test_payload(
                 authority: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::transaction::TransactionPayload {
-                native_signer_test_payload_for_chain("server-test-chain", authority)
+                native_signer_test_payload_for_network(server_test_network_id(), authority)
             }
 
             fn provider_ingest_completion_test_keypair() -> iroha_crypto::KeyPair {
@@ -34174,14 +34222,12 @@ mod protocol {
             }
 
             fn provider_ingest_completion_test_payload_with_executable(
-                chain_id: &str,
+                network_id: NetworkId,
                 authority: iroha_data_model::account::AccountId,
                 executable: iroha_data_model::transaction::Executable,
             ) -> iroha_data_model::transaction::TransactionPayload {
                 iroha_data_model::transaction::TransactionBuilder::new(
-                    chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .expect("provider-ingest test chain id must be canonical"),
+                    network_id,
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -34195,7 +34241,7 @@ mod protocol {
             ) -> iroha_data_model::transaction::TransactionPayload {
                 let completion = provider_ingest_completion_test_instruction(owner.clone());
                 provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner,
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(completion)].into(),
@@ -34211,6 +34257,7 @@ mod protocol {
                     7,
                     TEST_POLICY_DIGEST,
                 )
+                .with_network_id_for_test(server_test_network_id())
             }
 
             fn moderation_transaction_signer_test_payload()
@@ -35703,6 +35750,7 @@ mod protocol {
                     .expect("observe exact Bootle/Lantern test backend");
                 BrokerServerStateV1 {
                     chain_id: "server-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding],
                     observations: vec![observation],
                     backends,
@@ -36034,6 +36082,7 @@ mod protocol {
                     .expect("observe exact appeal-finance transaction signer");
                 BrokerServerStateV1 {
                     chain_id: "server-test-chain".to_owned(),
+                    network_id: Some(server_test_network_id()),
                     catalog: vec![binding],
                     observations: vec![observation],
                     backends,
@@ -36762,9 +36811,13 @@ mod protocol {
                     .map(ProviderBindingWireV1::try_from_binding)
                     .collect::<Result<Vec<_>, _>>()
                     .expect("project source test catalog");
-                let (session, observations) =
-                    BrokerSession::connect(policy, bindings.chain_id(), requested_catalog.clone())
-                        .expect("connect source broker session");
+                let (session, observations) = BrokerSession::connect(
+                    policy,
+                    bindings.chain_id(),
+                    bindings.network_id().copied(),
+                    requested_catalog.clone(),
+                )
+                .expect("connect source broker session");
                 let binding = requested_catalog
                     .iter()
                     .find(|binding| {
@@ -36792,7 +36845,7 @@ mod protocol {
             fn connect_test_server_session(policy: &EndpointPolicy) -> Arc<BrokerSession> {
                 let binding = signer_binding_for_server();
                 let (session, _) =
-                    BrokerSession::connect(policy, "server-test-chain", vec![binding])
+                    BrokerSession::connect(policy, "server-test-chain", None, vec![binding])
                         .expect("connect authenticated broker server session");
                 session
             }
@@ -37909,6 +37962,7 @@ mod protocol {
                     match BrokerSession::connect(
                         &policy,
                         "server-test-chain",
+                        None,
                         vec![signer_binding_for_server()],
                     ) {
                         Ok((session, _)) => break session,
@@ -38528,7 +38582,7 @@ mod protocol {
                     make_operation_request([0x91; 32], 1, binding, [0x92; 32], 28, payload)
                         .expect("construct retired operation request");
                 assert_eq!(
-                    validate_operation_request_for_session(&request, "server-test-chain"),
+                    validate_operation_request_for_session(&request, "server-test-chain", None),
                     Err(BrokerError::BindingMismatch)
                 );
             }
@@ -39450,28 +39504,30 @@ mod protocol {
                 );
                 assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
 
-                let cross_chain =
-                    native_signer_test_payload_for_chain("other-chain", exact.authority().clone());
-                let cross_chain_request = make_operation_request(
+                let cross_network = native_signer_test_payload_for_network(
+                    test_network_id(0x16),
+                    exact.authority().clone(),
+                );
+                let cross_network_request = make_operation_request(
                     TEST_SESSION_ID,
                     2,
                     state.catalog[0].clone(),
                     state.observations[0].metadata_digest,
                     OPERATION_NATIVE_TRANSACTION_SIGN_V1,
-                    encode_native_transaction_payload(&cross_chain)
-                        .expect("encode cross-chain native signer payload"),
+                    encode_native_transaction_payload(&cross_network)
+                        .expect("encode cross-network native signer payload"),
                 )
-                .expect("seal cross-chain native signer request");
-                validate_operation_request(&cross_chain_request)
-                    .expect("cross-chain payload is structurally canonical");
+                .expect("seal cross-network native signer request");
+                validate_operation_request(&cross_network_request)
+                    .expect("cross-network payload is structurally canonical");
                 assert_eq!(
-                    dispatch_server_operation(&state, &cross_chain_request),
+                    dispatch_server_operation(&state, &cross_network_request),
                     Err(BrokerError::BindingMismatch)
                 );
                 assert_eq!(
                     signer.sign_calls.load(Ordering::Relaxed),
                     0,
-                    "the HSM boundary must not see a foreign-chain transaction"
+                    "the HSM boundary must not see a foreign-network transaction"
                 );
 
                 let request = make_operation_request(
@@ -39537,38 +39593,40 @@ mod protocol {
             }
 
             #[test]
-            fn appeal_finance_signer_rejects_cross_chain_before_provider_use() {
+            fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
                 let signer = Arc::new(ServerTestAppealFinanceSigner::exact());
                 let state = appeal_finance_signer_test_state(signer.clone());
                 let exact = state.catalog[0]
                     .appeal_finance_signer_binding
                     .as_ref()
                     .expect("exact appeal-finance signer binding");
-                let cross_chain =
-                    native_signer_test_payload_for_chain("other-chain", exact.authority.clone());
-                let cross_chain_request = make_operation_request(
+                let cross_network = native_signer_test_payload_for_network(
+                    test_network_id(0x16),
+                    exact.authority.clone(),
+                );
+                let cross_network_request = make_operation_request(
                     TEST_SESSION_ID,
                     1,
                     state.catalog[0].clone(),
                     state.observations[0].metadata_digest,
                     OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1,
                     encode_transaction_payload_bounded(
-                        &cross_chain,
+                        &cross_network,
                         MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1,
                     )
-                    .expect("encode cross-chain appeal-finance payload"),
+                    .expect("encode cross-network appeal-finance payload"),
                 )
-                .expect("seal cross-chain appeal-finance signer request");
-                validate_operation_request(&cross_chain_request)
-                    .expect("cross-chain appeal-finance payload is structurally canonical");
+                .expect("seal cross-network appeal-finance signer request");
+                validate_operation_request(&cross_network_request)
+                    .expect("cross-network appeal-finance payload is structurally canonical");
                 assert_eq!(
-                    dispatch_server_operation(&state, &cross_chain_request),
+                    dispatch_server_operation(&state, &cross_network_request),
                     Err(BrokerError::BindingMismatch)
                 );
                 assert_eq!(
                     signer.sign_calls.load(Ordering::Relaxed),
                     0,
-                    "the appeal-finance HSM boundary must not see a foreign-chain transaction"
+                    "the appeal-finance HSM boundary must not see a foreign-network transaction"
                 );
 
                 let exact_payload = native_signer_test_payload(exact.authority.clone());
@@ -39819,30 +39877,30 @@ mod protocol {
                 }
                 assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
 
-                let cross_chain = native_signer_test_payload_for_chain(
-                    "other-chain",
+                let cross_network = native_signer_test_payload_for_network(
+                    test_network_id(0x16),
                     payload.authority().clone(),
                 );
-                let cross_chain_request = make_operation_request(
+                let cross_network_request = make_operation_request(
                     TEST_SESSION_ID,
                     2,
                     state.catalog[0].clone(),
                     state.observations[0].metadata_digest,
                     OPERATION_NATIVE_TRANSACTION_SIGN_V1,
-                    encode_native_transaction_payload(&cross_chain)
-                        .expect("encode cross-chain moderation payload"),
+                    encode_native_transaction_payload(&cross_network)
+                        .expect("encode cross-network moderation payload"),
                 )
-                .expect("seal cross-chain moderation signer request");
-                validate_operation_request(&cross_chain_request)
-                    .expect("cross-chain moderation payload is structurally canonical");
+                .expect("seal cross-network moderation signer request");
+                validate_operation_request(&cross_network_request)
+                    .expect("cross-network moderation payload is structurally canonical");
                 assert_eq!(
-                    dispatch_server_operation(&state, &cross_chain_request),
+                    dispatch_server_operation(&state, &cross_network_request),
                     Err(BrokerError::BindingMismatch)
                 );
                 assert_eq!(
                     signer.sign_calls.load(Ordering::Relaxed),
                     0,
-                    "the moderation HSM boundary must not see a foreign-chain transaction"
+                    "the moderation HSM boundary must not see a foreign-network transaction"
                 );
 
                 let request = make_operation_request(
@@ -42018,6 +42076,7 @@ mod protocol {
                     .expect("qualify stable threshold-PRF provider");
                 let state = BrokerServerStateV1 {
                     chain_id: "privacy-cycle-prf-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -42181,6 +42240,7 @@ mod protocol {
                     .expect("qualify stable finalized release anchor");
                 let state = BrokerServerStateV1 {
                     chain_id: "privacy-release-anchor-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -42305,6 +42365,7 @@ mod protocol {
                     .expect("qualify non-persisting test release anchor");
                 let no_readback_state = BrokerServerStateV1 {
                     chain_id: "privacy-release-anchor-no-readback-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding],
                     observations: vec![no_readback_observed],
                     backends: no_readback_backends,
@@ -42422,6 +42483,7 @@ mod protocol {
                     .expect("qualify stable leader-lease provider");
                 let state = BrokerServerStateV1 {
                     chain_id: "transparency-leader-lease-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -42807,6 +42869,7 @@ mod protocol {
                     .expect("qualify stable fenced privacy publisher");
                 let state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-publisher-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -42890,6 +42953,7 @@ mod protocol {
                     .expect("qualify publisher whose receipt is substituted");
                 let substituted_state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-substituted-receipt-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding],
                     observations: vec![substituted_observed],
                     backends: substituted_backends,
@@ -42996,6 +43060,7 @@ mod protocol {
                     .expect("qualify stable fenced privacy head reader");
                 let state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-head-reader-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -43110,6 +43175,7 @@ mod protocol {
                     .expect("qualify head reader that substitutes proof evidence");
                 let substituted_state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-substituted-head-proof-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding.clone()],
                     observations: vec![substituted_observed],
                     backends: substituted_backends,
@@ -43128,6 +43194,7 @@ mod protocol {
                     .expect("head reader is stable before its authenticated read");
                 let drift_state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-head-read-drift-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding],
                     observations: vec![drift_observed],
                     backends: drift_backends,
@@ -43266,6 +43333,7 @@ mod protocol {
                     .expect("qualify stable replay archive");
                 let state = BrokerServerStateV1 {
                     chain_id: "por-replay-archive-test-chain".to_owned(),
+                    network_id: None,
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -45049,11 +45117,27 @@ mod protocol {
                 .expect("build provider-ingest sign operation");
                 assert_eq!(validate_operation_request(&admitted_request), Ok(()));
                 assert_eq!(
-                    validate_operation_request_for_session(&admitted_request, "server-test-chain",),
+                    validate_operation_request_for_session(
+                        &admitted_request,
+                        "server-test-chain",
+                        Some(&server_test_network_id()),
+                    ),
                     Ok(())
                 );
                 assert_eq!(
-                    validate_operation_request_for_session(&admitted_request, "other-chain"),
+                    validate_operation_request_for_session(
+                        &admitted_request,
+                        "server-test-chain",
+                        Some(&test_network_id(0x16)),
+                    ),
+                    Err(BrokerError::BindingMismatch)
+                );
+                assert_eq!(
+                    validate_operation_request_for_session(
+                        &admitted_request,
+                        "server-test-chain",
+                        None,
+                    ),
                     Err(BrokerError::BindingMismatch)
                 );
 
@@ -45061,7 +45145,7 @@ mod protocol {
                     provider_ingest_completion_test_instruction(signer_owner.clone());
                 substituted_instruction.expected_assignment_revision += 1;
                 let substituted_payload = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     signer_owner,
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(
@@ -45104,6 +45188,7 @@ mod protocol {
                     validate_operation_request_for_session(
                         &substituted_request,
                         "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45119,22 +45204,44 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &exact_payload,
                         &context,
-                        "server-test-chain"
+                        Some(&server_test_network_id()),
                     ),
                     Ok(())
                 );
-                let cross_chain_payload = iroha_data_model::transaction::TransactionBuilder::new(
-                    iroha_data_model::ChainId::from("other-chain"),
+                let cross_network_payload = iroha_data_model::transaction::TransactionBuilder::new(
+                    test_network_id(0x16),
                     owner.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .into_payload()
-                .expect("build cross-chain provider-ingest payload");
+                .expect("build cross-network provider-ingest payload");
                 assert_eq!(
                     ensure_provider_ingest_completion_payload(
-                        &cross_chain_payload,
+                        &cross_network_payload,
                         &context,
-                        "server-test-chain"
+                        Some(&server_test_network_id()),
+                    ),
+                    Err(BrokerError::BindingMismatch)
+                );
+                assert_eq!(
+                    ensure_provider_ingest_completion_payload(&exact_payload, &context, None),
+                    Err(BrokerError::BindingMismatch)
+                );
+                let genesis_payload =
+                    iroha_data_model::transaction::TransactionBuilder::new_genesis(
+                        owner,
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                    .into_payload()
+                    .expect("build genesis-domain provider-ingest payload");
+                assert_eq!(
+                    ensure_provider_ingest_completion_payload(
+                        &genesis_payload,
+                        &context,
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45160,7 +45267,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &payload,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Ok(())
                 );
@@ -45173,7 +45280,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &payload,
                         &substituted,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45200,13 +45307,13 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &exact,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Ok(())
                 );
 
                 let other_executable = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner.clone(),
                     iroha_data_model::transaction::Executable::Ivm(
                         iroha_data_model::transaction::IvmBytecode::from_compiled(vec![1]),
@@ -45216,13 +45323,13 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &other_executable,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::Rejected)
                 );
 
                 let wrong_instruction = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner.clone(),
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(
@@ -45238,14 +45345,14 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &wrong_instruction,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::Rejected)
                 );
 
                 let completion = provider_ingest_completion_test_instruction(owner.clone());
                 let batch = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner.clone(),
                     iroha_data_model::transaction::Executable::Batch(
                         vec![
@@ -45260,13 +45367,13 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &batch,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::Rejected)
                 );
 
                 let extra_instruction = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner.clone(),
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![
@@ -45285,7 +45392,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &extra_instruction,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::Rejected)
                 );
@@ -45300,7 +45407,7 @@ mod protocol {
                     .clone(),
                 );
                 let wrong_payload_owner = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     other_owner.clone(),
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(
@@ -45313,7 +45420,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &wrong_payload_owner,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45321,7 +45428,7 @@ mod protocol {
                 let mut wrong_authority = completion.clone();
                 wrong_authority.expected_authority.provider_owner = other_owner;
                 let wrong_authority = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner.clone(),
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(wrong_authority)].into(),
@@ -45331,7 +45438,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &wrong_authority,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45339,7 +45446,7 @@ mod protocol {
                 let mut wrong_policy = completion.clone();
                 wrong_policy.expected_authority.signer_policy.policy_digest[0] ^= 1;
                 let wrong_policy = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner.clone(),
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(wrong_policy)].into(),
@@ -45349,7 +45456,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &wrong_policy,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45357,7 +45464,7 @@ mod protocol {
                 let mut wrong_anchor = completion.clone();
                 wrong_anchor.finalized_anchor.block_hash[0] ^= 1;
                 let wrong_anchor = provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner.clone(),
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(wrong_anchor)].into(),
@@ -45367,7 +45474,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &wrong_anchor,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45377,7 +45484,7 @@ mod protocol {
                     context.expected_assignment_revision + 1;
                 let wrong_assignment_revision =
                     provider_ingest_completion_test_payload_with_executable(
-                        "server-test-chain",
+                        server_test_network_id(),
                         owner.clone(),
                         iroha_data_model::transaction::Executable::Instructions(
                             vec![iroha_data_model::isi::InstructionBox::from(
@@ -45390,7 +45497,7 @@ mod protocol {
                     ensure_provider_ingest_completion_payload(
                         &wrong_assignment_revision,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -45418,7 +45525,7 @@ mod protocol {
                     zero_anchor_hash,
                 ] {
                     let payload = provider_ingest_completion_test_payload_with_executable(
-                        "server-test-chain",
+                        server_test_network_id(),
                         owner.clone(),
                         iroha_data_model::transaction::Executable::Instructions(
                             vec![iroha_data_model::isi::InstructionBox::from(malformed)].into(),
@@ -45428,7 +45535,7 @@ mod protocol {
                         ensure_provider_ingest_completion_payload(
                             &payload,
                             &context,
-                            "server-test-chain",
+                            Some(&server_test_network_id()),
                         ),
                         Err(BrokerError::Rejected)
                     );
@@ -45451,7 +45558,7 @@ mod protocol {
                     ensure_provider_ingest_completion_transaction(
                         &exact,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Ok(())
                 );
@@ -45474,7 +45581,7 @@ mod protocol {
                     ensure_provider_ingest_completion_transaction(
                         &attached,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::Rejected)
                 );
@@ -45487,7 +45594,7 @@ mod protocol {
                     ensure_provider_ingest_completion_transaction(
                         &multisig,
                         &context,
-                        "server-test-chain",
+                        Some(&server_test_network_id()),
                     ),
                     Err(BrokerError::Rejected)
                 );
@@ -45772,7 +45879,7 @@ mod protocol {
 
                 let binding = signer_binding();
                 let (session, observations) =
-                    BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
+                    BrokerSession::connect(&policy, "test-chain", None, vec![binding.clone()])
                         .expect("connect broker session");
                 let metadata = observations[0]
                     .signer_metadata
@@ -46121,7 +46228,7 @@ mod protocol {
 
                 let binding = signer_binding();
                 let (session, observations) =
-                    BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
+                    BrokerSession::connect(&policy, "test-chain", None, vec![binding.clone()])
                         .expect("connect broker session");
                 let metadata = observations[0]
                     .signer_metadata
@@ -46183,7 +46290,7 @@ mod protocol {
 
                 let binding = checkpoint_binding();
                 let (session, observations) =
-                    BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
+                    BrokerSession::connect(&policy, "test-chain", None, vec![binding.clone()])
                         .expect("connect broker session");
                 let store = GovernanceDagBrokerCheckpointStore {
                     session,
@@ -46241,7 +46348,7 @@ mod protocol {
                     send_handshake(&mut stream, &response);
                 });
                 assert!(matches!(
-                    BrokerSession::connect(&policy, "test-chain", vec![signer_binding()]),
+                    BrokerSession::connect(&policy, "test-chain", None, vec![signer_binding()]),
                     Err(BrokerError::BindingMismatch)
                 ));
                 server.join().expect("join fake broker");

@@ -18,6 +18,7 @@ import {
 import { computeIvmArtifactHashes } from "./ivmArtifact.js";
 import { verifyIvmContractArtifactAdmission } from "./ivmArtifactAdmissionWasm.js";
 import { verifyCompiledContractArtifact } from "./kotodamaCompiler/normalize.js";
+import { networkIdBytes } from "./networkId.js";
 import { noritoEncodeContractManifestSignaturePayload } from "./norito.js";
 import {
   browserTransactionPayloadHashHex,
@@ -674,7 +675,7 @@ function validateDeploymentState(
 
 async function submitDeploymentStep({
   step,
-  chainId,
+  networkId,
   authority,
   chainDiscriminant,
   signingPublicKey,
@@ -687,7 +688,7 @@ async function submitDeploymentStep({
   metadata,
 }) {
   const payloadBytes = buildBrowserInstructionTransactionPayload({
-    chainId,
+    networkId,
     authority,
     chainDiscriminant,
     instructions: [step.instruction],
@@ -740,6 +741,15 @@ async function submitDeploymentStep({
  */
 export async function deploySmartContractBrowser(options) {
   const source = requirePlainObject(options, "deployment options");
+  for (const field of ["chain", "chain_id"]) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      throw new TypeError(
+        `deployment options.${field} is unsupported; provide networkId for the transaction domain and chainId for contract-address derivation`,
+      );
+    }
+  }
+  networkIdBytes(source.networkId, "deployment options.networkId");
+  const networkId = source.networkId;
   if (typeof source.sign !== "function") {
     throw new TypeError("deployment options.sign must be a local signer callback");
   }
@@ -849,7 +859,7 @@ export async function deploySmartContractBrowser(options) {
     sequence += 1;
     const result = await submitDeploymentStep({
       step,
-      chainId,
+      networkId,
       authority: authority.literal,
       chainDiscriminant,
       signingPublicKey: authority.signingPublicKey,

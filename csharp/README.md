@@ -89,9 +89,23 @@ This initial slice provides the foundation needed for a usable managed SDK:
   once outside the JSON body, and is never replayed across redirects. There is
   no direct-registration overload or multisig-specific onboarding route.
 
-When injecting a custom `HttpClient`, configure its underlying
-`HttpClientHandler.AllowAutoRedirect` to `false`; redirect policy belongs to the
-injected transport and cannot be changed after `HttpClient` construction.
+When injecting a custom `HttpClient`, configure its complete handler chain as an
+identity, one-shot transport for signed, nonce-bearing, and credential-bearing
+requests: set `HttpClientHandler.AllowAutoRedirect` to `false` and do not attach
+automatic retry/resilience handlers. Redirect and retry policy belongs to the
+injected transport and cannot be inspected or changed after `HttpClient`
+construction. `ToriiClient` dispatches these bodies once and surfaces 3xx,
+non-success, and network failures. For an ambiguous transaction outcome, query
+the pipeline status by transaction hash instead of replaying the body; a
+deliberate signed-query retry must use a freshly signed envelope and nonce.
+
+The public pipeline-status response is metadata-only: canonical hash, closed status kind,
+optional committed height, scope, and resolution source. Retired rejection, diagnostic,
+trigger, and batch fields are rejected. For details, build an exact-entrypoint predicate with
+`SignedIterableQueryBuilder.FindTransactionDetails(...)` and pass the resulting envelope to
+`GetPipelineTransactionDetailsAsync(...)`. The signature is bound to the deployment's exact
+genesis-derived `NetworkId`; Torii admits only an involved account or operator, and the SDK
+sends the nonce-bearing body once without redirects or retries.
 - multisig propose/approve helpers reject zero `creation_time_ms` when supplied, and generic/contract-call multisig response DTOs reject zero returned `creation_time_ms` before callers trust signing material
 - native multisig propose instruction-list DTOs snapshot assigned arrays, return
   detached arrays on access, reject null instruction elements during direct
@@ -238,6 +252,7 @@ injected transport and cannot be changed after `HttpClient` construction.
   `SignedIterableQueryBuilder` for the current fast_dsl iterable subset
   (`FindDomains`, `FindAccounts`, `FindAssets`, `FindAssetDefinitions`,
   `FindRepoAgreements`, `FindNfts`, `FindRwas`, `FindTransactions`,
+  exact-entrypoint `FindTransactionDetails`,
   `FindRoles`, `FindRoleIds`, `FindPeers`, `FindActiveTriggerIds`,
   `FindTriggers`, `FindAccountsWithAsset`, `FindPermissionsByAccountId`,
   `FindRolesByAccountId`, `FindBlocks`, `FindBlockHeaders`,
@@ -309,9 +324,9 @@ injected transport and cannot be changed after `HttpClient` construction.
   transaction-status reads validate exact
   hash/scope request text before dispatch while retaining explicit 32-byte hash
   casing/`0x` canonicalization and empty-scope defaulting, and reject malformed
-  status envelopes, non-exact returned hash/scope/resolution text, negative
-  heights, and non-exact or noncanonical rejection-content base64 before
-  returning status objects; `ToriiClient` construction validates absolute
+  status envelopes, unknown status kinds, non-exact returned hash/scope/resolution
+  text, non-positive heights, and retired rejection/diagnostic/trigger/batch fields
+  before returning status objects; `ToriiClient` construction validates absolute
   HTTP(S) base URIs without user-info, query, or fragment components while
   preserving exact path prefixes; low-level request setup validates exact
   HTTP Bearer token grammar, HTTP-token method text, and root-relative path
@@ -443,7 +458,7 @@ using var torii = new ToriiClient(
     toriiUri,
     options: new ToriiClientOptions
     {
-        LocalSigningContext = new ToriiLocalSigningContext("production-chain"),
+        LocalSigningContext = new ToriiLocalSigningContext(NetworkId.Parse(networkId)),
     });
 
 var draft = await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
@@ -568,16 +583,19 @@ Optional live-smoke environment variables:
 - `IROHA_CSHARP_SMOKE_CONTRACT_NAMESPACE` to override the default contract-instance namespace (`universal`)
 - `IROHA_CSHARP_SMOKE_CONTRACT_CODE_HASH` to override the code hash used for `/v1/contracts/code/{code_hash}`, `/v1/contracts/code-bytes/{code_hash}`, and `/v1/contracts/code/{code_hash}/contract-view`
 - `IROHA_CSHARP_SMOKE_SORAFS_CID` and optional `IROHA_CSHARP_SMOKE_SORAFS_PATH` to also probe `/v1/sorafs/cid/{cid}` plus `/sorafs/cid/{cid}/...`
-- `IROHA_CSHARP_CANONICAL_ACCOUNT_ID` plus `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX` to also create a signed VPN quote and verify that Torii returns an `OpenVpnLeaseEscrow` instruction skeleton
+- `IROHA_CSHARP_CANONICAL_ACCOUNT_ID`, `IROHA_CSHARP_PRIVATE_KEY_SEED_HEX`, and the deployment's exact checksummed `IROHA_CSHARP_NETWORK_ID` to prepare a quoted signed transaction
 
 ## Fee quotes and sponsor programs
 
-Every `TransactionBuilder` requires a `FeePaymentIntent`. The guided ledger
+Every `TransactionBuilder` requires the exact checksummed `NetworkId` derived
+from the deployment's genesis header and a `FeePaymentIntent`. Ordinary client
+transactions cannot use the genesis transaction-domain marker. The guided ledger
 flow freezes the unsigned payload, account-signs `POST /v1/fees/quote`, verifies
 that the quote retained the payer, exact sponsor program/revision, and gas
 bound, then replaces only the charge maxima before signing:
 
 ```csharp
+using Hyperledger.Iroha;
 using Hyperledger.Iroha.Transactions;
 
 var requested = FeePaymentIntent.Sponsor(
@@ -586,7 +604,7 @@ var requested = FeePaymentIntent.Sponsor(
     chargeLimits: Array.Empty<FeeChargeLimit>());
 
 var transaction = client.Ledger
-    .BuildTransaction(chainId, authorityAccountId, requested)
+    .BuildTransaction(NetworkId.Parse(networkId), authorityAccountId, requested)
     .TransferAsset(assetId, NumericV1.QuantityValue.ParseCanonical("1"), destinationAccountId)
     .SetCreationTime(DateTimeOffset.UtcNow)
     .SetTimeToLiveMilliseconds(30_000);
@@ -608,7 +626,7 @@ their intended execution order:
 
 ```csharp
 var transaction = client.Ledger
-    .BuildTransaction(chainId, authorityAccountId, feeIntentWithGasLimit)
+    .BuildTransaction(NetworkId.Parse(networkId), authorityAccountId, feeIntentWithGasLimit)
     .AddInstruction(registerInstruction)
     .AddContractCall(new TransactionContractInvocation(
         contractAddress,
@@ -650,7 +668,7 @@ try
     // {
     //     var transaction = client.Ledger
     //         .BuildTransaction(
-    //             "00000042",
+    //             NetworkId.Parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"),
     //             accounts.Items[0].Id,
     //             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
     //         .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", NumericV1.QuantityValue.ParseCanonical("1"), accounts.Items[0].Id)
@@ -735,6 +753,7 @@ catch (ToriiApiException exception)
 - `LedgerClient.SubmitAsync(...)`
 - `LedgerClient.SubmitAndWaitAsync(...)`
 - `ToriiClient.GetPipelineTransactionStatusAsync(...)`
+- `ToriiClient.GetPipelineTransactionDetailsAsync(...)`
 - `ToriiClient.SubmitSignedQueryAsync(...)`
 - `ToriiClient.OpenEventSseAsync(...)`
 - `ToriiClient.StreamEventsAsync(...)`

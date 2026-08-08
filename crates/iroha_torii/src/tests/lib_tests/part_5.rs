@@ -623,12 +623,16 @@
 
     #[tokio::test]
     async fn error_response_contains_details() {
-        let err = Error::AcceptTransaction(iroha_core::tx::AcceptTransactionFail::ChainIdMismatch(
-            iroha_data_model::isi::error::Mismatch {
-                expected: "123".into(),
-                actual: "321".into(),
-            },
-        ));
+        let mismatch = iroha_data_model::isi::error::Mismatch {
+            expected: iroha_data_model::transaction::TransactionDomain::Network(
+                crate::test_utils::signed_query_network_id(),
+            ),
+            actual: iroha_data_model::transaction::TransactionDomain::Genesis,
+        };
+        let expected_message = format!("failed to accept transaction: {mismatch}");
+        let err = Error::AcceptTransaction(
+            iroha_core::tx::AcceptTransactionFail::TransactionDomainMismatch(mismatch),
+        );
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let content_type = response
@@ -641,10 +645,7 @@
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let payload = norito::decode_from_bytes::<super::ErrorEnvelope>(&body).unwrap();
         assert_eq!(payload.code(), "transaction_rejected");
-        assert_eq!(
-            payload.message(),
-            "failed to accept transaction: Chain id doesn't correspond to the id of current blockchain: Expected ChainId(\"123\"), actual ChainId(\"321\")"
-        );
+        assert_eq!(payload.message(), expected_message);
     }
 
     #[test]

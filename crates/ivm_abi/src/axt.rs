@@ -14,7 +14,7 @@ use std::{
 use iroha_crypto::{Hash, Signature};
 use iroha_data_model::nexus::{
     AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
-    AxtHandleFragment, AxtPolicyEntry as ModelAxtPolicyEntry,
+    AxtHandleFragment, AxtHandleIssuerContextV1, AxtPolicyEntry as ModelAxtPolicyEntry,
     AxtPolicySnapshot as ModelAxtPolicySnapshot,
     AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
     AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec, DataSpaceId,
@@ -474,10 +474,10 @@ impl AxtPolicy for SnapshotAxtPolicy {
         if usage.handle.manifest_view_root.as_slice() != entry.manifest_root.as_slice() {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.handle_era != entry.min_handle_era {
+        if usage.handle.handle_era != entry.active_handle_era {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.sub_nonce != entry.min_sub_nonce {
+        if usage.handle.sub_nonce != entry.next_handle_counter {
             return Err(VMError::PermissionDenied);
         }
         Ok(())
@@ -552,9 +552,9 @@ pub struct AssetHandle {
     pub subject: HandleSubject,
     /// Budget parameters controlling single-/multi-use semantics.
     pub budget: HandleBudget,
-    /// Logical era counter for revocation sequencing.
+    /// Exact active policy era selected by the issuer.
     pub handle_era: u64,
-    /// Per-use nonce guarding replay.
+    /// Exact next per-dataspace counter selected by the issuer.
     pub sub_nonce: u64,
     /// Lane/group binding advertised by the issuer.
     pub group_binding: GroupBinding,
@@ -568,8 +568,10 @@ pub struct AssetHandle {
     pub expiry_slot: u64,
     /// Optional wall-clock skew allowance enforced by the host.
     pub max_clock_skew_ms: Option<u32>,
-    /// Signature made by the issuer key resolved from committed policy.
-    pub issuer_signature: Option<Signature>,
+    /// Immutable network, issuer, code, and ABI context authenticated by the signature.
+    pub issuer_context: AxtHandleIssuerContextV1,
+    /// Mandatory signature made by the issuer key resolved from committed policy.
+    pub issuer_signature: Signature,
 }
 
 impl AssetHandle {
@@ -617,7 +619,13 @@ pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
         || handle.sub_nonce == 0
         || handle.group_binding.epoch_id == 0
         || handle.expiry_slot == 0
-        || handle.issuer_signature.is_none()
+        || handle
+            .issuer_context
+            .issuer_manifest_root
+            .iter()
+            .all(|byte| *byte == 0)
+        || handle.issuer_context.abi_version != 1
+        || handle.issuer_context.abi_hash.iter().all(|byte| *byte == 0)
     {
         return Err(VMError::PermissionDenied);
     }
@@ -651,6 +659,7 @@ pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMEr
         manifest_view_root: handle.manifest_view_root.to_vec(),
         expiry_slot: handle.expiry_slot,
         max_clock_skew_ms: handle.max_clock_skew_ms,
+        issuer_context: handle.issuer_context,
         issuer_signature: handle.issuer_signature.clone(),
     })
 }
@@ -1223,6 +1232,7 @@ impl TryFrom<&HandleUsage> for AxtHandleFragment {
             manifest_view_root,
             expiry_slot: usage.handle.expiry_slot,
             max_clock_skew_ms: usage.handle.max_clock_skew_ms,
+            issuer_context: usage.handle.issuer_context,
             issuer_signature: usage.handle.issuer_signature.clone(),
         };
         let intent = ModelRemoteSpendIntent {
@@ -1463,7 +1473,8 @@ mod tests {
             manifest_view_root: vec![1; 32],
             expiry_slot: 99,
             max_clock_skew_ms: Some(0),
-            issuer_signature: Some(Signature::from_bytes(&[1_u8; 64])),
+            issuer_context: Default::default(),
+            issuer_signature: Signature::from_bytes(&[1_u8; 64]),
         }
     }
 
@@ -2023,8 +2034,8 @@ mod tests {
         let entry = ModelAxtPolicyEntry {
             manifest_root: [0xAB; 32],
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 10,
         };
         let entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
@@ -2046,8 +2057,8 @@ mod tests {
         let mut handle = sample_handle(dsid, binding, 25, None);
         handle.manifest_view_root = entry.manifest_root.to_vec();
         handle.target_lane = entry.target_lane;
-        handle.handle_era = entry.min_handle_era;
-        handle.sub_nonce = entry.min_sub_nonce;
+        handle.handle_era = entry.active_handle_era;
+        handle.sub_nonce = entry.next_handle_counter;
         handle.max_clock_skew_ms = Some(6);
         let intent = sample_intent(dsid, Some(1));
         let usage = HandleUsage {
@@ -2070,8 +2081,8 @@ mod tests {
         let entry = ModelAxtPolicyEntry {
             manifest_root: [0xAB; 32],
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 10,
         };
         let snapshot = ModelAxtPolicySnapshot {

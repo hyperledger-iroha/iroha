@@ -19,10 +19,14 @@ import {
 } from "../src/transaction.js";
 import { ToriiClient } from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
+import { NetworkId } from "../src/networkId.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "http://localhost:8080";
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const AUTHORITY_FEE_PAYMENT = Object.freeze({
   payer: "authority",
   chargeLimits: Object.freeze([]),
@@ -143,7 +147,9 @@ test("hashSignedTransactionPayload delegates to the native payload hasher", () =
 
 test("decodeSignedTransaction parses the native JSON inspection envelope", () => {
   const input = Buffer.from([0xca, 0xfe]);
-  const decoded = { payload: { chain: "chain", authority: "account" } };
+  const decoded = {
+    payload: { domain: { Network: NETWORK_ID.literal }, authority: "account" },
+  };
   withNativeBinding(
     { decodeSignedTransactionJson: () => JSON.stringify(decoded) },
     () => assert.deepEqual(decodeSignedTransaction(input), decoded),
@@ -469,7 +475,7 @@ test("buildMintAndTransferTransaction yields multi-instruction payload", () => {
     },
     () =>
       buildMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "7" },
@@ -516,7 +522,7 @@ test("buildBurnAssetTransaction yields single burn instruction", () => {
     },
     () =>
       buildBurnAssetTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetId: ASSET_ID_INPUT,
@@ -548,7 +554,7 @@ test("buildBurnTriggerTransaction yields single trigger burn instruction", () =>
     },
     () =>
       buildBurnTriggerTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         triggerId: "cleanup-trigger",
@@ -579,7 +585,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
     },
     () =>
       buildMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "9" },
@@ -624,7 +630,7 @@ test("buildMintAndTransferTransaction rejects both transfer and transfers", () =
   assert.throws(
     () =>
       buildMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "4" },
@@ -640,7 +646,7 @@ test("buildMintAndTransferTransaction requires at least one transfer", () => {
   assert.throws(
     () =>
       buildMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "4" },
@@ -664,7 +670,7 @@ test("buildRegisterDomainAndMintTransaction expands registration and mint", () =
     },
     () =>
       buildRegisterDomainAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora", metadata: { key: "value" } },
@@ -703,7 +709,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
     },
     () =>
       buildRegisterDomainAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora" },
@@ -735,7 +741,7 @@ test("buildRegisterDomainAndMintTransaction rejects both mint and mints", () => 
   assert.throws(
     () =>
       buildRegisterDomainAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora" },
@@ -751,7 +757,7 @@ test("buildRegisterDomainAndMintTransaction enforces assetId in mints", () => {
   assert.throws(
     () =>
       buildRegisterDomainAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora" },
@@ -776,7 +782,7 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
     },
     () =>
       buildRegisterAccountAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
@@ -834,7 +840,7 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
     },
     () =>
       buildRegisterAccountAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
@@ -876,7 +882,7 @@ test("buildRegisterAccountAndTransferTransaction rejects both transfer and trans
   assert.throws(
     () =>
       buildRegisterAccountAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
@@ -894,7 +900,7 @@ test("buildRegisterAccountAndTransferTransaction enforces sourceAssetId in trans
   assert.throws(
     () =>
       buildRegisterAccountAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
@@ -921,7 +927,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
     },
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
@@ -969,7 +975,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects confidential policy
   assert.throws(
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
@@ -1002,7 +1008,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
     },
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1038,7 +1044,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction requires ownership intent",
   assert.throws(
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
@@ -1055,7 +1061,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction requires balance policy int
   assert.throws(
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
@@ -1072,7 +1078,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects both mint and mints
   assert.throws(
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1088,7 +1094,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction enforces mint destination f
   assert.throws(
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1103,7 +1109,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
   assert.throws(
     () =>
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1135,7 +1141,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
     },
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1187,7 +1193,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
     },
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1233,7 +1239,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both transf
   assert.throws(
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1250,7 +1256,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both mint a
   assert.throws(
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1267,7 +1273,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction requires mint spec"
   assert.throws(
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1282,7 +1288,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction validates mint dest
   assert.throws(
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },
@@ -1298,7 +1304,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
   assert.throws(
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
-        chainId: "test-chain",
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ID_INPUT,
         feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID, owningDomain: null, balanceScopePolicy: "Global" },

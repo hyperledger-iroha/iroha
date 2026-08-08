@@ -1282,6 +1282,9 @@ mod tests {
 
     fn context(key_pair: &KeyPair) -> PrivacyReleaseTransactionContextV1 {
         PrivacyReleaseTransactionContextV1 {
+            network_id: crate::privacy_release_evidence::release_network_id_from_genesis_hash([
+                0xA7; 32
+            ]),
             chain_id: ChainId::from("privacy-release-builder-test"),
             authority: AccountId::new(key_pair.public_key().clone()),
             creation_time: Duration::from_secs(1_800_000_000),

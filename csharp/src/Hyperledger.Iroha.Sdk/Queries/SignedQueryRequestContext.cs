@@ -1,6 +1,4 @@
-using System.Globalization;
 using System.Security.Cryptography;
-using System.Text;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Transactions;
 
@@ -13,34 +11,17 @@ internal static class SignedQueryRequestContext
 
     internal static byte[] DecodeNetworkId(string networkId, string parameterName)
     {
-        ArgumentNullException.ThrowIfNull(networkId, parameterName);
-        if (networkId.Length != 74 ||
-            !networkId.StartsWith("hash:", StringComparison.Ordinal) ||
-            networkId[69] != '#')
+        try
+        {
+            return NetworkId.Parse(networkId).ToBytes();
+        }
+        catch (Exception error) when (error is ArgumentNullException or FormatException)
         {
             throw new ArgumentException(
                 "Network id must be a canonical checksummed Norito Hash literal.",
-                parameterName);
+                parameterName,
+                error);
         }
-
-        var body = networkId.Substring(5, 64);
-        var checksum = networkId.Substring(70, 4);
-        if (body.Any(static value => !IsUpperHex(value)) ||
-            checksum.Any(static value => !IsUpperHex(value)) ||
-            !ushort.TryParse(checksum, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var supplied) ||
-            supplied != Crc16(Encoding.ASCII.GetBytes($"hash:{body}")))
-        {
-            throw new ArgumentException(
-                "Network id has a malformed or invalid Norito Hash checksum.",
-                parameterName);
-        }
-
-        var decoded = Convert.FromHexString(body);
-        if ((decoded[^1] & 1) == 0)
-        {
-            throw new ArgumentException("Network id Hash marker bit must be set.", parameterName);
-        }
-        return decoded;
     }
 
     internal static (ulong CreationTimeMilliseconds, byte[] Nonce) CreateFresh()
@@ -96,7 +77,7 @@ internal static class SignedQueryRequestContext
                 nameof(nonce));
         }
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(networkId);
         writer.WriteField(context.EncodeAccountId(authorityAccountId));
         writer.WriteField(context.EncodeUInt64(creationTimeMilliseconds));
@@ -116,23 +97,5 @@ internal static class SignedQueryRequestContext
             }
         }
         return true;
-    }
-
-    private static bool IsUpperHex(char value) => value is >= '0' and <= '9' or >= 'A' and <= 'F';
-
-    private static ushort Crc16(ReadOnlySpan<byte> bytes)
-    {
-        var crc = 0xffff;
-        foreach (var value in bytes)
-        {
-            crc ^= value << 8;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 0x8000) != 0
-                    ? ((crc << 1) ^ 0x1021) & 0xffff
-                    : (crc << 1) & 0xffff;
-            }
-        }
-        return (ushort)crc;
     }
 }

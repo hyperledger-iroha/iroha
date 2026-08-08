@@ -89,9 +89,9 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "fc77593666772726caf3ca96516b943c7a6b89fb003a39c5fd6bb26d9b01851a",
-        "ios-arm64": "0de8b53c56f4ded6c0bed760ce8c527eeb9bc6cab0033e0aeb51ba034d8620dc",
-        "ios-arm64_x86_64-simulator": "c091e66c9fca491a2633ce65dc7920889a8b88fe9e3d2cda417930ba8cf7fb56"
+        "macos-arm64": "e7656ef3a0bd5cf3cdbbef3b709c4fd5689f2fc5d4f9dd1d20b337472eca4cb6",
+        "ios-arm64": "32a0bf6953dcb2ef0625ec0c22f7c80505b38bc405c21234f484958b6ebb4dc6",
+        "ios-arm64_x86_64-simulator": "87be1e9f98bf46e5d3dd4a6ffaa9dbc6e079559f8e251b590502970a8e447f56"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
@@ -578,7 +578,7 @@ struct NativeAliasInstructionRoundTripResult {
 enum NativeBridgeError: Error, Equatable {
     case nullPointer
     case utf8
-    case chainId
+    case networkId
     case authority
     case assetDefinition
     case destination
@@ -635,7 +635,7 @@ enum NativeBridgeError: Error, Equatable {
         switch status {
         case -1: return .nullPointer
         case -2: return .utf8
-        case -3: return .chainId
+        case -3: return .networkId
         case -4: return .authority
         case -5: return .assetDefinition
         case -6: return .destination
@@ -4091,7 +4091,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeTransfer(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4126,7 +4126,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     canonicalQuantity.withCString { quantityPtr in
@@ -4142,7 +4142,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         return self.withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                             if useAlg, let encodeTransferWithAlgFn = self.encodeTransferWithAlgFn {
                                                 return encodeTransferWithAlgFn(
-                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                     authorityPtr, UInt(authority.utf8.count),
                                                     creationTimeMs,
                                                     ttlValue,
@@ -4162,7 +4162,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 )
                                             } else if let encodeTransferFn = self.encodeTransferFn {
                                                 return encodeTransferFn(
-                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                     authorityPtr, UInt(authority.utf8.count),
                                                     creationTimeMs,
                                                     ttlValue,
@@ -4272,7 +4272,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeRegisterZkAsset(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4300,7 +4300,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     privateKey.withUnsafeBytes { keyBuffer -> Int32 in
@@ -4316,7 +4316,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     withOptionalCString(shieldVerifyingKey) { shieldPtr, shieldLen, shieldFlag in
                                             if useAlg, let encodeRegisterZkAssetWithAlgFn {
                                                 return encodeRegisterZkAssetWithAlgFn(
-                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                     authorityPtr, UInt(authority.utf8.count),
                                                     creationTimeMs,
                                                     ttlValue,
@@ -4336,7 +4336,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 )
                                             } else if let encodeRegisterZkAssetFn {
                                                 return encodeRegisterZkAssetFn(
-                                                    chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                     authorityPtr, UInt(authority.utf8.count),
                                                     creationTimeMs,
                                                     ttlValue,
@@ -4385,7 +4385,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeMint(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4418,7 +4418,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     canonicalQuantity.withCString { quantityPtr in
@@ -4431,7 +4431,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                         if useAlg, let encodeMintWithAlgFn {
                                             return encodeMintWithAlgFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4451,7 +4451,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             )
                                         } else if let encodeMintFn {
                                             return encodeMintFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4498,7 +4498,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeMultisigRegister(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4525,7 +4525,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr -> Int32 in
+            networkId.literal.withCString { networkIdPtr -> Int32 in
                 return authority.withCString { authorityPtr -> Int32 in
                 return accountId.withCString { accountPtr -> Int32 in
                     return specJSON.withUnsafeBytes { specBuffer -> Int32 in
@@ -4546,7 +4546,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     let accountLen = UInt(accountId.utf8.count)
                                     if useAlg, let encodeMultisigRegisterWithAlgFn {
                                         return encodeMultisigRegisterWithAlgFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -4563,7 +4563,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         )
                                     } else if let encodeMultisigRegisterFn {
                                         return encodeMultisigRegisterFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -4606,7 +4606,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeClaimIdentifier(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4633,7 +4633,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr -> Int32 in
+            networkId.literal.withCString { networkIdPtr -> Int32 in
                 authority.withCString { authorityPtr -> Int32 in
                     accountId.withCString { accountPtr -> Int32 in
                         receiptJSON.withUnsafeBytes { receiptBuffer -> Int32 in
@@ -4651,7 +4651,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                         if useAlg, let encodeClaimIdentifierWithAlgFn {
                                             return encodeClaimIdentifierWithAlgFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4668,7 +4668,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             )
                                         } else if let encodeClaimIdentifierFn {
                                             return encodeClaimIdentifierFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4711,7 +4711,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeBurn(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4744,7 +4744,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 assetDefinitionId.withCString { assetPtr in
                     canonicalQuantity.withCString { quantityPtr in
@@ -4757,7 +4757,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                         if useAlg, let encodeBurnWithAlgFn {
                                             return encodeBurnWithAlgFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4777,7 +4777,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             )
                                         } else if let encodeBurnFn {
                                             return encodeBurnFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4824,7 +4824,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeSetKeyValue(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4853,7 +4853,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 objectId.withCString { objectPtr in
                     key.withCString { keyCStrPtr in
@@ -4872,7 +4872,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                         if useAlg, let encodeSetKeyValueWithAlgFn {
                                             return encodeSetKeyValueWithAlgFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4891,7 +4891,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             )
                                         } else if let encodeSetKeyValueFn {
                                             return encodeSetKeyValueFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -4937,7 +4937,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeRemoveKeyValue(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -4965,7 +4965,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 objectId.withCString { objectPtr in
                     key.withCString { keyPtr in
@@ -4980,7 +4980,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                     if useAlg, let encodeRemoveKeyValueWithAlgFn {
                                         return encodeRemoveKeyValueWithAlgFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -4998,7 +4998,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         )
                                     } else if let encodeRemoveKeyValueFn {
                                         return encodeRemoveKeyValueFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -5042,7 +5042,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeGovernanceProposeDeploy(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -5073,7 +5073,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 contractAddress.withCString { contractAddressPtr in
                         codeHashHex.withCString { codeHashPtr in
@@ -5094,7 +5094,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 let modeFlag: UInt8 = modeCode == nil ? 0 : 1
                                                 if useAlg, let encodeGovernanceProposeDeployWithAlgFn {
                                                     return encodeGovernanceProposeDeployWithAlgFn(
-                                                        chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                         authorityPtr, UInt(authority.utf8.count),
                                                         creationTimeMs,
                                                         ttlValue,
@@ -5118,7 +5118,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                     )
                                                 } else if let encodeGovernanceProposeDeployFn {
                                                     return encodeGovernanceProposeDeployFn(
-                                                        chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                         authorityPtr, UInt(authority.utf8.count),
                                                         creationTimeMs,
                                                         ttlValue,
@@ -5170,7 +5170,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeGovernanceCastPlainBallot(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -5200,7 +5200,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 referendumId.withCString { referendumPtr in
                     owner.withCString { ownerPtr in
@@ -5216,7 +5216,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                         if useAlg, let encodeGovernanceCastPlainBallotWithAlgFn {
                                             return encodeGovernanceCastPlainBallotWithAlgFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -5236,7 +5236,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             )
                                         } else if let encodeGovernanceCastPlainBallotFn {
                                             return encodeGovernanceCastPlainBallotFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -5283,7 +5283,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeGovernanceCastZkBallot(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -5311,7 +5311,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 electionId.withCString { electionPtr in
                     proofB64.withCString { proofPtr in
@@ -5330,7 +5330,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                         if useAlg, let encodeGovernanceCastZkBallotWithAlgFn {
                                             return encodeGovernanceCastZkBallotWithAlgFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -5348,7 +5348,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                             )
                                         } else if let encodeGovernanceCastZkBallotFn {
                                             return encodeGovernanceCastZkBallotFn(
-                                                chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
                                                 ttlValue,
@@ -5393,7 +5393,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeGovernanceEnactReferendum(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -5422,7 +5422,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 referendumIdHex.withCString { referendumPtr in
                     preimageHashHex.withCString { preimagePtr in
@@ -5437,7 +5437,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                     if useAlg, let encodeGovernanceEnactReferendumWithAlgFn {
                                         return encodeGovernanceEnactReferendumWithAlgFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -5456,7 +5456,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         )
                                     } else if let encodeGovernanceEnactReferendumFn {
                                         return encodeGovernanceEnactReferendumFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -5501,7 +5501,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeGovernanceFinalizeReferendum(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -5528,7 +5528,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 referendumId.withCString { referendumPtr in
                     proposalIdHex.withCString { proposalPtr in
@@ -5543,7 +5543,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                     if useAlg, let encodeGovernanceFinalizeReferendumWithAlgFn {
                                         return encodeGovernanceFinalizeReferendumWithAlgFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -5560,7 +5560,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         )
                                     } else if let encodeGovernanceFinalizeReferendumFn {
                                         return encodeGovernanceFinalizeReferendumFn(
-                                            chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                             authorityPtr, UInt(authority.utf8.count),
                                             creationTimeMs,
                                             ttlValue,
@@ -5603,7 +5603,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     func encodeGovernancePersistCouncil(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -5630,7 +5630,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let algorithmRaw = algorithm.noritoDiscriminant
 
         let status = try withAuthorityChainDiscriminant(authority: authority) {
-            chainId.withCString { chainPtr in
+            networkId.literal.withCString { networkIdPtr in
             authority.withCString { authorityPtr in
                 membersJson.withUnsafeBytes { membersBuffer -> Int32 in
                     guard let membersPtr = membersBuffer.bindMemory(to: UInt8.self).baseAddress else {
@@ -5647,7 +5647,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                             return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                 if useAlg, let encodeGovernancePersistCouncilWithAlgFn {
                                     return encodeGovernancePersistCouncilWithAlgFn(
-                                        chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                         authorityPtr, UInt(authority.utf8.count),
                                         creationTimeMs,
                                         ttlValue,
@@ -5664,7 +5664,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                     )
                                 } else if let encodeGovernancePersistCouncilFn {
                                     return encodeGovernancePersistCouncilFn(
-                                        chainPtr, UInt(chainId.utf8.count),
+                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
                                         authorityPtr, UInt(authority.utf8.count),
                                         creationTimeMs,
                                         ttlValue,

@@ -95,6 +95,7 @@ fn retained_plain_electorate_rules(
         ProposalKind::DeployContract(_)
         | ProposalKind::RuntimeUpgrade(_)
         | ProposalKind::SccpRouteGovernance(_)
+        | ProposalKind::SorafsProviderGovernance(_)
         | ProposalKind::MusubiRegistryGovernance(_) => {
             return Err(inconsistent(
                 "non-validation-fee proposal reached the typed validation-fee projection",

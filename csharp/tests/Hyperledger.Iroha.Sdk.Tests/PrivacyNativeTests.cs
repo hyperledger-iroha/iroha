@@ -206,18 +206,11 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
-    public void CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable()
+    public void CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()
     {
-        if (!PrivacyNative.IsAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-22 connect_norito_bridge with compiled-profile catalog symbols is required.");
-            return;
-        }
+        Assert.True(
+            PrivacyNative.IsAvailable(),
+            "ABI-22 connect_norito_bridge with compiled-profile catalog symbols is required.");
 
         var catalog = PrivacyNative.CompiledProfileCatalogV1();
         var canonical = catalog.NoritoBytes;
@@ -273,19 +266,11 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
-    public void Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable()
+    public void Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()
     {
-        if (!PrivacyNative.IsAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-22 connect_norito_bridge with exact-12 fixture symbols is required.");
-            return;
-        }
+        Assert.True(
+            PrivacyNative.IsAvailable(),
+            "ABI-22 connect_norito_bridge with exact-12 fixture symbols is required.");
 
         var bundle = PrivacyNative.Exact12FixtureBundleV1();
         var canonical = bundle.NoritoBytes;

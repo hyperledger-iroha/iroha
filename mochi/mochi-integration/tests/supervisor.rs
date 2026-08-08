@@ -1,3 +1,7 @@
+//! End-to-end supervisor integration tests backed by the gated Kagami test stub.
+
+#![cfg(feature = "dev-tools")]
+
 use std::{
     collections::HashSet,
     fs,
@@ -10,7 +14,7 @@ use std::{
 use color_eyre::{Result, eyre::eyre};
 use iroha_data_model::{block::stream::BlockMessage, events::EventBox};
 use mochi_core::{
-    ProfilePreset, Supervisor, SupervisorBuilder,
+    ProfilePreset, Supervisor, SupervisorBuilder, resolve_selected_peer_storage_paths,
     torii::{BlockStreamEvent, EventCategory, EventStreamEvent},
 };
 use mochi_integration::{MockToriiBuilder, MockToriiData};
@@ -490,14 +494,16 @@ fn supervisor_genesis_matches_peer_counts() -> Result<()> {
 }
 
 #[test]
-fn supervisor_builder_cleans_preexisting_storage() -> Result<()> {
+fn supervisor_builder_preserves_unmanaged_storage_and_selects_fresh_generation() -> Result<()> {
     let presets = [ProfilePreset::FourPeerBft];
 
     for preset in presets {
         let port = match reserve_port() {
             Ok(port) => port,
             Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                eprintln!("skipping supervisor_builder_cleans_preexisting_storage: {err}");
+                eprintln!(
+                    "skipping supervisor_builder_preserves_unmanaged_storage_and_selects_fresh_generation: {err}"
+                );
                 return Ok(());
             }
             Err(err) => return Err(err.into()),
@@ -515,9 +521,24 @@ fn supervisor_builder_cleans_preexisting_storage() -> Result<()> {
 
         let supervisor = build_supervisor(&temp, port, preset)?;
 
-        for idx in 0..supervisor.peers().len() {
-            let alias = format!("peer{idx}");
-            let storage_dir = supervisor.paths().peer_dir(&alias).join("storage");
+        for peer in supervisor.peers() {
+            let alias = peer.alias();
+            let unmanaged_storage = paths.peer_dir(alias).join("storage");
+            assert_eq!(
+                fs::read(unmanaged_storage.join("junk.bin"))?,
+                b"junk",
+                "building a generation must preserve unmanaged storage for {alias}"
+            );
+
+            let selected = resolve_selected_peer_storage_paths(supervisor.paths().root(), alias)?
+                .ok_or_else(|| eyre!("missing selected storage for {alias}"))?;
+            assert_eq!(selected.config_generation_id(), supervisor.generation_id());
+            assert_eq!(selected.storage_generation_id(), supervisor.generation_id());
+            assert_eq!(selected.storage_dir(), peer.storage_dir());
+            assert_eq!(selected.snapshot_dir(), peer.snapshot_dir());
+            assert_ne!(selected.storage_dir(), unmanaged_storage);
+
+            let storage_dir = selected.storage_dir();
             let mut names: Vec<String> = fs::read_dir(&storage_dir)?
                 .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
                 .collect::<std::io::Result<Vec<_>>>()?;
@@ -528,7 +549,7 @@ fn supervisor_builder_cleans_preexisting_storage() -> Result<()> {
                 "storage dir should only contain snapshot for {alias}"
             );
 
-            let snapshot_dir = storage_dir.join("snapshot");
+            let snapshot_dir = selected.snapshot_dir();
             let snapshot_entries = fs::read_dir(&snapshot_dir)?
                 .map(|entry| entry.map(|value| value.file_name()))
                 .collect::<std::io::Result<Vec<_>>>()?;
@@ -562,24 +583,46 @@ fn supervisor_wipe_and_regenerate_resets_storage_and_genesis() -> Result<()> {
         };
         let temp = TempDir::new()?;
         let mut supervisor = build_supervisor(&temp, port, preset)?;
-        let genesis_path = supervisor.genesis_manifest().to_path_buf();
-        let aliases: Vec<String> = supervisor
-            .peers()
-            .iter()
-            .map(|peer| peer.alias().to_owned())
-            .collect();
+        let old_generation_id = supervisor.generation_id().to_owned();
+        let old_genesis_path = supervisor.genesis_manifest().to_path_buf();
+        let old_generation_root = old_genesis_path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| eyre!("genesis path has no immutable generation root"))?
+            .to_path_buf();
+        let old_genesis_bytes = fs::read(&old_genesis_path)?;
+        let mut old_peer_paths = Vec::with_capacity(supervisor.peers().len());
 
-        for alias in &aliases {
-            let storage_dir = supervisor.paths().peer_dir(alias).join("storage");
-            let snapshot_dir = storage_dir.join("snapshot");
-            fs::create_dir_all(&snapshot_dir)?;
-            fs::write(storage_dir.join("junk.bin"), b"junk")?;
-            fs::write(snapshot_dir.join("leftover.bin"), b"stale")?;
+        for peer in supervisor.peers() {
+            let alias = peer.alias().to_owned();
+            let storage_dir = peer.storage_dir().to_path_buf();
+            let snapshot_dir = peer.snapshot_dir().to_path_buf();
+            let config_path = peer.config_path().to_path_buf();
+            let config_bytes = fs::read(&config_path)?;
+            fs::write(storage_dir.join("junk.bin"), b"old-storage-state")?;
+            fs::write(snapshot_dir.join("leftover.bin"), b"old-snapshot-state")?;
+            old_peer_paths.push((alias, storage_dir, snapshot_dir, config_path, config_bytes));
         }
 
         supervisor.wipe_and_regenerate()?;
 
-        let genesis_bytes = fs::read(&genesis_path)?;
+        let new_generation_id = supervisor.generation_id().to_owned();
+        let new_genesis_path = supervisor.genesis_manifest().to_path_buf();
+        let new_generation_root = new_genesis_path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| eyre!("regenerated genesis path has no immutable generation root"))?
+            .to_path_buf();
+        assert_ne!(new_generation_id, old_generation_id);
+        assert_ne!(new_generation_root, old_generation_root);
+        assert_eq!(
+            fs::read(&old_genesis_path)?,
+            old_genesis_bytes,
+            "regeneration must retain the prior immutable genesis"
+        );
+        assert!(old_generation_root.is_dir());
+
+        let genesis_bytes = fs::read(&new_genesis_path)?;
         let manifest: Value = norito::json::from_slice(&genesis_bytes)?;
 
         let chain = manifest
@@ -608,16 +651,49 @@ fn supervisor_wipe_and_regenerate_resets_storage_and_genesis() -> Result<()> {
             "topology should match peer count for preset {preset:?}"
         );
 
-        for alias in &aliases {
-            let storage_dir = supervisor.paths().peer_dir(alias).join("storage");
+        for (peer, (alias, old_storage, old_snapshot, old_config, old_config_bytes)) in
+            supervisor.peers().iter().zip(&old_peer_paths)
+        {
+            assert_eq!(peer.alias(), alias);
+            assert_eq!(
+                fs::read(old_config)?.as_slice(),
+                old_config_bytes.as_slice()
+            );
+            assert!(old_config.starts_with(&old_generation_root));
+            assert!(peer.config_path().starts_with(&new_generation_root));
+
+            let selected = resolve_selected_peer_storage_paths(supervisor.paths().root(), alias)?
+                .ok_or_else(|| eyre!("missing regenerated storage for {alias}"))?;
+            assert_eq!(selected.config_generation_id(), new_generation_id);
+            assert_eq!(selected.storage_generation_id(), new_generation_id);
+            assert_eq!(selected.storage_dir(), peer.storage_dir());
+            assert_eq!(selected.snapshot_dir(), peer.snapshot_dir());
+            assert_ne!(selected.storage_dir(), old_storage);
+            assert_ne!(selected.snapshot_dir(), old_snapshot);
+            assert_eq!(
+                fs::read(old_storage.join("junk.bin"))?,
+                b"old-storage-state",
+                "retired storage state must remain available for {alias}"
+            );
+            assert_eq!(
+                fs::read(old_snapshot.join("leftover.bin"))?,
+                b"old-snapshot-state",
+                "retired snapshot state must remain available for {alias}"
+            );
+
+            let storage_dir = selected.storage_dir();
             assert!(
                 !storage_dir.join("junk.bin").exists(),
-                "storage should not retain junk for {alias}"
+                "fresh selected storage should not inherit junk for {alias}"
             );
-            let snapshot_dir = storage_dir.join("snapshot");
+            let snapshot_dir = selected.snapshot_dir();
             assert!(
                 snapshot_dir.exists(),
                 "snapshot directory should exist for {alias}"
+            );
+            assert!(
+                !snapshot_dir.join("leftover.bin").exists(),
+                "fresh selected snapshot should not inherit retired state for {alias}"
             );
             let entries = fs::read_dir(&snapshot_dir)?
                 .map(|entry| entry.map(|value| value.file_name()))

@@ -29,7 +29,7 @@ public extension MusubiInstructionV1 {
         let instruction = try transactionInstructionFrame()
         return noritoEncode(
             typeName: MusubiInstructionNoritoV1.instructionBoxSchema,
-            payload: instruction.compactInstructionBoxPayload(),
+            payload: try instruction.compactInstructionBoxPayload(),
             flags: NoritoHeader.compactLen,
             payloadAlignment: 8
         )

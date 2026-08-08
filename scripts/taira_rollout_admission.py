@@ -39,6 +39,7 @@ from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
 try:
+    from . import taira_privacy_protocol_receipt as privacy_evidence
     from . import taira_release_authority
     from .release_artifact_contract import (
         ReleaseArtifactError,
@@ -61,6 +62,7 @@ try:
         verify_release_manifest,
     )
 except ImportError:
+    import taira_privacy_protocol_receipt as privacy_evidence
     import taira_release_authority
     from release_artifact_contract import (
         ReleaseArtifactError,
@@ -90,8 +92,12 @@ ADMISSION_MANIFEST_PATH = "taira-rollout-admission-v1.json"
 CONTROLLER_MANIFEST_PATH = "controller/authority-controller-v1.json"
 MACOS_CONTROLLER_FILES = (
     "configs/soranexus/taira/check_mcp_rollout.sh",
+    "configs/soranexus/taira/privacy_rollout_plan_v1.json",
+    "scripts/build_privacy_v1_boi_handoff.py",
     "scripts/build_taira_rollout_candidate.py",
     "scripts/capture_taira_macos_four_peer_receipt.py",
+    "scripts/capture_taira_privacy_protocol_four_peer_receipt.py",
+    "scripts/check_native_sdk_abi22_artifact.py",
     "scripts/close_taira_publication_handoff.py",
     "scripts/close_taira_qualification_handoff.py",
     "scripts/compute_workspace_source_manifest.py",
@@ -106,6 +112,10 @@ MACOS_CONTROLLER_FILES = (
     "scripts/seal_taira_release_controllers.py",
     "scripts/taira_constants.py",
     "scripts/taira_peer_supervisor.py",
+    "scripts/taira_privacy_action_driver_ipc.py",
+    "scripts/taira_privacy_protocol_receipt.py",
+    "scripts/taira_privacy_rollout_contract.py",
+    "scripts/taira_privacy_sealed_controller.py",
     "scripts/taira_release_authority.py",
     "scripts/taira_rollout_admission.py",
     "scripts/write_release_sha256sums.py",
@@ -113,122 +123,47 @@ MACOS_CONTROLLER_FILES = (
 MACOS_RECEIPT_SCHEMA = "iroha.taira.macos_arm64_four_peer_receipt"
 MACOS_RECEIPT_SCHEMA_VERSION = 2
 MACOS_RECEIPT_PATH = "macos/four-peer-receipt-v2.json"
-PRIVACY_PROTOCOL_RECEIPT_SCHEMA = (
-    "iroha.taira.privacy_protocol_four_peer_receipt"
-)
-PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION = 1
+PRIVACY_PROTOCOL_RECEIPT_SCHEMA = privacy_evidence.RECEIPT_SCHEMA
+PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION = privacy_evidence.RECEIPT_SCHEMA_VERSION
+PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY = "macos/privacy-protocol-four-peer-v2"
 PRIVACY_PROTOCOL_RECEIPT_PATH = (
-    "macos/privacy-protocol-four-peer-receipt-v1.json"
+    f"{PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY}/{privacy_evidence.RECEIPT_NAME}"
 )
-MAX_PRIVACY_PROTOCOL_RECEIPT_LIFETIME_SECONDS = 24 * 60 * 60
+PRIVACY_PROTOCOL_EVIDENCE_PATHS = tuple(
+    f"{PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY}/{name}"
+    for name in privacy_evidence.EVIDENCE_NAMES
+)
+MAX_PRIVACY_PROTOCOL_RECEIPT_LIFETIME_SECONDS = (
+    privacy_evidence.MAX_RECEIPT_LIFETIME_SECONDS
+)
 REPLAY_LEDGER_SCHEMA = "iroha.taira.rollout_admission_replay_ledger"
 REPLAY_LEDGER_SCHEMA_VERSION = 1
 VERIFICATION_SCHEMA = "iroha.taira.rollout_admission_verification"
 VERIFICATION_SCHEMA_VERSION = 1
 
-# Ordered exactly as `PrivacyProtocolIdV1::ALL` and
-# `fixtures/privacy/exact12_v1.tsv`.  These values are release semantics, not
-# display text: an unavailable profile cannot be rewritten as a passing
-# production action, and Jindo's functional Experimental path cannot be used
-# to claim the deliberately absent security certificate.
-PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1 = (
-    (
-        "zk-ace-pq-authorization-v0",
-        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "anonymous-pgc-k-out-of-n-v1",
-        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "verange-transparent-range-v1",
-        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "iroha-zk-ams-v1",
-        "privacy_exact12_activation_network::zk_ams_unreleased_profile_fails_closed_across_four_peer_restart",
-        "engine-unavailable",
-        "governance-and-action-rejected-across-four-peers",
-        "PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable",
-        "zk-ams-mkhe-release-readiness-incomplete",
-    ),
-    (
-        "vega-existing-credential-zk-v0",
-        "privacy_exact12_zk_ams_vega_network::canonical_vega_action_survives_four_validator_activation_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "iroha-zk-x509-stark-p256-v0",
-        "privacy_exact12_zk_x509_network::zk_x509_governance_and_unreleased_actions_fail_closed_across_four_peer_restart",
-        "engine-unavailable",
-        "governance-and-action-rejected-across-four-peers",
-        "PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable",
-        "zk-x509-native-readiness-captures-incomplete",
-    ),
-    (
-        "iroha-jindo-polynomial-commitment-v0",
-        "privacy_exact12_jindo_network::canonical_jindo_direct_action_survives_four_peer_activation_replay_and_restart",
-        "available-experimental",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "JindoSecurityCertificateErrorV1::MissingDistributionWideKnowledgeSoundnessEvidence",
-    ),
-    (
-        "iroha-bootle-lantern-anoncred-v1",
-        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "orchard-halo2-actions-v1",
-        "privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "monero-fcmp-plus-plus-v1",
-        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "iroha-ivm-private-note-stark-v1",
-        "privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
-    (
-        "pq-masp-stark-v0",
-        "privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart",
-        "available",
-        "accepted-and-queried-across-four-peers",
-        "none",
-        "none",
-    ),
+PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V2 = privacy_evidence.OUTCOMES
+
+BOI_SOURCE_HANDOFF_SCHEMA = "iroha.taira.release_handoff"
+BOI_SOURCE_HANDOFF_KIND = "privacy-v1-boi-artifacts"
+BOI_SOURCE_HANDOFF_MANIFEST = "handoff-inventory-v1.json"
+BOI_ARTIFACT_INVENTORY_PATH = "boi/privacy-v1/handoff-inventory-v1.json"
+BOI_SOURCE_ARTIFACT_PATHS = (
+    "abi22/connect_norito_bridge.h",
+    "abi22/libconnect_norito_bridge.so",
+    "abi22/native-artifact-v1.json",
+    "abi22/privacy-exports-v1.txt",
+    "capability/exact12-capability-manifest-v1.norito",
+    "config/privacy-v1.example.toml",
+    "schemas/exact12-capability-manifest-v1.json",
+    "schemas/privacy-wallet-ipc-v1.json",
+    "sdk/iroha_python_privacy_v1.whl",
+    "source/Cargo.lock",
+    "source/exact12-v1.tsv",
+    "source/workspace-source-manifest.sha256",
+    "worker/iroha_privacy_wallet_worker",
 )
+MAX_BOI_ARTIFACT_INVENTORY_BYTES = 1024 * 1024
+MAX_BOI_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 
 FINAL_AUTHORITY_FILES = (
     "release_manifest.json",
@@ -258,6 +193,8 @@ FINAL_ARCHIVE_DIRECTORIES = frozenset(
         "linux/authority/artifacts",
         "macos",
         "controller",
+        "boi",
+        "boi/privacy-v1",
     }
 )
 
@@ -355,6 +292,36 @@ def _canonical_object(payload: bytes, label: str) -> dict[str, object]:
     return value
 
 
+def _canonical_compact_object(payload: bytes, label: str) -> dict[str, object]:
+    """Parse the compact handoff JSON representation used between authorities."""
+
+    if len(payload) > MAX_BOI_ARTIFACT_INVENTORY_BYTES:
+        _fail(
+            f"{label} exceeds the {MAX_BOI_ARTIFACT_INVENTORY_BYTES}-byte limit"
+        )
+    try:
+        value = load_json_object(payload, label)
+    except ReleaseArtifactError as exc:
+        raise TairaRolloutAdmissionError(str(exc)) from exc
+    try:
+        canonical = (
+            json.dumps(
+                value,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("ascii")
+    except (TypeError, UnicodeEncodeError, ValueError) as exc:
+        raise TairaRolloutAdmissionError(
+            f"{label} contains a value outside canonical JSON: {exc}"
+        ) from exc
+    if canonical != payload:
+        _fail(f"{label} is not canonical deterministic compact JSON")
+    return value
+
+
 def _source_identity(value: object, label: str) -> SourceIdentity:
     if not isinstance(value, dict):
         _fail(f"{label} must be an object")
@@ -394,6 +361,113 @@ def _require_source(
         )
 
 
+def _validate_boi_artifact_inventory(
+    payload: bytes,
+    *,
+    expected_source: SourceIdentity,
+    expected_exact12_matrix_sha256: str | None = None,
+) -> dict[str, object]:
+    """Validate the sole source-bound 13-artifact BOI handoff inventory.
+
+    Candidate admission intentionally authenticates the inventory bytes rather
+    than treating the macOS qualification handoff digest as a substitute.  The
+    BOI assembler later requires the independently supplied artifact bytes to
+    match this signed inventory exactly.
+    """
+
+    manifest = _canonical_compact_object(payload, "BOI artifact inventory")
+    _exact_fields(
+        manifest,
+        {"files", "kind", "schema", "schema_version"},
+        "BOI artifact inventory",
+    )
+    if (
+        manifest["schema"] != BOI_SOURCE_HANDOFF_SCHEMA
+        or manifest["kind"] != BOI_SOURCE_HANDOFF_KIND
+        or _integer(
+            manifest["schema_version"],
+            "BOI artifact inventory schema version",
+            minimum=1,
+        )
+        != 1
+    ):
+        _fail("BOI artifact inventory identity is unsupported")
+    raw_rows = manifest["files"]
+    if not isinstance(raw_rows, list) or len(raw_rows) != len(
+        BOI_SOURCE_ARTIFACT_PATHS
+    ):
+        _fail("BOI artifact inventory must contain exactly thirteen rows")
+
+    rows: list[dict[str, object]] = []
+    for index, raw in enumerate(raw_rows):
+        if not isinstance(raw, dict):
+            _fail(f"BOI artifact inventory row {index} must be an object")
+        _exact_fields(
+            raw,
+            {"path", "sha256", "size"},
+            "BOI artifact inventory row",
+        )
+        path = raw["path"]
+        if not isinstance(path, str):
+            _fail("BOI artifact inventory path must be a string")
+        try:
+            path = canonical_relative_path(path)
+        except ReleaseArtifactError as exc:
+            raise TairaRolloutAdmissionError(str(exc)) from exc
+        rows.append(
+            {
+                "path": path,
+                "sha256": _sha256(
+                    raw["sha256"], f"BOI artifact inventory digest for {path}"
+                ),
+                "size": _integer(
+                    raw["size"],
+                    f"BOI artifact inventory size for {path}",
+                    minimum=1,
+                ),
+            }
+        )
+    paths = [str(row["path"]) for row in rows]
+    if paths != list(BOI_SOURCE_ARTIFACT_PATHS):
+        _fail(
+            "BOI artifact inventory paths must be the exact unique canonical "
+            "thirteen-artifact sequence"
+        )
+    if any(int(row["size"]) > MAX_BOI_ARTIFACT_BYTES for row in rows):
+        _fail("BOI artifact inventory contains an artifact above its size bound")
+
+    by_path = {str(row["path"]): row for row in rows}
+    cargo = by_path["source/Cargo.lock"]
+    if cargo["sha256"] != expected_source.cargo_lock_sha256:
+        _fail("BOI artifact inventory is bound to a different Cargo.lock")
+    source_payload = (
+        expected_source.workspace_source_manifest_sha256 + "\n"
+    ).encode("ascii")
+    source_row = by_path["source/workspace-source-manifest.sha256"]
+    if source_row != {
+        "path": "source/workspace-source-manifest.sha256",
+        "sha256": hashlib.sha256(source_payload).hexdigest(),
+        "size": len(source_payload),
+    }:
+        _fail("BOI artifact inventory is bound to a different source manifest")
+    matrix_sha256 = str(by_path["source/exact12-v1.tsv"]["sha256"])
+    if (
+        expected_exact12_matrix_sha256 is not None
+        and matrix_sha256
+        != _sha256(
+            expected_exact12_matrix_sha256,
+            "expected BOI Exact12 matrix digest",
+        )
+    ):
+        _fail("BOI artifact inventory is bound to a different Exact12 matrix")
+    return {
+        "artifact_count": len(rows),
+        "exact12_matrix_sha256": matrix_sha256,
+        "files": rows,
+        "inventory_sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
 def compute_macos_receipt_id(receipt_without_id: Mapping[str, object]) -> str:
     """Return the domain-separated ID for a receipt body without ``receipt_id``."""
 
@@ -408,220 +482,42 @@ def compute_macos_receipt_id(receipt_without_id: Mapping[str, object]) -> str:
 def compute_privacy_protocol_receipt_id(
     receipt_without_id: Mapping[str, object],
 ) -> str:
-    """Return the domain-separated ID for an Exact12 four-peer receipt body."""
+    """Return the sole v2 domain-separated Exact12 receipt ID."""
 
-    if "receipt_id" in receipt_without_id:
-        _fail("privacy protocol receipt ID input must omit receipt_id")
-    digest = hashlib.sha256()
-    digest.update(b"iroha.taira.privacy_protocol_four_peer_receipt.v1\0")
-    digest.update(canonical_json_bytes(receipt_without_id))
-    return digest.hexdigest()
+    try:
+        return privacy_evidence.compute_receipt_id(receipt_without_id)
+    except privacy_evidence.PrivacyProtocolEvidenceError as exc:
+        raise TairaRolloutAdmissionError(str(exc)) from exc
 
 
 def _validate_privacy_protocol_receipt(
-    payload: bytes,
+    evidence_root: Path,
     *,
     expected_source: SourceIdentity,
     expected_validator_binary_sha256: str,
     expected_linux_release_archive_sha256: str,
     expected_exact12_matrix_sha256: str,
+    expected_artifact_handoff_sha256: str,
     expected_receipt_id: str,
     now_unix: int,
 ) -> dict[str, object]:
-    """Validate one strict, signed-later Exact12 production-network receipt."""
+    """Validate v2 receipt, transcript, and result bytes from the archive."""
 
-    receipt = _canonical_object(payload, "privacy protocol four-peer receipt")
-    _exact_fields(
-        receipt,
-        {
-            "candidate",
-            "expires_at_unix",
-            "issued_at_unix",
-            "outcomes",
-            "platform",
-            "receipt_id",
-            "schema",
-            "schema_version",
-        },
-        "privacy protocol four-peer receipt",
-    )
-    if receipt["schema"] != PRIVACY_PROTOCOL_RECEIPT_SCHEMA:
-        _fail("privacy protocol receipt schema identifier is unsupported")
-    if (
-        _integer(
-            receipt["schema_version"],
-            "privacy protocol receipt schema version",
-            minimum=1,
+    try:
+        return privacy_evidence.validate_evidence_directory(
+            evidence_root,
+            expected_source=expected_source.as_dict(),
+            expected_validator_binary_sha256=expected_validator_binary_sha256,
+            expected_linux_release_archive_sha256=(
+                expected_linux_release_archive_sha256
+            ),
+            expected_exact12_matrix_sha256=expected_exact12_matrix_sha256,
+            expected_artifact_handoff_sha256=expected_artifact_handoff_sha256,
+            expected_receipt_id=expected_receipt_id,
+            now_unix=now_unix,
         )
-        != PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION
-    ):
-        _fail("privacy protocol receipt schema version is unsupported")
-
-    receipt_id = _sha256(
-        receipt["receipt_id"], "privacy protocol receipt ID"
-    )
-    body = dict(receipt)
-    del body["receipt_id"]
-    if compute_privacy_protocol_receipt_id(body) != receipt_id:
-        _fail("privacy protocol receipt ID does not match its canonical body")
-    if receipt_id != _sha256(
-        expected_receipt_id, "expected privacy protocol receipt ID"
-    ):
-        _fail("privacy protocol receipt ID differs from the independently expected ID")
-
-    platform = receipt["platform"]
-    if not isinstance(platform, dict):
-        _fail("privacy protocol receipt platform must be an object")
-    _exact_fields(platform, {"arch", "os", "peer_count"}, "privacy protocol platform")
-    if platform != {"arch": "arm64", "os": "macos", "peer_count": PEER_COUNT}:
-        _fail("privacy protocol receipt platform must be exactly four-peer macos/arm64")
-
-    issued = _integer(
-        receipt["issued_at_unix"], "privacy protocol receipt issue time"
-    )
-    expires = _integer(
-        receipt["expires_at_unix"], "privacy protocol receipt expiry time"
-    )
-    if expires <= issued:
-        _fail("privacy protocol receipt expiry must follow its issue time")
-    if expires - issued > MAX_PRIVACY_PROTOCOL_RECEIPT_LIFETIME_SECONDS:
-        _fail("privacy protocol receipt lifetime exceeds the first-release maximum")
-    if issued > now_unix + MAX_FUTURE_CLOCK_SKEW_SECONDS:
-        _fail("privacy protocol receipt issue time is implausibly far in the future")
-    if now_unix > expires:
-        _fail("privacy protocol four-peer receipt is stale")
-
-    candidate = receipt["candidate"]
-    if not isinstance(candidate, dict):
-        _fail("privacy protocol receipt candidate must be an object")
-    _exact_fields(
-        candidate,
-        {
-            "exact12_matrix_sha256",
-            "linux_release_archive_sha256",
-            "source",
-            "validator_binary_sha256",
-        },
-        "privacy protocol receipt candidate",
-    )
-    source = _source_identity(
-        candidate["source"], "privacy protocol receipt candidate source"
-    )
-    _require_source(source, expected_source, "privacy protocol receipt")
-    validator_sha = _sha256(
-        candidate["validator_binary_sha256"],
-        "privacy protocol validator binary digest",
-    )
-    linux_archive_sha = _sha256(
-        candidate["linux_release_archive_sha256"],
-        "privacy protocol Linux release archive digest",
-    )
-    exact12_sha = _sha256(
-        candidate["exact12_matrix_sha256"],
-        "privacy protocol Exact12 matrix digest",
-    )
-    if validator_sha != _sha256(
-        expected_validator_binary_sha256,
-        "expected privacy protocol validator binary digest",
-    ):
-        _fail("privacy protocol receipt is bound to a different validator binary")
-    if linux_archive_sha != _sha256(
-        expected_linux_release_archive_sha256,
-        "expected privacy protocol Linux release archive digest",
-    ):
-        _fail("privacy protocol receipt is bound to a different Linux release archive")
-    if exact12_sha != _sha256(
-        expected_exact12_matrix_sha256,
-        "expected privacy protocol Exact12 matrix digest",
-    ):
-        _fail("privacy protocol receipt is bound to a different Exact12 matrix")
-
-    outcomes = receipt["outcomes"]
-    if not isinstance(outcomes, list):
-        _fail("privacy protocol receipt outcomes must be an array")
-    if len(outcomes) != len(PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1):
-        _fail("privacy protocol receipt must contain exactly twelve outcome rows")
-    observed_labels: list[str] = []
-    normalized_outcomes: list[dict[str, object]] = []
-    for index, (row, expected) in enumerate(
-        zip(outcomes, PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1)
-    ):
-        if not isinstance(row, dict):
-            _fail("privacy protocol receipt outcome rows must be objects")
-        _exact_fields(
-            row,
-            {
-                "case",
-                "case_output_sha256",
-                "closed_reason",
-                "index",
-                "production_outcome",
-                "profile",
-                "protocol",
-                "security_boundary",
-                "validator_binary_sha256",
-            },
-            f"privacy protocol receipt outcome {index}",
-        )
-        (
-            expected_protocol,
-            expected_case,
-            expected_profile,
-            expected_production_outcome,
-            expected_closed_reason,
-            expected_security_boundary,
-        ) = expected
-        if row["index"] != index:
-            _fail("privacy protocol receipt outcome rows are not in exact registry order")
-        for field, expected_value in (
-            ("protocol", expected_protocol),
-            ("case", expected_case),
-            ("profile", expected_profile),
-            ("production_outcome", expected_production_outcome),
-            ("closed_reason", expected_closed_reason),
-            ("security_boundary", expected_security_boundary),
-        ):
-            if row[field] != expected_value:
-                _fail(
-                    f"privacy protocol receipt outcome {index} has a noncanonical {field}"
-                )
-        case_output_sha = _sha256(
-            row["case_output_sha256"],
-            f"privacy protocol receipt outcome {index} case output digest",
-        )
-        row_validator_sha = _sha256(
-            row["validator_binary_sha256"],
-            f"privacy protocol receipt outcome {index} validator binary digest",
-        )
-        if row_validator_sha != validator_sha:
-            _fail(
-                f"privacy protocol receipt outcome {index} is bound to a different validator"
-            )
-        observed_labels.append(expected_protocol)
-        normalized_outcomes.append(
-            {
-                **row,
-                "case_output_sha256": case_output_sha,
-                "validator_binary_sha256": row_validator_sha,
-            }
-        )
-    if len(observed_labels) != len(set(observed_labels)):
-        _fail("privacy protocol receipt repeats a protocol outcome")
-    case_digests: dict[str, str] = {}
-    for row in normalized_outcomes:
-        case = str(row["case"])
-        digest = str(row["case_output_sha256"])
-        previous = case_digests.setdefault(case, digest)
-        if previous != digest:
-            _fail("one privacy four-peer case has conflicting output digests")
-
-    return {
-        "exact12_matrix_sha256": exact12_sha,
-        "linux_release_archive_sha256": linux_archive_sha,
-        "outcomes": normalized_outcomes,
-        "receipt_id": receipt_id,
-        "validator_binary_sha256": validator_sha,
-    }
+    except privacy_evidence.PrivacyProtocolEvidenceError as exc:
+        raise TairaRolloutAdmissionError(str(exc)) from exc
 
 
 def canonical_replay_ledger_bytes(consumed_receipt_ids: Sequence[str]) -> bytes:
@@ -1082,6 +978,7 @@ def _validate_admission_manifest(
     payload: bytes,
     *,
     actual_inventory: Mapping[str, ExtractedFile],
+    boi_inventory_payload: bytes,
     controller_manifest_payload: bytes,
     expected_source: SourceIdentity,
     expected_receipt_id: str,
@@ -1092,6 +989,7 @@ def _validate_admission_manifest(
     _exact_fields(
         manifest,
         {
+            "boi_privacy_v1",
             "controller",
             "inventory",
             "linux_arm64",
@@ -1112,6 +1010,41 @@ def _validate_admission_manifest(
         _fail("admission manifest schema version is unsupported")
     source = _source_identity(manifest["source"], "admission manifest source")
     _require_source(source, expected_source, "admission manifest")
+
+    boi = manifest["boi_privacy_v1"]
+    if not isinstance(boi, dict):
+        _fail("admission BOI binding must be an object")
+    _exact_fields(
+        boi,
+        {"artifact_count", "inventory_path", "inventory_sha256"},
+        "admission BOI binding",
+    )
+    boi_inventory_sha256 = _sha256(
+        boi["inventory_sha256"], "admission BOI inventory digest"
+    )
+    artifact_count = _integer(
+        boi["artifact_count"], "admission BOI artifact count", minimum=1
+    )
+    if boi != {
+        "artifact_count": artifact_count,
+        "inventory_path": BOI_ARTIFACT_INVENTORY_PATH,
+        "inventory_sha256": boi_inventory_sha256,
+    } or artifact_count != len(BOI_SOURCE_ARTIFACT_PATHS):
+        _fail("admission BOI binding is not the exact first-release contract")
+    boi_info = actual_inventory.get(BOI_ARTIFACT_INVENTORY_PATH)
+    if boi_info is None:
+        _fail("candidate archive omits the signed BOI artifact inventory")
+    if (
+        boi_info.sha256 != boi_inventory_sha256
+        or boi_info.size != len(boi_inventory_payload)
+    ):
+        _fail("signed BOI artifact inventory differs from its admission binding")
+    boi_inventory = _validate_boi_artifact_inventory(
+        boi_inventory_payload,
+        expected_source=expected_source,
+    )
+    if boi_inventory["inventory_sha256"] != boi_inventory_sha256:
+        _fail("signed BOI artifact inventory digest differs after parsing")
 
     controller = manifest["controller"]
     if not isinstance(controller, dict):
@@ -1221,9 +1154,10 @@ def _validate_admission_manifest(
     _validate_inventory(manifest, actual_inventory)
     required_paths = {
         archive_path,
+        BOI_ARTIFACT_INVENTORY_PATH,
         CONTROLLER_MANIFEST_PATH,
         MACOS_RECEIPT_PATH,
-        PRIVACY_PROTOCOL_RECEIPT_PATH,
+        *PRIVACY_PROTOCOL_EVIDENCE_PATHS,
         *(f"{LINUX_AUTHORITY_DIRECTORY}/{path}" for path in LINUX_AUTHORITY_FILES),
     }
     actual_paths = set(actual_inventory) - {ADMISSION_MANIFEST_PATH}
@@ -1231,6 +1165,8 @@ def _validate_admission_manifest(
         _fail("admission archive does not contain the exact first-release inventory")
     return {
         "controller_digest": controller_digest,
+        "boi_artifact_inventory_sha256": boi_inventory_sha256,
+        "boi_exact12_matrix_sha256": boi_inventory["exact12_matrix_sha256"],
         "linux_archive_path": archive_path,
         "linux_authority_manifest_sha256": linux["authority_manifest_sha256"],
         "linux_native_verifier_sha256": linux["authority_native_verifier_sha256"],
@@ -1699,9 +1635,19 @@ def verify_admission(
             return_payload=True,
         )
         assert controller_manifest_payload is not None
+        if BOI_ARTIFACT_INVENTORY_PATH not in actual_inventory:
+            _fail("candidate archive omits the signed BOI artifact inventory")
+        _, boi_inventory_payload = stable_read_relative(
+            root,
+            BOI_ARTIFACT_INVENTORY_PATH,
+            max_size=MAX_BOI_ARTIFACT_INVENTORY_BYTES,
+            return_payload=True,
+        )
+        assert boi_inventory_payload is not None
         admission = _validate_admission_manifest(
             admission_payload,
             actual_inventory=actual_inventory,
+            boi_inventory_payload=boi_inventory_payload,
             controller_manifest_payload=controller_manifest_payload,
             expected_source=expected_source,
             expected_receipt_id=expected_receipt_id,
@@ -1726,14 +1672,6 @@ def verify_admission(
             now_unix=current_time,
         )
 
-        _, privacy_protocol_receipt_payload = stable_read_relative(
-            root,
-            PRIVACY_PROTOCOL_RECEIPT_PATH,
-            max_size=MAX_JSON_BYTES,
-            return_payload=True,
-        )
-        assert privacy_protocol_receipt_payload is not None
-
         linux_archive_path = root / str(admission["linux_archive_path"])
         nested = _verify_closed_linux_authority(
             root,
@@ -1756,8 +1694,12 @@ def verify_admission(
             trusted_signing_fingerprint=trusted_signing_fingerprint,
             native_verifier_sha256=str(nested["native_verifier_sha256"]),
         )
+        if admission["boi_exact12_matrix_sha256"] != nested["exact12_matrix_sha256"]:
+            _fail(
+                "signed BOI artifact inventory is bound to a different Exact12 matrix"
+            )
         privacy_protocol_receipt = _validate_privacy_protocol_receipt(
-            privacy_protocol_receipt_payload,
+            root / PRIVACY_PROTOCOL_EVIDENCE_DIRECTORY,
             expected_source=expected_source,
             expected_validator_binary_sha256=str(
                 receipt["validator_binary_sha256"]
@@ -1767,6 +1709,9 @@ def verify_admission(
             ).sha256,
             expected_exact12_matrix_sha256=str(
                 nested["exact12_matrix_sha256"]
+            ),
+            expected_artifact_handoff_sha256=str(
+                receipt["artifact_handoff_sha256"]
             ),
             expected_receipt_id=str(
                 admission["privacy_protocol_receipt_id"]
@@ -1809,6 +1754,9 @@ def verify_admission(
     return {
         "artifact_handoff_sha256": receipt["artifact_handoff_sha256"],
         "archive_sha256": archive_info.sha256,
+        "boi_artifact_inventory_sha256": admission[
+            "boi_artifact_inventory_sha256"
+        ],
         "deployment_performed": False,
         "linux_authority_manifest_sha256": nested["manifest_sha256"],
         "macos_end_block_hash": receipt["end_block_hash"],

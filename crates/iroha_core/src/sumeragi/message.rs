@@ -1102,7 +1102,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
-        AccountId, ChainId, Level,
+        AccountId, Level,
         consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         },
@@ -1135,13 +1135,11 @@ mod tests {
     }
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
+        let network_id = crate::sumeragi::synthetic_network_id("sumeragi-message-test");
         let keypair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

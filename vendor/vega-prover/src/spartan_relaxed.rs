@@ -314,13 +314,15 @@ mod tests {
 
     #[test]
     fn test_relaxed_spartan_proof() {
-        let _ = tracing_subscriber::fmt()
-            .with_target(false)
-            .with_env_filter(EnvFilter::from_default_env())
-            .try_init();
+        crate::iroha_rng::with_deterministic_test_seed(0x40, || {
+            let _ = tracing_subscriber::fmt()
+                .with_target(false)
+                .with_env_filter(EnvFilter::from_default_env())
+                .try_init();
 
-        type E = crate::provider::PallasHyraxEngine;
-        test_relaxed_spartan_with::<E>();
+            type E = crate::provider::PallasHyraxEngine;
+            test_relaxed_spartan_with::<E>();
+        });
     }
 
     fn test_relaxed_spartan_with<E: Engine>() {

@@ -451,6 +451,7 @@ test("findFeeSponsorProgramById posts and binds the exact program id", async () 
   const programId = `${sponsor}/wallet_fx`;
   const program = {
     id: { sponsor, name: "wallet_fx" },
+    payout_account: sponsor,
     lifecycle: { state: "active", value: null },
     active_revision: 7,
   };
@@ -485,6 +486,7 @@ test("findFeeSponsorProgramById returns null and rejects mismatched lifecycle re
     fetchImpl: async () =>
       jsonResponse(200, {
         id: { sponsor, name: "other" },
+        payout_account: sponsor,
         lifecycle: { state: "active", value: null },
         active_revision: 1,
       }),

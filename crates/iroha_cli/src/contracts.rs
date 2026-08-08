@@ -1219,12 +1219,8 @@ impl DevCallArgs {
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
                 block_height: status.block_height,
-                rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
-                summary: status.summary,
-                diagnostics: status.diagnostics,
-                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })
         } else {
@@ -1354,9 +1350,6 @@ impl DevSmokeArgs {
                             "terminal_kind": (status.terminal_kind),
                             "attempts": (status.attempts),
                             "elapsed_ms": (status.elapsed_ms),
-                            "summary": (status.summary),
-                            "diagnostics": (status.diagnostics),
-                            "trigger_completions": (status.trigger_completions),
                             "final": (status.r#final),
                         })
                     } else {
@@ -2345,12 +2338,8 @@ struct ContractSubmissionWaitResponse {
     attempts: u64,
     elapsed_ms: u64,
     block_height: Option<u64>,
-    rejection_reason: Option<iroha::data_model::transaction::error::TransactionRejectionReason>,
     scope: String,
     resolved_from: String,
-    summary: String,
-    diagnostics: Vec<iroha_torii_shared::PipelineDiagnostic>,
-    trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
     r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
 }
 
@@ -2483,12 +2472,8 @@ impl Run for CallArgs {
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
                 block_height: status.block_height,
-                rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
-                summary: status.summary,
-                diagnostics: status.diagnostics,
-                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })?;
         } else {
@@ -5857,11 +5842,12 @@ mod tests {
         world
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
-        let state = State::new_with_chain_for_testing(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ctx.config().chain.clone(),
+            ctx.config().network_id,
         );
         {
             let header = BlockHeader::new(
@@ -5892,7 +5878,7 @@ mod tests {
         }
 
         let tx = TransactionBuilder::new(
-            ctx.config().chain.clone(),
+            ctx.config().network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(DEFAULT_CONTRACT_GAS_LIMIT)),
         )
@@ -6272,9 +6258,8 @@ impl Run for SimulateArgs {
         let gas_limit = NonZeroU64::new(self.gas_limit)
             .ok_or_else(|| eyre!("--gas-limit must be greater than zero"))?;
         let metadata = Metadata::default();
-        let chain_id = context.config().chain.clone();
         let tx = TransactionBuilder::new(
-            chain_id,
+            context.config().network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), Some(gas_limit)),
         )

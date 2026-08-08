@@ -6,6 +6,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class ReplicationOrderInstructionTests
 {
+    private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string OrderId =
         "abababababababababababababababababababababababababababababababab";
     private const string ArchiveId =
@@ -277,7 +278,7 @@ public sealed class ReplicationOrderInstructionTests
     public void TransactionBuilderExposesAllThreeCanonicalInstructions()
     {
         var builder = new TransactionBuilder(
-                "00000042",
+                NetworkId.Parse(FixtureNetworkId),
                 FixtureAccountId,
                 FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
             .IssueReplicationOrder(OrderId, Fixture(), 20, 28, ArchiveId)
@@ -396,31 +397,18 @@ public sealed class ReplicationOrderInstructionTests
 
     private ref struct FixedFieldReader
     {
-        private readonly ReadOnlySpan<byte> payload;
-        private int offset;
+        private CanonicalNoritoReader reader;
 
         internal FixedFieldReader(ReadOnlySpan<byte> payload)
         {
-            this.payload = payload;
-            offset = 0;
+            reader = new CanonicalNoritoReader(
+                payload,
+                "replication-order test payload",
+                nameof(payload));
         }
 
-        internal ReadOnlySpan<byte> ReadField()
-        {
-            Assert.True(offset + sizeof(ulong) <= payload.Length);
-            var length = BinaryPrimitives.ReadUInt64LittleEndian(
-                payload.Slice(offset, sizeof(ulong)));
-            offset += sizeof(ulong);
-            Assert.True(length <= int.MaxValue);
-            Assert.True((int)length <= payload.Length - offset);
-            var result = payload.Slice(offset, (int)length);
-            offset += (int)length;
-            return result;
-        }
+        internal ReadOnlySpan<byte> ReadField() => reader.ReadField("field");
 
-        internal void RequireEnd()
-        {
-            Assert.Equal(payload.Length, offset);
-        }
+        internal void RequireEnd() => reader.RequireEnd();
     }
 }

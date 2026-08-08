@@ -2149,9 +2149,9 @@ pub(crate) enum AutonomousLaneReservationSlotPlanError {
         /// Structural validation failure.
         reason: String,
     },
-    /// The context belongs to a different chain than committed state.
-    #[error("frozen height context belongs to a different chain")]
-    ChainIdMismatch,
+    /// The context belongs to a different exact network than committed state.
+    #[error("frozen height context belongs to a different network")]
+    NetworkIdMismatch,
     /// The context is not the exact next height over committed state.
     #[error(
         "stale autonomous reservation context at height {context_height}; committed height is {committed_height}"
@@ -2462,7 +2462,7 @@ fn assemble_autonomous_lane_reservation_slot(
         encode_autonomous_lane_reservation_identity_hashes(
             AutonomousLaneReservationSlotIdentityV1 {
                 identity_version: AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1,
-                chain_id_hash: Hash::new(context.chain_id.as_str().as_bytes()),
+                chain_id_hash: Hash::new(context.network_id.as_bytes()),
                 height_context_id: context.id(),
                 epoch: context.epoch,
                 proposal_height: context.height,
@@ -2524,8 +2524,8 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
             reason: error.to_string(),
         }
     })?;
-    if state.chain_id_ref() != &context.chain_id {
-        return Err(AutonomousLaneReservationSlotPlanError::ChainIdMismatch);
+    if state.network_id_ref() != &context.network_id {
+        return Err(AutonomousLaneReservationSlotPlanError::NetworkIdMismatch);
     }
     let committed_height = u64::try_from(state.committed_height()).map_err(|_| {
         AutonomousLaneReservationSlotPlanError::StaleHeightContext {
@@ -3805,7 +3805,6 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId,
         block::consensus::SumeragiLanePayloadOwnership,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
@@ -3952,7 +3951,7 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         wire::HeightContext {
-            chain_id: ChainId::from("autonomous-reservation-slot-test"),
+            network_id: crate::sumeragi::synthetic_network_id("autonomous-reservation-slot-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 7,

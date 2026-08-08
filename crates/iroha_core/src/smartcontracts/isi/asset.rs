@@ -61,15 +61,42 @@ pub mod isi {
     impl WorldTransaction<'_, '_> {
         /// Decrease a numeric asset balance; removes the asset entry if it reaches zero.
         /// Does not emit events; callers remain responsible for event emission.
-        fn withdraw_numeric_asset(&mut self, id: &AssetId, amount: &Quantity) -> Result<(), Error> {
+        fn withdraw_numeric_asset(
+            &mut self,
+            network_id: &iroha_data_model::NetworkId,
+            id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
-            if sccp_registry_references_custody_asset(self.sccp_registry.get(), &resolved_id) {
+            if sccp_registry_references_custody_asset(
+                self.sccp_registry.get(),
+                network_id,
+                &resolved_id,
+            ) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "SCCP custody can only be debited by verified native inbound settlement".into(),
                 )
                 .into());
+            }
+            if fx_registry_references_escrow_asset(self.parameters.get(), network_id, &resolved_id)?
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "FX corridor escrow can only be debited by the sealed native FX settlement or owner-refund path"
+                        .into(),
+                )
+                .into());
+            }
+            if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset(
+                self,
+                &resolved_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SoraFS reserve custody can only be debited by a verified native reserve withdrawal"
+                        .into(),
+                )
+                    .into());
             }
             let asset = self
                 .assets
@@ -388,10 +415,11 @@ pub mod isi {
     #[cfg(test)]
     pub(crate) fn debit_numeric_asset_balance_for_test(
         world: &mut WorldTransaction<'_, '_>,
+        network_id: &iroha_data_model::NetworkId,
         id: &AssetId,
         amount: &Quantity,
     ) -> Result<(), Error> {
-        world.withdraw_numeric_asset(id, amount)
+        world.withdraw_numeric_asset(network_id, id, amount)
     }
 
     /// Exercise prepared-transfer freshness without exposing the private movement plan.
@@ -1438,8 +1466,12 @@ pub mod isi {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum NumericAssetTransferSourcePolicy {
         User,
+        SccpEscrowDeposit,
+        FxEscrowDeposit,
         NativeEscrowCustody,
-        SccpInboundSettlement,
+        SorafsReserveCustody,
+        SccpEscrowRelease,
+        FxEscrowRelease,
         FeeSponsorCustody,
         OfflineEscrowCustody,
         OracleReward,
@@ -1538,14 +1570,133 @@ pub mod isi {
 
     fn sccp_registry_references_custody_asset(
         registry: &iroha_data_model::bridge::SccpRegistryV1,
+        network_id: &iroha_data_model::NetworkId,
         asset_id: &AssetId,
     ) -> bool {
         registry.lanes.iter().any(|lane| {
             lane.routes.iter().any(|route| {
                 route.settlement.asset_definition_id == *asset_id.definition()
-                    && route.settlement.custody_account_id == *asset_id.account()
+                    && iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                        network_id,
+                        &route.key(),
+                        &route.settlement.asset_definition_id,
+                    ) == *asset_id.account()
             })
         })
+    }
+
+    fn fx_registry_references_escrow_asset(
+        parameters: &Parameters,
+        network_id: &iroha_data_model::NetworkId,
+        asset_id: &AssetId,
+    ) -> Result<bool, Error> {
+        use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
+
+        let Some(custom) = parameters
+            .custom()
+            .get(&FxCorridorPolicyRegistry::parameter_id())
+        else {
+            return Ok(false);
+        };
+        let registry = FxCorridorPolicyRegistry::from_custom_parameter(custom)
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid retained FX corridor registry: {error}").into(),
+                )
+            })?
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "retained FX corridor registry has the wrong parameter identity".into(),
+                )
+            })?;
+        Ok(registry.policies.values().any(|policy| {
+            iroha_data_model::isi::settlement::fx_corridor_escrow_account_id_v1(
+                network_id,
+                &policy.corridor_id(),
+                &policy.destination_asset_definition_id,
+            ) == *asset_id.account()
+        }))
+    }
+
+    /// Return whether an asset balance belongs to a governed native FX reserve account.
+    pub(crate) fn is_fx_corridor_escrow_asset(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_id: &AssetId,
+    ) -> Result<bool, Error> {
+        fx_registry_references_escrow_asset(
+            state_transaction.world.parameters.get(),
+            &state_transaction.network_id,
+            asset_id,
+        )
+    }
+
+    /// Return whether an account is a deterministic native FX reserve.
+    pub(crate) fn is_fx_corridor_escrow_account(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) -> Result<bool, Error> {
+        use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
+
+        let Some(custom) = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(&FxCorridorPolicyRegistry::parameter_id())
+        else {
+            return Ok(false);
+        };
+        let registry = FxCorridorPolicyRegistry::from_custom_parameter(custom)
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid retained FX corridor registry: {error}").into(),
+                )
+            })?
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "retained FX corridor registry has the wrong parameter identity".into(),
+                )
+            })?;
+        Ok(registry.policies.values().any(|policy| {
+            iroha_data_model::isi::settlement::fx_corridor_escrow_account_id_v1(
+                &state_transaction.network_id,
+                &policy.corridor_id(),
+                &policy.destination_asset_definition_id,
+            ) == *account_id
+        }))
+    }
+
+    /// Return whether an asset definition is retained by a native FX corridor.
+    pub(crate) fn is_fx_corridor_asset_definition(
+        state_transaction: &StateTransaction<'_, '_>,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<bool, Error> {
+        use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
+
+        let Some(custom) = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(&FxCorridorPolicyRegistry::parameter_id())
+        else {
+            return Ok(false);
+        };
+        let registry = FxCorridorPolicyRegistry::from_custom_parameter(custom)
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid retained FX corridor registry: {error}").into(),
+                )
+            })?
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "retained FX corridor registry has the wrong parameter identity".into(),
+                )
+            })?;
+        Ok(registry.policies.values().any(|policy| {
+            policy.source_asset_definition_id == *definition_id
+                || policy.destination_asset_definition_id == *definition_id
+        }))
     }
 
     /// Return whether an asset is protected backing for any retained SCCP revision.
@@ -1555,6 +1706,7 @@ pub mod isi {
     ) -> bool {
         sccp_registry_references_custody_asset(
             state_transaction.world.sccp_registry.get(),
+            &state_transaction.network_id,
             asset_id,
         )
     }
@@ -1571,7 +1723,28 @@ pub mod isi {
             .lanes
             .iter()
             .flat_map(|lane| &lane.routes)
-            .any(|route| route.settlement.custody_account_id == *account_id)
+            .any(|route| {
+                iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+                    &state_transaction.network_id,
+                    &route.key(),
+                    &route.settlement.asset_definition_id,
+                ) == *account_id
+            })
+    }
+
+    /// Return whether an account is the immutable funding/refund owner of a retained SCCP route.
+    pub(crate) fn is_sccp_custody_owner(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) -> bool {
+        state_transaction
+            .world
+            .sccp_registry
+            .get()
+            .lanes
+            .iter()
+            .flat_map(|lane| &lane.routes)
+            .any(|route| route.settlement.custody_owner == *account_id)
     }
 
     /// Return whether a definition is referenced by any retained SCCP revision.
@@ -1598,6 +1771,65 @@ pub mod isi {
                 "SCCP custody can only be debited by verified native inbound settlement".into(),
             )
             .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_not_sccp_custody_destination(
+        state_transaction: &StateTransaction<'_, '_>,
+        destination_id: &AssetId,
+    ) -> Result<(), Error> {
+        if is_sccp_custody_asset(state_transaction, destination_id) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP route escrow can only be credited by a route-bound native SCCP instruction"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_not_fx_corridor_escrow_source(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+    ) -> Result<(), Error> {
+        if is_fx_corridor_escrow_asset(state_transaction, source_id)? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "FX corridor escrow can only be debited by the sealed native FX settlement or owner-refund path"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_not_fx_corridor_escrow_destination(
+        state_transaction: &StateTransaction<'_, '_>,
+        destination_id: &AssetId,
+    ) -> Result<(), Error> {
+        if is_fx_corridor_escrow_asset(state_transaction, destination_id)? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "FX corridor escrow can only be credited by its exact owner-funded instruction"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_not_sorafs_reserve_custody_source(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+    ) -> Result<(), Error> {
+        if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset(
+            state_transaction.world(),
+            source_id,
+        )? {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SoraFS reserve custody can only be debited by a verified native reserve withdrawal"
+                    .into(),
+            )
+                .into());
         }
         Ok(())
     }
@@ -1648,6 +1880,15 @@ pub mod isi {
         NativeEscrow(Vec<u8>),
         /// Fund a VPN lease retained record.
         VpnLease(Vec<u8>),
+        /// Deposit into one exact governed SCCP route escrow.
+        SccpEscrowDeposit {
+            /// Stable transcript tag distinguishing owner funding from outbound locking.
+            tag: &'static str,
+            /// Complete route, asset, source, destination, and amount binding.
+            binding: Vec<u8>,
+        },
+        /// Fund one exact owner-funded native FX reserve.
+        FxCorridorEscrowDeposit(Vec<u8>),
         /// Charge one exact SNS auto-renewal quote.
         SnsAutoRenewal(Vec<u8>),
     }
@@ -1683,8 +1924,14 @@ pub mod isi {
         NativeEscrow(Vec<u8>),
         /// Move value according to an exact VPN lease record.
         VpnLease(Vec<u8>),
+        /// Release one exact approved SoraFS reserve withdrawal.
+        SorafsReserve(Vec<u8>),
         /// Move value from verified fee-sponsor custody.
         FeeSponsor(Vec<u8>),
+        /// Refund one exact inactive governed SCCP route escrow to its owner.
+        SccpEscrowRefund(Vec<u8>),
+        /// Refund one exact inactive native FX reserve to its immutable owner.
+        FxCorridorEscrowRefund(Vec<u8>),
         /// Move one exact transparent balance effect authorized by a native privacy proof.
         PrivacyPublicBridge(Vec<u8>),
     }
@@ -1720,6 +1967,14 @@ pub mod isi {
             submitting_authority: &AccountId,
             purpose: EmbeddedNumericAssetMovementPurpose,
         ) -> Self {
+            let is_sccp_deposit = matches!(
+                &purpose,
+                EmbeddedNumericAssetMovementPurpose::SccpEscrowDeposit { .. }
+            );
+            let is_fx_deposit = matches!(
+                &purpose,
+                EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(_)
+            );
             let (debit, tag, binding) = match purpose {
                 EmbeddedNumericAssetMovementPurpose::AccountAdmissionFee(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
@@ -1777,6 +2032,16 @@ pub mod isi {
                     "vpn-lease-funding",
                     binding,
                 ),
+                EmbeddedNumericAssetMovementPurpose::SccpEscrowDeposit { tag, binding } => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    tag,
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "fx-corridor-owner-funding",
+                    binding,
+                ),
                 EmbeddedNumericAssetMovementPurpose::SnsAutoRenewal(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
                     "sns-auto-renewal",
@@ -1790,7 +2055,13 @@ pub mod isi {
                     tag,
                     binding,
                 },
-                source_policy: NumericAssetTransferSourcePolicy::User,
+                source_policy: if is_sccp_deposit {
+                    NumericAssetTransferSourcePolicy::SccpEscrowDeposit
+                } else if is_fx_deposit {
+                    NumericAssetTransferSourcePolicy::FxEscrowDeposit
+                } else {
+                    NumericAssetTransferSourcePolicy::User
+                },
                 control_policy: NumericAssetTransferControlPolicy::Enforce,
                 destination_admission: NumericAssetDestinationAdmissionPolicy::ExistingAccount,
             }
@@ -1886,10 +2157,28 @@ pub mod isi {
                     NumericAssetTransferSourcePolicy::NativeEscrowCustody,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
+                RetainedNumericAssetMovementPurpose::SorafsReserve(binding) => (
+                    "sorafs-reserve-withdrawal",
+                    binding,
+                    NumericAssetTransferSourcePolicy::SorafsReserveCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
                 RetainedNumericAssetMovementPurpose::FeeSponsor(binding) => (
                     "fee-sponsor-custody",
                     binding,
                     NumericAssetTransferSourcePolicy::FeeSponsorCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::SccpEscrowRefund(binding) => (
+                    "sccp-route-escrow-refund",
+                    binding,
+                    NumericAssetTransferSourcePolicy::SccpEscrowRelease,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::FxCorridorEscrowRefund(binding) => (
+                    "fx-corridor-owner-refund",
+                    binding,
+                    NumericAssetTransferSourcePolicy::FxEscrowRelease,
                     NumericAssetTransferControlPolicy::Enforce,
                 ),
                 RetainedNumericAssetMovementPurpose::PrivacyPublicBridge(binding) => (
@@ -2243,6 +2532,7 @@ pub mod isi {
                 ensure_not_offline_escrow_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+                ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetBurnSourcePolicy::FeeSponsorCustody => {
                 if source_id.account()
@@ -2258,6 +2548,7 @@ pub mod isi {
                 ensure_not_offline_escrow_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+                ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
             }
         }
 
@@ -2352,9 +2643,11 @@ pub mod isi {
             ));
         }
 
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&source_id, &amount)?;
+        state_transaction.world.withdraw_numeric_asset(
+            &state_transaction.network_id,
+            &source_id,
+            &amount,
+        )?;
         state_transaction
             .world
             .decrease_asset_total_amount(source_id.definition(), &amount)?;
@@ -3233,6 +3526,53 @@ pub mod isi {
             NumericAssetMovementAuthorization::retained(
                 &owner,
                 RetainedNumericAssetMovementPurpose::GovernanceUnlock(binding),
+            ),
+        )
+    }
+
+    /// Consume one exact approved SoraFS reserve withdrawal capability.
+    pub(in crate::smartcontracts::isi) fn execute_verified_sorafs_reserve_withdrawal(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::sorafs_reserve::VerifiedSorafsReserveWithdrawal,
+    ) -> Result<(), Error> {
+        let (
+            provider_id,
+            movement_id,
+            policy_digest,
+            expected_provider_revision,
+            decision_authority,
+            source_id,
+            destination_id,
+            amount,
+        ) = authorization.into_parts();
+        crate::smartcontracts::isi::sorafs_reserve::validate_verified_reserve_withdrawal(
+            state_transaction.world(),
+            provider_id,
+            movement_id,
+            policy_digest,
+            expected_provider_revision,
+            &decision_authority,
+            &source_id,
+            &destination_id,
+            &amount,
+        )?;
+        let binding = canonical_numeric_movement_binding(&(
+            provider_id,
+            movement_id,
+            policy_digest,
+            expected_provider_revision,
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                &decision_authority,
+                RetainedNumericAssetMovementPurpose::SorafsReserve(binding),
             ),
         )
     }
@@ -4268,6 +4608,7 @@ pub mod isi {
         destination_source_id: AssetId,
         destination_id: AssetId,
         destination_amount: Quantity,
+        policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
     ) -> Result<PreparedNumericTransferPair, Error> {
         if source_id.scope() != source_destination_id.scope()
             || destination_source_id.scope() != destination_id.scope()
@@ -4285,16 +4626,69 @@ pub mod isi {
             ));
         }
 
-        prepare_authorized_numeric_asset_pair(
+        let current_policy = crate::smartcontracts::isi::settlement::fx_policy(
+            state_transaction,
+            &policy.policy_id,
+        )?;
+        if current_policy != *policy {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native FX movement does not match the exact active corridor policy".into(),
+            ));
+        }
+        let expected_escrow = iroha_data_model::isi::settlement::fx_corridor_escrow_account_id_v1(
+            &state_transaction.network_id,
+            &policy.corridor_id(),
+            &policy.destination_asset_definition_id,
+        );
+        if source_id.account() != submitting_authority
+            || source_destination_id.account() != &policy.owner
+            || source_id.definition() != &policy.source_asset_definition_id
+            || source_destination_id.definition() != &policy.source_asset_definition_id
+            || source_id.scope() != &AssetBalanceScope::Dataspace(policy.source_dataspace)
+            || destination_source_id.account() != &expected_escrow
+            || destination_source_id.definition() != &policy.destination_asset_definition_id
+            || destination_id.definition() != &policy.destination_asset_definition_id
+            || destination_source_id.scope()
+                != &AssetBalanceScope::Dataspace(policy.destination_dataspace)
+            || destination_id.account() == &expected_escrow
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "native FX movement legs do not match the sealed owner/escrow corridor".into(),
+            ));
+        }
+        ensure_user_numeric_asset_source_authority(
+            state_transaction,
+            submitting_authority,
+            &source_id,
+        )?;
+        let source = PreparedNumericTransferPlan::prepare(
             state_transaction,
             submitting_authority,
             source_id,
             source_destination_id,
             source_amount,
+            NumericAssetTransferScopePolicy::ExplicitBilateral,
+            NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+            NumericAssetTransferSourcePolicy::User,
+            NumericAssetTransferControlPolicy::Enforce,
+            NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+        )?;
+        let destination = PreparedNumericTransferPlan::prepare(
+            state_transaction,
+            submitting_authority,
             destination_source_id,
             destination_id,
             destination_amount,
-        )
+            NumericAssetTransferScopePolicy::ExplicitBilateral,
+            NumericAssetTransferAuthorityPolicy::ProtocolAuthorized,
+            NumericAssetTransferSourcePolicy::FxEscrowRelease,
+            NumericAssetTransferControlPolicy::Enforce,
+            NumericAssetDestinationAdmissionPolicy::ExistingAccount,
+        )?;
+        Ok(PreparedNumericTransferPair {
+            source,
+            destination,
+        })
     }
 
     /// Validate two explicitly authorized bilateral legs through the ordinary
@@ -4418,6 +4812,7 @@ pub mod isi {
         destination_source_id: AssetId,
         destination_id: AssetId,
         destination_amount: Quantity,
+        policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
     ) -> Result<(), Error> {
         prepare_native_fx_numeric_asset_pair(
             state_transaction,
@@ -4428,6 +4823,7 @@ pub mod isi {
             destination_source_id,
             destination_id,
             destination_amount,
+            policy,
         )?;
         Ok(())
     }
@@ -4448,6 +4844,7 @@ pub mod isi {
         destination_source_id: AssetId,
         destination_id: AssetId,
         destination_amount: Quantity,
+        policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
     ) -> Result<(), Error> {
         state_transaction.require_transfer_transcript_identity("native FX transfer")?;
         let prepared = prepare_native_fx_numeric_asset_pair(
@@ -4459,6 +4856,7 @@ pub mod isi {
             destination_source_id,
             destination_id,
             destination_amount,
+            policy,
         )?;
 
         // The policies require distinct asset definitions, so applying the first prechecked
@@ -4676,11 +5074,48 @@ pub mod isi {
             Some(amount),
         )?;
 
+        if source_policy != NumericAssetTransferSourcePolicy::SorafsReserveCustody {
+            ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
+        }
+        if source_policy != NumericAssetTransferSourcePolicy::SccpEscrowDeposit {
+            ensure_not_sccp_custody_destination(state_transaction, &destination_id)?;
+        }
+        if source_policy != NumericAssetTransferSourcePolicy::FxEscrowRelease {
+            ensure_not_fx_corridor_escrow_source(state_transaction, &source_id)?;
+        }
+        if source_policy != NumericAssetTransferSourcePolicy::FxEscrowDeposit {
+            ensure_not_fx_corridor_escrow_destination(state_transaction, &destination_id)?;
+        }
+
         match source_policy {
             NumericAssetTransferSourcePolicy::User => {
                 ensure_not_offline_escrow_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+            }
+            NumericAssetTransferSourcePolicy::SccpEscrowDeposit => {
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+                if !is_sccp_custody_asset(state_transaction, &destination_id) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP route escrow deposit destination is not governed protocol custody"
+                            .into(),
+                    )
+                    .into());
+                }
+            }
+            NumericAssetTransferSourcePolicy::FxEscrowDeposit => {
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+                if !is_fx_corridor_escrow_asset(state_transaction, &destination_id)? {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "FX corridor escrow deposit destination is not governed protocol custody"
+                            .into(),
+                    )
+                    .into());
+                }
             }
             NumericAssetTransferSourcePolicy::NativeEscrowCustody => {
                 ensure_not_sccp_custody_source(state_transaction, &source_id)?;
@@ -4693,14 +5128,38 @@ pub mod isi {
                     ));
                 }
             }
-            NumericAssetTransferSourcePolicy::SccpInboundSettlement => {
-                if !is_sccp_custody_asset(state_transaction, &source_id) {
+            NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
+                if !crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset(
+                    state_transaction.world(),
+                    &source_id,
+                )? {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "SCCP inbound settlement source is not governed custody".into(),
+                        "SoraFS reserve withdrawal source is not active protocol custody".into(),
                     ));
                 }
                 ensure_not_offline_escrow_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
+            }
+            NumericAssetTransferSourcePolicy::SccpEscrowRelease => {
+                if !is_sccp_custody_asset(state_transaction, &source_id) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "SCCP route escrow release source is not governed protocol custody".into(),
+                    ));
+                }
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+            }
+            NumericAssetTransferSourcePolicy::FxEscrowRelease => {
+                if !is_fx_corridor_escrow_asset(state_transaction, &source_id)? {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "FX corridor escrow release source is not governed protocol custody".into(),
+                    )
+                    .into());
+                }
+                ensure_not_offline_escrow_source(state_transaction, &source_id)?;
+                ensure_not_native_escrow_source(state_transaction, &source_id)?;
+                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::FeeSponsorCustody => {
                 if source_id.account()
@@ -4850,6 +5309,7 @@ pub mod isi {
     #[cfg(test)]
     pub(crate) fn apply_verified_nexus_fee_burn_to_world_for_test(
         world: &mut WorldTransaction<'_, '_>,
+        network_id: &iroha_data_model::NetworkId,
         nexus: &iroha_config::parameters::actual::Nexus,
         authorization: crate::state::VerifiedNexusFeeBurn,
     ) -> Result<(), Error> {
@@ -4873,7 +5333,7 @@ pub mod isi {
                 "verified Nexus fee burn does not match live fee custody configuration".into(),
             ));
         }
-        world.withdraw_numeric_asset(&source_id, &amount)?;
+        world.withdraw_numeric_asset(network_id, &source_id, &amount)?;
         world.decrease_asset_total_amount(source_id.definition(), &amount)?;
         world.emit_asset_event(AssetEvent::Removed(AssetChanged {
             asset: source_id,
@@ -4959,6 +5419,8 @@ pub mod isi {
             let resolved_asset_id = state_transaction
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
+            ensure_not_sccp_custody_destination(state_transaction, &resolved_asset_id)?;
+            ensure_not_fx_corridor_escrow_destination(state_transaction, &resolved_asset_id)?;
 
             let _created = ensure_receiving_account(
                 authority,
@@ -5057,11 +5519,15 @@ pub mod isi {
             )?;
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sccp_custody_source(state_transaction, &resolved_asset_id)?;
+            ensure_not_fx_corridor_escrow_source(state_transaction, &resolved_asset_id)?;
+            ensure_not_sorafs_reserve_custody_source(state_transaction, &resolved_asset_id)?;
 
             // Withdraw from source asset balance and remove if it reaches zero
-            state_transaction
-                .world
-                .withdraw_numeric_asset(&asset_id, &quantity)?;
+            state_transaction.world.withdraw_numeric_asset(
+                &state_transaction.network_id,
+                &asset_id,
+                &quantity,
+            )?;
 
             #[allow(clippy::float_arithmetic)]
             {
@@ -5180,6 +5646,251 @@ pub mod isi {
         )
     }
 
+    fn resolve_sccp_route_escrow_binding(
+        state_transaction: &StateTransaction<'_, '_>,
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> Result<(AccountId, AccountId), Error> {
+        let route = state_transaction
+            .sccp_registry
+            .route(route_key)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "SCCP escrow movement references an ungoverned route revision".into(),
+                )
+            })?;
+        if &route.settlement.asset_definition_id != asset_definition_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP escrow movement asset does not match the governed route".into(),
+            )
+            .into());
+        }
+        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
+            &state_transaction.network_id,
+            route_key,
+            asset_definition_id,
+        );
+        state_transaction.world.account(&escrow)?;
+        Ok((route.settlement.custody_owner.clone(), escrow))
+    }
+
+    fn execute_sccp_route_escrow_deposit(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        asset_definition_id: &AssetDefinitionId,
+        amount: Quantity,
+        owner_only: bool,
+        tag: &'static str,
+    ) -> Result<(), Error> {
+        let (owner, escrow) =
+            resolve_sccp_route_escrow_binding(state_transaction, route_key, asset_definition_id)?;
+        if owner_only && authority != &owner {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "only the exact SCCP route custody owner may fund its protocol escrow".into(),
+            )
+            .into());
+        }
+        let source_id = AssetId::new(asset_definition_id.clone(), authority.clone());
+        let destination_id = AssetId::new(asset_definition_id.clone(), escrow);
+        let binding = canonical_numeric_movement_binding(&(
+            route_key.clone(),
+            asset_definition_id.clone(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::SccpEscrowDeposit { tag, binding },
+            ),
+        )
+    }
+
+    /// Fund one exact SCCP route escrow from its immutable custody owner.
+    pub(crate) fn execute_sccp_route_owner_funding(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        asset_definition_id: &AssetDefinitionId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        execute_sccp_route_escrow_deposit(
+            state_transaction,
+            authority,
+            route_key,
+            asset_definition_id,
+            amount,
+            true,
+            "sccp-route-owner-funding",
+        )
+    }
+
+    /// Lock an outbound SCCP sender's funds in the exact governed route escrow.
+    pub(crate) fn execute_sccp_outbound_route_lock(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        asset_definition_id: &AssetDefinitionId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        execute_sccp_route_escrow_deposit(
+            state_transaction,
+            authority,
+            route_key,
+            asset_definition_id,
+            amount,
+            false,
+            "sccp-outbound-route-lock",
+        )
+    }
+
+    /// Refund an inactive SCCP route escrow only to its immutable custody owner.
+    pub(crate) fn execute_sccp_route_owner_refund(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
+        asset_definition_id: &AssetDefinitionId,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let (owner, escrow) =
+            resolve_sccp_route_escrow_binding(state_transaction, route_key, asset_definition_id)?;
+        if authority != &owner {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "only the exact SCCP route custody owner may refund its protocol escrow".into(),
+            )
+            .into());
+        }
+        let source_id = AssetId::new(asset_definition_id.clone(), escrow);
+        let destination_id = AssetId::new(asset_definition_id.clone(), owner);
+        let binding = canonical_numeric_movement_binding(&(
+            route_key.clone(),
+            asset_definition_id.clone(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                authority,
+                RetainedNumericAssetMovementPurpose::SccpEscrowRefund(binding),
+            ),
+        )
+    }
+
+    fn resolve_fx_corridor_escrow_binding(
+        state_transaction: &StateTransaction<'_, '_>,
+        policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
+    ) -> Result<(AccountId, AssetId), Error> {
+        let current = crate::smartcontracts::isi::settlement::fx_policy(
+            state_transaction,
+            &policy.policy_id,
+        )?;
+        if current != *policy {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "FX escrow movement does not match the exact active corridor policy".into(),
+            ));
+        }
+        let escrow = iroha_data_model::isi::settlement::fx_corridor_escrow_account_id_v1(
+            &state_transaction.network_id,
+            &policy.corridor_id(),
+            &policy.destination_asset_definition_id,
+        );
+        state_transaction.world.account(&escrow)?;
+        let escrow_asset = AssetId::with_scope(
+            policy.destination_asset_definition_id.clone(),
+            escrow,
+            AssetBalanceScope::Dataspace(policy.destination_dataspace),
+        );
+        Ok((policy.owner.clone(), escrow_asset))
+    }
+
+    /// Fund an exact FX reserve from its immutable owner through a typed movement corridor.
+    pub(crate) fn execute_fx_corridor_owner_funding(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let (owner, destination_id) =
+            resolve_fx_corridor_escrow_binding(state_transaction, policy)?;
+        if authority != &owner {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "only the exact FX corridor owner may fund its protocol escrow".into(),
+            ));
+        }
+        let source_id = AssetId::with_scope(
+            policy.destination_asset_definition_id.clone(),
+            owner,
+            AssetBalanceScope::Dataspace(policy.destination_dataspace),
+        );
+        let binding = canonical_numeric_movement_binding(&(
+            policy.policy_id.clone(),
+            policy.revision,
+            policy.corridor_id(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::embedded_user(
+                authority,
+                EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(binding),
+            ),
+        )
+    }
+
+    /// Refund an inactive FX reserve only to its immutable owner.
+    pub(crate) fn execute_fx_corridor_owner_refund(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
+        amount: Quantity,
+    ) -> Result<(), Error> {
+        let (owner, source_id) = resolve_fx_corridor_escrow_binding(state_transaction, policy)?;
+        if authority != &owner || policy.enabled {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "FX corridor refund requires its exact owner and an inactive policy".into(),
+            ));
+        }
+        let destination_id = AssetId::with_scope(
+            policy.destination_asset_definition_id.clone(),
+            owner,
+            AssetBalanceScope::Dataspace(policy.destination_dataspace),
+        );
+        let binding = canonical_numeric_movement_binding(&(
+            policy.policy_id.clone(),
+            policy.revision,
+            policy.corridor_id(),
+            source_id.clone(),
+            destination_id.clone(),
+            amount.clone(),
+        ))?;
+        execute_numeric_asset_movement(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            NumericAssetMovementAuthorization::retained(
+                authority,
+                RetainedNumericAssetMovementPurpose::FxCorridorEscrowRefund(binding),
+            ),
+        )
+    }
+
     /// A fully validated, one-shot SCCP custody release whose balance mutation cannot fail.
     ///
     /// This capability is intentionally neither [`Clone`] nor [`Copy`]: proof admission creates
@@ -5203,19 +5914,31 @@ pub mod isi {
     /// succeeds.
     pub(crate) fn prepare_sccp_inbound_numeric_asset_release(
         state_transaction: &mut StateTransaction<'_, '_>,
-        source_id: AssetId,
+        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
         destination: AccountId,
         amount: Quantity,
     ) -> Result<PreparedSccpInboundNumericAssetRelease, Error> {
         state_transaction.require_transfer_transcript_identity("SCCP native inbound settlement")?;
         state_transaction.world.account(&destination)?;
+        let route = state_transaction
+            .sccp_registry
+            .route(route_key)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "SCCP inbound settlement references an ungoverned route revision".into(),
+                )
+            })?;
+        let asset_definition_id = route.settlement.asset_definition_id.clone();
+        let (_owner, escrow) =
+            resolve_sccp_route_escrow_binding(state_transaction, route_key, &asset_definition_id)?;
+        let source_id = AssetId::new(asset_definition_id, escrow);
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
         let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
             state_transaction,
             &source_id,
             &destination_id,
             &amount,
-            NumericAssetTransferSourcePolicy::SccpInboundSettlement,
+            NumericAssetTransferSourcePolicy::SccpEscrowRelease,
         )?;
         let control_update =
             prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, &amount)?;

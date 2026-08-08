@@ -16,7 +16,7 @@ use std::{
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
@@ -206,7 +206,7 @@ pub(crate) fn reconcile_lane_reservation_ownership(
     state: &State,
     queue: &Queue,
     kura: &Kura,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<(usize, usize), V2ReservationLifecycleError> {
     let recovered = queue.live_lane_reservations();
     let recovered_release_barriers = queue.lane_reservation_release_barriers();
@@ -247,7 +247,7 @@ pub(crate) fn reconcile_lane_reservation_ownership(
     let remaining = queue.live_lane_reservations();
     let nexus = state.nexus_snapshot();
     let world = state.world_view();
-    let chain_hash = Hash::new(chain_id.clone().into_inner().as_bytes());
+    let chain_hash = Hash::prehashed(*network_id.as_bytes());
     let mut retired_slots = BTreeMap::new();
     for reservation in &remaining {
         let epoch =
@@ -922,7 +922,9 @@ impl V2ApplyService {
     ///
     /// This updates only the process-local relay service cache. Contract/world
     /// state can consume the envelope only through a later consensus-applied
-    /// `RegisterVerifiedLaneRelay` transaction.
+    /// `RegisterVerifiedLaneRelay` transaction. Callers must first cross the
+    /// durable WSV/Kura finality boundary; candidate validation must never call
+    /// this function.
     fn publish_finalized_lane_relays(
         &self,
         block: &SignedBlock,
@@ -939,6 +941,7 @@ impl V2ApplyService {
         {
             return Err(V2ApplyError::ExecutionCommitmentMismatch);
         }
+        let mut finalized_envelopes = Vec::with_capacity(manifest.statements().len());
         for (index, statement) in manifest.statements().iter().enumerate() {
             let proof_index = u32::try_from(index).map_err(|_| {
                 V2ApplyError::ExecutionCommitment(
@@ -974,9 +977,23 @@ impl V2ApplyService {
                     "canonical lane-finality statement cannot reconstruct its relay".to_owned(),
                 ));
             }
-            self.state.record_lane_relay(&envelope).map_err(|error| {
+            finalized_envelopes.push(envelope);
+        }
+        for envelope in &finalized_envelopes {
+            self.state.record_lane_relay(envelope).map_err(|error| {
                 V2ApplyError::committed_recovery_required("lane-finality relay publication", &error)
             })?;
+        }
+        // Candidate execution remains pure: process-global observability is
+        // updated only here, after `validate_and_apply` has durably accepted the
+        // block (or recovery has confirmed that the WSV already contains it).
+        if !finalized_envelopes.is_empty() {
+            crate::sumeragi::status::set_lane_settlement_commitments(
+                finalized_envelopes
+                    .iter()
+                    .map(|envelope| envelope.settlement_commitment.clone())
+                    .collect(),
+            );
         }
         Ok(())
     }
@@ -2175,6 +2192,12 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x96; Hash::LENGTH]),
+        ))
+    }
     use iroha_executor_data_model::permission::sorafs::{
         CanManageSorafsReputationJournalPolicy, CanSetSorafsPricing, CanSetSorafsReservePolicy,
     };
@@ -2561,6 +2584,7 @@ mod tests {
 
         fn new_with_options(include_lane_payload: bool, include_projection_policies: bool) -> Self {
             let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
+            let network_id = test_network_id();
             let mut keys = (1_u8..=4)
                 .map(|seed| {
                     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -2582,7 +2606,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: chain_id.clone(),
+                network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -2617,11 +2641,12 @@ mod tests {
                 &treasury_account,
                 include_projection_policies,
             );
-            let state = Arc::new(State::new_with_chain_for_testing(
+            let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
                 world,
                 Arc::clone(&kura),
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
+                network_id,
             ));
             let validator_set_pops = keys
                 .iter()
@@ -2731,8 +2756,7 @@ mod tests {
                 instructions
             };
             let body = if include_lane_payload {
-                let transaction = TransactionBuilder::new(
-                    chain_id.clone(),
+                let transaction = TransactionBuilder::new_genesis(
                     transaction_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -2764,8 +2788,7 @@ mod tests {
                     .with_lane_payload_ownerships(lane_plan.ownerships);
                 build_genesis_body(transaction, Some(execution_context))
             } else {
-                let transaction = TransactionBuilder::new(
-                    chain_id.clone(),
+                let transaction = TransactionBuilder::new_genesis(
                     transaction_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -2885,11 +2908,12 @@ mod tests {
                 &self.treasury_account,
                 self.include_projection_policies,
             );
-            let state = Arc::new(State::new_with_chain_for_testing(
+            let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
                 world,
                 Arc::clone(&self.kura),
                 LiveQueryStore::start_test(),
                 self.service.chain_id.clone(),
+                self.context.network_id,
             ));
             install_fixture_validator_authority(
                 &state,
@@ -3054,7 +3078,7 @@ mod tests {
         };
 
         let transaction = TransactionBuilder::new(
-            context.chain_id.clone(),
+            context.network_id,
             fixture.service.genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3800,7 +3824,7 @@ mod tests {
         let transactions = (0_u8..4)
             .map(|index| {
                 TransactionBuilder::new(
-                    fixture.context.chain_id.clone(),
+                    fixture.context.network_id,
                     fixture.service.genesis_account.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -3920,7 +3944,7 @@ mod tests {
             .iter()
             .map(|reserved| reserved.routing_plan().clone())
             .collect::<Vec<_>>();
-        let chain_id_hash = Hash::new(fixture.context.chain_id.clone().into_inner().as_bytes());
+        let chain_id_hash = Hash::prehashed(*fixture.context.network_id.as_bytes());
         let epoch = {
             let world = fixture.state.world_view();
             crate::sumeragi::epoch_for_height_from_world(
@@ -4340,7 +4364,7 @@ mod tests {
                     fixture.state.as_ref(),
                     &replayed_queue,
                     fixture.kura.as_ref(),
-                    &fixture.context.chain_id,
+                    &fixture.context.network_id,
                 )
                 .expect("reconcile replayed committed reservation"),
                 (1, 0)
@@ -4361,7 +4385,7 @@ mod tests {
                     fixture.state.as_ref(),
                     &replayed_queue,
                     fixture.kura.as_ref(),
-                    &fixture.context.chain_id,
+                    &fixture.context.network_id,
                 )
                 .expect("repeat startup reconciliation"),
                 (0, 0)
@@ -4546,7 +4570,7 @@ mod tests {
                         fixture.state.as_ref(),
                         replayed_queue.as_ref(),
                         fixture.kura.as_ref(),
-                        &fixture.context.chain_id,
+                        &fixture.context.network_id,
                     )
                     .expect("reconcile first cross-store crash image"),
                     if boundary == "queue_completion_forgotten" {
@@ -4602,7 +4626,7 @@ mod tests {
                         fixture.state.as_ref(),
                         replayed_again.as_ref(),
                         fixture.kura.as_ref(),
-                        &fixture.context.chain_id,
+                        &fixture.context.network_id,
                     )
                     .expect("repeat terminal ownership reconciliation"),
                     (0, 0),
@@ -5192,10 +5216,24 @@ mod tests {
         assert!(durable.has_results());
         assert_eq!(durable.results().len(), 1);
         assert!(durable.results().all(|result| result.is_ok()));
+        let durable_statement = durable
+            .lane_finality_statements()
+            .first()
+            .cloned()
+            .expect("lane execution must persist one finality statement");
+        assert_eq!(
+            durable_statement.block_header_hash,
+            durable.hash(),
+            "persisted lane finality must bind the exact result-bearing header"
+        );
         let durable_wire = durable.encode_wire().expect("encode Kura lane crash image");
         fixture.assert_no_post_apply_sidecars();
         assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
         assert_eq!(fixture.state.committed_height(), 0);
+        assert!(
+            fixture.state.lane_relay_snapshot().is_empty(),
+            "Kura-only candidate persistence must not publish relay state before WSV commit"
+        );
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
             baseline_state_hash,
@@ -5209,11 +5247,48 @@ mod tests {
             "Kura crash image must include the exact lane sidecar"
         );
 
+        let (restarted_service, restarted_state) =
+            fixture.restart_service_from_last_finalized_snapshot();
         let mut store = fixture.reopen_body_store();
-        fixture
-            .execute(&mut store)
-            .expect("resume exact lane-body WSV application after Kura-first crash");
-        fixture.assert_complete();
+        restarted_service
+            .execute(&fixture.context, &mut store, &fixture.task)
+            .expect("restart resumes exact lane-body WSV application after Kura-first crash");
+        fixture.assert_complete_for_state(restarted_state.as_ref());
+        let recovered_relays = restarted_state.lane_relay_snapshot();
+        assert_eq!(recovered_relays.len(), 1);
+        assert_eq!(
+            recovered_relays[0]
+                .lane_finality_statement()
+                .expect("recovered finalized relay reconstructs its statement"),
+            durable_statement,
+            "restart must reconstruct relay evidence from the exact persisted statement"
+        );
+        let recovered_artifact = fixture
+            .kura
+            .v2_finality_artifact(fixture.context.height)
+            .expect("read recovered finality artifact")
+            .expect("recovery must make finality durable before relay publication");
+        let recovered_authority = recovered_relays[0]
+            .finality_authority
+            .as_ref()
+            .expect("relay publication must wait for and carry real CommitQC authority");
+        assert_eq!(
+            recovered_authority.global_block_height,
+            fixture.context.height
+        );
+        assert_eq!(
+            recovered_authority.finality_artifact_hash,
+            HashOf::new(&recovered_artifact),
+            "restart must bind the relay to the exact durable CommitQC artifact"
+        );
+        restarted_service
+            .execute(&fixture.context, &mut store, &fixture.task)
+            .expect("exact post-recovery retry is idempotent");
+        assert_eq!(
+            restarted_state.lane_relay_snapshot(),
+            recovered_relays,
+            "recovery retry must neither duplicate nor replace finalized lane relays"
+        );
         assert_eq!(
             fixture
                 .kura

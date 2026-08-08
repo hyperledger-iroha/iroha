@@ -209,10 +209,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     }
 
     func testCompiledProfileCatalogRoundTripsAndRejectsAdversarialBytes() throws {
-        guard PrivacyNativeBridge.isNativeAvailable else {
-            XCTFail("ABI-22 NoritoBridge with compiled-profile catalog symbols is required.")
-            return
-        }
+        XCTAssertTrue(
+            PrivacyNativeBridge.isNativeAvailable,
+            "ABI-22 NoritoBridge with compiled-profile catalog symbols is required."
+        )
         let canonical = try PrivacyNativeBridge.compiledProfileCatalogV1()
         XCTAssertFalse(canonical.isEmpty)
         XCTAssertLessThanOrEqual(
@@ -272,10 +272,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     }
 
     func testExact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() throws {
-        guard PrivacyNativeBridge.isNativeAvailable else {
-            XCTFail("ABI-22 NoritoBridge with exact-12 fixture symbols is required.")
-            return
-        }
+        XCTAssertTrue(
+            PrivacyNativeBridge.isNativeAvailable,
+            "ABI-22 NoritoBridge with exact-12 fixture symbols is required."
+        )
 
         let canonical = try PrivacyNativeBridge.exact12FixtureBundleV1()
         XCTAssertFalse(canonical.isEmpty)

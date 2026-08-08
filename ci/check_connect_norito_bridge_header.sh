@@ -431,6 +431,14 @@ exact("Rust transaction signer algorithm pairing", expected_transaction_signers,
 for name in sorted(rust_transaction_signers):
     rust_names = rust_parameter_names(name)
     header_names = c_parameter_names(name)
+    if rust_names[:2] != ["network_id_ptr", "network_id_len"]:
+        raise SystemExit(
+            f"Rust signer {name} must begin with exact NetworkId pointer/length arguments"
+        )
+    if header_names[:2] != ["network_id", "network_id_len"]:
+        raise SystemExit(
+            f"C signer {name} must begin with exact NetworkId pointer/length arguments"
+        )
     rust_fee_index = rust_names.index("fee_payment_json_ptr")
     header_fee_index = header_names.index("fee_payment_json")
     if rust_names[rust_fee_index:rust_fee_index + 4] != [

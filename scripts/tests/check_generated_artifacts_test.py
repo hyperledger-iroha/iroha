@@ -26,6 +26,8 @@ schema_version = 1
 [policy]
 forbidden_tracked_globs = [
   "dist/**",
+  "**/node_modules/**",
+  "**/.docusaurus/**",
   "**/__pycache__/**",
 ]
 allowed_tracked_paths = ["dist/.gitkeep"]
@@ -90,6 +92,85 @@ def test_valid_manifest_and_repository_pass(tmp_path: Path) -> None:
     assert "1 outputs" in result.stdout
 
 
+def test_repository_policy_forbids_dependency_and_portal_caches() -> None:
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+
+    assert {
+        "**/node_modules/**",
+        "**/.docusaurus/**",
+    } <= set(manifest["policy"]["forbidden_tracked_globs"])
+
+
+def test_sorafs_por_aggregate_fixtures_have_complete_unique_owner() -> None:
+    fixture_root = ROOT / "fixtures" / "sorafs_manifest"
+    managed_directories = (
+        "governance",
+        "moderation",
+        "por",
+        "potr",
+        "reference_sdk",
+        "repair",
+    )
+    expected_outputs = {
+        fixture.relative_to(ROOT).as_posix()
+        for directory in managed_directories
+        for fixture in (fixture_root / directory).rglob("*")
+        if fixture.is_file() and fixture.suffix in {".json", ".to"}
+    }
+    expected_outputs.add(
+        "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
+    )
+    assert len(expected_outputs) == 55
+
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owners = [
+        entry
+        for entry in manifest["generated"]
+        if expected_outputs.intersection(entry["outputs"])
+    ]
+
+    assert len(owners) == 1
+    owner = owners[0]
+    assert owner["name"] == "sorafs-por-aggregate-fixtures"
+    assert owner["kind"] == "file"
+    assert set(owner["outputs"]) == expected_outputs
+    assert set(owner["generator_sources"]) == {
+        "crates/sorafs_manifest/Cargo.toml",
+        "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs",
+    }
+    assert set(owner["inputs"]) == {
+        "fixtures/sorafs_manifest/appeal_finance/**",
+        "fixtures/sorafs_manifest/orderbook/**",
+        "fixtures/sorafs_manifest/pdp/**",
+        "fixtures/sorafs_manifest/provider_admission/**",
+        "fixtures/sorafs_manifest/replication_order/**",
+    }
+
+    generator = owner["generator"]
+    assert "--write" in generator
+    assert "--output-dir" in generator
+    assert "IROHA_SORAFS_MANIFEST_STAGE" in generator
+
+    check = owner["check"]
+    assert "--check" in check
+    assert "--output-dir" not in check
+
+    for command in (generator, check):
+        assert command.startswith("NORITO_SKIP_BINDINGS_SYNC=1 ")
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "--jobs 1" in command
+        assert "-Z unstable-options" in command
+        assert "--lockfile-path Cargo.lock" in command
+        assert "-p sorafs_manifest" in command
+        assert "--features dev-tools" in command
+        assert "--bin generate_por_fixtures" in command
+
+
 def test_current_rust_contract_artifact_has_complete_unique_owner() -> None:
     output = "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.json"
     manifest = tomllib.loads(
@@ -125,6 +206,58 @@ def test_current_rust_contract_artifact_has_complete_unique_owner() -> None:
         assert "IROHA_GIT" in command
         assert "--ivm-rlib" not in command
         assert "--rustc" not in command
+
+
+def test_nexus_connect_transfer_fixture_has_closed_unique_staging_owner() -> None:
+    output = "fixtures/sdk/nexus_connect_transfer_v1.json"
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owners = [entry for entry in manifest["generated"] if output in entry["outputs"]]
+
+    assert len(owners) == 1
+    owner = owners[0]
+    assert owner["name"] == "nexus-connect-transfer-v1-fixture"
+    assert owner["kind"] == "file"
+    assert owner["outputs"] == [output]
+    assert set(owner["generator_sources"]) == {
+        "xtask/src/main.rs",
+        "xtask/src/nexus.rs",
+    }
+    assert set(owner["inputs"]) == {
+        "Cargo.toml",
+        "crates/iroha/Cargo.toml",
+        "crates/iroha/src/nexus_app.rs",
+        "crates/iroha_crypto/src/**/*.rs",
+        "crates/iroha_data_model/src/**/*.rs",
+        "crates/iroha_primitives/src/**/*.rs",
+        "crates/norito/src/**/*.rs",
+        "rust-toolchain.toml",
+        "xtask/Cargo.toml",
+    }
+
+    generator = owner["generator"]
+    assert "nexus-connect-fixture --write" in generator
+    assert "--output-root" in generator
+    assert "IROHA_NEXUS_CONNECT_FIXTURE_STAGE" in generator
+    assert "$PWD" not in generator
+    assert output not in generator
+
+    check = owner["check"]
+    assert "nexus-connect-fixture --check" in check
+    assert '--output-root \"$PWD\"' in check
+    assert "IROHA_NEXUS_CONNECT_FIXTURE_STAGE" not in check
+
+    for command in (generator, check):
+        assert command.startswith("cargo run ")
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "--jobs 1" in command
+        assert "-Z unstable-options" in command
+        assert "--lockfile-path Cargo.lock" in command
+        assert "-p xtask" in command
+        assert "--features dev-tools" in command
+        assert "--bin xtask" in command
 
 
 def test_kagemusha_peer_payment_fixture_has_complete_unique_replay_owner() -> None:
@@ -215,10 +348,20 @@ def test_globstar_input_matches_zero_or_more_directories(
     assert result.returncode == 0
 
 
-def test_forbidden_tracked_build_artifact_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "dist/bundle.js",
+        "docs/portal/node_modules/package/index.js",
+        "docs/portal/.docusaurus/cache.json",
+    ),
+)
+def test_forbidden_tracked_build_artifact_fails(
+    tmp_path: Path, relative_path: str
+) -> None:
     repo = _init_repo(tmp_path)
-    path = repo / "dist" / "bundle.js"
-    path.parent.mkdir()
+    path = repo / relative_path
+    path.parent.mkdir(parents=True)
     path.write_text("generated package output\n", encoding="utf-8")
     subprocess.run(["git", "add", str(path)], cwd=repo, check=True)
 
@@ -226,7 +369,7 @@ def test_forbidden_tracked_build_artifact_fails(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "forbidden generated/build artifacts" in result.stderr
-    assert "dist/bundle.js" in result.stderr
+    assert relative_path in result.stderr
 
 
 def test_allowed_directory_marker_passes(tmp_path: Path) -> None:

@@ -23,7 +23,7 @@ use iroha_core::{
 };
 use iroha_crypto::{HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::consensus_v2::{ConsensusMode, ValidatorPower},
@@ -52,7 +52,7 @@ use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::Value as JsonValue;
 
-use super::{Outcome, Result, write_new_durable_file};
+use super::{Outcome, Result, publish_new_durable_file};
 
 const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TAIRA_RELEASE_GENERATION_V4: &str = "production-gate-real-artifacts-v4";
@@ -78,6 +78,9 @@ pub(super) struct PrepareReleaseRosterV4Args {
     /// One rendered validator config containing the complete trusted-peers PoP roster.
     #[arg(long)]
     validator_config: PathBuf,
+    /// Exact genesis-derived network identity whose finality votes the roster authenticates.
+    #[arg(long)]
+    network_id: NetworkId,
     /// First excluded height for release issuance and roster authentication.
     #[arg(long, default_value_t = DEFAULT_TAIRA_RELEASE_WITHDRAWAL_HEIGHT_V4)]
     withdrawal_height: u64,
@@ -101,7 +104,7 @@ pub(super) struct PrepareTestnetBootstrapV4Args {
     /// Runtime account whose private key signs Torii offline commands.
     #[arg(long)]
     command_authority: String,
-    /// XOR amount minted to the command authority for mandatory readiness and fees.
+    /// XOR amount minted to the command authority for transaction fees.
     #[arg(long, default_value = "1000000")]
     fee_mint: String,
     /// Apple App ID prefix, normally the Developer Team ID.
@@ -122,7 +125,7 @@ pub(super) struct PrepareTestnetBootstrapV4Args {
     /// Android signing-certificate SHA-256; repeat for signer rotation.
     #[arg(long, value_parser = parse_sha256, required = true)]
     android_signing_certificate_sha256: Vec<[u8; 32]>,
-    /// New private path receiving the complete unsigned offline-enabled genesis.
+    /// New private path receiving the unsigned Taira genesis with Kagemusha release fixtures.
     #[arg(long)]
     output: PathBuf,
     /// New external JSON path receiving the exact operator-reviewed release identity.
@@ -379,6 +382,7 @@ fn parse_public_validator_roster(config: &toml::Value) -> Result<Vec<PublicValid
 }
 
 fn taira_release_roster_v4(
+    network_id: NetworkId,
     validators: Vec<PublicValidatorWithPop>,
     withdrawal_height: u64,
 ) -> Result<KagemushaTopUpFinalityRosterArtifactV2> {
@@ -395,6 +399,7 @@ fn taira_release_roster_v4(
     let roster = KagemushaTopUpFinalityRosterArtifactV2 {
         version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
         chain_id: ChainId::from(PUBLIC_TAIRA_CHAIN_ID),
+        network_id,
         artifact_generation: TAIRA_RELEASE_GENERATION_V4.to_owned(),
         windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
             activates_at_height: TAIRA_RELEASE_ACTIVATION_HEIGHT_V4,
@@ -425,14 +430,15 @@ pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
         toml::from_str(config_text).wrap_err("failed to decode rendered validator config")?;
     let validators = parse_public_validator_roster(&config)?;
     let validator_count = validators.len();
-    let roster = taira_release_roster_v4(validators, args.withdrawal_height)?;
+    let roster = taira_release_roster_v4(args.network_id, validators, args.withdrawal_height)?;
     let bytes = norito::to_bytes(&roster).wrap_err("failed to encode Taira release roster")?;
     let sha256 = kagemusha_recursive_spend_release_sha256(&bytes);
-    write_new_durable_file(&args.output, &bytes)?;
+    publish_new_durable_file(writer, &args.output, &bytes)?;
     writeln!(
         writer,
-        "{{\"status\":\"prepared\",\"chain_id\":\"{}\",\"generation\":\"{}\",\"activation_height\":{},\"withdrawal_height\":{},\"validator_count\":{},\"roster_sha256\":\"{}\",\"output\":\"{}\"}}",
+        "{{\"status\":\"prepared\",\"chain_id\":\"{}\",\"network_id\":\"{}\",\"generation\":\"{}\",\"activation_height\":{},\"withdrawal_height\":{},\"validator_count\":{},\"roster_sha256\":\"{}\",\"output\":\"{}\"}}",
         PUBLIC_TAIRA_CHAIN_ID,
+        args.network_id,
         TAIRA_RELEASE_GENERATION_V4,
         TAIRA_RELEASE_ACTIVATION_HEIGHT_V4,
         args.withdrawal_height,
@@ -1094,11 +1100,12 @@ pub(super) fn prepare_testnet_bootstrap_v4<T: std::io::Write>(
     }
     let output_genesis = output_genesis.with_consensus_meta();
     let output_json = norito::json::to_json_pretty(&output_genesis)
-        .wrap_err("failed to encode offline-enabled Taira genesis")?;
+        .wrap_err("failed to encode Taira genesis with Kagemusha release fixtures")?;
     let operator_identity_json = norito::json::to_json_pretty(&operator_identity)
         .wrap_err("failed to encode operator-reviewed Taira release identity")?;
-    write_new_durable_file(&args.output, output_json.as_bytes())?;
-    write_new_durable_file(
+    publish_new_durable_file(writer, &args.output, output_json.as_bytes())?;
+    publish_new_durable_file(
+        writer,
         &args.operator_identity_output,
         operator_identity_json.as_bytes(),
     )?;
@@ -1291,8 +1298,13 @@ mod tests {
 
     #[test]
     fn release_roster_rejects_height_two_withdrawal() {
-        let error = taira_release_roster_v4(Vec::new(), TAIRA_RELEASE_ACTIVATION_HEIGHT_V4)
-            .expect_err("an empty issuance window must fail");
+        let network_id =
+            "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+                .parse()
+                .expect("deterministic Taira test network identity");
+        let error =
+            taira_release_roster_v4(network_id, Vec::new(), TAIRA_RELEASE_ACTIVATION_HEIGHT_V4)
+                .expect_err("an empty issuance window must fail");
         assert!(error.to_string().contains("withdrawal height"));
     }
 

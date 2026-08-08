@@ -20,6 +20,7 @@ import java.util.zip.GZIPOutputStream;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.SocketPolicy;
 import okio.Buffer;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
@@ -52,6 +53,87 @@ public final class OkHttpTransportExecutorTests {
       assertEquals(201, response.statusCode());
       assertEquals("hello", new String(response.body(), StandardCharsets.UTF_8));
       assertArrayEquals(new String[] {"ok"}, response.headers().get("X-Test").toArray());
+    }
+  }
+
+  @Test
+  public void oneShotBodiesNeverFollow307Or308WithUnsafeInjectedClient() throws Exception {
+    for (final int status : new int[] {307, 308}) {
+      try (MockWebServer server = new MockWebServer()) {
+        server.start();
+        server.enqueue(
+            new MockResponse()
+                .setResponseCode(status)
+                .setHeader("Location", server.url("/redirected")));
+        server.enqueue(new MockResponse().setResponseCode(202));
+        final OkHttpClient unsafeClient =
+            new OkHttpClient.Builder()
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build();
+        final TransportRequest request =
+            TransportRequest.builder()
+                .setMethod("POST")
+                .setUri(server.url("/signed").uri())
+                .setBody("signed-bytes".getBytes(StandardCharsets.UTF_8))
+                .build();
+
+        final TransportResponse response =
+            new OkHttpTransportExecutor(unsafeClient).execute(request).get(5, TimeUnit.SECONDS);
+
+        assertEquals(status, response.statusCode());
+        assertEquals("one-shot request must not reach redirect target", 1, server.getRequestCount());
+      }
+    }
+  }
+
+  @Test
+  public void oneShotBodiesNeverRetryAfterConnectionFailure() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.start();
+      server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+      server.enqueue(new MockResponse().setResponseCode(202));
+      final OkHttpClient unsafeClient =
+          new OkHttpClient.Builder().retryOnConnectionFailure(true).build();
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("POST")
+              .setUri(server.url("/signed").uri())
+              .setBody("signed-bytes".getBytes(StandardCharsets.UTF_8))
+              .build();
+
+      assertThrows(
+          ExecutionException.class,
+          () ->
+              new OkHttpTransportExecutor(unsafeClient)
+                  .execute(request)
+                  .get(5, TimeUnit.SECONDS));
+      assertEquals("one-shot request must not be retried", 1, server.getRequestCount());
+    }
+  }
+
+  @Test
+  public void oneShotBodiesNeverRetryRetryAfterZeroStatus() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.start();
+      server.enqueue(
+          new MockResponse().setResponseCode(503).setHeader("Retry-After", "0"));
+      server.enqueue(new MockResponse().setResponseCode(202));
+      final TransportRequest request =
+          TransportRequest.builder()
+              .setMethod("POST")
+              .setUri(server.url("/signed").uri())
+              .setBody("signed-bytes".getBytes(StandardCharsets.UTF_8))
+              .build();
+
+      final TransportResponse response =
+          new OkHttpTransportExecutor(new OkHttpClient.Builder().build())
+              .execute(request)
+              .get(5, TimeUnit.SECONDS);
+
+      assertEquals(503, response.statusCode());
+      assertEquals("one-shot request must not honor Retry-After", 1, server.getRequestCount());
     }
   }
 

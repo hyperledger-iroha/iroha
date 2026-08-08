@@ -6,6 +6,7 @@ import type {
   BrowserTransactionUnsigned,
 } from "./transaction-codec.js";
 import type { IvmArtifactAdmissionWasmVerifier } from "./ivm-artifact-admission-wasm.js";
+import type { NetworkId } from "./index.js";
 
 export const SMART_CONTRACT_CODE_CHUNK_BYTES: 65536;
 
@@ -125,6 +126,11 @@ export interface BrowserDeploymentStateResponse {
 export interface BrowserContractDeploymentOptions
   extends BrowserContractArtifactInput {
   artifactAdmissionVerifier: IvmArtifactAdmissionWasmVerifier;
+  /** Exact genesis-derived domain for every deployment transaction. */
+  networkId: NetworkId;
+  chain?: never;
+  chain_id?: never;
+  /** Canonical ChainId committed only into contract-address derivation. */
   chainId: string;
   chainDiscriminant: BrowserTransactionUnsigned;
   authority: string;

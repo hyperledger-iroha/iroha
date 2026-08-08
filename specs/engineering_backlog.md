@@ -133,10 +133,15 @@ TON, generic backends, arbitrary assets, and compatibility manifests are not
 SCCP V1 launch work.
 
 The implementation uses one consensus-owned `SccpRegistryV1` and typed,
-compare-and-swap `ApplySccpRouteGovernance` actions. Each route binds the exact
+NetworkId-bound `SccpRouteGovernanceAnchorV1` actions enacted only through a
+finalized threshold referendum. Direct registry apply is retired and rejected.
+Each route binds the exact
 transfer-only XOR settlement, revision, source identity, native trust anchor,
 destination deployment, full BN254 key, audited semantic-profile commitments,
-Taira checkpoint, destination binding, and route-configuration hash. Old route
+Taira checkpoint, destination binding, and route-configuration hash. Its
+liquidity sits in a route-scoped non-signable protocol escrow derived from the
+exact NetworkId, route revision, and asset; only owner funding, proof-backed
+settlement, and owner refund may move that balance. Old route
 manifests, node-local policy, generic submit shapes, private-key-bearing or
 caller-route-selected HTTP DTOs, and transparent SCCP proof paths are retired.
 Bridge admission accepts only the two closed SCCP proof variants, whose payloads

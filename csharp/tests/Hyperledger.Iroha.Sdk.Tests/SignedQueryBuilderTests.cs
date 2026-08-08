@@ -422,7 +422,7 @@ public sealed class SignedQueryBuilderTests
         Assert.Equal(7u, definitionDiscriminant);
         var definitionStruct = ReadField(definitionPayload, out _);
         var definitionIdBytes = ReadField(definitionStruct, out _);
-        Assert.Equal(16 * 9, definitionIdBytes.Length);
+        AssertCanonicalAssetDefinitionId(definitionIdBytes);
 
         AssertSignatureVerifies(assetEnvelope);
         AssertSignatureVerifies(definitionEnvelope);
@@ -616,6 +616,47 @@ public sealed class SignedQueryBuilderTests
         AssertSignatureVerifies(providerEnvelope);
     }
 
+    [Fact]
+    public void SignedQueryUsesCanonicalCompactFieldsAndRejectsFixedFieldAlias()
+    {
+        var envelope = new SignedQueryBuilder(FixtureAccountId, FixtureNetworkId)
+            .FindParameters()
+            .BuildSigned(
+                Convert.FromHexString(FixtureSeedHex),
+                creationTimeMilliseconds: 1_736_000_000_000,
+                timeToLiveMilliseconds: 100_000,
+                nonce: Enumerable.Repeat((byte)0x01, 32).ToArray());
+
+        Assert.Equal(new byte[] { 0x88, 0x01 }, envelope.SignedQueryBytes[..2]);
+        var signatureField = ReadField(
+            envelope.SignedQueryBytes,
+            out var signatureConsumed);
+        Assert.Equal(138, signatureConsumed);
+        Assert.Equal(136, signatureField.Length);
+        Assert.Equal(
+            (ulong)Ed25519Signer.SignatureLength,
+            BinaryPrimitives.ReadUInt64LittleEndian(signatureField));
+        var offset = sizeof(ulong);
+        for (var index = 0; index < Ed25519Signer.SignatureLength; index++)
+        {
+            Assert.Equal(1, signatureField[offset]);
+            offset += 2;
+        }
+        Assert.Equal(signatureField.Length, offset);
+
+        var fixedFields = new OfflineNoritoWriter();
+        fixedFields.WriteField(signatureField);
+        fixedFields.WriteField(envelope.PayloadBytes);
+        var obsolete = fixedFields.ToArray();
+        AssertArgumentException(
+            "signedQueryBytes",
+            () => new SignedQueryEnvelope(
+                VersionSignedQueryBytes(obsolete),
+                obsolete,
+                envelope.PayloadBytes,
+                envelope.SignatureBytes));
+    }
+
     private static byte[] VersionSignedQueryBytes(byte[] signedQueryBytes)
     {
         var versionedNoritoBytes = new byte[signedQueryBytes.Length + 1];
@@ -626,7 +667,7 @@ public sealed class SignedQueryBuilderTests
 
     private static byte[] BuildSignedQueryBytes(byte[] signatureBytes, byte[] payloadBytes)
     {
-        var signedQuery = new OfflineNoritoWriter();
+        var signedQuery = new CanonicalNoritoWriter();
         signedQuery.WriteField(EncodeConstVec(signatureBytes));
         signedQuery.WriteField(payloadBytes);
         return signedQuery.ToArray();
@@ -634,8 +675,8 @@ public sealed class SignedQueryBuilderTests
 
     private static byte[] EncodeConstVec(byte[] value)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteUInt64LittleEndian((ulong)value.Length);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength((ulong)value.Length);
         foreach (var item in value)
         {
             writer.WriteField([item]);
@@ -704,25 +745,44 @@ public sealed class SignedQueryBuilderTests
 
     private static byte[] ReadField(ReadOnlySpan<byte> bytes, out int consumed)
     {
-        var length = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
-        consumed = 8 + length;
-        return bytes.Slice(8, length).ToArray();
+        var reader = new CanonicalNoritoReader(bytes, "signed-query test field", nameof(bytes));
+        var field = reader.ReadField("field").ToArray();
+        consumed = bytes.Length - reader.Remaining;
+        return field;
+    }
+
+    private static void AssertCanonicalAssetDefinitionId(ReadOnlySpan<byte> bytes)
+    {
+        Assert.Equal(16 * 2, bytes.Length);
+        var uuid = new byte[16];
+        var offset = 0;
+        for (var index = 0; index < uuid.Length; index++)
+        {
+            var component = ReadField(bytes[offset..], out var consumed);
+            Assert.Single(component);
+            Assert.Equal(2, consumed);
+            uuid[index] = component[0];
+            offset += consumed;
+        }
+
+        Assert.Equal(bytes.Length, offset);
+        Assert.Equal(4, uuid[6] >> 4);
+        Assert.Equal(2, uuid[8] >> 6);
     }
 
     private static byte[] DecodeConstVec(ReadOnlySpan<byte> bytes)
     {
-        var count = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
+        var reader = new CanonicalNoritoReader(bytes, "signed-query test signature", nameof(bytes));
+        var count = checked((int)reader.ReadSequenceLength("count"));
         var output = new byte[count];
-        var offset = 8;
         for (var index = 0; index < count; index++)
         {
-            var fieldLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, 8)));
-            Assert.Equal(1, fieldLength);
-            output[index] = bytes[offset + 8];
-            offset += 9;
+            var item = reader.ReadField($"signature[{index}]");
+            Assert.Single(item.ToArray());
+            output[index] = item[0];
         }
 
-        Assert.Equal(bytes.Length, offset);
+        reader.RequireEnd();
         return output;
     }
 
@@ -738,7 +798,10 @@ public sealed class SignedQueryBuilderTests
 
     private static string ReadNoritoString(ReadOnlySpan<byte> bytes)
     {
-        var length = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
-        return Encoding.UTF8.GetString(bytes.Slice(8, length));
+        var reader = new CanonicalNoritoReader(bytes, "signed-query test string", nameof(bytes));
+        var length = checked((int)reader.ReadCompactLength("length"));
+        var value = Encoding.UTF8.GetString(reader.ReadExact(length, "value"));
+        reader.RequireEnd();
+        return value;
     }
 }

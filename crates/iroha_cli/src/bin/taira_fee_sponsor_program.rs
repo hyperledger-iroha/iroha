@@ -160,6 +160,7 @@ where
 
 fn provisioning_instructions(
     revision: FeeSponsorProgramRevision,
+    payout_account: AccountId,
     beneficiaries: Vec<AccountId>,
     fund_amount: Quantity,
     activate_at_height: u64,
@@ -169,7 +170,7 @@ fn provisioning_instructions(
     let revision_number = revision.revision;
     let mut instructions = vec![
         CreateFeeSponsorProgram {
-            program: FeeSponsorProgram::new(program_id.clone()),
+            program: FeeSponsorProgram::new(program_id.clone(), payout_account),
         }
         .into(),
         StageFeeSponsorProgramRevision { revision }.into(),
@@ -251,6 +252,7 @@ fn main() -> Result<()> {
     };
     let instructions = provisioning_instructions(
         revision,
+        signer.clone(),
         beneficiaries,
         args.fund_amount,
         args.activate_at_height,
@@ -383,8 +385,13 @@ mod tests {
     fn provisioning_order_is_create_stage_enroll_fund_activate() {
         let revision = sample_revision();
         let beneficiary = revision.program_id.sponsor.clone();
-        let instructions =
-            provisioning_instructions(revision, vec![beneficiary], Quantity::from(100_u64), 42);
+        let instructions = provisioning_instructions(
+            revision,
+            beneficiary.clone(),
+            vec![beneficiary],
+            Quantity::from(100_u64),
+            42,
+        );
         let wire_ids = instructions
             .iter()
             .map(|instruction| {

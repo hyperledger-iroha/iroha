@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Protocol, Union
 
-from .crypto import hash_blake2b_32
+from .crypto import NetworkId, _require_network_id, hash_blake2b_32
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tx import QuantityLike
@@ -33,12 +33,20 @@ class NexusAppError(RuntimeError):
 class NexusAppConfig:
     """Static configuration for a Nexus app facade instance."""
 
+    network_id: NetworkId
     chain_id: str
     authority: Optional[str] = None
     base_url: Optional[str] = None
     node: Optional[str] = None
     signing_public_key: Optional[bytes] = None
     app_metadata: Optional[Mapping[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "network_id",
+            _require_network_id(self.network_id, "NexusAppConfig.network_id"),
+        )
 
 
 @dataclass(frozen=True)
@@ -391,7 +399,7 @@ class DefaultNexusTransactionCodec:
 
         draft = TransactionDraft(
             TransactionConfig(
-                chain_id=str(payload_input["chain_id"]),
+                network_id=_require_network_id(payload_input["network_id"]),
                 authority=str(payload_input["authority"]),
                 fee_payment=payload_input["fee_payment"],
                 creation_time_ms=payload_input.get("creation_time_ms"),
@@ -696,7 +704,7 @@ class NexusAppClient:
         except (TypeError, ValueError) as exc:
             raise NexusAppError("invalid_quantity", str(exc)) from exc
         payload_input = {
-            "chain_id": self.config.chain_id,
+            "network_id": self.config.network_id,
             "authority": authority,
             "source_asset_id": input.source_asset_id,
             "quantity": quantity,

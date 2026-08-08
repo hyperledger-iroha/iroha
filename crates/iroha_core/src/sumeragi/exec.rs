@@ -367,6 +367,7 @@ pub(crate) struct LaneFinalityManifestV1 {
 
 impl LaneFinalityManifestV1 {
     /// Build the canonical empty lane-finality manifest.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn empty() -> Self {
         Self {
@@ -855,6 +856,7 @@ mod tests {
             fixture_key(0x32, Algorithm::Ed25519),
         ];
         let chain_id = ChainId::from("native-manifest-exec-test");
+        let network_id = crate::sumeragi::synthetic_network_id("native-manifest-exec-test");
         let transaction_time =
             TimeSource::new_fixed(Duration::from_millis(MANIFEST_APPLICATION_HEIGHT));
         let transactions = transaction_keys
@@ -862,7 +864,7 @@ mod tests {
             .map(|key| {
                 let authority = AccountId::new(key.public_key().clone());
                 TransactionBuilder::new_with_time_source(
-                    chain_id.clone(),
+                    network_id,
                     authority,
                     &transaction_time,
                     FeePaymentIntent::authority(Vec::new(), None),

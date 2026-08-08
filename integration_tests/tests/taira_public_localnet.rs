@@ -663,7 +663,6 @@ async fn taira_localnet_bootstrap_validators() -> Result<()> {
         Ok(())
     }
     .await;
-
     finalize_result(temp_dir, "taira_localnet_bootstrap_validators", result)
 }
 
@@ -672,7 +671,6 @@ async fn taira_localnet_bootstrap_validators() -> Result<()> {
 async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
-
     let temp_dir = localnet_tempdir("taira-membership")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
@@ -683,7 +681,6 @@ async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
         Ok(())
     }
     .await;
-
     finalize_result(
         temp_dir,
         "taira_localnet_joiner_register_unregister_behavior",
@@ -691,31 +688,13 @@ async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires local process orchestration"]
-async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
-    init_instruction_registry();
-    let _guard = sandbox::serial_guard();
-
-    let temp_dir = localnet_tempdir("taira-restart")?;
-    let out_dir = temp_dir.path().join("localnet");
-    let result: Result<()> = async {
-        let mut harness = setup_taira_harness(&out_dir, "taira-restart", 0).await?;
-        let _ = process_churn_cycle(&mut harness, 0, Duration::from_secs(PROCESS_DOWNTIME_SECS))
-            .await?;
-        Ok(())
-    }
-    .await;
-
-    finalize_result(temp_dir, "taira_localnet_restart_catchup_behavior", result)
-}
+mod strict_restart;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "24-hour Taira-profile soak with validator restarts and packet impairment"]
 async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
-
     let cfg = SimulationConfig::from_env();
     let workspace_source_manifest_sha256 = required_release_source_manifest_sha256()?;
     let evidence_path = required_release_evidence_path()?;

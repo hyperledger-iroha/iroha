@@ -9,7 +9,7 @@ use std::{num::NonZeroU32, time::Duration};
 
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
-    prelude::{AccountId, AssetId, ChainId, Metadata, Quantity, Transfer},
+    prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity, Transfer},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use thiserror::Error;
@@ -118,8 +118,10 @@ impl NexusAppError {
 /// Static configuration for a Nexus app facade instance.
 #[derive(Debug, Clone)]
 pub struct NexusAppConfig {
-    /// Chain id used by transfer drafts and Connect previews.
+    /// Human-readable chain label used by Connect previews.
     pub chain_id: ChainId,
+    /// Exact genesis-header-derived domain signed into transfer transactions.
+    pub network_id: NetworkId,
     /// Optional default transaction authority.
     pub authority: Option<AccountId>,
     /// Optional Torii/Connect base URL used by transport implementations.
@@ -133,11 +135,12 @@ pub struct NexusAppConfig {
 }
 
 impl NexusAppConfig {
-    /// Construct config with the minimum chain id.
+    /// Construct config with the display label and exact transaction network.
     #[must_use]
-    pub fn new(chain_id: ChainId) -> Self {
+    pub fn new(chain_id: ChainId, network_id: NetworkId) -> Self {
         Self {
             chain_id,
+            network_id,
             authority: None,
             torii_url: None,
             node: None,
@@ -611,7 +614,7 @@ where
         };
 
         let mut builder = TransactionBuilder::new(
-            self.config.chain_id.clone(),
+            self.config.network_id,
             authority.clone(),
             input.fee_payment.clone(),
         )
@@ -697,6 +700,14 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = include_str!("../../../fixtures/sdk/nexus_connect_transfer_v1.json");
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xA5; 32]),
+            ),
+        )
+    }
 
     fn wallet_signature_for(
         key_pair: &KeyPair,
@@ -953,7 +964,7 @@ mod tests {
         let key_pair = checked_ed25519_keypair();
         let account = AccountId::new(key_pair.public_key().clone());
         let client = NexusAppClient::new(
-            NexusAppConfig::new("test-chain".into()),
+            NexusAppConfig::new("test-chain".into(), test_network_id()),
             UnsupportedConnectTransport,
             MismatchedQuoteSubmitter,
         );
@@ -969,7 +980,7 @@ mod tests {
         let account = AccountId::new(key_pair.public_key().clone());
         let config = NexusAppConfig {
             authority: Some(account.clone()),
-            ..NexusAppConfig::new("test-chain".into())
+            ..NexusAppConfig::new("test-chain".into(), test_network_id())
         };
         let bootstrap_client = NexusAppClient::new(
             config.clone(),
@@ -1005,7 +1016,7 @@ mod tests {
         let account = AccountId::new(key_pair.public_key().clone());
         let config = NexusAppConfig {
             authority: Some(account.clone()),
-            ..NexusAppConfig::new("test-chain".into())
+            ..NexusAppConfig::new("test-chain".into(), test_network_id())
         };
         let draft = NexusAppClient::new(
             config.clone(),
@@ -1055,6 +1066,9 @@ mod tests {
                 fixture_string("chain_id")
                     .parse()
                     .expect("fixture chain id"),
+                fixture_string("network_id")
+                    .parse()
+                    .expect("fixture network id"),
             )
         };
         let client = NexusAppClient::new(
@@ -1090,6 +1104,9 @@ mod tests {
                 fixture_string("chain_id")
                     .parse()
                     .expect("fixture chain id"),
+                fixture_string("network_id")
+                    .parse()
+                    .expect("fixture network id"),
             )
         };
         let submitter = FakeSubmitter::default();
@@ -1175,7 +1192,7 @@ mod tests {
             NexusAppConfig {
                 authority: Some(account.clone()),
                 signing_public_key: Some(secp_key_pair.public_key().clone()),
-                ..NexusAppConfig::new("test-chain".into())
+                ..NexusAppConfig::new("test-chain".into(), test_network_id())
             },
             UnsupportedConnectTransport,
             FakeSubmitter::default(),
@@ -1205,7 +1222,7 @@ mod tests {
         let client = NexusAppClient::new(
             NexusAppConfig {
                 authority: Some(account.clone()),
-                ..NexusAppConfig::new("test-chain".into())
+                ..NexusAppConfig::new("test-chain".into(), test_network_id())
             },
             connect.clone(),
             FakeSubmitter::default(),
@@ -1233,7 +1250,7 @@ mod tests {
         let client = NexusAppClient::new(
             NexusAppConfig {
                 authority: Some(account.clone()),
-                ..NexusAppConfig::new("test-chain".into())
+                ..NexusAppConfig::new("test-chain".into(), test_network_id())
             },
             UnsupportedConnectTransport,
             FakeSubmitter::default(),
@@ -1263,7 +1280,7 @@ mod tests {
         let client = NexusAppClient::new(
             NexusAppConfig {
                 authority: Some(account.clone()),
-                ..NexusAppConfig::new("test-chain".into())
+                ..NexusAppConfig::new("test-chain".into(), test_network_id())
             },
             UnsupportedConnectTransport,
             submitter.clone(),
@@ -1314,7 +1331,7 @@ mod tests {
             let client = NexusAppClient::new(
                 NexusAppConfig {
                     authority: Some(account.clone()),
-                    ..NexusAppConfig::new("test-chain".into())
+                    ..NexusAppConfig::new("test-chain".into(), test_network_id())
                 },
                 UnsupportedConnectTransport,
                 submitter.clone(),
@@ -1349,7 +1366,7 @@ mod tests {
         let client = NexusAppClient::new(
             NexusAppConfig {
                 authority: Some(account.clone()),
-                ..NexusAppConfig::new("test-chain".into())
+                ..NexusAppConfig::new("test-chain".into(), test_network_id())
             },
             UnsupportedConnectTransport,
             MismatchedHashSubmitter,
@@ -1375,7 +1392,7 @@ mod tests {
         let account = AccountId::new(key_pair.public_key().clone());
         let config = NexusAppConfig {
             authority: Some(account.clone()),
-            ..NexusAppConfig::new("test-chain".into())
+            ..NexusAppConfig::new("test-chain".into(), test_network_id())
         };
         for (error, expected_code) in [
             (NexusAppError::Submit("down".to_owned()), "submit_failed"),

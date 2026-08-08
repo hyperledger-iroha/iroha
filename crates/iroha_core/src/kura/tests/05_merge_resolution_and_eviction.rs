@@ -933,7 +933,7 @@
         );
 
         let unrelated = TransactionBuilder::new(
-            ChainId::from("kura-offline-operation-index"),
+            test_network_id(b"kura-offline-operation-index"),
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2814,4 +2814,3 @@
             "rejected test-hook removal must not perturb disk accounting"
         );
     }
-

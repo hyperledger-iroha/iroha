@@ -740,7 +740,8 @@
                         .expect("re-sign adversarial certificate");
             };
             let mut foreign_context = fixture.context.clone();
-            foreign_context.chain_id = "delayed-gst-foreign-context".into();
+            foreign_context.network_id =
+                crate::sumeragi::synthetic_network_id("delayed-gst-foreign-context");
 
             let mut wrong_context = canonical_prepare.clone();
             wrong_context.round.context_id = foreign_context.id();

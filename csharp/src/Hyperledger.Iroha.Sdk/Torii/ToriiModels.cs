@@ -5894,6 +5894,9 @@ public sealed record class ToriiFeeSponsorProgram
     [JsonPropertyName("id")]
     public FeeSponsorProgramId Id { get; init; } = null!;
 
+    [JsonPropertyName("payout_account")]
+    public string PayoutAccount { get; init; } = string.Empty;
+
     [JsonPropertyName("lifecycle")]
     public ToriiFeeSponsorProgramLifecycle Lifecycle { get; init; } = null!;
 

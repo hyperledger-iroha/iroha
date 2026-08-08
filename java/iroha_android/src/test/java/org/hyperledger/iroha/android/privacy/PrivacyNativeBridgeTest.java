@@ -58,9 +58,9 @@ public final class PrivacyNativeBridgeTest {
     aliasesAndNonCanonicalSpellingsAreRejected();
     sharedTypedValidatorStatusContractIsStable();
     compiledProfileCatalogPreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
-    compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable();
+    compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22();
     exact12FixturePreflightRejectsNullEmptyAndOversizeWithoutNativeCalls();
-    exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable();
+    exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22();
     retiredGenericProofSurfaceIsAbsent();
     System.out.println("[IrohaAndroid] PrivacyNativeBridgeTest passed.");
   }
@@ -235,14 +235,11 @@ public final class PrivacyNativeBridgeTest {
         == PrivacyNativeBridge.CompiledProfileCatalogValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
-  private static void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
+  private static void compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
-    if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
+    if (!available) {
       throw new AssertionError(
           "ABI-22 connect_norito_bridge with compiled-profile catalog JNI exports is required");
-    }
-    if (!available) {
-      return;
     }
 
     final byte[] canonical = PrivacyNativeBridge.compiledProfileCatalogV1();
@@ -292,14 +289,11 @@ public final class PrivacyNativeBridgeTest {
         == PrivacyNativeBridge.Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE;
   }
 
-  private static void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesWhenAvailable() {
+  private static void exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22() {
     final boolean available = PrivacyNativeBridge.isNativeAvailable();
-    if ("1".equals(System.getenv("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE")) && !available) {
+    if (!available) {
       throw new AssertionError(
           "ABI-22 connect_norito_bridge with exact-12 fixture JNI exports is required");
-    }
-    if (!available) {
-      return;
     }
 
     final byte[] fetched = PrivacyNativeBridge.exact12FixtureBundleV1();

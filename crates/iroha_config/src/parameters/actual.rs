@@ -84,7 +84,7 @@ use iroha_primitives::{
 use norito::{codec::Encode, streaming::EntropyMode};
 use thiserror::Error;
 use url::Url;
-pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy};
+pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
 
 use crate::{
     kura::{FsyncMode, InitMode},
@@ -2751,7 +2751,7 @@ pub struct Governance {
     pub sorafs_penalty: SorafsPenaltyPolicy,
     /// SoraFS telemetry authentication/replay safeguards.
     pub sorafs_telemetry: SorafsTelemetryPolicy,
-    /// Static provider→owner bindings seeded at startup.
+    /// Trusted provider→owner bindings seeded only before the first block.
     pub sorafs_provider_owners: BTreeMap<ProviderId, AccountId>,
     /// Conviction step in blocks for plain (non‑ZK) voting. Duration/step yields extra weight.
     pub conviction_step_blocks: u64,
@@ -4607,6 +4607,30 @@ pub fn execution_policy_digest_v1(
         })
         .collect::<Vec<_>>();
     policy.push("governance.sorafs_pin.approval_signers", &pin_signers);
+    policy.push(
+        "governance.sorafs_pin.max_global_manifests",
+        &pin.max_global_manifests,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_global_bytes",
+        &pin.max_global_bytes,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_manifests_per_authority",
+        &pin.max_manifests_per_authority,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_bytes_per_authority",
+        &pin.max_bytes_per_authority,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_lineage_depth",
+        &pin.max_lineage_depth,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_successor_fanout",
+        &pin.max_successor_fanout,
+    );
     policy.push(
         "governance.sorafs_pin_fee_asset_id",
         &governance.sorafs_pin_fee_asset_id,
@@ -7005,6 +7029,7 @@ impl Sumeragi {
         .max(1);
         if runtime_progress_reserve
             .checked_add(runtime_completion_reserve)
+            .and_then(|reserved| reserved.checked_add(1))
             .is_none_or(|reserved| reserved >= runtime_command_capacity)
         {
             return Err(SumeragiV2ConfigError::InvalidQueueAllocation);
@@ -7017,8 +7042,8 @@ impl Sumeragi {
             self.queues.authenticated_non_validator_sources.get(),
         )?;
         let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
-            .checked_mul(2)
-            .and_then(|hubs| hubs.checked_add(6))
+            .checked_mul(3)
+            .and_then(|hubs| hubs.checked_add(7))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
             ))?;
@@ -7042,6 +7067,9 @@ impl Sumeragi {
                 .expect("static recommended transport-completion manifest fits u64");
         let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
             .expect("static timeout-vote reserve fits u64");
+        let certified_fence_escape_reserve =
+            u64::try_from(defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+                .expect("static certified fence-escape reserve fits u64");
         let lane_progress_bytes = u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES)
             .expect("static certified lane-source limit fits u64");
         let lane_completion_bytes = u64::try_from(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
@@ -7061,6 +7089,7 @@ impl Sumeragi {
             ))?;
         let minimum_body_source_bytes = ordinary_bytes
             .checked_add(completion_bytes)
+            .and_then(|minimum| minimum.checked_add(certified_fence_escape_reserve))
             .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 per-source canonical outer-ingress wire-byte minimum",
@@ -7072,6 +7101,7 @@ impl Sumeragi {
                 max_payload_bytes,
                 envelope_headroom,
                 manifest_wire_bytes,
+                certified_fence_escape_reserve,
                 timeout_vote_reserve,
                 lane_progress_bytes,
                 lane_completion_bytes,
@@ -7752,9 +7782,9 @@ pub enum SumeragiV2ConfigError {
         authenticated_non_validator_sources: u64,
     },
     /// The per-source canonical wire-byte budget cannot isolate ordinary and
-    /// payload-completion envelopes plus one timeout vote.
+    /// payload-completion envelopes plus one certified escape and timeout vote.
     #[error(
-        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, and {timeout_vote_reserve} reserved timeout-vote bytes"
+        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest wire bytes, {lane_progress_bytes} bytes of lane progress, {lane_completion_bytes} bytes of lane completion, {certified_fence_escape_reserve} reserved certified-fence-escape bytes, and {timeout_vote_reserve} reserved timeout-vote bytes"
     )]
     BodySourceBytesTooSmall {
         /// Configured per-source capacity.
@@ -7767,6 +7797,8 @@ pub enum SumeragiV2ConfigError {
         envelope_headroom: u64,
         /// Recommended manifest wire bytes included in the completion partition.
         manifest_wire_bytes: u64,
+        /// Fixed bytes isolated for a TC, CommitQC, or CommitQC response.
+        certified_fence_escape_reserve: u64,
         /// Fixed bytes isolated from ordinary traffic for a timeout vote.
         timeout_vote_reserve: u64,
         /// Minimum ordinary region required by an atomic lane certificate.
@@ -8364,6 +8396,14 @@ pub struct Torii {
     pub zk_ivm_prove_job_max_entries: usize,
     /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
     pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
+    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one authenticated account.
+    ///
+    /// Set to 0 to disable the per-account count cap (not recommended).
+    pub zk_ivm_prove_job_max_entries_per_owner: usize,
+    /// Maximum bytes retained by `/v1/zk/ivm/prove` for one authenticated account.
+    ///
+    /// Set to 0 to disable the per-account byte cap (not recommended).
+    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes<u64>,
     /// Iroha Connect configuration.
     pub connect: Connect,
     /// ISO 20022 bridge configuration.
@@ -10843,6 +10883,57 @@ pub struct SorafsProviderIngestOutbox {
     pub max_status_page_size: usize,
 }
 
+/// Public qualification binding for one provider-attestation runtime effect.
+///
+/// The handle is an opaque deployment identity, not an endpoint or credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsProviderAttestationRuntimeBinding {
+    /// Stable credential-free production provider handle.
+    pub handle: String,
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
+}
+
+/// Bounded activation policy for the Musubi provider-attestation journal.
+///
+/// This policy contains no filesystem selector, nonce, endpoint, credential,
+/// token, or key material. Its three bindings name the external effects that a
+/// daemon registry projects as three independent public roles. Live adapter
+/// qualification and consumption remain gated, and stock `irohad` continues
+/// to reject activation until that wiring is complete.
+/// TODO: consume these projected bindings only after all three adapters and
+/// the capture child satisfy their qualification contracts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsProviderAttestationJournal {
+    /// Qualified rollback-resistant UNIX-time seal provider.
+    pub clock_seal: SorafsProviderAttestationRuntimeBinding,
+    /// Qualified approval-only HSM/KMS or threshold signer provider.
+    pub approval_signer: SorafsProviderAttestationRuntimeBinding,
+    /// Qualified authenticated coordinator-inventory provider.
+    pub inventory: SorafsProviderAttestationRuntimeBinding,
+    /// Maximum retained active and terminal entries, independently of the
+    /// checkpoint byte cap.
+    pub max_entries: usize,
+    /// Maximum approval or inventory-handoff attempts per stage.
+    pub max_attempts: u32,
+    /// Lease duration for approval and inventory-handoff claims.
+    pub lease_ttl_ms: u64,
+    /// Maximum external approval-signer operation duration.
+    pub approval_timeout_ms: u64,
+    /// Maximum external coordinator-inventory operation duration.
+    pub handoff_timeout_ms: u64,
+    /// Delay before retrying a transient stage failure.
+    pub retry_delay_ms: u64,
+    /// Maximum canonical checkpoint size, independently of the entry cap and
+    /// including the minimum reserve for one active intent's worst-case future
+    /// attestation state.
+    pub checkpoint_max_bytes: usize,
+    /// Maximum CAS conflicts retried by one journal operation.
+    pub max_cas_retries: u32,
+}
+
 /// Public binding for the external finalized-archive retention authority.
 #[derive(Debug, Clone)]
 pub struct SorafsProviderIngestFinalizedArchiveRetentionAuthority {
@@ -10938,6 +11029,10 @@ pub struct SorafsProviderIngestRuntime {
     pub finalized_archive: SorafsProviderIngestFinalizedArchive,
     /// Durable payload-free completion-outbox policy.
     pub outbox: SorafsProviderIngestOutbox,
+    /// Optional request to activate the capture-only Musubi provider-attestation
+    /// journal; stock `irohad` currently rejects `Some` until a concrete child
+    /// is qualified.
+    pub provider_attestation_journal: Option<SorafsProviderAttestationJournal>,
 }
 
 /// Operational policy for the durable native orderbook transaction worker.
@@ -11992,6 +12087,18 @@ pub struct SorafsPinPolicyConstraints {
     pub approval_quorum: u16,
     /// Canonically signer-id-ordered trusted Ed25519 approval roster.
     pub approval_signers: Vec<SorafsPinApprovalSigner>,
+    /// Maximum number of live pin manifests in consensus state.
+    pub max_global_manifests: u64,
+    /// Maximum aggregate content bytes represented by live pin manifests.
+    pub max_global_bytes: u64,
+    /// Maximum number of live pin manifests owned by one account.
+    pub max_manifests_per_authority: u64,
+    /// Maximum aggregate content bytes represented by one account's live pins.
+    pub max_bytes_per_authority: u64,
+    /// Maximum predecessor depth admitted for a manifest lineage.
+    pub max_lineage_depth: u32,
+    /// Maximum number of direct successors admitted for one manifest.
+    pub max_successor_fanout: u32,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -12007,6 +12114,16 @@ impl Default for SorafsPinPolicyConstraints {
                 super::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
             approval_quorum: super::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM,
             approval_signers: Vec::new(),
+            max_global_manifests:
+                super::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_MANIFESTS,
+            max_global_bytes: super::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_BYTES,
+            max_manifests_per_authority:
+                super::defaults::governance::sorafs_pin_policy::MAX_MANIFESTS_PER_AUTHORITY,
+            max_bytes_per_authority:
+                super::defaults::governance::sorafs_pin_policy::MAX_BYTES_PER_AUTHORITY,
+            max_lineage_depth: super::defaults::governance::sorafs_pin_policy::MAX_LINEAGE_DEPTH,
+            max_successor_fanout:
+                super::defaults::governance::sorafs_pin_policy::MAX_SUCCESSOR_FANOUT,
         }
     }
 }
@@ -14197,6 +14314,14 @@ mod tests {
         assert_changed("governance execution policy", changed);
 
         let mut changed = baseline.clone();
+        changed.gov.sorafs_pin_policy.max_global_manifests = changed
+            .gov
+            .sorafs_pin_policy
+            .max_global_manifests
+            .saturating_add(1);
+        assert_changed("SoraFS pin resource policy", changed);
+
+        let mut changed = baseline.clone();
         changed.content.max_files = changed.content.max_files.saturating_add(1);
         assert_changed("content admission policy", changed);
 
@@ -14739,10 +14864,11 @@ mod tests {
             &config,
             SumeragiV2ConfigError::BodySourceBytesTooSmall {
                 actual: 16 * 1024 * 1024,
-                minimum: 2 * 16 * 1024 * 1024 + 230_408,
+                minimum: 2 * 16 * 1024 * 1024 + 295_944,
                 max_payload_bytes: 16 * 1024 * 1024,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
+                certified_fence_escape_reserve: 64 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -14751,7 +14877,7 @@ mod tests {
 
         let mut config = default_v2_sumeragi();
         config.block.max_payload_bytes = NonZeroUsize::new(1).expect("non-zero");
-        let lane_minimum: usize = 5 * 1024 * 1024 + 64 * 1024;
+        let lane_minimum: usize = 5 * 1024 * 1024 + 2 * 64 * 1024;
         config.queues.body_source_bytes = NonZeroUsize::new(lane_minimum - 1).expect("non-zero");
         assert_error(
             &config,
@@ -14761,6 +14887,7 @@ mod tests {
                 max_payload_bytes: 1,
                 envelope_headroom: 64 * 1024,
                 manifest_wire_bytes: 33_800,
+                certified_fence_escape_reserve: 64 * 1024,
                 timeout_vote_reserve: 64 * 1024,
                 lane_progress_bytes: 1024 * 1024,
                 lane_completion_bytes: 4 * 1024 * 1024,
@@ -14768,12 +14895,12 @@ mod tests {
         );
 
         let mut config = default_v2_sumeragi();
-        config.queues.bodies = NonZeroUsize::new(9).expect("non-zero");
+        config.queues.bodies = NonZeroUsize::new(12).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyQueueTooSmall {
-                actual: 9,
-                minimum: 10,
+                actual: 12,
+                minimum: 13,
                 authenticated_non_validator_sources: 2,
             },
         );

@@ -596,6 +596,8 @@ pub struct FeeSponsorProgramActivation {
 pub struct FeeSponsorProgram {
     /// Stable program identifier.
     pub id: FeeSponsorProgramId,
+    /// Immutable registered account that receives every vault withdrawal.
+    pub payout_account: AccountId,
     /// Current lifecycle state.
     pub lifecycle: FeeSponsorProgramLifecycle,
     /// Active immutable revision, if any.
@@ -613,11 +615,12 @@ pub struct FeeSponsorProgram {
 }
 
 impl FeeSponsorProgram {
-    /// Construct a staged, fail-closed program with no revisions.
+    /// Construct a staged, fail-closed program with an immutable payout account and no revisions.
     #[must_use]
-    pub const fn new(id: FeeSponsorProgramId) -> Self {
+    pub const fn new(id: FeeSponsorProgramId, payout_account: AccountId) -> Self {
         Self {
             id,
+            payout_account,
             lifecycle: FeeSponsorProgramLifecycle::Staged,
             active_revision: None,
             staged_revision: None,
@@ -1033,17 +1036,37 @@ mod tests {
     #[test]
     fn program_constructor_is_fail_closed() {
         let id = program_id();
-        let program = FeeSponsorProgram::new(id.clone());
+        let program = FeeSponsorProgram::new(id.clone(), id.sponsor.clone());
         assert_eq!(program.id, id);
+        assert_eq!(program.payout_account, program.id.sponsor);
         assert_eq!(program.lifecycle, FeeSponsorProgramLifecycle::Staged);
         assert_eq!(program.active_revision, None);
         assert_eq!(program.staged_revision, None);
         assert_eq!(program.scheduled_activation, None);
     }
 
+    #[cfg(feature = "json")]
+    #[test]
+    fn program_json_requires_immutable_payout_account() {
+        let id = program_id();
+        let program = FeeSponsorProgram::new(id.clone(), id.sponsor.clone());
+        let mut value = norito::json::to_value(&program).expect("serialize sponsor program");
+        value
+            .as_object_mut()
+            .expect("sponsor program object")
+            .remove("payout_account")
+            .expect("payout account is encoded");
+
+        assert!(
+            norito::json::from_value::<FeeSponsorProgram>(value).is_err(),
+            "the first-release program wire must not default an omitted payout account"
+        );
+    }
+
     #[test]
     fn program_state_and_revision_roundtrip_binary_and_json() {
-        let program = FeeSponsorProgram::new(program_id());
+        let id = program_id();
+        let program = FeeSponsorProgram::new(id.clone(), id.sponsor);
         let revision = sample_revision();
 
         let bytes = revision.encode();

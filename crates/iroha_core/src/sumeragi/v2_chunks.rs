@@ -266,9 +266,15 @@ pub(crate) enum V2ChunkError {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{ChainId, block::BlockHeader, peer::PeerId};
+    use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
 
     use super::*;
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x92; Hash::LENGTH]),
+        ))
+    }
 
     fn context() -> wire::HeightContext {
         let mut roster = (1_u8..=4)
@@ -283,7 +289,7 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         wire::HeightContext {
-            chain_id: ChainId::from("sumeragi-v2-chunk-test"),
+            network_id: test_network_id(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 2,
             epoch: 0,
@@ -310,7 +316,7 @@ mod tests {
 
     fn parent_qc(roster: &[wire::ValidatorPower]) -> wire::QuorumCertificate {
         let parent_context = wire::HeightContext {
-            chain_id: ChainId::from("sumeragi-v2-chunk-test"),
+            network_id: test_network_id(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,

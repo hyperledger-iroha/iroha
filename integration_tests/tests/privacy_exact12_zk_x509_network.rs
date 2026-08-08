@@ -44,13 +44,15 @@ use iroha::{
         permission::Permission,
         prelude::{Name, QueryBuilderExt},
         privacy::{
-            IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCapabilitySnapshotV1,
+            IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1,
+            PrivacyCapabilityActivationStateV1, PrivacyCapabilityReadinessV1,
             PrivacyCertificateKeyDigestV1, PrivacyChallengeV1, PrivacyCompiledProfileResultV1,
-            PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
-            PrivacyNullifierV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
-            PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootV1,
-            PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+            PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusLimitsV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyIssuerIdV1,
+            PrivacyNullifierV1, PrivacyOperationSchemaV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
+            PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
             PrivacyTransactionIntentDigestV1, PrivacyX509CrlDerDigestV1,
             PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
             PrivacyX509KeyUsageRequirementV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
@@ -318,7 +320,7 @@ async fn wait_for_transaction_result_on_peers(
 }
 
 fn assert_zk_x509_unavailable(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
     context: &str,
 ) -> Result<()> {
@@ -348,6 +350,21 @@ fn assert_zk_x509_unavailable(
         "{context}: unavailable ZK-X509 unexpectedly has a governance activation: {:?}",
         row.activation
     );
+    ensure!(
+        row.operation_schema == PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1
+            && row.execution_mode == PrivacyExecutionModeV1::PresentationAction
+            && row.privacy_feature_mask.bits() == 2,
+        "{context}: ZK-X509 public operation tuple drifted"
+    );
+    ensure!(
+        row.readiness
+            == PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            )
+            && row.activation_state == PrivacyCapabilityActivationStateV1::NotRegistered
+            && !row.is_network_available(),
+        "{context}: unavailable ZK-X509 was projected as network-available"
+    );
     Ok(())
 }
 
@@ -355,7 +372,7 @@ async fn wait_for_identical_unavailable_snapshots(
     clients: &[Client],
     minimum_height: u64,
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
     let mut last_observed = Vec::new();
     loop {
@@ -662,7 +679,7 @@ fn candidate_action_transaction(
     let nonce = NonZeroU32::new(nonce).ok_or_else(|| eyre!("probe nonce must be non-zero"))?;
     let build_payload = |envelope| -> Result<TransactionPayload> {
         let mut builder =
-            TransactionBuilder::new(client.chain.clone(), client.account.clone(), no_fee())
+            TransactionBuilder::new(client.network_id, client.account.clone(), no_fee())
                 .with_instructions([SubmitPrivacyProofV1::new(envelope)])
                 .with_metadata(Metadata::default());
         builder.set_creation_time(creation_time);

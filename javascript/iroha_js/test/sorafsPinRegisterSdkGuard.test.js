@@ -342,13 +342,17 @@ test("SoraFS pin-register SDK guard locks required workflow lanes", () => {
     "--negative-control-kotlin-successor-digest-test",
     "--negative-control-java-builder-test",
     "--negative-control-java-successor-digest-test",
+    "--negative-control-rust-client-submitted-epoch",
+    "--negative-control-js-submitted-epoch-type",
+    "--negative-control-kotlin-submitted-epoch-model",
+    "--negative-control-java-submitted-epoch-model",
   ]) {
     assert.match(workflow, new RegExp(`bash ci/check_sorafs_pin_register_sdk_guard\\.sh ${mode}`));
     assert.match(guard, new RegExp(mode));
   }
   assert.match(
     read("ci/check_sorafs_pin_register_js_sdk.sh"),
-    /NODE_OVERRIDE="\$\{SORAFS_PIN_REGISTER_JS_SDK_NODE_BIN:-\}"[\s\S]*is_node_24_bin\(\)[\s\S]*resolve_node_24_bin\(\)[\s\S]*NODE_BIN="\$\(resolve_node_24_bin\)"[\s\S]*NODE_VERSION="\$\("\$\{NODE_BIN\}" --version\)"[\s\S]*printf '%s\\n' "\$\{NODE_VERSION\}"[\s\S]*v24\.\*\) ;;[\s\S]*registerSorafsPinManifest\|SoraFS pin-register SDK guard\|SoraFS \.\* SDK runner/,
+    /NODE_OVERRIDE="\$\{SORAFS_PIN_REGISTER_JS_SDK_NODE_BIN:-\}"[\s\S]*is_node_24_bin\(\)[\s\S]*resolve_node_24_bin\(\)[\s\S]*NODE_BIN="\$\(resolve_node_24_bin\)"[\s\S]*NODE_VERSION="\$\("\$\{NODE_BIN\}" --version\)"[\s\S]*printf '%s\\n' "\$\{NODE_VERSION\}"[\s\S]*v24\.\*\) ;;[\s\S]*registerSorafsPinManifest\|buildRegisterPinManifestInstruction\|rejects a retired submitted epoch\|SoraFS pin-register SDK guard\|SoraFS \.\* SDK runner/,
     "SoraFS JavaScript SDK runner must print the selected Node version and run runtime-gate meta tests",
   );
   assert.match(
@@ -459,6 +463,7 @@ test("SoraFS pin-register SDK guard enforces caller-signed transport", () => {
     assert.match(text, /function buildRegisterPinManifestTransaction\(client, input, options = \{\}\)/);
     assert.match(text, /instructions: \[instruction\]/);
     assert.match(text, /quoteAndSignTransaction/);
+    assert.match(text, /no longer accepts a submitted epoch/);
   }
   assert.match(dts, /registerSorafsPinManifest\(/);
   assert.match(dts, /registerSorafsPinManifestTyped\(/);
@@ -516,7 +521,7 @@ test("SoraFS pin-register SDK guard enforces caller-signed transport", () => {
 
   for (const text of [javaInstruction, kotlinInstruction]) {
     assert.match(text, /RegisterPinManifestInstruction/);
-    assert.match(text, /submittedEpoch/);
+    assert.doesNotMatch(text, /submittedEpoch|submitted_epoch/);
     assert.match(text, /successorOfHex/);
     assert.doesNotMatch(text, /private[_A-Z]?key/i);
   }

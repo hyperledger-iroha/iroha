@@ -16,7 +16,7 @@ use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::ChainId,
+    prelude::{ChainId, NetworkId},
     privacy::{
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
@@ -1445,6 +1445,8 @@ pub const BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1: u32 = 0;
 /// presentation.
 #[derive(Clone, Debug)]
 pub struct BootleLanternPresentationPrivacyActionTransactionContextV1 {
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Exact chain identifier.
     pub chain_id: ChainId,
     /// Exact single-key transaction authority.
@@ -1723,6 +1725,11 @@ pub enum BootleLanternPresentationPrivacyActionBuildErrorV1 {
     /// The all-zero genesis sentinel is never a canonical chain binding.
     #[error("Bootle/Lantern presentation requires a non-zero canonical genesis hash")]
     ZeroGenesisHash,
+    /// The signed transaction domain does not equal the supplied canonical genesis hash.
+    #[error(
+        "Bootle/Lantern presentation transaction network does not match the canonical genesis hash"
+    )]
+    NetworkIdMismatch,
     /// Native relation compilation, proof construction, or verification failed.
     #[error(transparent)]
     Native(#[from] super::BoundPresentationErrorV1),
@@ -1786,7 +1793,7 @@ fn validate_bootle_lantern_presentation_transaction_context_v1(
     }
 
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -1855,7 +1862,7 @@ fn bootle_lantern_presentation_transaction_payload_v1(
     envelope: PrivacyProofEnvelopeV1,
 ) -> Result<TransactionPayload, BootleLanternPresentationPrivacyActionIntentErrorV1> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -2064,6 +2071,9 @@ fn validate_bootle_lantern_presentation_payload_integrity_v1(
     expected: BootleLanternPresentationPrivacyActionIntegrityV1,
 ) -> Result<(), ()> {
     if expected.canonical_genesis_hash == [0; 32]
+        || payload
+            .network_id()
+            .is_none_or(|network_id| network_id.as_bytes() != &expected.canonical_genesis_hash)
         || validate_bootle_lantern_active_issuer_policy_v1(policy).is_err()
     {
         return Err(());
@@ -2260,6 +2270,9 @@ where
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(BootleLanternPresentationPrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(BootleLanternPresentationPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
     validate_bootle_lantern_presentation_transaction_intent_v1(
         &context,
@@ -2940,6 +2953,11 @@ mod tests {
         signer: &KeyPair,
     ) -> BootleLanternPresentationPrivacyActionTransactionContextV1 {
         BootleLanternPresentationPrivacyActionTransactionContextV1 {
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::prehashed([0x32; 32])
+            )),
             chain_id: ChainId::from("bootle-lantern-proof-test"),
             authority: AccountId::new(signer.public_key().clone()),
             creation_time: Duration::from_millis(1_800_000_000_321),
@@ -3013,6 +3031,22 @@ mod tests {
                 &mut PanicRng,
             ),
             Err(BootleLanternPresentationPrivacyActionBuildErrorV1::ZeroGenesisHash)
+        ));
+
+        let signer = presentation_action_signer(90);
+        let context = presentation_action_context(&signer);
+        let policy = sealed_issued_fixture().policy.clone();
+        let statement = presentation_action_statement(&context, &policy);
+        assert!(matches!(
+            prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
+                context,
+                policy,
+                statement,
+                &sealed_issued_fixture().witness,
+                [0x33; 32],
+                &mut PanicRng,
+            ),
+            Err(BootleLanternPresentationPrivacyActionBuildErrorV1::NetworkIdMismatch)
         ));
 
         let signer = presentation_action_signer(90);

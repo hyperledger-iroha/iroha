@@ -10249,7 +10249,7 @@ pub(crate) async fn handle_rollout(
     };
     let service_label = service_name.to_string();
     let rollout_handle = request.payload.rollout_handle.clone();
-    let governance_tx_hash = request.payload.governance_tx_hash.clone();
+    let governance_tx_hash = request.payload.governance_tx_hash;
     match submit_confirm_and_respond(
         &app,
         signer,

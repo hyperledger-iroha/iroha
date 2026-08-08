@@ -123,6 +123,13 @@ Job status values:
 - `done` — proof attachment is available.
 - `error` — proving failed (see `error`).
 
+Ownership and authentication:
+- `POST`, `GET`, and `DELETE` for IVM prove jobs require canonical account-signature headers (or
+  the canonical multisig witness). The signed POST account must exactly match the request
+  `authority`.
+- Torii stores that account as the immutable job owner. Foreign and absent job identifiers share
+  the same `404` response, and a foreign caller cannot refresh or delete the owner's entry.
+
 Cancellation:
 - `DELETE` is best-effort cancellation. It cancels queued jobs immediately and frees capacity.
 - In-flight proof generation may continue to consume CPU (Halo2 proving is not preemptible), but the
@@ -151,6 +158,9 @@ Resource controls:
 - Job cache retention is controlled by `torii.zk_ivm_prove_job_ttl_secs` (TTL),
   `torii.zk_ivm_prove_job_max_entries` (count cap), and
   `torii.zk_ivm_prove_job_max_retained_bytes` (aggregate byte cap; default 128 MiB).
+  Per-owner caps are `torii.zk_ivm_prove_job_max_entries_per_owner` (default 32) and
+  `torii.zk_ivm_prove_job_max_retained_bytes_per_owner` (default 32 MiB). Capacity pressure may
+  evict only that same owner's terminal entries; it never evicts another tenant's result.
   Terminal JSON is compact, serialized once, and retained as immutable bytes; proof bytes use
   canonical `proof.bytes_b64` and are limited to 8 MiB decoded.
   - TTL eviction cancels pending/running jobs best-effort to free capacity.
@@ -277,6 +287,8 @@ zk_ivm_tooling_timeout_ms = 60000     # derive/simulation/view deadline
 zk_ivm_prove_job_ttl_secs = 1800      # 30 minutes
 zk_ivm_prove_job_max_entries = 1024   # cap in-memory job entries (0 disables the cap)
 zk_ivm_prove_job_max_retained_bytes = 134_217_728 # aggregate job memory cap (128 MiB)
+zk_ivm_prove_job_max_entries_per_owner = 32 # per-account retained job cap
+zk_ivm_prove_job_max_retained_bytes_per_owner = 33_554_432 # per-account cap (32 MiB)
 
 # (optional) app API tokens and rate limits
 require_api_token = false

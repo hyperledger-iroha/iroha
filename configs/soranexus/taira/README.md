@@ -640,12 +640,13 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 5. Copy each validator's complete generated directory to that validator
    host's canonical `/etc/iroha/taira-validator` directory. Every rendered
-   config binds signer sidecars and governance manifests to that same
-   first-release install root; it never embeds the developer checkout or
-   `dist/` path. The renderer creates bundle and runtime directories with mode
-   `0700`, creates the onboarding/faucet signer and API-token sidecars with mode
-   `0600`, writes only canonical signer paths and the BLAKE3 token digest to
-   peer config, and emits a protective `.gitignore`. It also creates the
+config binds signer sidecars and governance manifests to that same
+first-release install root; it never embeds the developer checkout or
+`dist/` path. The renderer creates bundle and runtime directories with mode
+`0700`, creates validator, SoraNet transport, streaming, Kagemusha command,
+onboarding, faucet, and API-token sidecars with mode `0600`, writes only
+canonical signer paths and the BLAKE3 token digest to peer config, and emits a
+protective `.gitignore`. It also creates the
    co-located `sorafs_admission/` directory and rewrites admission-envelope,
    signer, and manifest paths together when
    `--install-root` is changed. It prints sidecar paths but never their contents.
@@ -656,6 +657,12 @@ topology transaction is rebuilt from the public roster and PoPs, plus
 independently built, reviewed executable outside the checkout and run that
 command. The fixed protocol passes only `--unsigned-genesis`, `--peer-config`,
 `--bound-manifest-out`, `--signed-genesis-out`, and `--expected-hash-out`.
+The qualified signer must also publish the sibling `genesis.identity.toml`
+which binds its one exact signed-header hash as both client `network_id` and
+validator `genesis.expected_hash`; deployment automation must consume that
+paired artifact and reject either independently supplied value. The published
+template resolves `/run/iroha/genesis.expected_hash` through
+`genesis.expected_hash_file`; clients mount the same file as `network_id_file`.
 The signer owns its HSM or key-provider access internally; it must never accept
 a private-key path or key bytes through argv, environment, or the rendered
 tree. Source-built Kagami is not a genesis signer in this release path. The
@@ -682,6 +689,7 @@ reads only `trusted_peers_pop` and emits only the public canonical roster:
 cargo run -p iroha_kagami --bin kagami -- \
   kagemusha prepare-taira-release-roster-v4 \
   --validator-config /absolute/path/to/rendered-validator/config.toml \
+  --network-id "$(cat /absolute/path/to/genesis.expected_hash)" \
   --output /absolute/private/path/taira-release-roster.norito
 
 mkdir -m 700 /absolute/private/path/kagemusha-release-inputs
@@ -1009,6 +1017,15 @@ is signed into the Linux authority, reset manifest, and final macOS candidate.
 
 `capture_taira_macos_four_peer_receipt.py` emits the canonical receipt only
 after all four restart proofs pass and the original reset inputs are unchanged.
+The untrusted macOS build job only compiles and inventories the Exact12 native
+test drivers. `capture_taira_privacy_protocol_four_peer_receipt.py` runs those
+frozen drivers inside secret-free qualification, never invokes Cargo, and
+preserves one bounded canonical transcript/result pair for each of the six
+protocol cases plus the independent governance case. The v2 privacy receipt
+binds those bytes, both driver digests, the macOS handoff, validator, Linux
+archive, Exact12 matrix, and complete source identity. Admission rejects the
+v1 receipt and independently reads, hashes, and parses every preserved v2
+record before accepting the signed candidate.
 `build_taira_rollout_candidate.py` binds that receipt, the exact binary,
 the sealed macOS controller manifest, and signed Linux authority into the final
 secret-free Mac admission archive. The private reset bundle, validator secrets,

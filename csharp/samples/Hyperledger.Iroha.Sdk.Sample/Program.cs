@@ -7,6 +7,7 @@ var baseUrl = Environment.GetEnvironmentVariable("IROHA_CSHARP_TORII_BASE_URL")
     ?? "https://taira.sora.org";
 var seedHex = Environment.GetEnvironmentVariable("IROHA_CSHARP_PRIVATE_KEY_SEED_HEX");
 var canonicalAccountId = Environment.GetEnvironmentVariable("IROHA_CSHARP_CANONICAL_ACCOUNT_ID");
+var networkId = Environment.GetEnvironmentVariable("IROHA_CSHARP_NETWORK_ID");
 var privateKeySeed = string.IsNullOrWhiteSpace(seedHex)
     ? null
     : Convert.FromHexString(seedHex);
@@ -37,11 +38,13 @@ try
     Console.WriteLine($"Aliases on first account: {aliases?.Total ?? 0}");
     Console.WriteLine($"Faucet puzzle difficulty bits: {faucetPuzzle.DifficultyBits}");
 
-    if (privateKeySeed is not null && !string.IsNullOrWhiteSpace(canonicalAccountId))
+    if (privateKeySeed is not null
+        && !string.IsNullOrWhiteSpace(canonicalAccountId)
+        && !string.IsNullOrWhiteSpace(networkId))
     {
         var transaction = client.Ledger
             .BuildTransaction(
-                "00000042",
+                NetworkId.Parse(networkId),
                 canonicalAccountId,
                 FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
             .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "1", canonicalAccountId)

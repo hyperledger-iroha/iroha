@@ -12,6 +12,7 @@ import pytest
 import requests
 
 import iroha_python.client as client_module
+import iroha_python.crypto as crypto_module
 from iroha_python import (
     CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
     AccountAsset,
@@ -26,6 +27,7 @@ from iroha_python import (
     Instruction,
     KotodamaQuantity,
     LocalSigningContext,
+    NetworkId,
     RwaListItem,
     ToriiClient,
     TransactionConfig,
@@ -47,6 +49,7 @@ from iroha_python.repo import (
     RepoCashLeg,
     RepoCollateralLeg,
 )
+
 from iroha_python.settlement import SettlementLeg
 from iroha_python.tx import (
     _normalize_quantity,
@@ -56,8 +59,11 @@ from iroha_python.tx import (
     _require_canonical_public_balance_scope,
 )
 
+CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
+NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
-VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext("vk-test")
+VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
+TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 
 
 def canonical_proof_attachment(
@@ -84,6 +90,102 @@ def test_data_model_version_matches_current_wire_contract() -> None:
     assert DATA_MODEL_VERSION == 4
 
 
+def test_signed_pipeline_details_is_exact_network_bound_and_one_shot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction_hash = "ab" * 32
+    captured: dict[str, object] = {}
+
+    def build_query(
+        authority: str,
+        private_key: bytes,
+        network_id: NetworkId,
+        entrypoint_hash: str,
+    ) -> bytes:
+        captured.update(
+            authority=authority,
+            private_key=private_key,
+            network_id=network_id,
+            entrypoint_hash=entrypoint_hash,
+        )
+        return b"signed-find-transactions"
+
+    monkeypatch.setattr(
+        crypto_module,
+        "build_find_committed_transaction_query",
+        build_query,
+    )
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "hash": transaction_hash,
+                    "transaction": {"entrypoint_hash": transaction_hash},
+                    "trigger_completions": [],
+                },
+            )
+        ]
+    )
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        max_retries=4,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
+    )
+
+    details = client.get_pipeline_transaction_details(
+        transaction_hash,
+        authority="alice@wonderland",
+        private_key=b"private-key",
+    )
+
+    assert details["hash"] == transaction_hash
+    assert captured == {
+        "authority": "alice@wonderland",
+        "private_key": b"private-key",
+        "network_id": NETWORK_ID,
+        "entrypoint_hash": transaction_hash,
+    }
+    assert len(session.calls) == 1
+    assert session.calls[0]["path"] == "/v1/pipeline/transactions/details"
+    assert session.calls[0]["data"] == b"signed-find-transactions"
+    assert session.calls[0]["allow_redirects"] is False
+    assert session.calls[0]["headers"] == {
+        "Content-Type": "application/x-norito",
+        "Accept": "application/json",
+    }
+
+
+@pytest.mark.parametrize("redirect_status", [307, 308])
+def test_signed_pipeline_details_never_replays_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+    redirect_status: int,
+) -> None:
+    monkeypatch.setattr(
+        crypto_module,
+        "build_find_committed_transaction_query",
+        lambda *_args: b"signed-find-transactions",
+    )
+    session = FakeSession([response(redirect_status, {"redirect": True})])
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        max_retries=4,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
+    )
+
+    with pytest.raises(requests.HTTPError):
+        client.get_pipeline_transaction_details(
+            "cd" * 32,
+            authority="alice@wonderland",
+            private_key=b"private-key",
+        )
+
+    assert len(session.calls) == 1
+    assert session.calls[0]["allow_redirects"] is False
+
+
 def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
     assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
 
@@ -100,6 +202,8 @@ class FakeSession:
                 "path": urlsplit(url).path,
                 "params": kwargs.get("params"),
                 "data": kwargs.get("data"),
+                "headers": dict(kwargs.get("headers") or {}),
+                "allow_redirects": kwargs.get("allow_redirects"),
             }
         )
         if not self.responses:
@@ -485,18 +589,16 @@ class FakeVkDraftCrypto:
     ) -> None:
         self.decoded = decoded
         self.error = error
-        self.calls: list[tuple[bytes, str, str, str]] = []
+        self.calls: list[tuple[bytes, NetworkId, str, str]] = []
 
     def decode_zk_vk_transaction_payload(
         self,
         payload: bytes,
-        expected_chain_id: str,
+        network_id: NetworkId,
         expected_authority: str,
         operation: str,
     ) -> dict[str, object]:
-        self.calls.append(
-            (payload, expected_chain_id, expected_authority, operation)
-        )
+        self.calls.append((payload, network_id, expected_authority, operation))
         if self.error is not None:
             raise self.error
         if self.decoded is None:
@@ -527,7 +629,7 @@ def account_address(seed: int, discriminant: int = 0x02F1) -> str:
 
 
 def test_submit_transaction_draft_result_wait_false_preserves_hash_after_submit_timeout() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     class FakeEnvelope:
         hash = bytes.fromhex("ab" * 32)
@@ -562,7 +664,7 @@ def test_submit_transaction_draft_result_wait_false_preserves_hash_after_submit_
 
 
 def test_submit_transaction_draft_result_wait_true_raises_submit_timeout() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     class FakeEnvelope:
         hash = bytes.fromhex("cd" * 32)
@@ -585,7 +687,7 @@ def test_submit_transaction_draft_result_wait_true_raises_submit_timeout() -> No
 
 
 def test_submit_transaction_draft_result_wait_false_does_not_hide_rejection() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     class FakeEnvelope:
         hash = bytes.fromhex("ef" * 32)
@@ -910,7 +1012,7 @@ def test_explorer_cursor_response_rejects_retired_or_inconsistent_fields() -> No
 
 
 def test_explorer_rwa_list_hard_cuts_retired_page_arguments() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         client.list_explorer_rwas(page=1, per_page=25)  # type: ignore[call-arg]
@@ -1043,7 +1145,7 @@ def test_query_rwas_typed_preserves_bounded_metadata_and_validates_count_mode() 
     assert page.count_mode == "bounded"
     assert json.loads(session.calls[0]["data"])["count_mode"] == "bounded"
 
-    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     with pytest.raises(ValueError, match="count_mode"):
         rejecting.list_rwas(count_mode="full")
 
@@ -1102,7 +1204,7 @@ def test_query_triggers_posts_query_wire_name_and_count_mode() -> None:
 
 def test_query_account_transactions_rejects_bad_select_before_request() -> None:
     account = account_address(0x32)
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     with pytest.raises(TypeError, match="select must be a sequence"):
         client.query_account_transactions(account, select="authority")
@@ -1233,7 +1335,7 @@ def test_repo_agreement_client_normalizes_count_mode_before_request() -> None:
     assert page.count_mode == "bounded"
     assert session.calls[0]["params"] == {"limit": 1, "count_mode": "bounded"}
 
-    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     with pytest.raises(ValueError, match="count_mode"):
         rejecting.query_repo_agreements({"count_mode": "full"})
 
@@ -1324,7 +1426,7 @@ def test_zk_verifying_key_helpers_detect_active_status_and_return_registration_d
     assert native.calls == [
         (
             b"vk transaction payload",
-            "vk-test",
+            NETWORK_ID,
             authority,
             "register",
         )
@@ -1760,8 +1862,8 @@ def test_zk_verifying_key_drafts_reject_substitution_extra_wrong_context_and_non
         ),
         (
             "wrong chain",
-            ValueError("transaction payload changed the configured chain ID"),
-            r"changed the configured chain ID",
+            ValueError("transaction payload changed the configured network ID"),
+            r"changed the configured network ID",
         ),
         (
             "wrong authority",
@@ -1788,7 +1890,7 @@ def test_zk_verifying_key_drafts_reject_substitution_extra_wrong_context_and_non
         with pytest.raises(ValueError, match=pattern):
             client.register_zk_verifying_key(payload)
         assert native.calls[0][1:] == (
-            "vk-test",
+            NETWORK_ID,
             authority,
             "register",
         ), label
@@ -1829,7 +1931,7 @@ def test_zk_verifying_key_draft_rejects_any_record_field_mismatch(
         client.register_zk_verifying_key(payload)
 
 
-def test_zk_verifying_key_local_signing_fails_closed_without_chain_context() -> None:
+def test_zk_verifying_key_local_signing_fails_closed_without_network_context() -> None:
     session = FakeSession([response(200, zk_verifying_key_transaction_draft())])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
     payload = {
@@ -1865,12 +1967,26 @@ def test_zk_verifying_key_local_signing_fails_closed_without_chain_context() -> 
     assert session.calls == []
     with pytest.raises(AttributeError):
         client.local_signing_context = LocalSigningContext(  # type: ignore[misc]
-            "other-chain"
+            NetworkId.from_bytes(bytes([0xA7]) * 32)
         )
     with pytest.raises(AttributeError):
-        VK_LOCAL_SIGNING_CONTEXT.chain_id = "other-chain"  # type: ignore[misc]
-    with pytest.raises(ValueError, match="must not contain surrounding whitespace"):
-        LocalSigningContext(" vk-test")
+        VK_LOCAL_SIGNING_CONTEXT.network_id = NetworkId.from_bytes(  # type: ignore[misc]
+            bytes([0xA7]) * 32
+        )
+    for retired_value in ("vk-test", CANONICAL_GENESIS_HASH, object()):
+        with pytest.raises(TypeError, match="LocalSigningContext.network_id must be a NetworkId"):
+            LocalSigningContext(retired_value)  # type: ignore[arg-type]
+    for retired_key in (
+        "chain",
+        "chainId",
+        "chain_id",
+        "canonicalGenesisHash",
+        "canonical_genesis_hash",
+        "genesisHash",
+        "genesis_hash",
+    ):
+        with pytest.raises(TypeError, match=f"unexpected keyword argument '{retired_key}'"):
+            LocalSigningContext(**{retired_key: "vk-test"})  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="unexpected keyword argument 'signing_chain_id'"):
         ToriiClient(
             "http://torii.example",
@@ -2424,7 +2540,6 @@ def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
     client.call_contract_batch_and_wait = call_batch  # type: ignore[method-assign]
 
     result = client.call_contract_and_wait(
-        chain_id="chain",
         authority="authority@is",
         private_key_hex="11" * 32,
         contract_alias="contract::is",
@@ -2436,7 +2551,7 @@ def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
         interval=0,
     )
 
-    assert captured["chain_id"] == "chain"
+    assert "chain_id" not in captured
     assert captured["authority"] == "authority@is"
     assert captured["private_key"] is None
     assert captured["private_key_hex"] == "11" * 32
@@ -2454,11 +2569,11 @@ def test_call_contract_and_wait_delegates_to_caller_signed_batch() -> None:
     assert session.calls == []
 
 
-def test_call_contract_and_wait_requires_explicit_chain_id_before_dispatch() -> None:
+def test_call_contract_and_wait_rejects_retired_chain_id_before_dispatch() -> None:
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
     client.call_contract_batch_and_wait = (  # type: ignore[method-assign]
-        lambda **_kwargs: pytest.fail("missing chain_id must fail before dispatch")
+        lambda **_kwargs: pytest.fail("retired chain_id must fail before dispatch")
     )
 
     with pytest.raises(TypeError, match="chain_id"):
@@ -2469,12 +2584,13 @@ def test_call_contract_and_wait_requires_explicit_chain_id_before_dispatch() -> 
             entrypoint="main",
             payload={"amount": 7},
             fee_payment=authority_fee_payment(charge_limits=[], gas_limit=5000),
+            **{"chain_id": "chain"},
         )
     assert session.calls == []
 
 
 def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     captured: dict[str, object] = {}
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     adult = account_address(0x11)
@@ -2488,7 +2604,6 @@ def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     result = client.mint_assets_and_wait(
-        chain_id="chain",
         authority="authority@is",
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
@@ -2508,17 +2623,17 @@ def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
     assert captured["kwargs"]["wait"] is False
 
 
-def test_transaction_draft_rejects_padded_chain_and_authority_before_signing() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+def test_transaction_draft_rejects_retired_chain_and_padded_authority_before_signing() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     with pytest.raises(
-        ValueError,
-        match="chain_id must not contain surrounding whitespace",
+        TypeError,
+        match="unexpected keyword argument 'chain_id'",
     ):
         client._transaction_draft(
-            chain_id=" chain",
             authority="authority@is",
             fee_payment=FEE_PAYMENT,
+            **{"chain_id": "chain"},
         )
 
     with pytest.raises(
@@ -2526,14 +2641,13 @@ def test_transaction_draft_rejects_padded_chain_and_authority_before_signing() -
         match="authority must not contain surrounding whitespace",
     ):
         client._transaction_draft(
-            chain_id="chain",
             authority=" authority@is ",
             fee_payment=FEE_PAYMENT,
         )
 
 
 def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     captured: dict[str, object] = {}
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x11)
@@ -2548,7 +2662,6 @@ def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     result = client.transfer_assets_and_wait(
-        chain_id="chain",
         authority="source@is",
         fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
@@ -2576,7 +2689,7 @@ def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
 
 
 def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     captured: list[tuple[object, dict[str, object]]] = []
     account = account_address(0x44)
 
@@ -2587,7 +2700,6 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     grant = client.grant_account_permission_and_wait(
-        chain_id="chain",
         authority="authority@is",
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
@@ -2598,7 +2710,6 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
         wait=False,
     )
     revoke = client.revoke_account_permission_and_wait(
-        chain_id="chain",
         authority="authority@is",
         fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
@@ -2627,6 +2738,7 @@ def test_permission_grant_normalizes_configured_chain_discriminant_for_transacti
         session=FakeSession([]),
         max_retries=0,
         chain_discriminant=0x0171,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
     captured: dict[str, object] = {}
     account = account_address(0x45, 0x0171)
@@ -2640,7 +2752,6 @@ def test_permission_grant_normalizes_configured_chain_discriminant_for_transacti
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     assert client.grant_account_permission_and_wait(
-        chain_id="chain",
         authority=account,
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
@@ -2662,6 +2773,7 @@ def test_transfer_helper_normalizes_configured_chain_discriminant_for_transactio
         session=FakeSession([]),
         max_retries=0,
         chain_discriminant=0x0171,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
     captured: dict[str, object] = {}
     source = account_address(0x46, 0x0171)
@@ -2677,7 +2789,6 @@ def test_transfer_helper_normalizes_configured_chain_discriminant_for_transactio
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     assert client.transfer_asset_and_wait(
-        chain_id="chain",
         authority=source,
         fee_payment=FEE_PAYMENT,
         private_key_hex="22" * 32,
@@ -2699,6 +2810,7 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
         session=FakeSession([]),
         max_retries=0,
         chain_discriminant=0x0171,
+        local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT,
     )
     captured: dict[str, object] = {}
     source = account_address(0x48, 0x0171)
@@ -2715,7 +2827,6 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     assert client.transfer_asset_and_wait(
-        chain_id="chain",
         authority=source,
         fee_payment=FEE_PAYMENT,
         private_key_hex="23" * 32,
@@ -2741,6 +2852,7 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
         Instruction.register_zk_asset(
             asset_definition_id,
             vk_unshield={"backend": "halo2/ipa", "name": "vk_unshield"},
+            vk_shield="halo2/ipa:vk_shield",
         ),
         Instruction.verify_proof(proof),
     ]
@@ -2782,130 +2894,19 @@ def test_retired_generic_confidential_instruction_and_client_surfaces_are_absent
 
     for name in (
         "sign_privacy_zk_ace_transfer_action_v1",
+        "sign_privacy_jindo_action_v1",
+        "sign_privacy_verange_action_v1",
+        "prepare_privacy_vega_action_v1",
+        "sign_privacy_zk_ams_batch_admission_action_v1",
+        "sign_privacy_zk_ams_provision_account_action_v1",
+        "sign_privacy_bootle_lantern_presentation_action_v1",
         "sign_privacy_anonymous_pgc_payment_action_v1",
         "sign_privacy_orchard_note_action_v1",
         "sign_privacy_fcmp_membership_payment_action_v1",
         "sign_privacy_ivm_private_note_action_v1",
         "sign_privacy_pq_masp_note_action_v1",
     ):
-        assert hasattr(TransactionDraft, name)
-
-
-@pytest.mark.parametrize(
-    "method_name",
-    (
-        "sign_privacy_anonymous_pgc_payment_action_v1",
-        "sign_privacy_orchard_note_action_v1",
-        "sign_privacy_fcmp_membership_payment_action_v1",
-        "sign_privacy_ivm_private_note_action_v1",
-        "sign_privacy_pq_masp_note_action_v1",
-    ),
-)
-def test_native_privacy_bundle_actions_reject_nonempty_drafts(method_name: str) -> None:
-    draft = TransactionDraft(
-        TransactionConfig(
-            chain_id="chain",
-            authority=account_address(0x73),
-            fee_payment=FEE_PAYMENT,
-        )
-    ).use_executable_batch()
-
-    with pytest.raises(ValueError, match="otherwise empty"):
-        getattr(draft, method_name)(
-            b"untrusted-bundle",
-            public_action_json=b"{}",
-            canonical_genesis_hash=b"\x01" * 32,
-        )
-
-
-@pytest.mark.parametrize(
-    "scope",
-    ("global", "dataspace:1", "dataspace:18446744073709551615"),
-)
-def test_zk_ace_public_balance_scope_is_validated_and_forwarded_exactly(
-    monkeypatch: pytest.MonkeyPatch,
-    scope: str,
-) -> None:
-    sentinel = object()
-    captured: dict[str, object] = {}
-
-    class Builder:
-        def sign_privacy_zk_ace_transfer_action_v1(self, *args: object, **kwargs: object) -> object:
-            captured["args"] = args
-            captured["kwargs"] = kwargs
-            return sentinel
-
-    monkeypatch.setattr(TransactionDraft, "to_builder", lambda self: Builder())
-    draft = TransactionDraft(
-        TransactionConfig(
-            chain_id="chain",
-            authority=account_address(0x73),
-            fee_payment=FEE_PAYMENT,
-        )
-    )
-    result = draft.sign_privacy_zk_ace_transfer_action_v1(
-        b"private-key",
-        canonical_genesis_hash=b"\x01" * 32,
-        canonical_policy_archive=b"policy",
-        source_account_id="source",
-        destination_account_id="destination",
-        amount="1",
-        public_balance_scope=scope,
-        identity_root=b"\x02" * 32,
-        identity_blinding=b"\x03" * 32,
-        replay_secret=b"\x04" * 32,
-    )
-
-    assert result is sentinel
-    assert captured["kwargs"] == {"public_balance_scope": scope}
-
-
-def test_zk_ace_public_balance_scope_keyword_is_required() -> None:
-    draft = TransactionDraft(
-        TransactionConfig(
-            chain_id="chain",
-            authority=account_address(0x73),
-            fee_payment=FEE_PAYMENT,
-        )
-    )
-    with pytest.raises(TypeError, match="public_balance_scope"):
-        draft.sign_privacy_zk_ace_transfer_action_v1(
-            b"private-key",
-            canonical_genesis_hash=b"\x01" * 32,
-            canonical_policy_archive=b"policy",
-            source_account_id="source",
-            destination_account_id="destination",
-            amount="1",
-            identity_root=b"\x02" * 32,
-            identity_blinding=b"\x03" * 32,
-            replay_secret=b"\x04" * 32,
-        )
-
-
-def test_native_zk_ace_public_balance_scope_is_keyword_only() -> None:
-    builder = TransactionDraft(
-        TransactionConfig(
-            chain_id="chain",
-            authority=account_address(0x73),
-            fee_payment=FEE_PAYMENT,
-        )
-    ).to_builder()
-    positional = (
-        b"private-key",
-        b"genesis",
-        b"policy",
-        "source",
-        "destination",
-        "1",
-        b"root",
-        b"blinding",
-        b"replay",
-    )
-
-    with pytest.raises(TypeError, match="public_balance_scope"):
-        builder.sign_privacy_zk_ace_transfer_action_v1(*positional)
-    with pytest.raises(TypeError):
-        builder.sign_privacy_zk_ace_transfer_action_v1(*positional, "global")
+        assert not hasattr(TransactionDraft, name)
 
 
 @pytest.mark.parametrize(
@@ -2974,7 +2975,7 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
 
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=source,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -2998,7 +2999,7 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
 
 
 def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     captured: dict[str, object] = {}
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
@@ -3009,7 +3010,6 @@ def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> N
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     result = client.cancel_asset_lock_and_wait(
-        chain_id="chain",
         authority=account_address(0x72),
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
@@ -3051,11 +3051,10 @@ def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> N
 
 
 def test_cancel_asset_lock_and_wait_requires_expected_remaining_amount() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     with pytest.raises(TypeError, match="expected_remaining_amount"):
         client.cancel_asset_lock_and_wait(  # type: ignore[call-arg]
-            chain_id="chain",
             authority=account_address(0x72),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
@@ -3065,11 +3064,10 @@ def test_cancel_asset_lock_and_wait_requires_expected_remaining_amount() -> None
 
 
 def test_cancel_asset_lock_and_wait_rejects_non_positive_remaining_amount() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
 
     with pytest.raises(ValueError, match="expected_remaining_amount must be positive"):
         client.cancel_asset_lock_and_wait(
-            chain_id="chain",
             authority=account_address(0x72),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
@@ -3140,7 +3138,7 @@ def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
     Instruction.cancel_asset_lock(exact_bound, "1")
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account_address(0x75),
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -3165,7 +3163,7 @@ def test_cancel_asset_lock_rejects_unclean_lock_id_preimage(lock_id: str) -> Non
 
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account_address(0x75),
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -3193,7 +3191,7 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
     account = account_address(0x74)
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -3225,7 +3223,7 @@ def test_asset_lock_transaction_draft_rejects_non_positive_expected_remaining_am
     account = account_address(0x75)
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -3249,7 +3247,7 @@ def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
     account = account_address(0x75)
     draft = TransactionDraft(
         TransactionConfig(
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority=account,
             fee_payment=authority_fee_payment(charge_limits=[]),
         )
@@ -3267,20 +3265,76 @@ def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "entry_surface",
+    ("instruction", "transaction_draft", "torii_client"),
+)
+@pytest.mark.parametrize(
+    ("unexpected_kwarg", "hostile_value"),
+    (
+        pytest.param("mode", "Hybrid", id="mode-hybrid"),
+        pytest.param("mode", "ZkNative", id="mode-zk-native"),
+        pytest.param(
+            "vk_transfer",
+            "halo2/ipa:vk_transfer",
+            id="vk-transfer",
+        ),
+        pytest.param("allow_shield", True, id="allow-shield"),
+        pytest.param("allow_unshield", True, id="allow-unshield"),
+    ),
+)
+def test_register_zk_asset_entry_surfaces_reject_transitional_keywords(
+    entry_surface: str,
+    unexpected_kwarg: str,
+    hostile_value: object,
+) -> None:
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    unexpected = {unexpected_kwarg: hostile_value}
+
+    with pytest.raises(
+        TypeError,
+        match=rf"unexpected keyword argument '{unexpected_kwarg}'",
+    ):
+        if entry_surface == "instruction":
+            Instruction.register_zk_asset(asset_definition_id, **unexpected)
+        elif entry_surface == "transaction_draft":
+            TransactionDraft(
+                TransactionConfig(
+                    network_id=NETWORK_ID,
+                    authority=account_address(0x75),
+                    fee_payment=FEE_PAYMENT,
+                )
+            ).register_zk_asset(asset_definition_id, **unexpected)
+        else:
+            assert entry_surface == "torii_client"
+            ToriiClient(
+                "http://torii.example",
+                session=FakeSession([]),
+                max_retries=0,
+            ).register_zk_asset_and_wait(
+                authority="authority@is",
+                fee_payment=FEE_PAYMENT,
+                private_key_hex="11" * 32,
+                asset_definition_id=asset_definition_id,
+                wait=False,
+                **unexpected,
+            )
+
+
 def test_zk_registration_helper_rejects_adversarial_inputs() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
-    with pytest.raises(TypeError, match="unexpected keyword argument 'mode'"):
-        Instruction.register_zk_asset(asset_definition_id, mode="Hybrid")
     with pytest.raises(ValueError, match="vk_shield requires vk_unshield"):
         Instruction.register_zk_asset(
             asset_definition_id,
             vk_shield={"backend": "halo2/ipa", "name": "vk_shield"},
         )
+    with pytest.raises(ValueError, match="backend:name"):
+        Instruction.register_zk_asset(asset_definition_id, vk_shield="halo2/ipa")
 
 
 def test_zk_client_helpers_build_transaction_drafts() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     captured: list[tuple[object, dict[str, object]]] = []
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x63)
@@ -3293,17 +3347,16 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
 
     assert client.register_zk_asset_and_wait(
-        chain_id="chain",
         authority="authority@is",
         fee_payment=FEE_PAYMENT,
         private_key_hex="11" * 32,
         asset_definition_id=asset_definition_id,
         vk_unshield="halo2/ipa:vk_unshield",
+        vk_shield="halo2/ipa:vk_shield",
         transaction_metadata={"purpose": "zk-register"},
         wait=False,
     ) == {"hash": "zk-1"}
     assert client.verify_proof_and_wait(
-        chain_id="chain",
         authority=source,
         fee_payment=FEE_PAYMENT,
         private_key_hex="bb" * 32,
@@ -3354,14 +3407,13 @@ def test_zk_ace_transaction_amount_boundary_is_canonical_and_exact() -> None:
 
 
 def test_verify_proof_client_helper_rejects_non_mapping_before_submission() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     client._submit_transaction_draft_result = (  # type: ignore[method-assign]
         lambda *_args, **_kwargs: pytest.fail("invalid ZK helper should not submit")
     )
 
     with pytest.raises(TypeError, match="proof must be a mapping"):
         client.verify_proof_and_wait(
-            chain_id="chain",
             authority=account_address(0x6B),
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
@@ -3441,7 +3493,7 @@ def test_batch_helpers_reject_invalid_records(
     error_type: type[Exception],
     match: str,
 ) -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     client._submit_transaction_draft_result = (  # type: ignore[method-assign]
         lambda *_args, **_kwargs: pytest.fail("invalid batch should not submit")
     )
@@ -3449,7 +3501,6 @@ def test_batch_helpers_reject_invalid_records(
 
     with pytest.raises(error_type, match=match):
         method(
-            chain_id="chain",
             authority="authority@is",
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
@@ -3485,14 +3536,13 @@ def test_permission_helpers_reject_invalid_inputs(
     kwargs: dict[str, object],
     match: str,
 ) -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0, local_signing_context=TRANSACTION_LOCAL_SIGNING_CONTEXT)
     client._submit_transaction_draft_result = (  # type: ignore[method-assign]
         lambda *_args, **_kwargs: pytest.fail("invalid permission should not submit")
     )
 
     with pytest.raises(ValueError, match=match):
         client.grant_account_permission_and_wait(
-            chain_id="chain",
             authority="authority@is",
             fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,

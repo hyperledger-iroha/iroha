@@ -32,7 +32,7 @@ use iroha_crypto::{
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::{
         AccountId,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
@@ -52,6 +52,7 @@ use iroha_data_model::{
         },
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
+        privacy::SubmitPrivacyProofV1,
         transfer::Transfer,
         zk,
     },
@@ -60,11 +61,14 @@ use iroha_data_model::{
     nexus::DataSpaceId,
     offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
     privacy::{
-        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
-        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
         PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogV1,
-        PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
-        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_exact12_fixture_bundle_v1,
+        PrivacyExact12CapabilityManifestV1, PrivacyExact12FixtureBundleValidationStatusV1,
+        PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
+        privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
+        validate_privacy_exact12_fixture_bundle_v1,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
@@ -120,31 +124,16 @@ mod kagemusha_candidate_apple;
 mod kagemusha_candidate_scenario;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
-mod proof_attachment_json;
-
-#[cfg(test)]
-use iroha_data_model::{
-    nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1,
-    proof::{PROOF_BOX_MAX_ENCODED_BYTES_V1, VERIFYING_KEY_ID_MAX_FIELD_BYTES},
-};
-#[cfg(test)]
-use proof_attachment_json::{
-    PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1, decode_canonical_bounded_base64,
-    proof_attachment_json_length_is_valid,
-};
-#[cfg(test)]
-use proof_attachment_json::{
-    PROOF_ATTACHMENT_JSON_MAX_BYTES_V1, parse_proof_attachment_from_json_bytes,
-    parse_proof_attachment_from_json_slice,
-};
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment whenever any NativeSignerBridge JNI method descriptor changes.
 // The bridge-wide ABI number alone cannot distinguish two ABI-22 artifacts
 // whose JVM calling conventions differ.
 // Revision 4 hard-cuts RegisterZkAsset signing to the asset plus optional
-// unshield and shield verifier bindings.
-const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 4;
+// unshield and shield verifier bindings. Revision 5 replaces the human chain
+// label with the exact 32-byte genesis-derived NetworkId.
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;
+const CANONICAL_NETWORK_ID_LITERAL_BYTES: usize = 74;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
@@ -215,7 +204,7 @@ const _: () = assert!(
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
-const ERR_CHAIN_ID_PARSE: c_int = -3;
+const ERR_NETWORK_ID_PARSE: c_int = -3;
 const ERR_AUTHORITY_PARSE: c_int = -4;
 const ERR_ASSET_DEFINITION_PARSE: c_int = -5;
 const ERR_DESTINATION_PARSE: c_int = -6;
@@ -230,7 +219,6 @@ const ERR_INVALID_NOTE_COMMITMENT: c_int = -14;
 const ERR_CONFIDENTIAL_PAYLOAD: c_int = -15;
 const ERR_SM2_VERIFY: c_int = -16;
 const ERR_SM2_PARSE: c_int = -17;
-const ERR_PROOF_ATTACHMENT: c_int = -18;
 const ERR_INVALID_NULLIFIERS: c_int = -19;
 const ERR_INVALID_ROOT_HINT: c_int = -20;
 const ERR_UNSUPPORTED_ALGORITHM: c_int = -21;
@@ -288,7 +276,7 @@ const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 enum BridgeError {
     NullPtr,
     Utf8,
-    ChainId,
+    NetworkId,
     Authority,
     AssetDefinition,
     Destination,
@@ -300,7 +288,6 @@ enum BridgeError {
     HashOutBuffer,
     InvalidNoteCommitment,
     ConfidentialPayload,
-    ProofAttachment,
     InvalidNullifiers,
     InvalidRootHint,
     AssetId,
@@ -339,7 +326,7 @@ impl BridgeError {
         match self {
             BridgeError::NullPtr => ERR_NULL_PTR,
             BridgeError::Utf8 => ERR_UTF8,
-            BridgeError::ChainId => ERR_CHAIN_ID_PARSE,
+            BridgeError::NetworkId => ERR_NETWORK_ID_PARSE,
             BridgeError::Authority => ERR_AUTHORITY_PARSE,
             BridgeError::AssetDefinition => ERR_ASSET_DEFINITION_PARSE,
             BridgeError::Destination => ERR_DESTINATION_PARSE,
@@ -351,7 +338,6 @@ impl BridgeError {
             BridgeError::HashOutBuffer => ERR_HASH_OUT_LEN,
             BridgeError::InvalidNoteCommitment => ERR_INVALID_NOTE_COMMITMENT,
             BridgeError::ConfidentialPayload => ERR_CONFIDENTIAL_PAYLOAD,
-            BridgeError::ProofAttachment => ERR_PROOF_ATTACHMENT,
             BridgeError::InvalidNullifiers => ERR_INVALID_NULLIFIERS,
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
@@ -542,6 +528,34 @@ unsafe fn read_string_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<S
     Ok(s.to_owned())
 }
 
+unsafe fn read_network_id_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<NetworkId> {
+    if usize::try_from(len).ok() != Some(CANONICAL_NETWORK_ID_LITERAL_BYTES) {
+        return Err(BridgeError::NetworkId);
+    }
+    let literal = unsafe { read_string_bridge(ptr, len) }?;
+    let network_id: NetworkId = norito::json::from_value(JsonValue::String(literal.clone()))
+        .map_err(|_| BridgeError::NetworkId)?;
+    let canonical = norito::json::to_value(&network_id).map_err(|_| BridgeError::NetworkId)?;
+    if canonical.as_str() != Some(literal.as_str()) {
+        return Err(BridgeError::NetworkId);
+    }
+    Ok(network_id)
+}
+
+fn network_id_from_raw_bytes(bytes: &[u8]) -> Result<NetworkId, &'static str> {
+    if bytes.len() != Hash::LENGTH {
+        return Err("networkId must contain exactly 32 raw genesis-hash bytes");
+    }
+    let hash = hex::encode(bytes)
+        .parse::<Hash>()
+        .map_err(|_| "networkId must be an exact marked Iroha hash")?;
+    Ok(NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        hash
+    )))
+}
+
 unsafe fn read_governance_selector_bridge(
     ptr: *const c_char,
     len: c_ulong,
@@ -700,14 +714,6 @@ fn kagemusha_canonical_decode_limits_with_profile(
             )
             .saturating_add(fixed_allocation_allowance),
         KAGEMUSHA_CANONICAL_MAX_NESTING_DEPTH,
-    )
-}
-
-fn kagemusha_canonical_decode_limits(encoded_len: usize) -> norito::DecodeLimits {
-    kagemusha_canonical_decode_limits_with_profile(
-        encoded_len,
-        0,
-        KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
     )
 }
 
@@ -2654,7 +2660,7 @@ unsafe fn read_distid_or_default(
 }
 
 struct AssetTxInputs {
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     asset_definition: AssetDefinitionId,
     asset_scope: AssetBalanceScope,
@@ -2665,8 +2671,8 @@ struct AssetTxInputs {
 }
 
 struct AssetInputPointers {
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     asset_definition_ptr: *const c_char,
@@ -2693,8 +2699,8 @@ where
     F: Fn(&[u8]) -> BridgeResult<PrivateKey>,
 {
     let AssetInputPointers {
-        chain_ptr,
-        chain_len,
+        network_id_ptr,
+        network_id_len,
         authority_ptr,
         authority_len,
         asset_definition_ptr,
@@ -2708,7 +2714,7 @@ where
         private_key_ptr,
         private_key_len,
     } = ptrs;
-    let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
+    let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
     let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
     let asset_definition_str =
         unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
@@ -2724,7 +2730,7 @@ where
         parse_asset_definition_with_balance_scope(asset_definition_str)?;
 
     Ok(AssetTxInputs {
-        chain_id: chain.parse().map_err(|_| BridgeError::ChainId)?,
+        network_id,
         authority: parse_account_id(authority_str)?,
         asset_definition,
         asset_scope,
@@ -2986,6 +2992,11 @@ fn inspect_detached_transaction_scaffold(
             .map(JsonValue::from)
             .map_err(|_| BridgeError::DetachedTransactionScaffold)
     })?;
+    let network_id = tx
+        .network_id()
+        .ok_or(BridgeError::DetachedTransactionScaffold)?;
+    let network_id =
+        norito::json::to_value(network_id).map_err(|_| BridgeError::DetachedTransactionScaffold)?;
 
     let json = JsonValue::Object(JsonMap::from_iter([
         (
@@ -3000,7 +3011,7 @@ fn inspect_detached_transaction_scaffold(
             "authority".into(),
             JsonValue::from(tx.authority().to_string()),
         ),
-        ("chain".into(), JsonValue::from(tx.chain().to_string())),
+        ("network_id".into(), network_id),
         ("creation_time_ms".into(), JsonValue::from(creation_time_ms)),
         ("time_to_live_ms".into(), time_to_live_ms),
         ("metadata".into(), metadata),
@@ -3595,7 +3606,7 @@ fn signed_transaction_bridge_debug_json(tx: &SignedTransaction) -> JsonValue {
 }
 
 fn encode_asset_transaction<F>(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
@@ -3607,7 +3618,7 @@ where
     F: FnOnce() -> Executable,
 {
     encode_asset_transaction_with_nonce(
-        chain_id,
+        network_id,
         authority,
         AssetTransactionTiming {
             creation_time_ms,
@@ -3628,7 +3639,7 @@ struct AssetTransactionTiming {
 }
 
 fn encode_asset_transaction_with_nonce<F>(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     timing: AssetTransactionTiming,
     fee_payment: FeePaymentIntent,
@@ -3639,7 +3650,7 @@ where
     F: FnOnce() -> Executable,
 {
     encode_asset_transaction_with_nonce_and_metadata(
-        chain_id,
+        network_id,
         authority,
         timing.creation_time_ms,
         timing.ttl,
@@ -3653,7 +3664,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn encode_asset_transaction_with_nonce_and_metadata<F>(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
@@ -3667,7 +3678,7 @@ where
     F: FnOnce() -> Executable,
 {
     let ttl_duration = ttl_option.map(|ttl| Duration::from_millis(ttl.get()));
-    let mut builder = TransactionBuilder::new(chain_id, authority, fee_payment);
+    let mut builder = TransactionBuilder::new(network_id, authority, fee_payment);
     builder = builder.with_executable(build_executable());
     if !metadata.is_empty() {
         builder = builder.with_metadata(metadata);
@@ -3690,7 +3701,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn encode_asset_transaction_with_nonce_fee_payment_and_metadata<F>(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
@@ -3704,7 +3715,7 @@ where
     F: FnOnce() -> Executable,
 {
     let ttl_duration = ttl_option.map(|ttl| Duration::from_millis(ttl.get()));
-    let mut builder = TransactionBuilder::new(chain_id, authority, fee_payment)
+    let mut builder = TransactionBuilder::new(network_id, authority, fee_payment)
         .with_executable(build_executable());
     if !metadata.is_empty() {
         builder = builder.with_metadata(metadata);
@@ -3726,7 +3737,7 @@ where
 }
 
 fn encode_instruction_transaction(
-    chain_id: ChainId,
+    network_id: NetworkId,
     authority: AccountId,
     creation_time_ms: u64,
     ttl_option: Option<NonZeroU64>,
@@ -3735,7 +3746,7 @@ fn encode_instruction_transaction(
     instruction: InstructionBox,
 ) -> BridgeResult<(Vec<u8>, [u8; 32])> {
     encode_asset_transaction(
-        chain_id,
+        network_id,
         authority,
         creation_time_ms,
         ttl_option,
@@ -7314,6 +7325,12 @@ fn validate_kagemusha_recursive_spend_init_request_shape_v4(
         || request.topup_finality_proof.anchor.anchor_digest != anchor.anchor_digest
         || request.topup_finality_proof.commit_qc.height_context.height != anchor.finalized_height
         || request.topup_finality_roster_artifact.chain_id != anchor.chain_id
+        || request.topup_finality_roster_artifact.network_id
+            != request
+                .topup_finality_proof
+                .commit_qc
+                .height_context
+                .network_id
         || request.topup_finality_roster_artifact.artifact_generation
             != request.artifact_binding.generation
     {
@@ -14381,6 +14398,14 @@ mod detached_transaction_scaffold_tests {
 
     use super::*;
 
+    fn detached_test_network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(Hash::new(
+            b"detached-bridge-test",
+        )))
+    }
+
     fn fixture_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("valid deterministic Ed25519 fixture")
@@ -14393,7 +14418,7 @@ mod detached_transaction_scaffold_tests {
     ) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            ChainId::from("detached-bridge-test"),
+            detached_test_network_id(),
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(9_000_000)),
         )
@@ -14487,6 +14512,30 @@ mod detached_transaction_scaffold_tests {
             object.get("authority").and_then(JsonValue::as_str),
             Some(tx.authority().to_string().as_str())
         );
+        let expected_network_id = norito::json::to_value(
+            tx.network_id()
+                .expect("detached scaffold must use the network transaction domain"),
+        )
+        .expect("NetworkId JSON projection");
+        assert_eq!(object.get("network_id"), Some(&expected_network_id));
+        let network_literal = expected_network_id
+            .as_str()
+            .expect("NetworkId JSON must be a string");
+        assert_eq!(network_literal.len(), CANONICAL_NETWORK_ID_LITERAL_BYTES);
+        let reparsed = unsafe {
+            read_network_id_bridge(
+                network_literal.as_ptr().cast::<c_char>(),
+                network_literal.len() as c_ulong,
+            )
+        }
+        .expect("detached scaffold must expose canonical checksummed NetworkId text");
+        assert_eq!(tx.network_id(), Some(&reparsed));
+        for retired_key in ["chain", "chain_id", "chainId"] {
+            assert!(
+                object.get(retired_key).is_none(),
+                "detached scaffold must not expose retired identity key {retired_key}"
+            );
+        }
         assert_eq!(
             object
                 .get("payload_signing_hash_hex")
@@ -14570,6 +14619,24 @@ mod detached_transaction_scaffold_tests {
     }
 
     #[test]
+    fn inspector_rejects_genesis_domain() {
+        let keypair = fixture_keypair(0x39);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let executable = contract_scaffold(&keypair).instructions().clone();
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(9_000_000)),
+        )
+        .with_executable(executable)
+        .sign(keypair.private_key());
+
+        assert!(
+            inspect_detached_transaction_scaffold(&transaction.encode_versioned()).is_err(),
+            "detached transaction scaffolds must use the network transaction domain"
+        );
+    }
+
+    #[test]
     fn inspector_rejects_nonce_attachments_and_multisig_sidecars() {
         let keypair = fixture_keypair(0x34);
         let with_nonce = scaffold_transaction(
@@ -14589,7 +14656,7 @@ mod detached_transaction_scaffold_tests {
         let contract = contract_scaffold(&keypair).instructions().clone();
         let placeholder = fixture_keypair(0xA1);
         let with_attachments = TransactionBuilder::new(
-            ChainId::from("detached-bridge-test"),
+            detached_test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15811,7 +15878,7 @@ mod kagemusha_bridge_tests {
     }
 
     fn receiver_offer_finality_chain(
-        chain_id: &ChainId,
+        network_id: &iroha_data_model::NetworkId,
         proof_count: usize,
         first_time_ms: u64,
         ordinary_writes_root: Hash,
@@ -15869,7 +15936,7 @@ mod kagemusha_bridge_tests {
                 0,
             );
             let context = HeightContext {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
                 height,
                 epoch: 0,
@@ -16094,8 +16161,13 @@ mod kagemusha_bridge_tests {
         };
         let ordinary_writes_root = receiver_offer_sparse_root(&active_receiver_witness);
         assert!(active_receiver_witness.verify(ordinary_writes_root));
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::new(b"receiver-offer-finality-test-genesis"),
+        ));
         let finality_chain = receiver_offer_finality_chain(
-            request.chain_id(),
+            &network_id,
             proof_count,
             first_time_ms,
             ordinary_writes_root,
@@ -18241,7 +18313,17 @@ mod kagemusha_bridge_tests {
     }
 
     #[cfg(feature = "privacy-production-enabled")]
+    fn production_topup_finality_network_id_v2() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(Hash::new(
+            b"production SBD acceptance network",
+        )))
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
     fn production_topup_finality_roster_v2(
+        network_id: iroha_data_model::NetworkId,
         chain_id: &ChainId,
         generation: &str,
     ) -> (
@@ -18286,6 +18368,7 @@ mod kagemusha_bridge_tests {
             KagemushaTopUpFinalityRosterArtifactV2 {
                 version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
                 chain_id: chain_id.clone(),
+                network_id,
                 artifact_generation: generation.to_owned(),
                 windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
                     activates_at_height: 1,
@@ -18392,7 +18475,13 @@ mod kagemusha_bridge_tests {
             configured_taira_topup_finality_roster_v4(&chain_id, generation);
         let taira_release_catalog = configured_taira_roster.is_some();
         let (topup_roster, topup_signing_keys) = configured_taira_roster.map_or_else(
-            || production_topup_finality_roster_v2(&chain_id, generation),
+            || {
+                production_topup_finality_roster_v2(
+                    production_topup_finality_network_id_v2(),
+                    &chain_id,
+                    generation,
+                )
+            },
             |roster| (roster, Vec::new()),
         );
         let activation_height = if taira_release_catalog {
@@ -18728,7 +18817,7 @@ mod kagemusha_bridge_tests {
             b"production SBD acceptance parent context",
         )));
         let context = HeightContext {
-            chain_id: anchor.chain_id.clone(),
+            network_id: topup_roster.network_id,
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -18856,7 +18945,7 @@ mod kagemusha_bridge_tests {
             .expect("production SBD live finality artifact");
         let projection = KagemushaTopUpFinalityHeightContextV2 {
             context_id: context.id(),
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             protocol_version: context.protocol_version,
             height: context.height,
             epoch: context.epoch,
@@ -18994,6 +19083,7 @@ mod kagemusha_bridge_tests {
         .finalize_digest()
         .expect("release-key regression top-up anchor");
         let (local_roster, local_signing_keys) = production_topup_finality_roster_v2(
+            production_topup_finality_network_id_v2(),
             &fixture.manifest.chain_id,
             &fixture.manifest.generation,
         );
@@ -24257,7 +24347,11 @@ mod kagemusha_bridge_tests {
         let keypair = fixture_key_pair(0x5A);
         let authority = AccountId::new(keypair.public_key().clone());
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            ChainId::from("bridge-checked-signing"),
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(Hash::new(
+                b"bridge-checked-signing-genesis",
+            ))),
             authority.clone(),
             1_736_000_000_000,
             None,
@@ -24753,8 +24847,8 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_err(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -24784,8 +24878,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
 
         let inputs = unsafe {
             gather_asset_tx_inputs(AssetInputPointers {
-                chain_ptr,
-                chain_len,
+                network_id_ptr,
+                network_id_len,
                 authority_ptr,
                 authority_len,
                 asset_definition_ptr,
@@ -24802,7 +24896,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
         };
 
         let AssetTxInputs {
-            chain_id,
+            network_id,
             authority,
             asset_definition,
             asset_scope,
@@ -24819,7 +24913,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
             AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction_with_nonce_fee_payment_and_metadata(
-                chain_id,
+                network_id,
                 authority,
                 creation_time_ms,
                 ttl,
@@ -24843,8 +24937,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -24877,8 +24971,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
         let inputs = unsafe {
             gather_asset_tx_inputs_with_parser(
                 AssetInputPointers {
-                    chain_ptr,
-                    chain_len,
+                    network_id_ptr,
+                    network_id_len,
                     authority_ptr,
                     authority_len,
                     asset_definition_ptr,
@@ -24897,7 +24991,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
         };
 
         let AssetTxInputs {
-            chain_id,
+            network_id,
             authority,
             asset_definition,
             asset_scope,
@@ -24914,7 +25008,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction_with_nonce_fee_payment_and_metadata(
-                chain_id,
+                network_id,
                 authority,
                 creation_time_ms,
                 ttl,
@@ -24981,8 +25075,8 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25013,11 +25107,10 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let asset_definition_str =
             unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -25038,7 +25131,7 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25060,8 +25153,8 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25094,11 +25187,10 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let asset_definition_str =
             unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let asset_definition = parse_asset_definition(asset_definition_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -25119,7 +25211,7 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25141,8 +25233,8 @@ pub unsafe extern "C" fn connect_norito_encode_register_zk_asset_signed_transact
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25172,13 +25264,12 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let object_str = unsafe { read_string_bridge(object_ptr, object_len) }?;
         let key_str = unsafe { read_string_bridge(key_ptr, key_len) }?;
         let value_slice = unsafe { slice::from_raw_parts(value_ptr, value_len as usize) };
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let target = parse_metadata_target(target_kind, object_str)?;
@@ -25191,7 +25282,7 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25210,8 +25301,8 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25243,13 +25334,12 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let object_str = unsafe { read_string_bridge(object_ptr, object_len) }?;
         let key_str = unsafe { read_string_bridge(key_ptr, key_len) }?;
         let value_slice = unsafe { slice::from_raw_parts(value_ptr, value_len as usize) };
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let target = parse_metadata_target(target_kind, object_str)?;
@@ -25262,7 +25352,7 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25281,8 +25371,8 @@ pub unsafe extern "C" fn connect_norito_encode_set_key_value_signed_transaction_
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25310,12 +25400,11 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let object_str = unsafe { read_string_bridge(object_ptr, object_len) }?;
         let key_str = unsafe { read_string_bridge(key_ptr, key_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let target = parse_metadata_target(target_kind, object_str)?;
@@ -25327,7 +25416,7 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25346,8 +25435,8 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25377,12 +25466,11 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let object_str = unsafe { read_string_bridge(object_ptr, object_len) }?;
         let key_str = unsafe { read_string_bridge(key_ptr, key_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let target = parse_metadata_target(target_kind, object_str)?;
@@ -25394,7 +25482,7 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25413,8 +25501,8 @@ pub unsafe extern "C" fn connect_norito_encode_remove_key_value_signed_transacti
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25450,7 +25538,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let contract_address_raw =
             unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
@@ -25458,7 +25545,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let contract_address = contract_address_raw
             .parse()
@@ -25515,7 +25602,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25534,8 +25621,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25573,7 +25660,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let contract_address_raw =
             unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
@@ -25581,7 +25667,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let contract_address = contract_address_raw
             .parse()
@@ -25638,7 +25724,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25657,8 +25743,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25695,12 +25781,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
 
         let referendum_id =
             unsafe { read_governance_selector_bridge(referendum_id_ptr, referendum_id_len) }?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let owner_str = unsafe { read_string_bridge(owner_ptr, owner_len) }?;
         let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let owner = parse_account_id(owner_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -25720,7 +25805,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25739,8 +25824,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25779,12 +25864,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
         let referendum_id =
             unsafe { read_governance_selector_bridge(referendum_id_ptr, referendum_id_len) }?;
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let owner_str = unsafe { read_string_bridge(owner_ptr, owner_len) }?;
         let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let owner = parse_account_id(owner_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -25804,7 +25888,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25823,8 +25907,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_plain_ballot_sign
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25856,13 +25940,12 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
 
         let election_id =
             unsafe { read_governance_selector_bridge(election_id_ptr, election_id_len) }?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let proof_raw = unsafe { read_string_bridge(proof_b64_ptr, proof_b64_len) }?;
         let inputs_slice =
             unsafe { slice::from_raw_parts(public_inputs_ptr, public_inputs_len as usize) };
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
 
@@ -25888,7 +25971,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25907,8 +25990,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -25942,13 +26025,12 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
         let election_id =
             unsafe { read_governance_selector_bridge(election_id_ptr, election_id_len) }?;
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let proof_raw = unsafe { read_string_bridge(proof_b64_ptr, proof_b64_len) }?;
         let inputs_slice =
             unsafe { slice::from_raw_parts(public_inputs_ptr, public_inputs_len as usize) };
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
 
@@ -25974,7 +26056,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -25993,8 +26075,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_cast_zk_ballot_signed_
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -26023,12 +26105,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let referendum_hex = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
         let preimage_hex = unsafe { read_string_bridge(preimage_hash_ptr, preimage_hash_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let referendum_id = parse_hex_32(&referendum_hex)?;
@@ -26050,7 +26131,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -26069,8 +26150,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -26101,12 +26182,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let referendum_hex = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
         let preimage_hex = unsafe { read_string_bridge(preimage_hash_ptr, preimage_hash_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let referendum_id = parse_hex_32(&referendum_hex)?;
@@ -26128,7 +26208,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -26147,8 +26227,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_enact_referendum_signe
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -26189,10 +26269,9 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
         if referendum_id != proposal_hex {
             return Err(BridgeError::Governance);
         }
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let proposal_id = parse_hex_32(&proposal_hex)?;
@@ -26208,7 +26287,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -26227,8 +26306,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -26271,10 +26350,9 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
             return Err(BridgeError::Governance);
         }
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let proposal_id = parse_hex_32(&proposal_hex)?;
@@ -26290,7 +26368,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -26309,8 +26387,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_finalize_referendum_si
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -26336,12 +26414,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let members_slice =
             unsafe { slice::from_raw_parts(members_json_ptr, members_json_len as usize) };
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
@@ -26358,7 +26435,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -26377,8 +26454,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -26406,12 +26483,11 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let members_slice =
             unsafe { slice::from_raw_parts(members_json_ptr, members_json_len as usize) };
 
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
@@ -26428,7 +26504,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -26890,53 +26966,8 @@ mod accel_tests {
         CString::new(s).expect("valid cstring")
     }
 
-    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
-        let hash: [u8; Hash::LENGTH] = Hash::new(bytes).into();
-        hex::encode(hash)
-    }
-
-    fn proof_attachment_json(backend: &str, proof_b64: &str, envelope_hash_hex: &str) -> String {
-        format!(
-            r#"{{"backend":"{backend}","proof_b64":"{proof_b64}","vk_ref":{{"backend":"{backend}","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-        )
-    }
-
-    fn parse_proof_attachment_test_json(json: &str) -> BridgeResult<ProofAttachment> {
-        parse_proof_attachment_from_json_slice(json.as_bytes())
-    }
-
-    fn proof_attachment_json_with_lane(lane: &str) -> String {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
-        json
-    }
-
-    fn json_byte_array(bytes: &[u8]) -> String {
-        format!(
-            "[{}]",
-            bytes
-                .iter()
-                .map(u8::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    }
-
-    fn lane_privacy_json(leaf_index: u64, audit_path: &[Option<Vec<u8>>]) -> String {
-        let leaf = json_byte_array(&[0xAA; 32]);
-        let path = audit_path
-            .iter()
-            .map(|sibling| {
-                sibling
-                    .as_deref()
-                    .map_or_else(|| "null".to_owned(), json_byte_array)
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            r#"{{"commitment_id":7,"witness":{{"kind":"merkle","payload":{{"leaf":{leaf},"proof":{{"leaf_index":{leaf_index},"audit_path":[{path}]}}}}}}}}"#
-        )
+    fn network_id_cstring(_test_case: &str) -> CString {
+        cstring("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
     }
 
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -26966,7 +26997,7 @@ mod accel_tests {
         algorithm: Option<Algorithm>,
         valid_private_key: bool,
     ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("governance-plain-ballot");
         let (authority, private) = sample_account("governance", 30);
         let owner = sample_destination("governance", 31);
         let amount = cstring(amount);
@@ -27043,7 +27074,7 @@ mod accel_tests {
         algorithm: Option<Algorithm>,
         valid_private_key: bool,
     ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("governance-zk-ballot");
         let (authority, private) = sample_account("governance", 32);
         let proof = b"AQ==";
         let public_inputs = b"{}";
@@ -27130,7 +27161,7 @@ mod accel_tests {
         algorithm: Option<Algorithm>,
         valid_private_key: bool,
     ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("governance-finalize");
         let (authority, private) = sample_account("governance", 33);
         let proposal_id = cstring(proposal_id);
         let invalid_private = [0xFF_u8];
@@ -27855,7 +27886,7 @@ mod accel_tests {
     #[test]
     fn encode_transfer_preserves_dataspace_balance_scope_suffix() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = cstring("00000042");
+        let chain = network_id_cstring("swift-parity-transfer");
         let authority = fixture_authority("wonderland");
         let asset_definition = cstring(&format!(
             "{}#dataspace:10",
@@ -27955,7 +27986,7 @@ mod accel_tests {
     #[test]
     fn swift_parity_transfer_hash_matches_fixture() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = cstring("00000042");
+        let chain = network_id_cstring("swift-parity-transfer");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("15.7500");
@@ -28001,7 +28032,7 @@ mod accel_tests {
     #[test]
     fn swift_parity_mint_hash_matches_fixture() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = cstring("00000043");
+        let chain = network_id_cstring("swift-parity-mint");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("42.0100");
@@ -28047,7 +28078,7 @@ mod accel_tests {
     #[test]
     fn swift_parity_burn_hash_matches_fixture() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(42);
-        let chain = cstring("00000044");
+        let chain = network_id_cstring("swift-parity-burn");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("5.2500");
@@ -28091,9 +28122,13 @@ mod accel_tests {
     }
 
     #[test]
-    fn transfer_encoder_success() {
+    fn transfer_encoder_constructs_exact_network_domain_for_every_canonical_quantity() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let network_id = network_id_cstring("transfer-success");
+        let expected_network_id = unsafe {
+            read_network_id_bridge(network_id.as_ptr(), network_id.as_bytes().len() as c_ulong)
+        }
+        .expect("canonical test NetworkId must parse");
         let (authority, private) = sample_account("bank", 1);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let destination = sample_destination("bank", 1);
@@ -28105,8 +28140,8 @@ mod accel_tests {
             let mut out_hash = [0u8; 32];
             let result = unsafe {
                 connect_norito_encode_transfer_signed_transaction(
-                    chain.as_ptr(),
-                    chain.as_bytes().len() as c_ulong,
+                    network_id.as_ptr(),
+                    network_id.as_bytes().len() as c_ulong,
                     authority.as_ptr(),
                     authority.as_bytes().len() as c_ulong,
                     1,
@@ -28135,6 +28170,30 @@ mod accel_tests {
             assert!(out_signed_len > 0);
             assert_ne!(out_hash, [0u8; 32], "hash should be populated");
 
+            let signed = decode_signed(out_signed_ptr, out_signed_len);
+            assert_eq!(signed.network_id(), Some(&expected_network_id));
+            let payload_json = norito::json::to_value(signed.payload())
+                .expect("signed payload must project to canonical JSON");
+            let payload = payload_json.as_object().expect("payload JSON object");
+            let domain = payload
+                .get("domain")
+                .and_then(JsonValue::as_object)
+                .expect("closed transaction domain object");
+            assert_eq!(
+                domain.get("kind").and_then(JsonValue::as_str),
+                Some("network")
+            );
+            assert_eq!(
+                domain.get("value").and_then(JsonValue::as_str),
+                Some(network_id.to_str().expect("NetworkId is UTF-8"))
+            );
+            for retired_key in ["chain", "chain_id", "chainId"] {
+                assert!(
+                    payload.get(retired_key).is_none() && domain.get(retired_key).is_none(),
+                    "ordinary transaction JSON must not expose retired identity key {retired_key}"
+                );
+            }
+
             unsafe {
                 free(out_signed_ptr.cast());
             }
@@ -28144,7 +28203,7 @@ mod accel_tests {
     #[test]
     fn transfer_encoder_nonce_roundtrip() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("transfer-nonce");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
@@ -28195,7 +28254,7 @@ mod accel_tests {
     #[test]
     fn transfer_encoder_invalid_nonce() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("transfer-invalid-nonce");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
@@ -28238,7 +28297,7 @@ mod accel_tests {
     #[test]
     fn transfer_encoder_nonce_roundtrip_alg() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("transfer-nonce-alg");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
@@ -28290,7 +28349,7 @@ mod accel_tests {
     #[test]
     fn transfer_encoder_requires_typed_sponsor_payment() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("transfer-sponsor-payment");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
@@ -28347,7 +28406,7 @@ mod accel_tests {
     #[test]
     fn mint_encoder_nonce_roundtrip() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("mint-nonce");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("5");
@@ -28394,7 +28453,7 @@ mod accel_tests {
     #[test]
     fn mint_encoder_nonce_roundtrip_alg() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("mint-nonce-alg");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("5");
@@ -28442,7 +28501,7 @@ mod accel_tests {
     #[test]
     fn burn_encoder_nonce_roundtrip() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("burn-nonce");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("3");
@@ -28489,7 +28548,7 @@ mod accel_tests {
     #[test]
     fn burn_encoder_nonce_roundtrip_alg() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("burn-nonce-alg");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("3");
@@ -28677,375 +28736,9 @@ mod accel_tests {
     }
 
     #[test]
-    fn proof_attachment_json_rejects_legacy_inline_vk_field() {
-        for field in [
-            "vk_inline",
-            "vkInline",
-            "verifyingKeyInline",
-            "verifying_key_inline",
-        ] {
-            let json = format!(
-                r#"{{"backend":"groth16","proof_b64":"AA==","vk_ref":{{"backend":"groth16","name":"vk1"}},"{field}":{{"backend":"groth16","bytes_b64":"AQID"}}}}"#
-            );
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("legacy inline verifying-key field rejected");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_accepts_matching_envelope_hash() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        let attachment =
-            parse_proof_attachment_test_json(&json).expect("matching envelope hash should parse");
-        assert_eq!(attachment.envelope_hash, Some(Hash::new([0_u8]).into()));
-    }
-
-    #[test]
-    fn proof_attachment_json_accepts_typed_lane_privacy_and_marks_raw_siblings() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let lane = lane_privacy_json(1, &[Some(vec![0x22; 32]), Some(vec![0x44; 32])]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(json.len() - 1, &format!(r#", "lane_privacy":{lane}"#));
-        let attachment = parse_proof_attachment_test_json(&json).expect("typed lane privacy");
-        let lane = attachment.lane_privacy.expect("lane privacy attachment");
-        let iroha_data_model::nexus::LanePrivacyWitness::Merkle(witness) = lane.witness;
-        assert_eq!(witness.proof.leaf_index(), 1);
-        assert_eq!(witness.proof.audit_path().len(), 2);
-        for sibling in witness.proof.audit_path() {
-            let sibling = sibling.as_ref().expect("complete lane path");
-            assert_eq!(sibling.as_ref()[31] & 1, 1);
-        }
-    }
-
-    #[test]
-    fn lane_privacy_json_rejects_incomplete_impossible_and_oversized_paths() {
-        let sibling = Some(vec![0x22; 32]);
-        let too_deep = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
-        let cases = [
-            lane_privacy_json(0, &[]),
-            lane_privacy_json(0, &[None]),
-            lane_privacy_json(2, std::slice::from_ref(&sibling)),
-            lane_privacy_json(0, &[Some(vec![0x22; 31])]),
-            lane_privacy_json(0, &too_deep),
-            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
-                r#""proof":{"#,
-                r#""shadow":0,"proof":{"#,
-                1,
-            ),
-            lane_privacy_json(0, std::slice::from_ref(&sibling)).replacen(
-                r#""merkle""#,
-                r#""snark""#,
-                1,
-            ),
-        ];
-        for lane in cases {
-            let json = proof_attachment_json_with_lane(&lane);
-            let error = parse_proof_attachment_test_json(&json)
-                .expect_err("malformed lane privacy path must reject");
-            assert!(matches!(error, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_base64_is_canonical_and_bounded_before_use() {
-        assert_eq!(
-            decode_canonical_bounded_base64("AA==", 1).expect("canonical one byte"),
-            vec![0]
-        );
-        assert_eq!(
-            decode_canonical_bounded_base64("AAA=", 2).expect("canonical two bytes"),
-            vec![0, 0]
-        );
-        for (value, maximum) in [
-            ("AAAA", 2),
-            ("AB==", 1),
-            ("AAB=", 2),
-            ("AA==\n", 1),
-            ("AA=A", 3),
-            ("AA_-", 3),
-        ] {
-            assert!(
-                decode_canonical_bounded_base64(value, maximum).is_err(),
-                "base64 {value:?} with maximum {maximum} must reject"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_input_is_bounded_before_parsing() {
-        assert_eq!(
-            PROOF_ATTACHMENT_JSON_MAX_BASE64_BYTES_V1,
-            PROOF_BOX_MAX_ENCODED_BYTES_V1.div_ceil(3) * 4
-        );
-        assert!(!proof_attachment_json_length_is_valid(0));
-        assert!(proof_attachment_json_length_is_valid(
-            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
-        ));
-        assert!(!proof_attachment_json_length_is_valid(
-            PROOF_ATTACHMENT_JSON_MAX_BYTES_V1
-                .checked_add(1)
-                .expect("JSON limit has a successor")
-        ));
-
-        let byte = b'{';
-        let oversized = c_ulong::try_from(PROOF_ATTACHMENT_JSON_MAX_BYTES_V1 + 1)
-            .expect("proof attachment JSON limit fits the C ABI length");
-        assert!(matches!(
-            parse_proof_attachment_from_json_bytes((&byte as *const u8).cast(), oversized),
-            Err(BridgeError::ProofAttachment)
-        ));
-    }
-
-    #[test]
-    fn proof_attachment_json_small_schema_strings_are_prebounded() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let oversized_identifier = "a".repeat(VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1);
-        let oversized_kind = "m".repeat(17);
-        let lane = lane_privacy_json(0, &[Some(vec![0x22; 32])]);
-
-        let cases = [
-            proof_attachment_json(&oversized_identifier, "AA==", &envelope_hash_hex),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"{oversized_identifier}"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            proof_attachment_json("halo2/ipa", "AA==", &format!("{envelope_hash_hex}0")),
-            proof_attachment_json_with_lane(&lane.replacen("merkle", &oversized_kind, 1)),
-        ];
-
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "oversized semantic string must reject before retention"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_rejects_types_duplicates_and_nulls() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let numeric_payload = "0,".repeat(16_384);
-        let cases = [
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":[{numeric_payload}0],"vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            ),
-            format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}","lane_privacy":null}}"#
-            ),
-        ];
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "adversarial JSON must reject"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_rejects_trailing_commas_at_every_object_depth() {
-        fn insert_before_closing_brace(value: &str, closing_from_end: usize) -> String {
-            let position = value
-                .char_indices()
-                .rev()
-                .filter_map(|(index, character)| (character == '}').then_some(index))
-                .nth(closing_from_end - 1)
-                .expect("requested object depth exists");
-            let mut mutated = value.to_owned();
-            mutated.insert(position, ',');
-            mutated
-        }
-
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let plain = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        let sibling = Some(vec![0x22; 32]);
-        let lane = lane_privacy_json(0, std::slice::from_ref(&sibling));
-
-        let mut cases = vec![
-            insert_before_closing_brace(&plain, 1),
-            plain.replacen(r#""name":"vk1"}"#, r#""name":"vk1",}"#, 1),
-        ];
-        // From the end of the isolated lane object these are respectively the
-        // lane, witness, payload, and Merkle-proof object boundaries.
-        for closing_from_end in 1..=4 {
-            let malformed_lane = insert_before_closing_brace(&lane, closing_from_end);
-            cases.push(proof_attachment_json_with_lane(&malformed_lane));
-        }
-
-        for json in cases {
-            assert!(
-                parse_proof_attachment_test_json(&json).is_err(),
-                "trailing object comma must reject: {json}"
-            );
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_streaming_parser_is_order_independent_and_path_bounded() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let reordered = format!(
-            r#"{{"envelope_hash_hex":"{envelope_hash_hex}","vk_ref":{{"name":"vk1","backend":"halo2/ipa"}},"proof_b64":"AA==","backend":"halo2/ipa"}}"#
-        );
-        parse_proof_attachment_test_json(&reordered).expect("field order is not semantic");
-
-        let sibling = Some(vec![0x22; 32]);
-        let maximum_path = vec![sibling.clone(); LANE_PRIVACY_MAX_MERKLE_DEPTH_V1];
-        let maximum_lane = lane_privacy_json(0, &maximum_path);
-        parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&maximum_lane))
-            .expect("maximum-depth complete path must parse");
-
-        let oversized_path = vec![sibling; LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1];
-        let oversized_lane = lane_privacy_json(0, &oversized_path);
-        assert!(
-            parse_proof_attachment_test_json(&proof_attachment_json_with_lane(&oversized_lane))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_missing_envelope_hash() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-        )
-        .expect_err("envelope_hash_hex must be present");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_forged_envelope_hash() {
-        let forged_hash = hex::encode([0x11_u8; 32]);
-        let json = proof_attachment_json("halo2/ipa", "AA==", &forged_hash);
-        let err = parse_proof_attachment_test_json(&json)
-            .expect_err("envelope_hash_hex must match proof bytes");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_noncanonical_envelope_hash_hex() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        for noncanonical in [
-            envelope_hash_hex.to_uppercase(),
-            format!("0x{envelope_hash_hex}"),
-            format!(" {envelope_hash_hex}"),
-        ] {
-            let json = proof_attachment_json("halo2/ipa", "AA==", &noncanonical);
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("envelope_hash_hex must be exact lowercase hex");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_zero_vk_commitment() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
-        json.insert_str(
-            json.len() - 1,
-            r#","vk_commitment_hex":"0000000000000000000000000000000000000000000000000000000000000000""#,
-        );
-        let err =
-            parse_proof_attachment_test_json(&json).expect_err("zero vk commitment must reject");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_empty_proof_bytes() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[]);
-        let json = proof_attachment_json("halo2/ipa", "", &envelope_hash_hex);
-        let err =
-            parse_proof_attachment_test_json(&json).expect_err("empty proof bytes must reject");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_retired_proof_backend_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_backend":"stark/fri","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-        )
-        .expect_err("retired proof_backend field should be rejected by bridge parser");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_bad_fixed_hash_lengths() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_commitment_hex":"abcd"}"#,
-        )
-        .expect_err("short vk_commitment_hex should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_non_string_vk_commitment() {
-        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
-        for non_string in ["null", "false", "0", "[]", "{}"] {
-            let json = format!(
-                r#"{{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{{"backend":"halo2/ipa","name":"vk1"}},"vk_commitment_hex":{non_string},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
-            );
-            let err = parse_proof_attachment_test_json(&json)
-                .expect_err("a present vk commitment must be canonical lowercase hex");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_vk_ref_backend_mismatch() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"stark/fri","name":"vk1"}}"#,
-        )
-        .expect_err("vk_ref backend mismatch should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_vk_reference_shadow_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"},"vk_reference":{"backend":"halo2/ipa","name":"shadow"}}"#,
-        )
-        .expect_err("vk_reference shadow field should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_nested_vk_ref_shadow_field() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1","vk_reference":"shadow"}}"#,
-        )
-        .expect_err("nested vk_ref shadow field should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_blank_vk_ref_name() {
-        let err = parse_proof_attachment_test_json(
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"   "}}"#,
-        )
-        .expect_err("blank vk_ref name should be rejected");
-        assert!(matches!(err, BridgeError::ProofAttachment));
-    }
-
-    #[test]
-    fn proof_attachment_json_rejects_blank_backend_fields() {
-        for json in [
-            r#"{"backend":"   ","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
-            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"   ","name":"vk1"}}"#,
-        ] {
-            let err = parse_proof_attachment_test_json(json)
-                .expect_err("blank backend field should be rejected");
-            assert!(matches!(err, BridgeError::ProofAttachment));
-        }
-    }
-
-    #[test]
     fn transfer_encoder_invalid_quantity() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("transfer-invalid-quantity");
         let (authority, private) = sample_account("bank", 0);
         let asset_definition = asset_definition_cstring("bank", "usd");
         let destination = sample_destination("bank", 1);
@@ -29099,7 +28792,7 @@ mod accel_tests {
     #[test]
     fn multisig_register_encoder_success() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("multisig-register");
         let (authority, private) = sample_account("default", 0);
         let scoped_account = cstring(authority.to_str().unwrap());
         let member_a_str = sample_destination("default", 2);
@@ -29162,7 +28855,7 @@ mod accel_tests {
     #[test]
     fn multisig_register_encoder_invalid_spec() {
         let _guard = chain_guard();
-        let chain = cstring("test-chain");
+        let chain = network_id_cstring("multisig-register-invalid");
         let (authority, private) = sample_account("bank", 0);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
@@ -29257,8 +28950,8 @@ mod secp256k1_tests {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29288,8 +28981,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
 
         let inputs = unsafe {
             gather_asset_tx_inputs(AssetInputPointers {
-                chain_ptr,
-                chain_len,
+                network_id_ptr,
+                network_id_len,
                 authority_ptr,
                 authority_len,
                 asset_definition_ptr,
@@ -29306,7 +28999,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
         };
 
         let AssetTxInputs {
-            chain_id,
+            network_id,
             authority,
             asset_definition,
             asset_scope,
@@ -29322,7 +29015,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
+            network_id,
             authority,
             AssetTransactionTiming {
                 creation_time_ms,
@@ -29347,8 +29040,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29381,8 +29074,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
         let inputs = unsafe {
             gather_asset_tx_inputs_with_parser(
                 AssetInputPointers {
-                    chain_ptr,
-                    chain_len,
+                    network_id_ptr,
+                    network_id_len,
                     authority_ptr,
                     authority_len,
                     asset_definition_ptr,
@@ -29401,7 +29094,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
         };
 
         let AssetTxInputs {
-            chain_id,
+            network_id,
             authority,
             asset_definition,
             asset_scope,
@@ -29417,7 +29110,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
+            network_id,
             authority,
             AssetTransactionTiming {
                 creation_time_ms,
@@ -29442,8 +29135,8 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29470,10 +29163,9 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -29484,7 +29176,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -29514,8 +29206,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29544,10 +29236,9 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -29558,7 +29249,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -29588,8 +29279,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29619,8 +29310,8 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
 
         let inputs = unsafe {
             gather_asset_tx_inputs(AssetInputPointers {
-                chain_ptr,
-                chain_len,
+                network_id_ptr,
+                network_id_len,
                 authority_ptr,
                 authority_len,
                 asset_definition_ptr,
@@ -29637,7 +29328,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
         };
 
         let AssetTxInputs {
-            chain_id,
+            network_id,
             authority,
             asset_definition,
             asset_scope,
@@ -29652,7 +29343,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
+            network_id,
             authority,
             AssetTransactionTiming {
                 creation_time_ms,
@@ -29677,8 +29368,8 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29705,10 +29396,9 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
             return Err(BridgeError::NullPtr);
         }
 
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -29720,7 +29410,7 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -29739,8 +29429,8 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29769,10 +29459,9 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
         }
 
         let algorithm = parse_algorithm_code(algorithm_code)?;
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
@@ -29784,7 +29473,7 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            chain_id,
+            network_id,
             authority,
             creation_time_ms,
             ttl,
@@ -29803,8 +29492,8 @@ pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transacti
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
     authority_ptr: *const c_char,
     authority_len: c_ulong,
     creation_time_ms: u64,
@@ -29837,8 +29526,8 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
         let inputs = unsafe {
             gather_asset_tx_inputs_with_parser(
                 AssetInputPointers {
-                    chain_ptr,
-                    chain_len,
+                    network_id_ptr,
+                    network_id_len,
                     authority_ptr,
                     authority_len,
                     asset_definition_ptr,
@@ -29857,7 +29546,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
         };
 
         let AssetTxInputs {
-            chain_id,
+            network_id,
             authority,
             asset_definition,
             asset_scope,
@@ -29872,7 +29561,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
-            chain_id,
+            network_id,
             authority,
             AssetTransactionTiming {
                 creation_time_ms,
@@ -32075,6 +31764,21 @@ fn java_text_array(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_network_id(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+) -> Result<NetworkId, String> {
+    let bytes = read_java_byte_array(env, array, "networkId")
+        .ok_or_else(|| "invalid networkId bytes".to_owned())?;
+    network_id_from_raw_bytes(&bytes).map_err(str::to_owned)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_optional_text_array(
     env: &mut jni::JNIEnv<'_>,
     array: &jni::objects::JByteArray<'_>,
@@ -32117,27 +31821,6 @@ fn java_fee_payment_intent_from_json(bytes: &[u8]) -> Result<FeePaymentIntent, S
         .validate()
         .map_err(|err| format!("invalid feePayment: {err}"))?;
     Ok(intent)
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn java_fixed_array<const N: usize>(
-    env: &mut jni::JNIEnv<'_>,
-    array: &jni::objects::JByteArray<'_>,
-    context: &str,
-) -> Result<[u8; N], String> {
-    let bytes =
-        read_java_byte_array(env, array, context).ok_or_else(|| format!("invalid {context}"))?;
-    if bytes.len() != N {
-        return Err(format!("{context} must be exactly {N} bytes"));
-    }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
 }
 
 #[cfg(any(
@@ -32230,7 +31913,7 @@ fn java_byte_array_pair(
 fn java_native_encode_register_zk_asset_signed_transaction(
     env: &mut jni::JNIEnv<'_>,
     algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
@@ -32248,9 +31931,7 @@ fn java_native_encode_register_zk_asset_signed_transaction(
         if creation_time_ms < 0 || ttl_ms < 0 {
             return Err("creationTimeMs and ttlMs must be non-negative".to_owned());
         }
-        let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
-            .parse()
-            .map_err(|_| "invalid chainId".to_owned())?;
+        let network_id = java_network_id(env, &network_id)?;
         let chain_discriminant = u16::try_from(chain_discriminant)
             .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
         let authority = parse_account_id_for_chain(
@@ -32281,7 +31962,7 @@ fn java_native_encode_register_zk_asset_signed_transaction(
         let fee_payment = java_fee_payment_intent(env, &fee_payment_json)?;
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction_with_nonce_fee_payment_and_metadata(
-                chain_id,
+                network_id,
                 authority,
                 creation_time_ms as u64,
                 ttl,
@@ -37892,6 +37573,308 @@ fn java_native_privacy_validate_compiled_profile_catalog(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_native_privacy_validate_exact12_capability_manifest(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    if archive.is_null() {
+        return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
+    }
+    let archive_len = match env.get_array_length(&archive) {
+        Ok(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => {
+                return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+            }
+        },
+        Err(_) => return PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
+    };
+    if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    }
+    match env.convert_byte_array(&archive) {
+        Ok(bytes) => validate_privacy_capability_archive_v1(&bytes).code(),
+        Err(_) => PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_privacy_exact12_capability_tuple_admitted(
+    archive: &[u8],
+    protocol_index: jni::sys::jint,
+) -> bool {
+    if !validate_privacy_capability_archive_v1(archive).is_valid() {
+        return false;
+    }
+    let Ok(index) = usize::try_from(protocol_index) else {
+        return false;
+    };
+    let Some(expected_protocol) = PrivacyProtocolIdV1::ALL.get(index).copied() else {
+        return false;
+    };
+    let Ok(manifest) = norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(archive)
+    else {
+        return false;
+    };
+    let Ok(catalog) = compiled_privacy_profile_catalog_v1() else {
+        return false;
+    };
+    let (Some(committed), Some(local)) =
+        (manifest.protocols.get(index), catalog.protocols.get(index))
+    else {
+        return false;
+    };
+    committed.protocol_id == expected_protocol
+        && local.protocol_id == expected_protocol
+        && committed.is_network_available()
+        && committed.compiled_profile == local.compiled_profile
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_require_exact12_capability_tuple(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+    protocol_index: jni::sys::jint,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    if archive.is_null() {
+        return JNI_FALSE;
+    }
+    let archive_len = match env.get_array_length(&archive) {
+        Ok(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => return JNI_FALSE,
+        },
+        Err(_) => return JNI_FALSE,
+    };
+    if archive_len == 0 || archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+        return JNI_FALSE;
+    }
+    let Ok(mut archive_bytes) = env.convert_byte_array(&archive) else {
+        return JNI_FALSE;
+    };
+    let admitted = java_privacy_exact12_capability_tuple_admitted(&archive_bytes, protocol_index);
+    archive_bytes.fill(0);
+    if admitted { JNI_TRUE } else { JNI_FALSE }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_privacy_exact12_submit_proof_admitted(
+    manifest_archive: &[u8],
+    protocol_index: jni::sys::jint,
+    instruction_archive: &[u8],
+) -> bool {
+    if !java_privacy_exact12_capability_tuple_admitted(manifest_archive, protocol_index)
+        || instruction_archive.is_empty()
+        || instruction_archive.len()
+            > usize::try_from(TAIRA_PRIVACY_MAX_ACTION_BYTES_V1)
+                .expect("u32 privacy action limit fits usize")
+    {
+        return false;
+    }
+    let Ok(index) = usize::try_from(protocol_index) else {
+        return false;
+    };
+    let Some(expected_protocol) = PrivacyProtocolIdV1::ALL.get(index).copied() else {
+        return false;
+    };
+    let Ok(manifest) =
+        norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(manifest_archive)
+    else {
+        return false;
+    };
+    let Some(committed) = manifest.protocols.get(index) else {
+        return false;
+    };
+    let Some(activation) = committed.activation.as_ref() else {
+        return false;
+    };
+    let Ok(instruction) = norito::decode_canonical::<SubmitPrivacyProofV1>(instruction_archive)
+    else {
+        return false;
+    };
+    instruction.envelope.protocol_id == expected_protocol
+        && instruction
+            .envelope
+            .validate_against_activation(
+                activation,
+                &manifest.consensus_policy.current_limits,
+                manifest.committed_height,
+            )
+            .is_ok()
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_validate_exact12_submit_proof_construction(
+    env: &mut jni::JNIEnv<'_>,
+    manifest_archive: jni::objects::JByteArray<'_>,
+    protocol_index: jni::sys::jint,
+    instruction_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    if manifest_archive.is_null() || instruction_archive.is_null() {
+        return JNI_FALSE;
+    }
+    let manifest_len = match env.get_array_length(&manifest_archive) {
+        Ok(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => return JNI_FALSE,
+        },
+        Err(_) => return JNI_FALSE,
+    };
+    let instruction_len = match env.get_array_length(&instruction_archive) {
+        Ok(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => return JNI_FALSE,
+        },
+        Err(_) => return JNI_FALSE,
+    };
+    if manifest_len == 0
+        || manifest_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+        || instruction_len == 0
+        || instruction_len
+            > usize::try_from(TAIRA_PRIVACY_MAX_ACTION_BYTES_V1)
+                .expect("u32 privacy action limit fits usize")
+    {
+        return JNI_FALSE;
+    }
+    let Ok(mut manifest_bytes) = env.convert_byte_array(&manifest_archive) else {
+        return JNI_FALSE;
+    };
+    let instruction_result = env.convert_byte_array(&instruction_archive);
+    let Ok(mut instruction_bytes) = instruction_result else {
+        manifest_bytes.fill(0);
+        return JNI_FALSE;
+    };
+    let admitted = java_privacy_exact12_submit_proof_admitted(
+        &manifest_bytes,
+        protocol_index,
+        &instruction_bytes,
+    );
+    manifest_bytes.fill(0);
+    instruction_bytes.fill(0);
+    if admitted { JNI_TRUE } else { JNI_FALSE }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_privacy_exact12_capability_manifest_inspection(archive: &[u8]) -> Result<Vec<u8>, String> {
+    let status = validate_privacy_capability_archive_v1(archive);
+    if !status.is_valid() {
+        return Err(format!(
+            "exact-12 capability manifest validation failed with status {}",
+            status.code()
+        ));
+    }
+    let manifest = norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(archive)
+        .map_err(|error| {
+            format!("failed to decode validated exact-12 capability manifest: {error}")
+        })?;
+    let catalog = compiled_privacy_profile_catalog_v1()
+        .map_err(|error| format!("failed to derive local compiled-profile catalog: {error}"))?;
+    if manifest.protocols.len() != catalog.protocols.len() {
+        return Err("exact-12 capability manifest and local catalog row counts differ".to_owned());
+    }
+    let local_compiled_tuple_matches = manifest
+        .protocols
+        .iter()
+        .zip(&catalog.protocols)
+        .map(|(committed, local)| {
+            committed.protocol_id == local.protocol_id
+                && committed.compiled_profile == local.compiled_profile
+        })
+        .collect::<Vec<_>>();
+
+    let mut projection = JsonMap::new();
+    projection.insert(
+        "manifest".to_owned(),
+        norito::json::to_value(&manifest)
+            .map_err(|error| format!("failed to inspect exact-12 capability manifest: {error}"))?,
+    );
+    projection.insert(
+        "local_compiled_tuple_matches".to_owned(),
+        norito::json::to_value(&local_compiled_tuple_matches)
+            .map_err(|error| format!("failed to inspect local profile tuple matches: {error}"))?,
+    );
+    norito::json::to_vec(&JsonValue::Object(projection))
+        .map_err(|error| format!("failed to encode exact-12 capability inspection: {error}"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_inspect_exact12_capability_manifest(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    if archive.is_null() {
+        return std::ptr::null_mut();
+    }
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let archive_len = env
+            .get_array_length(&archive)
+            .map_err(|error| error.to_string())?;
+        let archive_len = usize::try_from(archive_len)
+            .map_err(|_| "exact-12 capability manifest length is invalid".to_owned())?;
+        if archive_len == 0 || archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+            return Err("exact-12 capability manifest length is outside its bound".to_owned());
+        }
+        let mut archive_bytes = env
+            .convert_byte_array(&archive)
+            .map_err(|error| error.to_string())?;
+        let inspection_result = java_privacy_exact12_capability_manifest_inspection(&archive_bytes);
+        archive_bytes.fill(0);
+        let mut inspection = inspection_result?;
+        let array_result = env
+            .byte_array_from_slice(&inspection)
+            .map_err(|error| error.to_string());
+        inspection.fill(0);
+        Ok(array_result?.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_state(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_privacy_compiled_profile_catalog(env: &mut jni::JNIEnv<'_>) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_compiled_profile_catalog_archive()?;
@@ -38080,7 +38063,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
@@ -38097,7 +38080,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
         algorithm_code,
-        chain_id,
+        network_id,
         chain_discriminant,
         authority,
         creation_time_ms,
@@ -38226,7 +38209,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
-    chain_id: jni::objects::JByteArray<'_>,
+    network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
@@ -38243,7 +38226,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     java_native_encode_register_zk_asset_signed_transaction(
         &mut env,
         algorithm_code,
-        chain_id,
+        network_id,
         chain_discriminant,
         authority,
         creation_time_ms,
@@ -38303,6 +38286,82 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     java_native_privacy_validate_compiled_profile_catalog(&mut env, archive)
+}
+
+/// Validate a Torii Exact12 capability manifest for the Kotlin/JVM SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_exact12_capability_manifest(&mut env, archive)
+}
+
+/// Inspect one validated Torii Exact12 manifest and compare all local profile tuples.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeInspectExact12CapabilityManifest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_inspect_exact12_capability_manifest(&mut env, archive)
+}
+
+/// Require active committed admission and exact local tuple equality for Kotlin/JVM.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTuple(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+    protocol_index: jni::sys::jint,
+) -> jni::sys::jboolean {
+    java_native_privacy_require_exact12_capability_tuple(&mut env, archive, protocol_index)
+}
+
+/// Validate a canonical retained submit-proof instruction against committed Kotlin/JVM admission.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstruction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    manifest_archive: jni::objects::JByteArray<'_>,
+    protocol_index: jni::sys::jint,
+    instruction_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_privacy_validate_exact12_submit_proof_construction(
+        &mut env,
+        manifest_archive,
+        protocol_index,
+        instruction_archive,
+    )
 }
 
 /// Return the canonical exact-12 privacy fixture bundle to the Kotlin/JVM SDK.
@@ -38382,6 +38441,82 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     java_native_privacy_validate_compiled_profile_catalog(&mut env, archive)
+}
+
+/// Validate a Torii Exact12 capability manifest for the Java Android SDK.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12CapabilityManifest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_exact12_capability_manifest(&mut env, archive)
+}
+
+/// Inspect one validated Torii Exact12 manifest and compare all local profile tuples.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeInspectExact12CapabilityManifest(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_privacy_inspect_exact12_capability_manifest(&mut env, archive)
+}
+
+/// Require active committed admission and exact local tuple equality for Java/Android.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTuple(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+    protocol_index: jni::sys::jint,
+) -> jni::sys::jboolean {
+    java_native_privacy_require_exact12_capability_tuple(&mut env, archive, protocol_index)
+}
+
+/// Validate a canonical retained submit-proof instruction against committed Java admission.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateExact12SubmitProofConstruction(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    manifest_archive: jni::objects::JByteArray<'_>,
+    protocol_index: jni::sys::jint,
+    instruction_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_privacy_validate_exact12_submit_proof_construction(
+        &mut env,
+        manifest_archive,
+        protocol_index,
+        instruction_archive,
+    )
 }
 
 /// Return the canonical exact-12 privacy fixture bundle to the Java Android SDK.
@@ -45109,8 +45244,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v4_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 4);
+    fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 5);
+    }
+
+    #[test]
+    fn c_and_jni_transaction_network_ids_require_exact_canonical_encodings() {
+        const NETWORK_ID: &str =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+        let canonical = CString::new(NETWORK_ID).expect("canonical network id has no NUL");
+        let parsed =
+            unsafe { read_network_id_bridge(canonical.as_ptr(), NETWORK_ID.len() as c_ulong) }
+                .expect("canonical checksummed NetworkId must parse");
+        assert_eq!(parsed.as_bytes().len(), Hash::LENGTH);
+        assert_eq!(
+            network_id_from_raw_bytes(parsed.as_bytes())
+                .expect("JNI raw bytes must reconstruct the same NetworkId"),
+            parsed
+        );
+        assert!(network_id_from_raw_bytes(&parsed.as_bytes()[..31]).is_err());
+        let mut too_long = parsed.as_bytes().to_vec();
+        too_long.push(0);
+        assert!(network_id_from_raw_bytes(&too_long).is_err());
+        assert!(network_id_from_raw_bytes(NETWORK_ID.as_bytes()).is_err());
+        let mut unmarked = *parsed.as_bytes();
+        unmarked[Hash::LENGTH - 1] &= !1;
+        assert!(network_id_from_raw_bytes(&unmarked).is_err());
+
+        let lowercase = NETWORK_ID.to_ascii_lowercase();
+        for retired in [
+            &NETWORK_ID[5..69],
+            lowercase.as_str(),
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F1",
+            "00000042",
+        ] {
+            let retired = CString::new(retired).expect("fixture has no NUL");
+            assert!(matches!(
+                unsafe {
+                    read_network_id_bridge(retired.as_ptr(), retired.as_bytes().len() as c_ulong)
+                },
+                Err(BridgeError::NetworkId)
+            ));
+        }
     }
 
     #[test]
@@ -47846,7 +48021,11 @@ mod tests {
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1
         ));
 
-        let limits = kagemusha_canonical_decode_limits(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES);
+        let limits = kagemusha_canonical_decode_limits_with_profile(
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES,
+            0,
+            KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE,
+        );
         assert_eq!(
             limits.max_sequence_elements(),
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
@@ -48216,8 +48395,10 @@ mod tests {
 mod signed_transaction_fixture_tests {
     use std::time::Duration;
 
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{ChainId, account::AccountId, transaction::TransactionBuilder};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        NetworkId, account::AccountId, block::BlockHeader, transaction::TransactionBuilder,
+    };
     use iroha_version::codec::EncodeVersioned as _;
 
     use super::decode_signed_transaction;
@@ -48228,6 +48409,12 @@ mod signed_transaction_fixture_tests {
     fn fixture_key_pair() -> KeyPair {
         KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
+    }
+
+    fn fixture_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"connect-norito-signed-transaction-fixture-genesis",
+        )))
     }
 
     #[test]
@@ -48244,9 +48431,8 @@ mod signed_transaction_fixture_tests {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            fixture_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -48265,9 +48451,8 @@ mod signed_transaction_fixture_tests {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            fixture_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -48283,9 +48468,8 @@ mod signed_transaction_fixture_tests {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            fixture_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

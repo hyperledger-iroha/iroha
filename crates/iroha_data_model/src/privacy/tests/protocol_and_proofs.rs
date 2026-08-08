@@ -282,6 +282,11 @@ fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
         PRIVACY_COMPILED_PROFILE_CATALOG_SCHEMA_NAME_V1,
         hex!("f3addcc8d28f55b9119e6cc22e5e5b57"),
     );
+    assert_stable_schema_wire(
+        &exact12_capability_manifest(),
+        PRIVACY_EXACT12_CAPABILITY_MANIFEST_SCHEMA_NAME_V1,
+        hex!("5b9d88f68fd595c78e84f1693bbb0dcb"),
+    );
 }
 
 fn activation(envelope: &PrivacyProofEnvelopeV1) -> PrivacyProtocolActivationRecordV1 {
@@ -351,6 +356,18 @@ fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
             })
             .collect(),
     }
+}
+
+fn exact12_capability_manifest() -> PrivacyExact12CapabilityManifestV1 {
+    capability_snapshot()
+        .exact12_capability_manifest_v1()
+        .expect("project valid committed snapshot")
+}
+
+fn redigest_exact12_capability_manifest(manifest: &mut PrivacyExact12CapabilityManifestV1) {
+    manifest.manifest_digest = manifest
+        .computed_manifest_digest()
+        .expect("recompute canonical manifest digest");
 }
 
 fn compiled_profile_catalog() -> PrivacyCompiledProfileCatalogV1 {
@@ -939,6 +956,9 @@ fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
         "consensus_policy",
         "activation",
         "lifecycle",
+        "readiness",
+        "activation_state",
+        "manifest_digest",
     ] {
         assert!(
             !json.contains(governance_field),
@@ -1134,10 +1154,10 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     assert_eq!(Status::SchemaMismatch.code(), 5);
     assert_eq!(Status::NonCanonical.code(), 6);
     assert_eq!(Status::MalformedArchive.code(), 7);
-    assert_eq!(Status::InvalidSnapshot.code(), 8);
+    assert_eq!(Status::InvalidManifest.code(), 8);
 
-    let snapshot = capability_snapshot();
-    let archive = norito::encode_canonical(&snapshot).expect("canonical capability archive");
+    let manifest = exact12_capability_manifest();
+    let archive = norito::encode_canonical(&manifest).expect("canonical capability archive");
     assert_eq!(
         validate_privacy_capability_archive_v1(&archive),
         Status::Valid
@@ -1164,7 +1184,7 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     );
 
     // Preserve a valid CRC over a one-byte payload while substituting the
-    // expected snapshot schema. Header-only validation used to accept this
+    // expected manifest schema. Header-only validation used to accept this
     // exact adversary; the typed decoder must reject it.
     let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("canonical one-byte value");
     one_byte_fake[6..22].copy_from_slice(&archive[6..22]);
@@ -1173,16 +1193,24 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         Status::MalformedArchive
     );
 
-    let mut reordered = snapshot.clone();
-    reordered.protocols.swap(0, 1);
-    let reordered =
-        norito::encode_canonical(&reordered).expect("canonical reordered snapshot bytes");
+    let legacy_snapshot =
+        norito::encode_canonical(&capability_snapshot()).expect("canonical legacy snapshot");
     assert_eq!(
-        validate_privacy_capability_archive_v1(&reordered),
-        Status::InvalidSnapshot
+        validate_privacy_capability_archive_v1(&legacy_snapshot),
+        Status::SchemaMismatch,
+        "the manifest validator must reject the old snapshot schema outright"
     );
 
-    let mut profile_mutation = snapshot.clone();
+    let mut reordered = manifest.clone();
+    reordered.protocols.swap(0, 1);
+    let reordered =
+        norito::encode_canonical(&reordered).expect("canonical reordered manifest bytes");
+    assert_eq!(
+        validate_privacy_capability_archive_v1(&reordered),
+        Status::InvalidManifest
+    );
+
+    let mut profile_mutation = manifest.clone();
     let PrivacyCompiledProfileResultV1::Available(profile) =
         &mut profile_mutation.protocols[1].compiled_profile
     else {
@@ -1193,10 +1221,10 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         norito::encode_canonical(&profile_mutation).expect("canonical invalid-profile bytes");
     assert_eq!(
         validate_privacy_capability_archive_v1(&profile_mutation),
-        Status::InvalidSnapshot
+        Status::InvalidManifest
     );
 
-    let mut activation_mutation = snapshot.clone();
+    let mut activation_mutation = manifest.clone();
     activation_mutation.protocols[1]
         .activation
         .as_mut()
@@ -1206,10 +1234,10 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         .expect("canonical activation-mismatch bytes");
     assert_eq!(
         validate_privacy_capability_archive_v1(&activation_mutation),
-        Status::InvalidSnapshot
+        Status::InvalidManifest
     );
 
-    let mut excessive_rows = snapshot;
+    let mut excessive_rows = manifest;
     excessive_rows.protocols.push(excessive_rows.protocols[0]);
     let excessive_rows =
         norito::encode_canonical(&excessive_rows).expect("canonical excessive-row bytes");

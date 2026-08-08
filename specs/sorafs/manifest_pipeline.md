@@ -114,8 +114,8 @@ the full manifest before deriving its digest, chunk-plan digest, root CID,
 chunker, content length, and pin policy. Direct instruction submission therefore cannot bypass Torii's
 manifest checks. When governance requires council signatures, registration
 remains pending, without a published alias
-or replication order, until a `CanApproveSorafsPin` authority submits the actual
-bounded council envelope through `ApprovePinManifest`. A digest without its
+or replication order, until an authenticated account relays the actual bounded
+threshold council envelope through `ApprovePinManifest`. A digest without its
 envelope is never sufficient for the first approval, and a later replay cannot
 replace the stored envelope commitment. Approval must occur before retention
 expiry, and alias publication waits until every fallible automatic-order step

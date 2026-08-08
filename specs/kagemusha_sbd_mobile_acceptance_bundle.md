@@ -53,7 +53,8 @@ directory already contains a file, preventing partial or mixed releases.
 - `evaluated_block_height`, `evaluated_block_hash_hex`,
   `acceptance_time_ms`, `sender_account_id`, `recipient_account_id`, and
   `receiver_device_id`;
-- `artifact_set`, copied from the validated readiness projection with
+- `artifact_set`, copied from the fixture-owned authenticated operation-release
+  projection with
   `generation`, the manifest/policy/attestation SHA-256 strings, activation and
   withdrawal heights, proof-size bound, and asset scale;
 - `active_transfer_verifier`, copied from the same projection with
@@ -81,6 +82,12 @@ use an entry marked `use: "assertion"` to seed wallet state. Files marked
 metadata files are the inventory root and therefore are not self-listed.
 
 ## Required input inventory
+
+`offline_readiness_v4` below is a legacy bundle-v1 inventory name. Its payload
+is a fixture-owned, asset-specific operation-release projection used only by
+the acceptance harness. It is not validator readiness, does not enable offline
+support, and does not enroll an asset or dataspace. Renaming the inventory kind
+or file requires a future bundle-version bump.
 
 | Kind | Path | Secret |
 |---|---|---:|

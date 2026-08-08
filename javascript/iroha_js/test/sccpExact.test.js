@@ -542,7 +542,7 @@ function governedRoute({
     sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
     settlement: {
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-      custody_account_id: AUTHORITY,
+      custody_owner: AUTHORITY,
       payload_amount_scale: 9,
     },
   };
@@ -606,7 +606,7 @@ function solanaGovernedRoute({ activation = "staged" } = {}) {
     sora_outbound_execution_policy: soraOutboundExecutionPolicy(),
     settlement: {
       asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-      custody_account_id: AUTHORITY,
+      custody_owner: AUTHORITY,
       payload_amount_scale: 9,
     },
   };

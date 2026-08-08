@@ -92,11 +92,11 @@
             "minimal DA geometry must retain the layout-neutral 64-KiB sidecar requirement"
         );
         let validator = validator_peers(1).pop().expect("validator fixture");
-        let chain_id = ChainId::from("minimal-sidecar-frame-test");
+        let network_id = crate::sumeragi::synthetic_network_id("minimal-sidecar-frame-test");
         let required_control_message = super::fair_v2_ingress_required_proposal_bytes(layout, 1)
             .max(super::fair_v2_ingress_required_commit_certificate_response_bytes(1));
         let required_consensus = super::fair_v2_ingress_required_p2p_frame_bytes(
-            super::fair_v2_ingress_required_recovery_request_bytes(&chain_id, 1),
+            super::fair_v2_ingress_required_recovery_request_bytes(&network_id, 1),
         )
         .max(super::fair_v2_ingress_required_lane_p2p_frame_bytes(
             super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
@@ -111,30 +111,35 @@
         .expect("minimal-context outbound charge is representable");
 
         let ordinary_bytes = super::MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES;
+        let certified_bytes =
+            super::fair_v2_ingress_required_certified_fence_escape_bytes(1);
         let completion_bytes = super::MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES;
         let source_bytes = ordinary_bytes
-            .checked_add(completion_bytes)
+            .checked_add(certified_bytes)
+            .and_then(|bytes| bytes.checked_add(completion_bytes))
             .expect("test source geometry fits usize");
         let byte_capacity = source_bytes
             .checked_mul(2)
             .expect("validator and anonymous partitions fit usize");
         let ingress_with_transport_caps = |block_sync, outbound_high| {
-            super::FairV2Ingress::new_with_transport_frame_caps(
-                6,
+            super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                7,
                 byte_capacity,
                 source_bytes,
+                certified_bytes,
                 0,
                 completion_bytes,
                 required_consensus,
                 required_control,
                 block_sync,
                 outbound_high,
+                None,
             )
         };
 
         let exact = ingress_with_transport_caps(required_block_sync, required_outbound);
         exact
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect("the exact transport frame caps must activate");
         exact.open().expect("the exact transport caps must open");
 
@@ -145,7 +150,7 @@
             required_outbound,
         );
         let error = short
-            .configure_roster_for_context([validator.clone()], &chain_id, layout)
+            .configure_roster_for_context([validator.clone()], &network_id, layout)
             .expect_err("one byte below the exact BlockSync frame cap must fail closed");
         assert_eq!(error.configured(), required_block_sync - 1);
         assert_eq!(error.required(), required_block_sync);
@@ -158,7 +163,7 @@
         let outbound_short =
             ingress_with_transport_caps(required_block_sync, required_outbound - 1);
         let outbound_error = outbound_short
-            .configure_roster_for_context([validator], &chain_id, layout)
+            .configure_roster_for_context([validator], &network_id, layout)
             .expect_err("one byte below the exact outbound-high cap must fail closed");
         assert_eq!(outbound_error.configured(), required_outbound - 1);
         assert_eq!(outbound_error.required(), required_outbound);

@@ -18,6 +18,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
 import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
@@ -30,6 +31,9 @@ import org.junit.Test;
 
 /** Exact Rust/Java parity and adversarial coverage for the sole ABI-21 registration path. */
 public final class RegisterOfflineDeviceAttestationTests {
+  private static final NetworkId TEST_NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
   private static final FeePaymentIntent TEST_FEE_PAYMENT =
       FeePaymentIntent.authority(Collections.emptyList());
 
@@ -212,25 +216,25 @@ public final class RegisterOfflineDeviceAttestationTests {
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, 1_900_000_000_000L, 0L, 1L,
+                TEST_NETWORK_ID, accountId, registration, 1_900_000_000_000L, 0L, 1L,
                 TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, 1_900_000_000_000L, 1L, 0L,
+                TEST_NETWORK_ID, accountId, registration, 1_900_000_000_000L, 1L, 0L,
                 TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, Long.MAX_VALUE - 1, 2L, 1L,
+                TEST_NETWORK_ID, accountId, registration, Long.MAX_VALUE - 1, 2L, 1L,
                 TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000",
+                TEST_NETWORK_ID,
                 accountId,
                 registration,
                 registration.expiresAtMs() - 1,
@@ -243,7 +247,7 @@ public final class RegisterOfflineDeviceAttestationTests {
   private static RegisterOfflineDeviceAttestation request(
       final DeviceAttestationRegistration registration) {
     return new RegisterOfflineDeviceAttestation(
-        "00000000",
+        TEST_NETWORK_ID,
         registration.accountId(),
         registration,
         1_900_000_000_000L,

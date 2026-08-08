@@ -892,14 +892,6 @@ pub mod settlement {
             pub policy_id: Name,
         }
     }
-
-    permission! {
-        /// Permission to execute settlements under one FX corridor policy.
-        pub struct CanSettleFxCorridor {
-            /// Stable corridor policy identifier.
-            pub policy_id: Name,
-        }
-    }
 }
 
 /// Nexus / Space Directory permissions.
@@ -948,14 +940,6 @@ pub mod nexus {
         /// Permission to enroll or unenroll beneficiaries in one exact sponsor program.
         pub struct CanEnrollFeeSponsorProgram {
             /// Exact program whose enrollment set may be managed.
-            pub program_id: FeeSponsorProgramId,
-        }
-    }
-
-    permission! {
-        /// Permission to withdraw assets from one exact sponsor-program vault.
-        pub struct CanWithdrawFeeSponsorProgram {
-            /// Exact program whose paused or closing vault may be withdrawn.
             pub program_id: FeeSponsorProgramId,
         }
     }
@@ -1039,24 +1023,6 @@ pub mod governance {
 pub mod sorafs {
     use super::*;
     use iroha_data_model::sorafs::prelude::ProviderId;
-
-    permission! {
-        /// Permission to register a `SoraFS` manifest pin.
-        #[derive(Copy)]
-        pub struct CanRegisterSorafsPin;
-    }
-
-    permission! {
-        /// Permission to approve a `SoraFS` manifest pin.
-        #[derive(Copy)]
-        pub struct CanApproveSorafsPin;
-    }
-
-    permission! {
-        /// Permission to retire a `SoraFS` manifest pin.
-        #[derive(Copy)]
-        pub struct CanRetireSorafsPin;
-    }
 
     permission! {
         /// Permission to bind or update a `SoraFS` manifest alias.
@@ -1173,13 +1139,19 @@ pub mod sorafs {
     }
 
     permission! {
-        /// Permission to register or update a `SoraFS` provider owner binding.
+        /// Legacy permission accepted only for submitting a `SoraFS` provider-governance proposal.
+        ///
+        /// Holding or transferring this token never mutates provider ownership;
+        /// the proposal must still pass the native Parliament referendum.
         #[derive(Copy)]
         pub struct CanRegisterSorafsProviderOwner;
     }
 
     permission! {
-        /// Permission to remove a `SoraFS` provider owner binding.
+        /// Legacy permission accepted only for submitting a `SoraFS` provider-removal proposal.
+        ///
+        /// Holding or transferring this token never mutates provider ownership;
+        /// the proposal must still pass the native Parliament referendum.
         #[derive(Copy)]
         pub struct CanUnregisterSorafsProviderOwner;
     }

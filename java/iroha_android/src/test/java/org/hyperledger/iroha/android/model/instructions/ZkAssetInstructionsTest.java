@@ -14,6 +14,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 public final class ZkAssetInstructionsTest {
@@ -210,7 +211,7 @@ public final class ZkAssetInstructionsTest {
         () ->
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 SigningAlgorithm.ED25519,
-                "chain",
+                TestNetworkIds.canonical(),
                 AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 "alice",
                 0,
@@ -258,10 +259,10 @@ public final class ZkAssetInstructionsTest {
   private static void nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable()
       throws Exception {
     assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 22;
-    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 4;
+    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 5;
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 22 native-signer contract revision 4 is required");
+          "connect_norito_bridge ABI 22 native-signer contract revision 5 is required");
     }
 
     final byte[] seed = new byte[32];
@@ -289,7 +290,7 @@ public final class ZkAssetInstructionsTest {
     assertNativeFeePayment(
         NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
             SigningAlgorithm.ED25519,
-            "00000042",
+            TestNetworkIds.canonical(),
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             authority,
             1_736_000_000_000L,

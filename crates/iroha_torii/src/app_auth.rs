@@ -52,7 +52,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
-    ValidationFail,
+    NetworkId, ValidationFail,
     account::{AccountController, AccountId, rekey::AccountAlias},
     query::{
         ErasedIterQuery, Query, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
@@ -263,10 +263,41 @@ pub fn canonical_request_message(method: &Method, uri: &Uri, body: &[u8]) -> Vec
     .into_bytes()
 }
 
+/// Construct exact-network canonical request bytes for signing.
+#[must_use]
+pub fn canonical_network_request_message(
+    network_id: &NetworkId,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Vec<u8> {
+    const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
+    let request = canonical_request_message(method, uri, body);
+    let mut message =
+        Vec::with_capacity(DOMAIN.len() + network_id.as_bytes().len() + request.len());
+    message.extend_from_slice(DOMAIN);
+    message.extend_from_slice(network_id.as_bytes());
+    message.extend_from_slice(&request);
+    message
+}
+
 /// Hash the canonical request bytes used by witness verification.
 #[must_use]
 pub fn canonical_request_hash(method: &Method, uri: &Uri, body: &[u8]) -> Hash {
     Hash::new(canonical_request_message(method, uri, body))
+}
+
+/// Hash an exact-network canonical request for a multisig witness.
+#[must_use]
+pub fn canonical_network_request_hash(
+    network_id: &NetworkId,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Hash {
+    Hash::new(canonical_network_request_message(
+        network_id, method, uri, body,
+    ))
 }
 
 /// Construct canonical request bytes for signature verification with freshness metadata.
@@ -284,6 +315,59 @@ pub fn canonical_request_signature_message(
     msg.push(b'\n');
     msg.extend_from_slice(nonce.as_bytes());
     msg
+}
+
+/// Construct exact-network canonical request bytes with freshness metadata.
+#[must_use]
+pub fn canonical_network_request_signature_message(
+    network_id: &NetworkId,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    timestamp_ms: u64,
+    nonce: &str,
+) -> Vec<u8> {
+    let mut msg = canonical_network_request_message(network_id, method, uri, body);
+    msg.push(b'\n');
+    msg.extend_from_slice(timestamp_ms.to_string().as_bytes());
+    msg.push(b'\n');
+    msg.extend_from_slice(nonce.as_bytes());
+    msg
+}
+
+fn request_hash_for_network(
+    network_id: Option<&NetworkId>,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Hash {
+    network_id.map_or_else(
+        || canonical_request_hash(method, uri, body),
+        |network_id| canonical_network_request_hash(network_id, method, uri, body),
+    )
+}
+
+fn request_signature_message_for_network(
+    network_id: Option<&NetworkId>,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    timestamp_ms: u64,
+    nonce: &str,
+) -> Vec<u8> {
+    network_id.map_or_else(
+        || canonical_request_signature_message(method, uri, body, timestamp_ms, nonce),
+        |network_id| {
+            canonical_network_request_signature_message(
+                network_id,
+                method,
+                uri,
+                body,
+                timestamp_ms,
+                nonce,
+            )
+        },
+    )
 }
 
 /// Encode a signature payload for use in `X-Iroha-Signature` headers.
@@ -847,6 +931,42 @@ pub fn verify_canonical_request(
     body: &[u8],
     expected_account: Option<&AccountId>,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    verify_canonical_request_for_network(state, headers, method, uri, body, expected_account, None)
+}
+
+/// Verify required canonical request headers against an exact network identity.
+///
+/// A signature produced for a different genesis-derived [`NetworkId`] cannot
+/// authenticate on this network even when every HTTP field and body byte is identical.
+pub fn verify_canonical_network_request(
+    state: &Arc<CoreState>,
+    network_id: &NetworkId,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    verify_canonical_request_for_network(
+        state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+        Some(network_id),
+    )
+}
+
+fn verify_canonical_request_for_network(
+    state: &Arc<CoreState>,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+    network_id: Option<&NetworkId>,
+) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
     let account_hdr = headers.get(HEADER_ACCOUNT);
     let signature_hdr = headers.get(HEADER_SIGNATURE);
     let timestamp_hdr = headers.get(HEADER_TIMESTAMP_MS);
@@ -914,7 +1034,7 @@ pub fn verify_canonical_request(
             "X-Iroha-Nonce",
         )?;
 
-        let expected_hash = canonical_request_hash(method, uri, body);
+        let expected_hash = request_hash_for_network(network_id, method, uri, body);
         if witness.canonical_request_hash != expected_hash {
             return Err(crate::Error::Query(ValidationFail::NotPermitted(
                 "X-Iroha-Witness canonical request hash mismatch".to_owned(),
@@ -1031,7 +1151,8 @@ pub fn verify_canonical_request(
 
     let signature_b64 = parse_required_header_exact_text(headers, HEADER_SIGNATURE)?;
     let signature_bytes = decode_signature_bytes_value(&signature_b64, "X-Iroha-Signature")?;
-    let message = canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
+    let message =
+        request_signature_message_for_network(network_id, method, uri, body, timestamp_ms, &nonce);
 
     let world = state.world_view();
     let account_entry = world.account(&account).map_err(|_| {
@@ -1169,10 +1290,11 @@ mod tests {
         state::{State, StateReadOnly, World},
         sumeragi::network_topology::Topology,
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId, Registrable,
+        Registrable,
         account::{Account, AccountAddress, MultisigMember, MultisigPolicy},
+        block::BlockHeader,
         domain::Domain,
         isi::Register,
         prelude::DomainId,
@@ -1216,7 +1338,7 @@ mod tests {
 
     fn fee_quote_body(authority: &AccountId, account_to_register: &AccountId) -> Vec<u8> {
         let payload = TransactionBuilder::new(
-            ChainId::from("app-auth-self-register-fee-quote"),
+            test_network_id(0x30),
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1236,6 +1358,57 @@ mod tests {
     ) -> HeaderMap {
         let timestamp_ms = now_unix_ms();
         let message = canonical_request_signature_message(method, uri, body, timestamp_ms, nonce);
+        let signature = checked_signature(key_pair.private_key(), &message);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            account
+                .canonical_i105()
+                .expect("canonical account header")
+                .parse()
+                .expect("valid account header"),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            signature_header_value(&signature)
+                .parse()
+                .expect("valid signature header"),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            timestamp_ms
+                .to_string()
+                .parse()
+                .expect("valid timestamp header"),
+        );
+        headers.insert(HEADER_NONCE, nonce.parse().expect("valid nonce header"));
+        headers
+    }
+
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
+    fn signed_network_headers_for_test(
+        network_id: &NetworkId,
+        account: &AccountId,
+        key_pair: &KeyPair,
+        method: &Method,
+        uri: &Uri,
+        body: &[u8],
+        nonce: &'static str,
+    ) -> HeaderMap {
+        let timestamp_ms = now_unix_ms();
+        let message = canonical_network_request_signature_message(
+            network_id,
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(key_pair.private_key(), &message);
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1508,6 +1681,100 @@ mod tests {
         assert!(
             rendered.ends_with("37a76343c8e3c695feeaadfe52329673ff129c65f99f55ae6056c9254f4c481d")
         );
+    }
+
+    #[test]
+    fn exact_network_auth_rejects_wrong_network_and_replay() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        let network_id = test_network_id(0x31);
+        let wrong_network_id = test_network_id(0x32);
+        let method = Method::POST;
+        let uri: Uri = "/v1/da/ingest".parse().expect("DA ingest URI");
+        let body = br#"{"payload_public_key":"self-declared-only"}"#;
+        let headers = signed_network_headers_for_test(
+            &network_id,
+            &account,
+            &ALICE_KEYPAIR,
+            &method,
+            &uri,
+            body,
+            "exact-network-replay",
+        );
+
+        verify_canonical_network_request(
+            &state,
+            &wrong_network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect_err("a request signed for a different genesis lineage must fail");
+
+        let verified = verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect("exact-network request verification")
+        .expect("signed identity");
+        assert_eq!(verified.account, account);
+
+        let replay = verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect_err("an accepted exact-network nonce must be one-shot");
+        assert!(matches!(
+            replay,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "request nonce already used"
+        ));
+    }
+
+    #[test]
+    fn exact_network_auth_rejects_self_declared_unregistered_principal() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let key_pair = checked_app_auth_key_fixture();
+        let self_declared = AccountId::new(key_pair.public_key().clone());
+        let state = minimal_state_without_accounts();
+        let network_id = test_network_id(0x41);
+        let method = Method::POST;
+        let uri: Uri = "/v1/da/ingest".parse().expect("DA ingest URI");
+        let body = br#"{"payload_signature":"validity-does-not-establish-eligibility"}"#;
+        let headers = signed_network_headers_for_test(
+            &network_id,
+            &self_declared,
+            &key_pair,
+            &method,
+            &uri,
+            body,
+            "unregistered-self-declared-principal",
+        );
+
+        let error = verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect_err("a payload-declared key is not an eligible on-ledger principal");
+        assert_missing_account_rejection(error, &self_declared);
     }
 
     #[test]

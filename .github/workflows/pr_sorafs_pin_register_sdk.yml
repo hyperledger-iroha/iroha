@@ -23,17 +23,26 @@ on:
       - "crates/iroha_torii/src/openapi.rs"
       - "crates/iroha_torii/src/routing.rs"
       - "crates/iroha_torii/tests/sorafs_discovery.rs"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ApprovePinManifestInstruction.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/BindManifestAliasInstruction.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RetirePinManifestInstruction.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsManifestInstructionBuilderTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/testing/SimpleJson.java"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ApprovePinManifestInstruction.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RetirePinManifestInstruction.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/PinManifestLifecycleInstructionTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt"
       - "javascript/iroha_js/package.json"
       - "javascript/iroha_js/package-lock.json"
+      - "javascript/iroha_js/src/transaction.js"
       - "javascript/iroha_js/src/toriiClient.js"
       - "javascript/iroha_js/index.d.ts"
       - "javascript/iroha_js/test/toriiClient.test.js"
       - "javascript/iroha_js/test/sorafsPinRegisterSdkGuard.test.js"
+      - "javascript/iroha_js/test/transactionBuilder.test.js"
       - "python/iroha_python/src/iroha_python/__init__.py"
       - "python/iroha_python/src/iroha_python/client.py"
       - "python/iroha_python/tests/client_sorafs_pin_register_test.py"
@@ -174,6 +183,7 @@ jobs:
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-adversarial-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-adversarial-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-dual-manifest-source
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-submitted-epoch
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-manifest-b64-wire
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-manifest-bound
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-canonical-decode
@@ -191,6 +201,9 @@ jobs:
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-kotlin-successor-digest-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-builder-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-successor-digest-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-submitted-epoch-type
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-kotlin-submitted-epoch-model
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-submitted-epoch-model
       - name: Reject tracked Python bytecode
         run: bash ci/check_no_tracked_python_bytecode.sh
       - name: SoraFS pin-register SDK guard

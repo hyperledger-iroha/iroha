@@ -465,7 +465,8 @@ public final class MusubiInstructionsV1FixtureTests {
             .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final TransactionPayload transaction =
         TransactionPayload.builder()
-            .setChainId("musubi-fixture")
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.canonical())
             .setAuthority(authority)
             .setCreationTimeMs(1_735_555_000_000L)
             .setBatch(items)
@@ -476,7 +477,7 @@ public final class MusubiInstructionsV1FixtureTests {
             .encodeTransaction(transaction);
 
     final NoritoDecoder transactionDecoder = canonicalDecoder(encoded);
-    readField(transactionDecoder, "chain_id");
+    readField(transactionDecoder, "network_id");
     readField(transactionDecoder, "authority");
     readField(transactionDecoder, "creation_time_ms");
     final byte[] executablePayload = readField(transactionDecoder, "executable");

@@ -595,8 +595,8 @@ public struct KagemushaAxtErrorDetails: Equatable, Sendable {
     public let snapshotVersion: UInt64?
     public let dataspace: UInt64?
     public let lane: UInt32?
-    public let nextMinHandleEra: UInt64?
-    public let nextMinSubNonce: UInt64?
+    public let activeHandleEra: UInt64?
+    public let nextHandleCounter: UInt64?
 
     public init(
         code: String? = nil,
@@ -604,8 +604,8 @@ public struct KagemushaAxtErrorDetails: Equatable, Sendable {
         snapshotVersion: UInt64? = nil,
         dataspace: UInt64? = nil,
         lane: UInt32? = nil,
-        nextMinHandleEra: UInt64? = nil,
-        nextMinSubNonce: UInt64? = nil
+        activeHandleEra: UInt64? = nil,
+        nextHandleCounter: UInt64? = nil
     ) throws {
         self.code = try code.map {
             try KagemushaOperationValidation.exactText($0, field: "error.details.axt.code")
@@ -616,8 +616,8 @@ public struct KagemushaAxtErrorDetails: Equatable, Sendable {
         self.snapshotVersion = snapshotVersion
         self.dataspace = dataspace
         self.lane = lane
-        self.nextMinHandleEra = nextMinHandleEra
-        self.nextMinSubNonce = nextMinSubNonce
+        self.activeHandleEra = activeHandleEra
+        self.nextHandleCounter = nextHandleCounter
     }
 }
 
@@ -1136,12 +1136,12 @@ public enum KagemushaOperationCodec {
             compact: compact,
             decode: { try $0.readUInt32LE() }
         )
-        let nextMinHandleEra = try readOptionalScalarField(
+        let activeHandleEra = try readOptionalScalarField(
             &reader,
             compact: compact,
             decode: { try $0.readUInt64LE() }
         )
-        let nextMinSubNonce = try readOptionalScalarField(
+        let nextHandleCounter = try readOptionalScalarField(
             &reader,
             compact: compact,
             decode: { try $0.readUInt64LE() }
@@ -1152,8 +1152,8 @@ public enum KagemushaOperationCodec {
             snapshotVersion: snapshotVersion,
             dataspace: dataspace,
             lane: lane,
-            nextMinHandleEra: nextMinHandleEra,
-            nextMinSubNonce: nextMinSubNonce
+            activeHandleEra: activeHandleEra,
+            nextHandleCounter: nextHandleCounter
         )
     }
 

@@ -1,16 +1,17 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Validates that mismatched chain identifiers cause transaction rejection.
+//! Validates that an exact genesis-network mismatch causes transaction rejection.
 
 use integration_tests::sandbox;
+use iroha::crypto::{Hash, HashOf};
 use iroha::data_model::prelude::*;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 
 #[test]
-fn send_tx_with_different_chain_id() {
+fn send_tx_with_same_chain_name_but_different_genesis_network() {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new(),
-        stringify!(send_tx_with_different_chain_id),
+        NetworkBuilder::new().with_peers(4),
+        stringify!(send_tx_with_same_chain_name_but_different_genesis_network),
     )
     .unwrap() else {
         return;
@@ -51,9 +52,12 @@ fn send_tx_with_different_chain_id() {
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .unwrap();
-    let chain_id_0 = network.chain_id();
-    let chain_id_1 = ChainId::from("1");
-    assert_ne!(chain_id_0, chain_id_1);
+    let network_id = network.network_id();
+    let foreign_network_id =
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"same-chain-name-different-genesis",
+        )));
+    assert_ne!(network_id, foreign_network_id);
 
     let transfer_instruction = Transfer::asset_quantity(
         AssetId::new(
@@ -67,14 +71,14 @@ fn send_tx_with_different_chain_id() {
         receiver_id.clone(),
     );
     let asset_transfer_tx_0 = TransactionBuilder::new(
-        chain_id_0,
+        network_id,
         sender_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([transfer_instruction.clone()])
     .sign(sender_keypair.private_key());
     let asset_transfer_tx_1 = TransactionBuilder::new(
-        chain_id_1,
+        foreign_network_id,
         sender_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

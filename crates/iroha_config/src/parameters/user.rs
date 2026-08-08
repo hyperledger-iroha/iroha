@@ -24,7 +24,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::{Infallible, TryFrom, TryInto},
     fmt::Debug,
-    fs, io,
+    fs::{self, File},
+    io::{self, Read},
     net::IpAddr,
     num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
@@ -56,6 +57,8 @@ use thiserror::Error;
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
+const MAX_PUBLIC_IDENTITY_FILE_BYTES: u64 = 512;
 
 fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureScheme> {
     let mut schemes = BTreeSet::new();
@@ -192,6 +195,220 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
+
+fn resolve_private_key_source(
+    inline: Option<WithOrigin<PrivateKey>>,
+    file: Option<WithOrigin<PathBuf>>,
+    inline_field: &'static str,
+    file_field: &'static str,
+    error: ParseError,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<(PrivateKey, ParameterOrigin)> {
+    let file = match (inline, file) {
+        (Some(_), Some(_)) => {
+            emitter.emit(
+                Report::new(error).attach(format!(
+                    "{inline_field} and {file_field} are mutually exclusive; configure exactly one private-key source"
+                )),
+            );
+            return None;
+        }
+        (Some(inline), None) => return Some(inline.into_tuple()),
+        (None, Some(file)) => file,
+        (None, None) => {
+            emitter.emit(
+                Report::new(error).attach(format!(
+                    "missing private-key source; configure exactly one of {inline_field} or {file_field}"
+                )),
+            );
+            return None;
+        }
+    };
+
+    match read_private_key_file(file, file_field) {
+        Ok(private_key) => Some(private_key),
+        Err(message) => {
+            emitter.emit(Report::new(error).attach(message));
+            None
+        }
+    }
+}
+
+fn read_private_key_file(
+    file: WithOrigin<PathBuf>,
+    file_field: &'static str,
+) -> core::result::Result<(PrivateKey, ParameterOrigin), String> {
+    let path = file.resolve_relative_path();
+    let (_, origin) = file.into_tuple();
+    if path.as_os_str().is_empty() {
+        return Err(format!("{file_field} must not be empty"));
+    }
+
+    let opened = File::open(&path)
+        .map_err(|err| format!("failed to open {file_field} `{}`: {err}", path.display()))?;
+    let metadata = opened
+        .metadata()
+        .map_err(|err| format!("failed to inspect {file_field} `{}`: {err}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{file_field} `{}` must reference a regular file",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mode = metadata.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "{file_field} `{}` must not be readable or writable by group/other users (mode {:04o})",
+                path.display(),
+                mode & 0o777
+            ));
+        }
+    }
+
+    let mut encoded = String::new();
+    opened
+        .take(MAX_PRIVATE_KEY_FILE_BYTES + 1)
+        .read_to_string(&mut encoded)
+        .map_err(|err| {
+            format!(
+                "failed to read {file_field} `{}` as UTF-8: {err}",
+                path.display()
+            )
+        })?;
+    if encoded.len() as u64 > MAX_PRIVATE_KEY_FILE_BYTES {
+        return Err(format!(
+            "{file_field} `{}` exceeds the {MAX_PRIVATE_KEY_FILE_BYTES}-byte limit",
+            path.display()
+        ));
+    }
+    let encoded = encoded
+        .strip_suffix("\r\n")
+        .or_else(|| encoded.strip_suffix('\n'))
+        .unwrap_or(&encoded);
+    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        return Err(format!(
+            "{file_field} `{}` must contain exactly one canonical private key",
+            path.display()
+        ));
+    }
+    PrivateKey::from_str(encoded)
+        .map(|private_key| (private_key, origin))
+        .map_err(|err| {
+            format!(
+                "{file_field} `{}` does not contain a canonical private key: {err}",
+                path.display()
+            )
+        })
+}
+
+fn resolve_public_identity_source<T>(
+    inline: Option<WithOrigin<T>>,
+    file: Option<WithOrigin<PathBuf>>,
+    inline_field: &'static str,
+    file_field: &'static str,
+    error: ParseError,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<T>
+where
+    T: FromStr + ToString,
+    T::Err: std::fmt::Display,
+{
+    let file = match (inline, file) {
+        (Some(_), Some(_)) => {
+            emitter.emit(Report::new(error).attach(format!(
+                "{inline_field} and {file_field} are mutually exclusive; configure exactly one public identity source"
+            )));
+            return None;
+        }
+        (Some(inline), None) => return Some(inline.into_value()),
+        (None, Some(file)) => file,
+        (None, None) => {
+            emitter.emit(Report::new(error).attach(format!(
+                "missing public identity source; configure exactly one of {inline_field} or {file_field}"
+            )));
+            return None;
+        }
+    };
+
+    match read_public_identity_file::<T>(file, file_field) {
+        Ok((identity, _)) => Some(identity),
+        Err(message) => {
+            emitter.emit(Report::new(error).attach(message));
+            None
+        }
+    }
+}
+
+fn read_public_identity_file<T>(
+    file: WithOrigin<PathBuf>,
+    file_field: &'static str,
+) -> core::result::Result<(T, ParameterOrigin), String>
+where
+    T: FromStr + ToString,
+    T::Err: std::fmt::Display,
+{
+    let path = file.resolve_relative_path();
+    let (_, origin) = file.into_tuple();
+    if path.as_os_str().is_empty() {
+        return Err(format!("{file_field} must not be empty"));
+    }
+
+    let opened = File::open(&path)
+        .map_err(|err| format!("failed to open {file_field} `{}`: {err}", path.display()))?;
+    let metadata = opened
+        .metadata()
+        .map_err(|err| format!("failed to inspect {file_field} `{}`: {err}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{file_field} `{}` must reference a regular file",
+            path.display()
+        ));
+    }
+
+    let mut encoded = String::new();
+    opened
+        .take(MAX_PUBLIC_IDENTITY_FILE_BYTES + 1)
+        .read_to_string(&mut encoded)
+        .map_err(|err| {
+            format!(
+                "failed to read {file_field} `{}` as UTF-8: {err}",
+                path.display()
+            )
+        })?;
+    if encoded.len() as u64 > MAX_PUBLIC_IDENTITY_FILE_BYTES {
+        return Err(format!(
+            "{file_field} `{}` exceeds the {MAX_PUBLIC_IDENTITY_FILE_BYTES}-byte limit",
+            path.display()
+        ));
+    }
+    let encoded = encoded
+        .strip_suffix("\r\n")
+        .or_else(|| encoded.strip_suffix('\n'))
+        .unwrap_or(&encoded);
+    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        return Err(format!(
+            "{file_field} `{}` must contain exactly one canonical public identity",
+            path.display()
+        ));
+    }
+    let identity = T::from_str(encoded).map_err(|err| {
+        format!(
+            "{file_field} `{}` does not contain a valid public identity: {err}",
+            path.display()
+        )
+    })?;
+    if identity.to_string() != encoded {
+        return Err(format!(
+            "{file_field} `{}` does not contain the canonical public identity spelling",
+            path.display()
+        ));
+    }
+    Ok((identity, origin))
+}
 use iroha_primitives::{
     addr::SocketAddr,
     numeric::{Quantity, XorQuantity},
@@ -708,13 +925,19 @@ pub struct Root {
     #[config(env = "PUBLIC_KEY")]
     public_key: WithOrigin<PublicKey>,
     #[config(env = "PRIVATE_KEY")]
-    private_key: WithOrigin<PrivateKey>,
+    private_key: Option<WithOrigin<PrivateKey>>,
+    /// Owner-held file containing the validator's canonical private key.
+    #[config(env = "PRIVATE_KEY_FILE")]
+    private_key_file: Option<WithOrigin<PathBuf>>,
     /// Dedicated Ed25519 identity used only by the SoraNet transport handshake.
     #[config(env = "P2P_SORANET_TRANSPORT_PUBLIC_KEY")]
     soranet_transport_public_key: WithOrigin<PublicKey>,
     /// Private half of the dedicated SoraNet transport identity.
     #[config(env = "P2P_SORANET_TRANSPORT_PRIVATE_KEY")]
-    soranet_transport_private_key: WithOrigin<PrivateKey>,
+    soranet_transport_private_key: Option<WithOrigin<PrivateKey>>,
+    /// Owner-held file containing the SoraNet transport private key.
+    #[config(env = "P2P_SORANET_TRANSPORT_PRIVATE_KEY_FILE")]
+    soranet_transport_private_key_file: Option<WithOrigin<PathBuf>>,
     #[config(env = "TRUSTED_PEERS", default)]
     trusted_peers: WithOrigin<TrustedPeers>,
     #[config(
@@ -857,6 +1080,9 @@ pub enum ParseError {
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
+    /// Genesis trust-root configuration was absent, ambiguous, or invalid.
+    #[error("Invalid genesis trust-root configuration")]
+    InvalidGenesisConfig,
 }
 
 struct AccountAddressParseScope {
@@ -1052,13 +1278,23 @@ impl Root {
         let _account_address_scope =
             AccountAddressParseScope::enter(*self.chain_discriminant.value());
 
-        let (private_key, private_key_origin) = self.private_key.into_tuple();
+        let private_key = resolve_private_key_source(
+            self.private_key,
+            self.private_key_file,
+            "private_key",
+            "private_key_file",
+            ParseError::BadKeyPair,
+            &mut emitter,
+        );
         let (public_key, public_key_origin) = self.public_key.into_tuple();
-        let key_pair = iroha_crypto::KeyPair::new(public_key, private_key)
-            .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
-            .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
-            .change_context(ParseError::BadKeyPair)
-            .ok_or_emit(&mut emitter);
+        let peer_public_key = public_key.clone();
+        let key_pair = private_key.and_then(|(private_key, private_key_origin)| {
+            iroha_crypto::KeyPair::new(public_key, private_key)
+                .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
+                .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
+                .change_context(ParseError::BadKeyPair)
+                .ok_or_emit(&mut emitter)
+        });
         if let Some(key_pair) = key_pair.as_ref()
             && !matches!(
                 key_pair.public_key().try_algorithm(),
@@ -1071,50 +1307,54 @@ impl Root {
             );
         }
 
-        let (soranet_transport_private_key, soranet_transport_private_key_origin) =
-            self.soranet_transport_private_key.into_tuple();
+        let soranet_transport_private_key = resolve_private_key_source(
+            self.soranet_transport_private_key,
+            self.soranet_transport_private_key_file,
+            "soranet_transport_private_key",
+            "soranet_transport_private_key_file",
+            ParseError::InvalidSoranetTransportIdentity,
+            &mut emitter,
+        );
+        let soranet_transport_private_key_origin = soranet_transport_private_key
+            .as_ref()
+            .map(|(_, origin)| origin.clone());
         let (soranet_transport_public_key, soranet_transport_public_key_origin) =
             self.soranet_transport_public_key.into_tuple();
-        let soranet_transport_key_pair =
-            KeyPair::new(soranet_transport_public_key, soranet_transport_private_key)
-                .attach(ConfigValueAndOrigin::new(
-                    "[REDACTED]",
-                    soranet_transport_public_key_origin.clone(),
-                ))
-                .attach(ConfigValueAndOrigin::new(
-                    "[REDACTED]",
-                    soranet_transport_private_key_origin.clone(),
-                ))
-                .change_context(ParseError::InvalidSoranetTransportIdentity)
-                .ok_or_emit(&mut emitter);
+        let soranet_transport_key_pair = soranet_transport_private_key.and_then(
+            |(soranet_transport_private_key, soranet_transport_private_key_origin)| {
+                KeyPair::new(soranet_transport_public_key, soranet_transport_private_key)
+                    .attach(ConfigValueAndOrigin::new(
+                        "[REDACTED]",
+                        soranet_transport_public_key_origin.clone(),
+                    ))
+                    .attach(ConfigValueAndOrigin::new(
+                        "[REDACTED]",
+                        soranet_transport_private_key_origin.clone(),
+                    ))
+                    .change_context(ParseError::InvalidSoranetTransportIdentity)
+                    .ok_or_emit(&mut emitter)
+            },
+        );
         if let Some(key_pair) = soranet_transport_key_pair.as_ref()
             && !matches!(
                 key_pair.public_key().try_algorithm(),
                 Ok(Algorithm::Ed25519)
             )
         {
-            emitter.emit(
-                Report::new(ParseError::InvalidSoranetTransportIdentity)
-                    .attach("soranet_transport_public_key/private_key must be Ed25519")
-                    .attach(ConfigValueAndOrigin::new(
-                        "[REDACTED]",
-                        soranet_transport_public_key_origin,
-                    ))
-                    .attach(ConfigValueAndOrigin::new(
-                        "[REDACTED]",
-                        soranet_transport_private_key_origin,
-                    )),
-            );
+            let mut report = Report::new(ParseError::InvalidSoranetTransportIdentity)
+                .attach("soranet_transport_public_key/private_key must be Ed25519")
+                .attach(ConfigValueAndOrigin::new(
+                    "[REDACTED]",
+                    soranet_transport_public_key_origin,
+                ));
+            if let Some(origin) = soranet_transport_private_key_origin {
+                report = report.attach(ConfigValueAndOrigin::new("[REDACTED]", origin));
+            }
+            emitter.emit(report);
         }
 
         let (network, block_sync, transaction_gossiper) = self.network.parse();
-        let Some(key_pair_ref) = key_pair.as_ref() else {
-            panic!("Key pair is missing");
-        };
-        let peer = Peer::new(
-            network.address.value().clone(),
-            key_pair_ref.public_key().clone(),
-        );
+        let peer = Peer::new(network.address.value().clone(), peer_public_key);
         let trusted_peers = self.trusted_peers.map(|x| {
             let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
             let pops = Self::parse_trusted_peer_pops(&self.trusted_peers_pop.0, &mut emitter);
@@ -1127,7 +1367,7 @@ impl Root {
             trusted
         });
 
-        let genesis = self.genesis.into();
+        let genesis = self.genesis.parse(&mut emitter);
 
         let kura = self.kura.parse();
 
@@ -1225,6 +1465,9 @@ impl Root {
         if let Err(message) = snapshot.bootstrap.validate() {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
+        if let Err(message) = snapshot.resources.validate(snapshot.max_payload_bytes) {
+            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
+        }
 
         zk.max_proof_size_bytes = confidential.max_proof_size_bytes;
         zk.max_nullifiers_per_tx = confidential.max_nullifiers_per_tx;
@@ -1256,6 +1499,7 @@ impl Root {
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
+        let genesis = genesis.expect("genesis configuration should be valid when emitter succeeds");
 
         let key_pair = key_pair.unwrap();
         let soranet_transport_key_pair = soranet_transport_key_pair
@@ -1534,6 +1778,36 @@ pub struct SorafsPinPolicyConstraints {
     /// Canonically signer-id-ordered trusted Ed25519 approval roster.
     #[config(default = "Vec::new()")]
     pub approval_signers: Vec<SorafsPinApprovalSigner>,
+    /// Maximum number of live pin manifests in consensus state.
+    #[config(
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_MANIFESTS"
+    )]
+    pub max_global_manifests: u64,
+    /// Maximum aggregate content bytes represented by live pin manifests.
+    #[config(
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_BYTES"
+    )]
+    pub max_global_bytes: u64,
+    /// Maximum number of live pin manifests owned by one account.
+    #[config(
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_MANIFESTS_PER_AUTHORITY"
+    )]
+    pub max_manifests_per_authority: u64,
+    /// Maximum aggregate content bytes represented by one account's live pins.
+    #[config(
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_BYTES_PER_AUTHORITY"
+    )]
+    pub max_bytes_per_authority: u64,
+    /// Maximum predecessor depth admitted for a manifest lineage.
+    #[config(
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_LINEAGE_DEPTH"
+    )]
+    pub max_lineage_depth: u32,
+    /// Maximum number of direct successors admitted for one manifest.
+    #[config(
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::MAX_SUCCESSOR_FANOUT"
+    )]
+    pub max_successor_fanout: u32,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -1551,6 +1825,18 @@ impl Default for SorafsPinPolicyConstraints {
             approval_quorum:
                 crate::parameters::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM,
             approval_signers: Vec::new(),
+            max_global_manifests:
+                crate::parameters::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_MANIFESTS,
+            max_global_bytes:
+                crate::parameters::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_BYTES,
+            max_manifests_per_authority:
+                crate::parameters::defaults::governance::sorafs_pin_policy::MAX_MANIFESTS_PER_AUTHORITY,
+            max_bytes_per_authority:
+                crate::parameters::defaults::governance::sorafs_pin_policy::MAX_BYTES_PER_AUTHORITY,
+            max_lineage_depth:
+                crate::parameters::defaults::governance::sorafs_pin_policy::MAX_LINEAGE_DEPTH,
+            max_successor_fanout:
+                crate::parameters::defaults::governance::sorafs_pin_policy::MAX_SUCCESSOR_FANOUT,
         }
     }
 }
@@ -1660,6 +1946,24 @@ impl SorafsPinPolicyConstraints {
                 "governance.sorafs_pin_policy.approval_quorum must be nonzero and not exceed the governed signer count"
             );
         }
+        if self.max_global_manifests == 0
+            || self.max_global_bytes == 0
+            || self.max_manifests_per_authority == 0
+            || self.max_bytes_per_authority == 0
+            || self.max_lineage_depth == 0
+            || self.max_successor_fanout == 0
+        {
+            panic!(
+                "governance.sorafs_pin_policy resource and lineage ceilings must all be nonzero"
+            );
+        }
+        if self.max_manifests_per_authority > self.max_global_manifests
+            || self.max_bytes_per_authority > self.max_global_bytes
+        {
+            panic!(
+                "governance.sorafs_pin_policy per-authority ceilings must not exceed global ceilings"
+            );
+        }
 
         actual::SorafsPinPolicyConstraints {
             min_replicas_floor: self.min_replicas_floor,
@@ -1669,6 +1973,12 @@ impl SorafsPinPolicyConstraints {
             require_council_signatures: self.require_council_signatures,
             approval_quorum: self.approval_quorum,
             approval_signers,
+            max_global_manifests: self.max_global_manifests,
+            max_global_bytes: self.max_global_bytes,
+            max_manifests_per_authority: self.max_manifests_per_authority,
+            max_bytes_per_authority: self.max_bytes_per_authority,
+            max_lineage_depth: self.max_lineage_depth,
+            max_successor_fanout: self.max_successor_fanout,
         }
     }
 }
@@ -2194,7 +2504,7 @@ pub struct Governance {
     /// SoraFS telemetry authentication/replay policy.
     #[config(nested)]
     pub sorafs_telemetry: SorafsTelemetryPolicy,
-    /// Static SoraFS provider→owner bindings (hex provider id → account id).
+    /// Trusted pre-genesis SoraFS provider→owner bindings (hex provider id → account id).
     #[config(default = "BTreeMap::new()")]
     pub sorafs_provider_owners: BTreeMap<String, String>,
     /// Conviction step in blocks. duration/step increases conviction by 1.
@@ -5618,17 +5928,28 @@ pub struct Genesis {
     /// independently provisioned value prevents the artifact being authenticated from selecting
     /// its own trust root.
     #[config(env = "GENESIS_EXPECTED_HASH")]
-    pub expected_hash: WithOrigin<HashOf<BlockHeader>>,
+    pub expected_hash: Option<WithOrigin<HashOf<BlockHeader>>>,
+    /// Public file containing the canonical expected consensus-header hash.
+    #[config(env = "GENESIS_EXPECTED_HASH_FILE")]
+    pub expected_hash_file: Option<WithOrigin<PathBuf>>,
 }
 
-impl From<Genesis> for actual::Genesis {
-    fn from(genesis: Genesis) -> Self {
-        actual::Genesis {
-            public_key: genesis.public_key.into_value(),
-            file: genesis.file,
-            manifest_json: genesis.manifest_json,
-            expected_hash: genesis.expected_hash.into_value(),
-        }
+impl Genesis {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Genesis> {
+        let expected_hash = resolve_public_identity_source(
+            self.expected_hash,
+            self.expected_hash_file,
+            "genesis.expected_hash",
+            "genesis.expected_hash_file",
+            ParseError::InvalidGenesisConfig,
+            emitter,
+        )?;
+        Some(actual::Genesis {
+            public_key: self.public_key.into_value(),
+            file: self.file,
+            manifest_json: self.manifest_json,
+            expected_hash,
+        })
     }
 }
 
@@ -6044,6 +6365,8 @@ impl Sumeragi {
         let manifest_wire_bytes =
             defaults::sumeragi::TRANSPORT_COMPLETION_RECOMMENDED_MANIFEST_WIRE_BYTES;
         let timeout_vote_reserve = defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES;
+        let certified_fence_escape_reserve =
+            defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES;
         let lane_progress_bytes = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
         let lane_completion_bytes = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
         let minimum_source_bytes = block
@@ -6060,12 +6383,13 @@ impl Sumeragi {
                     .map(|completion| completion.max(lane_completion_bytes))
                     .and_then(|completion| ordinary.checked_add(completion))
             })
+            .and_then(|minimum| minimum.checked_add(certified_fence_escape_reserve))
             .and_then(|minimum| minimum.checked_add(timeout_vote_reserve));
         match minimum_source_bytes {
             Some(minimum) if queues.body_source_bytes.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, and {timeout_vote_reserve} timeout-vote bytes (minimum {minimum}, configured {})",
+                        "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes (minimum {minimum}, configured {})",
                         queues.body_source_bytes,
                     )),
                 );
@@ -6075,7 +6399,7 @@ impl Sumeragi {
             None => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "Sumeragi max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, and {timeout_vote_reserve} timeout-vote bytes exceed the platform size representation"
+                        "Sumeragi max-payload envelopes, {envelope_headroom} bytes of fixed headroom per envelope, {manifest_wire_bytes} recommended payload-completion manifest bytes, {lane_progress_bytes} lane-progress bytes, {lane_completion_bytes} lane-completion bytes, {certified_fence_escape_reserve} certified-fence-escape bytes, and {timeout_vote_reserve} timeout-vote bytes exceed the platform size representation"
                     )),
                 );
                 valid = false;
@@ -6089,13 +6413,13 @@ impl Sumeragi {
         let minimum_body_messages = queues
             .authenticated_non_validator_sources
             .get()
-            .checked_mul(2)
-            .and_then(|hubs| hubs.checked_add(6));
+            .checked_mul(3)
+            .and_then(|hubs| hubs.checked_add(7));
         match minimum_body_messages {
             Some(minimum) if queues.bodies.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum {minimum}, configured {})",
+                        "sumeragi.queues.bodies must reserve five positions for at least one validator, three per authenticated non-validator source, and two anonymous positions (minimum {minimum}, configured {})",
                         queues.bodies,
                     )),
                 );
@@ -8411,6 +8735,8 @@ pub struct Streaming {
     pub identity_public_key: Option<WithOrigin<PublicKey>>,
     /// Optional override for the streaming identity private key (must be Ed25519).
     pub identity_private_key: Option<WithOrigin<PrivateKey>>,
+    /// Optional owner-held file containing the streaming identity private key.
+    pub identity_private_key_file: Option<WithOrigin<PathBuf>>,
     /// Directory for persisted streaming session snapshots.
     pub session_store_dir: WithOrigin<PathBuf>,
     /// Feature bitmask advertised during streaming capability negotiation.
@@ -8457,6 +8783,12 @@ impl ReadConfigTrait for Streaming {
             .value_optional()
             .finish_with_origin();
 
+        let identity_private_key_file = reader
+            .read_parameter::<PathBuf>(["identity_private_key_file"])
+            .env("STREAMING_IDENTITY_PRIVATE_KEY_FILE")
+            .value_optional()
+            .finish_with_origin();
+
         let session_store_dir = reader
             .read_parameter::<PathBuf>(["session_store_dir"])
             .value_or_else(|| PathBuf::from(defaults::streaming::SESSION_STORE_DIR))
@@ -8493,6 +8825,7 @@ impl ReadConfigTrait for Streaming {
             kyber_suite: kyber_suite.unwrap(),
             identity_public_key: identity_public_key.unwrap(),
             identity_private_key: identity_private_key.unwrap(),
+            identity_private_key_file: identity_private_key_file.unwrap(),
             session_store_dir: session_store_dir.unwrap(),
             feature_bits: feature_bits.unwrap(),
             soranet: soranet.unwrap(),
@@ -8567,13 +8900,25 @@ impl Streaming {
         identity: &KeyPair,
         emitter: &mut Emitter<ParseError>,
     ) -> Option<KeyPair> {
+        let private_configured =
+            self.identity_private_key.is_some() || self.identity_private_key_file.is_some();
+        let private_key = private_configured.then(|| {
+            resolve_private_key_source(
+                self.identity_private_key.clone(),
+                self.identity_private_key_file.clone(),
+                "streaming.identity_private_key",
+                "streaming.identity_private_key_file",
+                ParseError::InvalidStreamingConfig,
+                emitter,
+            )
+        });
+        let private_key = private_key.flatten();
         match (
             self.identity_public_key.clone().map(WithOrigin::into_tuple),
-            self.identity_private_key
-                .clone()
-                .map(WithOrigin::into_tuple),
+            private_configured,
+            private_key,
         ) {
-            (Some((pub_key, pub_origin)), Some((priv_key, priv_origin))) => {
+            (Some((pub_key, pub_origin)), true, Some((priv_key, priv_origin))) => {
                 if !matches!(
                     pub_key.try_algorithm(),
                     Ok(iroha_crypto::Algorithm::Ed25519)
@@ -8606,27 +8951,31 @@ impl Streaming {
                     }
                 }
             }
-            (Some((_, origin)), None) => {
+            (Some((_, origin)), false, None) => {
                 emitter.emit(
                     Report::new(ParseError::InvalidStreamingConfig)
                         .attach(
-                            "streaming.identity_private_key must be provided when identity_public_key is set",
+                            "streaming identity needs exactly one of identity_private_key or identity_private_key_file when identity_public_key is set",
                         )
                         .attach(ConfigValueAndOrigin::new("[REDACTED]", origin)),
                 );
                 None
             }
-            (None, Some((_, origin))) => {
+            (None, true, Some((_, origin))) => {
                 emitter.emit(
                     Report::new(ParseError::InvalidStreamingConfig)
                         .attach(
-                            "streaming.identity_public_key must be provided when identity_private_key is set",
+                            "streaming.identity_public_key must be provided when a streaming private-key source is set",
                         )
                         .attach(ConfigValueAndOrigin::new("[REDACTED]", origin)),
                 );
                 None
             }
-            (None, None) => Some(identity.clone()),
+            (Some(_), true, None) | (None, true, None) => None,
+            (None, false, None) => Some(identity.clone()),
+            (Some(_), false, Some(_)) | (None, false, Some(_)) => {
+                unreachable!("an unconfigured private-key source cannot resolve")
+            }
         }
     }
 
@@ -12642,6 +12991,9 @@ pub struct Snapshot {
     /// additional transient memory beyond this on-disk byte bound.
     #[config(default = "defaults::snapshot::MAX_PAYLOAD_BYTES")]
     pub max_payload_bytes: NonZeroUsize,
+    /// Typed decode and transient-allocation budgets for snapshot restoration.
+    #[config(nested)]
+    pub resources: SnapshotResourcePolicy,
     /// Optional public key used to verify snapshot signatures (defaults to node identity key).
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
@@ -12649,6 +13001,72 @@ pub struct Snapshot {
     /// Explicit authorization for a one-time audited hash-only snapshot boundary.
     #[config(nested)]
     pub bootstrap: SnapshotBootstrapPolicy,
+}
+
+/// Strict typed-decoder and transient-allocation budgets for snapshot restoration.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SnapshotResourcePolicy {
+    /// Maximum nesting depth admitted by the typed decoder.
+    #[config(default = "defaults::snapshot::MAX_DECODE_DEPTH")]
+    pub max_decode_depth: NonZeroUsize,
+    /// Maximum aggregate collection items decoded from one payload.
+    #[config(default = "defaults::snapshot::MAX_DECODE_ITEMS")]
+    pub max_decode_items: NonZeroUsize,
+    /// Maximum UTF-8 bytes admitted for any individual string.
+    #[config(default = "defaults::snapshot::MAX_STRING_BYTES")]
+    pub max_string_bytes: NonZeroUsize,
+    /// Maximum bytes admitted for any individual binary blob.
+    #[config(default = "defaults::snapshot::MAX_BLOB_BYTES")]
+    pub max_blob_bytes: NonZeroUsize,
+    /// Maximum transient bytes allocated while restoring typed state.
+    #[config(default = "defaults::snapshot::MAX_TRANSIENT_BYTES")]
+    pub max_transient_bytes: NonZeroUsize,
+}
+
+impl Default for SnapshotResourcePolicy {
+    fn default() -> Self {
+        Self {
+            max_decode_depth: defaults::snapshot::MAX_DECODE_DEPTH,
+            max_decode_items: defaults::snapshot::MAX_DECODE_ITEMS,
+            max_string_bytes: defaults::snapshot::MAX_STRING_BYTES,
+            max_blob_bytes: defaults::snapshot::MAX_BLOB_BYTES,
+            max_transient_bytes: defaults::snapshot::MAX_TRANSIENT_BYTES,
+        }
+    }
+}
+
+impl SnapshotResourcePolicy {
+    /// Validate resource-budget relationships against the enclosing payload bound.
+    ///
+    /// The decoder cannot honor an individual-value budget larger than either
+    /// the authenticated payload or its total transient-allocation budget.
+    /// Keeping these relationships fail-closed also prevents a configuration
+    /// typo from silently weakening the smaller limit.
+    fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
+        if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
+            return Err(format!(
+                "snapshot.resources.max_decode_depth must not exceed Norito's structural limit of {}",
+                norito::json::MAX_JSON_VALUE_NESTING_DEPTH
+            ));
+        }
+        if self.max_string_bytes > self.max_blob_bytes {
+            return Err(
+                "snapshot.resources.max_string_bytes must not exceed max_blob_bytes".to_owned(),
+            );
+        }
+        if self.max_blob_bytes > max_payload_bytes {
+            return Err(
+                "snapshot.resources.max_blob_bytes must not exceed snapshot.max_payload_bytes"
+                    .to_owned(),
+            );
+        }
+        if self.max_blob_bytes > self.max_transient_bytes {
+            return Err(
+                "snapshot.resources.max_blob_bytes must not exceed max_transient_bytes".to_owned(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Fail-closed authorization for importing one audited hash-only snapshot boundary.
@@ -14180,6 +14598,22 @@ pub struct Torii {
         default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES"
     )]
     pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
+    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one authenticated account.
+    ///
+    /// Set to 0 to disable the per-account count cap (not recommended).
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER",
+        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER"
+    )]
+    pub zk_ivm_prove_job_max_entries_per_owner: usize,
+    /// Maximum bytes retained by `/v1/zk/ivm/prove` for one authenticated account.
+    ///
+    /// Set to 0 to disable the per-account byte cap (not recommended).
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER",
+        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER"
+    )]
+    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes<u64>,
     /// Push notification configuration (feature-gated in runtime).
     #[config(nested)]
     pub push: ToriiPush,
@@ -15190,6 +15624,9 @@ impl Torii {
             zk_ivm_prove_job_ttl_secs: self.zk_ivm_prove_job_ttl_secs,
             zk_ivm_prove_job_max_entries: self.zk_ivm_prove_job_max_entries,
             zk_ivm_prove_job_max_retained_bytes: self.zk_ivm_prove_job_max_retained_bytes,
+            zk_ivm_prove_job_max_entries_per_owner: self.zk_ivm_prove_job_max_entries_per_owner,
+            zk_ivm_prove_job_max_retained_bytes_per_owner: self
+                .zk_ivm_prove_job_max_retained_bytes_per_owner,
             connect: self.connect.parse(),
             iso_bridge: self.iso_bridge.parse(),
             transaction_ingress: self.transaction_ingress.parse(),
@@ -16709,9 +17146,6 @@ impl AccountOnboarding {
             "CanManageFxCorridors",
             "CanEnactGovernance",
             "CanManageParliament",
-            "CanRegisterSorafsPin",
-            "CanApproveSorafsPin",
-            "CanRetireSorafsPin",
             "CanBindSorafsAlias",
             "CanDeclareSorafsCapacity",
             "CanSubmitSorafsTelemetry",
@@ -17233,6 +17667,9 @@ pub struct ToriiKagemushaCommands {
     /// Private key for the account submitting typed Kagemusha instructions.
     #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")]
     pub private_key: Option<PrivateKey>,
+    /// Owner-held file containing the Kagemusha command submitter's private key.
+    #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY_FILE")]
+    pub private_key_file: Option<WithOrigin<PathBuf>>,
     /// Minimum live XOR balance required for the self-funded command authority.
     ///
     /// This has no default: enabling the command service requires an explicit,
@@ -17254,23 +17691,20 @@ impl ToriiKagemushaCommands {
         if !self.enabled {
             return None;
         }
-        let private_key = self
-            .private_key
-            .or_else(|| {
-                std::env::var("TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(|value| {
-                        value.parse::<PrivateKey>().unwrap_or_else(|err| {
-                            panic!("invalid TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY: {err}")
-                        })
-                    })
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "torii.kagemusha_commands.private_key or TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY is required"
-                )
-            });
+        let private_key = match (self.private_key, self.private_key_file) {
+            (Some(_), Some(_)) => panic!(
+                "torii.kagemusha_commands.private_key and torii.kagemusha_commands.private_key_file are mutually exclusive"
+            ),
+            (Some(private_key), None) => private_key,
+            (None, Some(file)) => {
+                read_private_key_file(file, "torii.kagemusha_commands.private_key_file")
+                    .unwrap_or_else(|err| panic!("invalid Kagemusha command key file: {err}"))
+                    .0
+            }
+            (None, None) => panic!(
+                "exactly one of torii.kagemusha_commands.private_key or torii.kagemusha_commands.private_key_file is required"
+            ),
+        };
         let key_pair = KeyPair::from_private_key(private_key.clone())
             .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.private_key: {err}"));
         let algorithm = key_pair
@@ -17319,13 +17753,44 @@ impl ToriiKagemushaCommands {
 
 #[cfg(test)]
 mod torii_kagemusha_commands_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use iroha_crypto::ExposedPrivateKey;
+
     use super::*;
+
+    static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
+
+    struct TestKeyFile(PathBuf);
+
+    impl TestKeyFile {
+        fn create(contents: &str) -> Self {
+            let sequence = NEXT_KEY_FILE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "iroha-config-kagemusha-{}-{sequence}.key",
+                std::process::id()
+            ));
+            fs::write(&path, contents).expect("write Kagemusha key file");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestKeyFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
 
     fn sample() -> ToriiKagemushaCommands {
         let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
         ToriiKagemushaCommands {
             enabled: true,
             private_key: Some(key_pair.private_key().clone()),
+            private_key_file: None,
             minimum_xor_balance: Quantity::from(25_u32),
             max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
             operation_registry_max_entries:
@@ -17344,6 +17809,34 @@ mod torii_kagemusha_commands_tests {
         );
         assert_eq!(parsed.minimum_xor_balance, Quantity::from(25_u32));
         assert!(!parsed.max_tx_value.is_zero());
+    }
+
+    #[test]
+    fn parses_owner_held_kagemusha_submission_key() {
+        let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
+        let key_file = TestKeyFile::create(&format!(
+            "{}\n",
+            ExposedPrivateKey(key_pair.private_key().clone())
+        ));
+        let mut config = sample();
+        config.private_key = None;
+        config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
+
+        let parsed = config.parse().expect("file-backed Kagemusha config");
+
+        assert_eq!(
+            parsed.authority,
+            AccountId::new(key_pair.public_key().clone())
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_kagemusha_private_key_sources() {
+        let key_file = TestKeyFile::create("");
+        let mut config = sample();
+        config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
+
+        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
     }
 
     #[test]
@@ -21490,6 +21983,404 @@ impl SorafsProviderIngestFinalizedArchiveConfig {
     }
 }
 
+/// User policy for Musubi provider-attestation journaling.
+///
+/// `enabled = true` requests activation but does not itself permit durable
+/// capture. Stock `irohad` rejects the request until a concrete capture child
+/// is qualified. The three public provider bindings are mandatory as one
+/// all-or-none set while paths, deployment nonces, endpoints, credentials,
+/// tokens, and keys remain deliberately absent.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsProviderAttestationJournalConfig {
+    /// Request activation of finalized-intent capture; stock `irohad` currently
+    /// rejects the request until a concrete capture child is qualified.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::ENABLED"
+    )]
+    pub enabled: bool,
+    /// Stable public identity of the rollback-resistant UNIX-time seal.
+    pub clock_seal_handle: Option<String>,
+    /// Exact non-zero clock-seal adapter and public-policy revision.
+    pub clock_seal_revision: Option<u64>,
+    /// Exact lowercase non-zero digest of the clock-seal public policy.
+    pub clock_seal_policy_digest_hex: Option<String>,
+    /// Stable public identity of the approval-only signer.
+    pub approval_signer_handle: Option<String>,
+    /// Exact non-zero approval-signer adapter and public-policy revision.
+    pub approval_signer_revision: Option<u64>,
+    /// Exact lowercase non-zero digest of the approval-signer public policy.
+    pub approval_signer_policy_digest_hex: Option<String>,
+    /// Stable public identity of the authenticated coordinator inventory.
+    pub inventory_handle: Option<String>,
+    /// Exact non-zero inventory adapter and public-policy revision.
+    pub inventory_revision: Option<u64>,
+    /// Exact lowercase non-zero digest of the inventory public policy.
+    pub inventory_policy_digest_hex: Option<String>,
+    /// Maximum retained active and terminal entries, independently of the
+    /// checkpoint byte cap.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::MAX_ENTRIES"
+    )]
+    pub max_entries: usize,
+    /// Maximum approval or inventory-handoff attempts per stage.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::MAX_ATTEMPTS"
+    )]
+    pub max_attempts: u32,
+    /// Lease duration for approval and inventory-handoff claims.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::LEASE_TTL_MS"
+    )]
+    pub lease_ttl_ms: u64,
+    /// Maximum external approval-signer operation duration.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::APPROVAL_TIMEOUT_MS"
+    )]
+    pub approval_timeout_ms: u64,
+    /// Maximum external coordinator-inventory operation duration.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::HANDOFF_TIMEOUT_MS"
+    )]
+    pub handoff_timeout_ms: u64,
+    /// Delay before retrying a transient stage failure.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::RETRY_DELAY_MS"
+    )]
+    pub retry_delay_ms: u64,
+    /// Maximum canonical checkpoint size, independently of the entry cap and
+    /// including the minimum reserve for one active intent's worst-case future
+    /// attestation state.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::CHECKPOINT_MAX_BYTES"
+    )]
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum CAS conflicts retried by one journal operation.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal::MAX_CAS_RETRIES"
+    )]
+    pub max_cas_retries: u32,
+}
+
+impl Default for SorafsProviderAttestationJournalConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+        Self {
+            enabled: journal::ENABLED,
+            clock_seal_handle: None,
+            clock_seal_revision: None,
+            clock_seal_policy_digest_hex: None,
+            approval_signer_handle: None,
+            approval_signer_revision: None,
+            approval_signer_policy_digest_hex: None,
+            inventory_handle: None,
+            inventory_revision: None,
+            inventory_policy_digest_hex: None,
+            max_entries: journal::MAX_ENTRIES,
+            max_attempts: journal::MAX_ATTEMPTS,
+            lease_ttl_ms: journal::LEASE_TTL_MS,
+            approval_timeout_ms: journal::APPROVAL_TIMEOUT_MS,
+            handoff_timeout_ms: journal::HANDOFF_TIMEOUT_MS,
+            retry_delay_ms: journal::RETRY_DELAY_MS,
+            checkpoint_max_bytes: journal::CHECKPOINT_MAX_BYTES,
+            max_cas_retries: journal::MAX_CAS_RETRIES,
+        }
+    }
+}
+
+impl SorafsProviderAttestationJournalConfig {
+    fn parse(
+        self,
+        provider_ingest_enabled: bool,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsProviderAttestationJournal> {
+        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
+        }
+
+        fn parse_binding(
+            role: &'static str,
+            handle: Option<String>,
+            revision: Option<u64>,
+            policy_digest_hex: Option<String>,
+            emitter: &mut Emitter<ParseError>,
+        ) -> Option<actual::SorafsProviderAttestationRuntimeBinding> {
+            const ROOT: &str =
+                "sorafs.storage.provider_ingest_runtime.provider_attestation_journal";
+
+            let handle = match handle {
+                Some(handle) if is_production_runtime_handle(&handle) => Some(handle),
+                Some(_) => {
+                    emit(
+                        emitter,
+                        format!(
+                            "{ROOT}.{role}_handle must be a canonical production runtime handle"
+                        ),
+                    );
+                    None
+                }
+                None => {
+                    emit(
+                        emitter,
+                        format!("{ROOT}.{role}_handle is required when enabled"),
+                    );
+                    None
+                }
+            };
+            let revision = match revision {
+                Some(revision) if revision != 0 => Some(revision),
+                Some(_) => {
+                    emit(emitter, format!("{ROOT}.{role}_revision must be nonzero"));
+                    None
+                }
+                None => {
+                    emit(
+                        emitter,
+                        format!("{ROOT}.{role}_revision is required when enabled"),
+                    );
+                    None
+                }
+            };
+            let policy_digest = match policy_digest_hex {
+                Some(value)
+                    if value.len() == 64
+                        && value
+                            .bytes()
+                            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) =>
+                {
+                    let mut digest = [0_u8; 32];
+                    hex::decode_to_slice(value, &mut digest)
+                        .expect("validated lowercase 32-byte hexadecimal");
+                    if digest == [0; 32] {
+                        emit(
+                            emitter,
+                            format!("{ROOT}.{role}_policy_digest_hex must be nonzero"),
+                        );
+                        None
+                    } else {
+                        Some(digest)
+                    }
+                }
+                Some(_) => {
+                    emit(
+                        emitter,
+                        format!(
+                            "{ROOT}.{role}_policy_digest_hex must be exactly 64 lowercase hexadecimal characters"
+                        ),
+                    );
+                    None
+                }
+                None => {
+                    emit(
+                        emitter,
+                        format!("{ROOT}.{role}_policy_digest_hex is required when enabled"),
+                    );
+                    None
+                }
+            };
+
+            Some(actual::SorafsProviderAttestationRuntimeBinding {
+                handle: handle?,
+                revision: revision?,
+                policy_digest: policy_digest?,
+            })
+        }
+
+        let binding_fields = [
+            ("clock_seal_handle", self.clock_seal_handle.is_some()),
+            ("clock_seal_revision", self.clock_seal_revision.is_some()),
+            (
+                "clock_seal_policy_digest_hex",
+                self.clock_seal_policy_digest_hex.is_some(),
+            ),
+            (
+                "approval_signer_handle",
+                self.approval_signer_handle.is_some(),
+            ),
+            (
+                "approval_signer_revision",
+                self.approval_signer_revision.is_some(),
+            ),
+            (
+                "approval_signer_policy_digest_hex",
+                self.approval_signer_policy_digest_hex.is_some(),
+            ),
+            ("inventory_handle", self.inventory_handle.is_some()),
+            ("inventory_revision", self.inventory_revision.is_some()),
+            (
+                "inventory_policy_digest_hex",
+                self.inventory_policy_digest_hex.is_some(),
+            ),
+        ];
+        if !self.enabled {
+            for (field, present) in binding_fields {
+                if present {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.{field} must be absent when disabled"
+                        ),
+                    );
+                }
+            }
+            return None;
+        }
+
+        let mut valid = true;
+        if !provider_ingest_enabled {
+            emit(
+                emitter,
+                "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.enabled requires provider_ingest_runtime.enabled",
+            );
+            valid = false;
+        }
+        if self.max_entries == 0 || self.max_entries > journal::MAX_ENTRIES_LIMIT {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.max_entries must be within 1..={}",
+                    journal::MAX_ENTRIES_LIMIT
+                ),
+            );
+            valid = false;
+        }
+        if self.max_attempts == 0 || self.max_attempts > journal::MAX_ATTEMPTS_LIMIT {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.max_attempts must be within 1..={}",
+                    journal::MAX_ATTEMPTS_LIMIT
+                ),
+            );
+            valid = false;
+        }
+        if self.lease_ttl_ms == 0 || self.lease_ttl_ms > journal::LEASE_TTL_MAX_MS {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.lease_ttl_ms must be within 1..={}",
+                    journal::LEASE_TTL_MAX_MS
+                ),
+            );
+            valid = false;
+        }
+        for (field, timeout_ms) in [
+            ("approval_timeout_ms", self.approval_timeout_ms),
+            ("handoff_timeout_ms", self.handoff_timeout_ms),
+        ] {
+            if timeout_ms == 0 || timeout_ms > journal::EXTERNAL_TIMEOUT_MAX_MS {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.{field} must be within 1..={}",
+                        journal::EXTERNAL_TIMEOUT_MAX_MS
+                    ),
+                );
+                valid = false;
+            }
+            if timeout_ms >= self.lease_ttl_ms {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.{field} must be less than lease_ttl_ms"
+                    ),
+                );
+                valid = false;
+            }
+        }
+        if self.retry_delay_ms == 0 || self.retry_delay_ms > journal::RETRY_DELAY_MAX_MS {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.retry_delay_ms must be within 1..={}",
+                    journal::RETRY_DELAY_MAX_MS
+                ),
+            );
+            valid = false;
+        }
+        let checkpoint_max_bytes = match usize::try_from(self.checkpoint_max_bytes.0) {
+            Ok(bytes)
+                if (journal::CHECKPOINT_MIN_BYTES..=journal::CHECKPOINT_MAX_BYTES_LIMIT)
+                    .contains(&bytes) =>
+            {
+                Some(bytes)
+            }
+            Ok(_) => {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.checkpoint_max_bytes must be within {}..={}",
+                        journal::CHECKPOINT_MIN_BYTES,
+                        journal::CHECKPOINT_MAX_BYTES_LIMIT
+                    ),
+                );
+                valid = false;
+                None
+            }
+            Err(_) => {
+                emit(
+                    emitter,
+                    "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.checkpoint_max_bytes does not fit this target",
+                );
+                valid = false;
+                None
+            }
+        };
+        if self.max_cas_retries == 0 || self.max_cas_retries > journal::MAX_CAS_RETRIES_LIMIT {
+            emit(
+                emitter,
+                format!(
+                    "sorafs.storage.provider_ingest_runtime.provider_attestation_journal.max_cas_retries must be within 1..={}",
+                    journal::MAX_CAS_RETRIES_LIMIT
+                ),
+            );
+            valid = false;
+        }
+
+        let clock_seal = parse_binding(
+            "clock_seal",
+            self.clock_seal_handle,
+            self.clock_seal_revision,
+            self.clock_seal_policy_digest_hex,
+            emitter,
+        );
+        let approval_signer = parse_binding(
+            "approval_signer",
+            self.approval_signer_handle,
+            self.approval_signer_revision,
+            self.approval_signer_policy_digest_hex,
+            emitter,
+        );
+        let inventory = parse_binding(
+            "inventory",
+            self.inventory_handle,
+            self.inventory_revision,
+            self.inventory_policy_digest_hex,
+            emitter,
+        );
+
+        let checkpoint_max_bytes = checkpoint_max_bytes?;
+        if !valid {
+            return None;
+        }
+        Some(actual::SorafsProviderAttestationJournal {
+            clock_seal: clock_seal?,
+            approval_signer: approval_signer?,
+            inventory: inventory?,
+            max_entries: self.max_entries,
+            max_attempts: self.max_attempts,
+            lease_ttl_ms: self.lease_ttl_ms,
+            approval_timeout_ms: self.approval_timeout_ms,
+            handoff_timeout_ms: self.handoff_timeout_ms,
+            retry_delay_ms: self.retry_delay_ms,
+            checkpoint_max_bytes,
+            max_cas_retries: self.max_cas_retries,
+        })
+    }
+}
+
 /// User configuration for supervised finalized-ledger provider ingest.
 ///
 /// Only public policy and opaque runtime-provider identities are accepted.
@@ -21578,6 +22469,11 @@ pub struct SorafsProviderIngestRuntimeConfig {
     /// Durable payload-free completion-outbox policy.
     #[config(nested)]
     pub outbox: SorafsProviderIngestOutboxConfig,
+    /// Optional request to activate the capture-only Musubi provider-attestation
+    /// journal; stock `irohad` currently rejects it until a concrete child is
+    /// qualified.
+    #[config(nested)]
+    pub provider_attestation_journal: SorafsProviderAttestationJournalConfig,
 }
 
 impl Default for SorafsProviderIngestRuntimeConfig {
@@ -21615,6 +22511,7 @@ impl Default for SorafsProviderIngestRuntimeConfig {
             completion_transaction_ttl_ms: runtime::COMPLETION_TRANSACTION_TTL_MS,
             finalized_archive: SorafsProviderIngestFinalizedArchiveConfig::default(),
             outbox: SorafsProviderIngestOutboxConfig::default(),
+            provider_attestation_journal: SorafsProviderAttestationJournalConfig::default(),
         }
     }
 }
@@ -21712,6 +22609,10 @@ impl SorafsProviderIngestRuntimeConfig {
             self.checkpoint_store_revision.is_some(),
             self.checkpoint_store_policy_digest_hex.is_some(),
         ];
+        let provider_attestation_journal_enabled = self.provider_attestation_journal.enabled;
+        let provider_attestation_journal = self
+            .provider_attestation_journal
+            .parse(self.enabled, emitter);
         let finalized_archive = self.finalized_archive.parse(emitter);
         if !self.enabled {
             if authority_fields_present.iter().any(|present| *present) {
@@ -22217,6 +23118,11 @@ impl SorafsProviderIngestRuntimeConfig {
                 terminal_retention_blocks: outbox.terminal_retention_blocks,
                 max_signed_transaction_bytes: outbox.max_signed_transaction_bytes,
                 max_status_page_size: outbox.max_status_page_size,
+            },
+            provider_attestation_journal: if provider_attestation_journal_enabled {
+                Some(provider_attestation_journal?)
+            } else {
+                None
             },
         })
     }
@@ -23682,6 +24588,22 @@ mod sorafs_provider_ingest_runtime_config_tests {
         }
     }
 
+    fn enable_attestation_journal(config: &mut SorafsProviderAttestationJournalConfig) {
+        config.enabled = true;
+        config.clock_seal_handle =
+            Some("sealed://sorafs/provider-attestation/clock-primary".to_owned());
+        config.clock_seal_revision = Some(11);
+        config.clock_seal_policy_digest_hex = Some("c1".repeat(32));
+        config.approval_signer_handle =
+            Some("hsm://sorafs/provider-attestation/approval-primary".to_owned());
+        config.approval_signer_revision = Some(12);
+        config.approval_signer_policy_digest_hex = Some("c2".repeat(32));
+        config.inventory_handle =
+            Some("coordinator://sorafs/provider-attestation/inventory-primary".to_owned());
+        config.inventory_revision = Some(13);
+        config.inventory_policy_digest_hex = Some("c3".repeat(32));
+    }
+
     fn large_valid_outbox_config() -> SorafsProviderIngestRuntimeConfig {
         use defaults::sorafs::storage::provider_ingest_runtime::outbox;
 
@@ -23697,12 +24619,20 @@ mod sorafs_provider_ingest_runtime_config_tests {
 
     #[test]
     fn disabled_default_is_inert() {
+        let config = SorafsProviderIngestRuntimeConfig::default();
+        let journal = &config.provider_attestation_journal;
+        assert!(!journal.enabled);
+        assert!(journal.clock_seal_handle.is_none());
+        assert!(journal.clock_seal_revision.is_none());
+        assert!(journal.clock_seal_policy_digest_hex.is_none());
+        assert!(journal.approval_signer_handle.is_none());
+        assert!(journal.approval_signer_revision.is_none());
+        assert!(journal.approval_signer_policy_digest_hex.is_none());
+        assert!(journal.inventory_handle.is_none());
+        assert!(journal.inventory_revision.is_none());
+        assert!(journal.inventory_policy_digest_hex.is_none());
         let mut emitter = Emitter::new();
-        assert!(
-            SorafsProviderIngestRuntimeConfig::default()
-                .parse(false, None, &mut emitter)
-                .is_none()
-        );
+        assert!(config.parse(false, None, &mut emitter).is_none());
         assert!(emitter.into_result().is_ok());
     }
 
@@ -23758,6 +24688,279 @@ mod sorafs_provider_ingest_runtime_config_tests {
         assert_eq!(parsed.outbox.max_active_entries, 128);
         assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 160 * 1024 * 1024);
         assert_eq!(parsed.outbox.checkpoint_operation_timeout_ms, 30_000);
+        assert!(parsed.provider_attestation_journal.is_none());
+    }
+
+    #[test]
+    fn enabled_attestation_journal_projects_exact_policy_and_bindings() {
+        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+        let mut config = valid_config();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        let mut emitter = Emitter::new();
+        let parsed = config
+            .parse(true, Some(&provider_id()), &mut emitter)
+            .expect("enabled provider-ingest policy with capture journal");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(
+            parsed.provider_attestation_journal,
+            Some(actual::SorafsProviderAttestationJournal {
+                clock_seal: actual::SorafsProviderAttestationRuntimeBinding {
+                    handle: "sealed://sorafs/provider-attestation/clock-primary".to_owned(),
+                    revision: 11,
+                    policy_digest: [0xC1; 32],
+                },
+                approval_signer: actual::SorafsProviderAttestationRuntimeBinding {
+                    handle: "hsm://sorafs/provider-attestation/approval-primary".to_owned(),
+                    revision: 12,
+                    policy_digest: [0xC2; 32],
+                },
+                inventory: actual::SorafsProviderAttestationRuntimeBinding {
+                    handle: "coordinator://sorafs/provider-attestation/inventory-primary"
+                        .to_owned(),
+                    revision: 13,
+                    policy_digest: [0xC3; 32],
+                },
+                max_entries: journal::MAX_ENTRIES,
+                max_attempts: journal::MAX_ATTEMPTS,
+                lease_ttl_ms: journal::LEASE_TTL_MS,
+                approval_timeout_ms: journal::APPROVAL_TIMEOUT_MS,
+                handoff_timeout_ms: journal::HANDOFF_TIMEOUT_MS,
+                retry_delay_ms: journal::RETRY_DELAY_MS,
+                checkpoint_max_bytes: usize::try_from(journal::CHECKPOINT_MAX_BYTES.0)
+                    .expect("default checkpoint bound fits usize"),
+                max_cas_retries: journal::MAX_CAS_RETRIES,
+            })
+        );
+    }
+
+    #[test]
+    fn disabled_attestation_journal_rejects_every_binding_field() {
+        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 9] = [
+            |config| config.clock_seal_handle = Some("sealed://clock/primary".to_owned()),
+            |config| config.clock_seal_revision = Some(1),
+            |config| config.clock_seal_policy_digest_hex = Some("c1".repeat(32)),
+            |config| config.approval_signer_handle = Some("hsm://approval/primary".to_owned()),
+            |config| config.approval_signer_revision = Some(1),
+            |config| config.approval_signer_policy_digest_hex = Some("c2".repeat(32)),
+            |config| config.inventory_handle = Some("coordinator://inventory/primary".to_owned()),
+            |config| config.inventory_revision = Some(1),
+            |config| config.inventory_policy_digest_hex = Some("c3".repeat(32)),
+        ];
+
+        for mutate in mutations {
+            let mut config = SorafsProviderIngestRuntimeConfig::default();
+            mutate(&mut config.provider_attestation_journal);
+            let mut emitter = Emitter::new();
+            assert!(config.parse(false, None, &mut emitter).is_none());
+            assert!(emitter.into_result().is_err());
+        }
+    }
+
+    #[test]
+    fn enabled_attestation_journal_requires_all_three_binding_roles() {
+        for present_roles in 0_u8..0b111 {
+            let mut config = valid_config();
+            enable_attestation_journal(&mut config.provider_attestation_journal);
+            if present_roles & 0b001 == 0 {
+                config.provider_attestation_journal.clock_seal_handle = None;
+                config.provider_attestation_journal.clock_seal_revision = None;
+                config
+                    .provider_attestation_journal
+                    .clock_seal_policy_digest_hex = None;
+            }
+            if present_roles & 0b010 == 0 {
+                config.provider_attestation_journal.approval_signer_handle = None;
+                config.provider_attestation_journal.approval_signer_revision = None;
+                config
+                    .provider_attestation_journal
+                    .approval_signer_policy_digest_hex = None;
+            }
+            if present_roles & 0b100 == 0 {
+                config.provider_attestation_journal.inventory_handle = None;
+                config.provider_attestation_journal.inventory_revision = None;
+                config
+                    .provider_attestation_journal
+                    .inventory_policy_digest_hex = None;
+            }
+
+            let mut emitter = Emitter::new();
+            assert!(
+                config
+                    .parse(true, Some(&provider_id()), &mut emitter)
+                    .is_none(),
+                "role mask {present_roles:03b} must fail closed"
+            );
+            assert!(emitter.into_result().is_err());
+        }
+    }
+
+    #[test]
+    fn enabled_attestation_journal_rejects_partial_binding_triplets() {
+        for present_fields in 0b001_u8..0b111 {
+            let mut config = valid_config();
+            enable_attestation_journal(&mut config.provider_attestation_journal);
+            config.provider_attestation_journal.clock_seal_handle =
+                (present_fields & 0b001 != 0).then(|| "sealed://clock/primary".to_owned());
+            config.provider_attestation_journal.clock_seal_revision =
+                (present_fields & 0b010 != 0).then_some(11);
+            config
+                .provider_attestation_journal
+                .clock_seal_policy_digest_hex =
+                (present_fields & 0b100 != 0).then(|| "c1".repeat(32));
+
+            let mut emitter = Emitter::new();
+            assert!(
+                config
+                    .parse(true, Some(&provider_id()), &mut emitter)
+                    .is_none(),
+                "field mask {present_fields:03b} must fail closed"
+            );
+            assert!(emitter.into_result().is_err());
+        }
+    }
+
+    #[test]
+    fn enabled_attestation_journal_rejects_unqualified_bindings() {
+        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 12] = [
+            |config| config.clock_seal_handle = Some("sealed://clock/test".to_owned()),
+            |config| config.approval_signer_handle = Some("hsm://approval/dev".to_owned()),
+            |config| config.inventory_handle = Some("coordinator://inventory/mock".to_owned()),
+            |config| config.clock_seal_revision = Some(0),
+            |config| config.approval_signer_revision = Some(0),
+            |config| config.inventory_revision = Some(0),
+            |config| config.clock_seal_policy_digest_hex = Some("00".repeat(32)),
+            |config| config.approval_signer_policy_digest_hex = Some("00".repeat(32)),
+            |config| config.inventory_policy_digest_hex = Some("00".repeat(32)),
+            |config| config.clock_seal_policy_digest_hex = Some("C1".repeat(32)),
+            |config| config.approval_signer_policy_digest_hex = Some("gg".repeat(32)),
+            |config| config.inventory_policy_digest_hex = Some("c3".repeat(31)),
+        ];
+
+        for mutate in mutations {
+            let mut config = valid_config();
+            enable_attestation_journal(&mut config.provider_attestation_journal);
+            mutate(&mut config.provider_attestation_journal);
+            let mut emitter = Emitter::new();
+            assert!(
+                config
+                    .parse(true, Some(&provider_id()), &mut emitter)
+                    .is_none()
+            );
+            assert!(emitter.into_result().is_err());
+        }
+    }
+
+    #[test]
+    fn attestation_journal_requires_enabled_provider_ingest_parent() {
+        let mut config = SorafsProviderIngestRuntimeConfig::default();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
+        let error = format!("{:?}", emitter.into_result().expect_err("parent gate"));
+        assert!(
+            error.contains(
+                "provider_attestation_journal.enabled requires provider_ingest_runtime.enabled"
+            ),
+            "unexpected diagnostic: {error}"
+        );
+    }
+
+    #[test]
+    fn attestation_journal_rejects_zero_below_minimum_and_above_limit_bounds() {
+        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 17] = [
+            |config| config.max_entries = 0,
+            |config| config.max_entries = journal::MAX_ENTRIES_LIMIT + 1,
+            |config| config.max_attempts = 0,
+            |config| config.max_attempts = journal::MAX_ATTEMPTS_LIMIT + 1,
+            |config| config.lease_ttl_ms = 0,
+            |config| config.lease_ttl_ms = journal::LEASE_TTL_MAX_MS + 1,
+            |config| config.approval_timeout_ms = 0,
+            |config| config.approval_timeout_ms = journal::EXTERNAL_TIMEOUT_MAX_MS + 1,
+            |config| config.handoff_timeout_ms = 0,
+            |config| config.handoff_timeout_ms = journal::EXTERNAL_TIMEOUT_MAX_MS + 1,
+            |config| config.retry_delay_ms = 0,
+            |config| config.retry_delay_ms = journal::RETRY_DELAY_MAX_MS + 1,
+            |config| config.checkpoint_max_bytes = Bytes(0),
+            |config| {
+                config.checkpoint_max_bytes = Bytes(
+                    u64::try_from(journal::CHECKPOINT_MIN_BYTES)
+                        .expect("checkpoint minimum fits u64")
+                        - 1,
+                );
+            },
+            |config| {
+                config.checkpoint_max_bytes = Bytes(
+                    u64::try_from(journal::CHECKPOINT_MAX_BYTES_LIMIT)
+                        .expect("checkpoint limit fits u64")
+                        + 1,
+                );
+            },
+            |config| config.max_cas_retries = 0,
+            |config| config.max_cas_retries = journal::MAX_CAS_RETRIES_LIMIT + 1,
+        ];
+
+        for mutate in mutations {
+            let mut config = valid_config();
+            enable_attestation_journal(&mut config.provider_attestation_journal);
+            mutate(&mut config.provider_attestation_journal);
+            let mut emitter = Emitter::new();
+            assert!(
+                config
+                    .parse(true, Some(&provider_id()), &mut emitter)
+                    .is_none()
+            );
+            assert!(emitter.into_result().is_err());
+        }
+    }
+
+    #[test]
+    fn attestation_journal_accepts_exact_checkpoint_minimum() {
+        use defaults::sorafs::storage::provider_ingest_runtime::provider_attestation_journal as journal;
+
+        let mut config = valid_config();
+        enable_attestation_journal(&mut config.provider_attestation_journal);
+        config.provider_attestation_journal.checkpoint_max_bytes = Bytes(
+            u64::try_from(journal::CHECKPOINT_MIN_BYTES).expect("checkpoint minimum fits u64"),
+        );
+        let mut emitter = Emitter::new();
+        let parsed = config
+            .parse(true, Some(&provider_id()), &mut emitter)
+            .expect("exact checkpoint minimum is valid");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(
+            parsed
+                .provider_attestation_journal
+                .expect("enabled journal")
+                .checkpoint_max_bytes,
+            journal::CHECKPOINT_MIN_BYTES
+        );
+    }
+
+    #[test]
+    fn attestation_journal_stage_timeouts_must_fit_the_claim_lease() {
+        let mutations: [fn(&mut SorafsProviderAttestationJournalConfig); 2] = [
+            |config: &mut SorafsProviderAttestationJournalConfig| {
+                config.approval_timeout_ms = config.lease_ttl_ms;
+            },
+            |config: &mut SorafsProviderAttestationJournalConfig| {
+                config.handoff_timeout_ms = config.lease_ttl_ms;
+            },
+        ];
+        for select_timeout in mutations {
+            let mut config = valid_config();
+            enable_attestation_journal(&mut config.provider_attestation_journal);
+            select_timeout(&mut config.provider_attestation_journal);
+            let mut emitter = Emitter::new();
+            assert!(
+                config
+                    .parse(true, Some(&provider_id()), &mut emitter)
+                    .is_none()
+            );
+            assert!(emitter.into_result().is_err());
+        }
     }
 
     #[test]
@@ -32261,6 +33464,45 @@ mod offline_cfg_tests {
     }
 
     #[test]
+    fn sorafs_pin_resource_policy_requires_finite_coherent_ceilings() {
+        let defaults = SorafsPinPolicyConstraints::default().parse();
+        assert!(defaults.max_global_manifests >= defaults.max_manifests_per_authority);
+        assert!(defaults.max_global_bytes >= defaults.max_bytes_per_authority);
+        assert_ne!(defaults.max_lineage_depth, 0);
+        assert_ne!(defaults.max_successor_fanout, 0);
+
+        for invalid in [
+            SorafsPinPolicyConstraints {
+                max_global_manifests: 0,
+                ..SorafsPinPolicyConstraints::default()
+            },
+            SorafsPinPolicyConstraints {
+                max_lineage_depth: 0,
+                ..SorafsPinPolicyConstraints::default()
+            },
+            SorafsPinPolicyConstraints {
+                max_successor_fanout: 0,
+                ..SorafsPinPolicyConstraints::default()
+            },
+            SorafsPinPolicyConstraints {
+                max_global_manifests: 1,
+                max_manifests_per_authority: 2,
+                ..SorafsPinPolicyConstraints::default()
+            },
+            SorafsPinPolicyConstraints {
+                max_global_bytes: 1,
+                max_bytes_per_authority: 2,
+                ..SorafsPinPolicyConstraints::default()
+            },
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| invalid.parse()).is_err(),
+                "invalid SoraFS pin resource policy must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn governance_parliament_fields_roundtrip() {
         let cfg = Governance {
             vk_ballot: None,
@@ -32441,13 +33683,15 @@ mod duration_clamp_tests {
         fs,
         path::{Path, PathBuf},
         str::FromStr,
+        sync::atomic::{AtomicU64, Ordering},
         time::{Duration, Duration as StdDuration},
     };
 
     use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes};
-    use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+    use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
+        block::BlockHeader,
         name::Name,
         sorafs::orderbook::{
             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
@@ -32460,6 +33704,38 @@ mod duration_clamp_tests {
         actual, defaults,
         user::{SoracloudRuntime, SoracloudRuntimeHuggingFace},
     };
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn create(label: &str) -> Self {
+            for _ in 0..1024 {
+                let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "iroha-config-{label}-{}-{sequence}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create test directory {}: {error}", path.display()),
+                }
+            }
+            panic!("could not allocate a unique configuration test directory");
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     const MINIMAL_CONFIG: &str = r#"
 chain = "00000000-0000-0000-0000-000000000000"
@@ -32608,6 +33884,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         config.torii.kagemusha_commands = Some(super::ToriiKagemushaCommands {
             enabled: true,
             private_key: Some(private_key.clone()),
+            private_key_file: None,
             minimum_xor_balance: Quantity::from(1_u64),
             max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
             operation_registry_max_entries:
@@ -35264,6 +36541,43 @@ publish_delay_seconds = 17
     }
 
     #[test]
+    fn snapshot_resource_policy_rejects_incoherent_budgets() {
+        let invalid_resources = [
+            (
+                "max_decode_depth",
+                i64::try_from(norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1)
+                    .expect("Norito depth limit fits i64"),
+            ),
+            ("max_string_bytes", 65),
+            ("max_blob_bytes", 129),
+            ("max_transient_bytes", 63),
+        ];
+
+        for (field, value) in invalid_resources {
+            let mut table = base_table();
+            let snapshot = table
+                .entry("snapshot")
+                .or_insert_with(|| Value::Table(Table::new()))
+                .as_table_mut()
+                .expect("snapshot table");
+            snapshot.insert("max_payload_bytes".into(), Value::Integer(128));
+            let mut resources = Table::new();
+            resources.insert("max_decode_depth".into(), Value::Integer(64));
+            resources.insert("max_decode_items".into(), Value::Integer(1_024));
+            resources.insert("max_string_bytes".into(), Value::Integer(32));
+            resources.insert("max_blob_bytes".into(), Value::Integer(64));
+            resources.insert("max_transient_bytes".into(), Value::Integer(128));
+            resources.insert(field.into(), Value::Integer(value));
+            snapshot.insert("resources".into(), Value::Table(resources));
+
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "incoherent snapshot resource field {field} must fail configuration parsing"
+            );
+        }
+    }
+
+    #[test]
     fn retired_peer_genesis_bootstrap_config_is_rejected() {
         for (field, value) in [
             ("bootstrap_allowlist", Value::Array(Vec::new())),
@@ -35301,6 +36615,57 @@ publish_delay_seconds = 17
         assert!(
             actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
             "a signed artifact must not be allowed to select its own startup trust root"
+        );
+    }
+
+    #[test]
+    fn genesis_expected_hash_file_supplies_the_exact_trust_root() {
+        let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"configuration file backed genesis identity",
+        ));
+        let identity_dir = TestDir::create("genesis-identity");
+        let identity_path = identity_dir.path().join("expected_hash");
+        fs::write(&identity_path, format!("{expected_hash}\n")).expect("write identity");
+
+        let mut table = base_table();
+        let genesis = table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .expect("genesis table");
+        genesis.remove("expected_hash");
+        genesis.insert(
+            "expected_hash_file".into(),
+            Value::String(identity_path.display().to_string()),
+        );
+
+        let root = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect("canonical identity file must be accepted");
+        assert_eq!(root.genesis.expected_hash, expected_hash);
+    }
+
+    #[test]
+    fn genesis_rejects_ambiguous_inline_and_file_trust_roots() {
+        let identity_dir = TestDir::create("ambiguous-genesis-identity");
+        let identity_path = identity_dir.path().join("expected_hash");
+        fs::write(
+            &identity_path,
+            "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n",
+        )
+        .expect("write identity");
+
+        let mut table = base_table();
+        table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .expect("genesis table")
+            .insert(
+                "expected_hash_file".into(),
+                Value::String(identity_path.display().to_string()),
+            );
+
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "two trust-root sources must fail closed"
         );
     }
 

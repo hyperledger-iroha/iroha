@@ -62,7 +62,8 @@ test("raw artifact-admission WASM is digest anchored and returns bounded typed o
     headerLength: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.header_len,
     codeOffset: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.code_offset,
     entrypointCount: CURRENT_ARTIFACT_FIXTURE.artifact_semantics.entrypoint_count,
-    manifest: CURRENT_ARTIFACT_FIXTURE.manifest,
+    // The WASM JSON boundary materializes ordinary-prototype objects.
+    manifest: JSON.parse(JSON.stringify(CURRENT_ARTIFACT_FIXTURE.manifest)),
   });
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.manifest), true);

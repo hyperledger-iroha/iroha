@@ -15,7 +15,7 @@ use norito::codec::Encode as NoritoEncode;
 
 fn build_min_world() -> (
     iroha_core::state::State,
-    ChainId,
+    NetworkId,
     AccountId,
     iroha_crypto::KeyPair,
 ) {
@@ -29,16 +29,17 @@ fn build_min_world() -> (
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     let state =
         iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-    (state, chain_id, authority_id, kp)
+    (state, network_id, authority_id, kp)
 }
 
 #[test]
 fn overlay_instruction_cap_rejects_and_rest_apply() {
-    let (mut state, chain_id, authority_id, kp) = build_min_world();
+    let (mut state, network_id, authority_id, kp) = build_min_world();
 
     // Set strict instruction cap: at most 1 instruction per overlay
     let mut cfg = state.view().pipeline().clone();
@@ -48,7 +49,7 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
 
     // tx_a: two instructions → should be rejected by instruction cap
     let tx_a = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -59,7 +60,7 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
     .sign(kp.private_key());
     // tx_b: one instruction → should be approved
     let tx_b = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -102,7 +103,7 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
 
 #[test]
 fn overlay_bytes_cap_rejects_and_rest_apply() {
-    let (mut state, chain_id, authority_id, kp) = build_min_world();
+    let (mut state, network_id, authority_id, kp) = build_min_world();
 
     // Choose a strict byte cap so that the small overlay passes but the big one is rejected.
     let small_instr: InstructionBox = Log::new(Level::INFO, "ok".to_string()).into();
@@ -124,7 +125,7 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
     state.set_pipeline(cfg);
 
     let tx_big = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -132,7 +133,7 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
     .sign(kp.private_key());
     // tx_small: a small Log within byte cap
     let tx_small = TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -181,7 +182,7 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
 
 #[test]
 fn expired_transaction_is_rejected_during_stateless_prepass() {
-    let (state, chain_id, authority_id, kp) = build_min_world();
+    let (state, network_id, authority_id, kp) = build_min_world();
 
     // Require expiry checks based on block height via SetParameter
     {
@@ -212,7 +213,7 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
 
     // tx_expired: creation time far in the past with short TTL → should be rejected
     let tx_expired = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -227,7 +228,7 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
 
     // tx_ok: current creation time without TTL → should be approved
     let tx_ok = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

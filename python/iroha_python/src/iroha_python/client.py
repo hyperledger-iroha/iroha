@@ -206,11 +206,6 @@ from .dataspaces import (
 )
 from .event_filter import DataEventFilter, ensure_event_filter
 from .numeric_v1 import NumericV1Codec
-from .privacy_catalog import (
-    PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1,
-    PrivacyCapabilitySnapshotV1,
-    parse_privacy_capability_snapshot_json_v1,
-)
 from .query import (
     AggregateSpec,
     account_query_envelope,
@@ -236,10 +231,17 @@ from .sorafs_hedging_billing import (
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
-    from .crypto import Instruction, SignedTransactionEnvelope  # noqa: F401
+    from .crypto import (  # noqa: F401
+        Instruction,
+        NetworkId,
+        PrivacyExact12CapabilityManifestV1,
+        SignedTransactionEnvelope,
+    )
     from .tx import AssetTransferAvailability, QuantityLike, TransactionDraft
 else:  # pragma: no cover - runtime type aliases
     Instruction = Any  # type: ignore[assignment]
+    NetworkId = Any  # type: ignore[assignment]
+    PrivacyExact12CapabilityManifestV1 = Any  # type: ignore[assignment]
     SignedTransactionEnvelope = Any  # type: ignore[assignment]
     ConnectControlBase = Any  # type: ignore[assignment]
     QuantityLike = Any  # type: ignore[assignment]
@@ -414,15 +416,15 @@ class AppApiTransactionDraft(TypedDict):
 class LocalSigningContext:
     """Immutable client-owned context for validating local-signing drafts."""
 
-    chain_id: str
+    network_id: "NetworkId"
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
-            "chain_id",
-            _normalize_local_signing_context_chain(
-                self.chain_id,
-                "LocalSigningContext.chain_id",
+            "network_id",
+            _normalize_network_id(
+                self.network_id,
+                "LocalSigningContext.network_id",
             ),
         )
 
@@ -568,7 +570,7 @@ def _normalize_zk_verifying_key_transaction_draft(
     payload: Any,
     context: str,
     *,
-    expected_chain_id: str,
+    network_id: "NetworkId",
     operation: str,
     request: Mapping[str, Any],
 ) -> ZkVerifyingKeyTransactionDraft:
@@ -611,7 +613,7 @@ def _normalize_zk_verifying_key_transaction_draft(
         )
     decoded_instruction = _require_crypto().decode_zk_vk_transaction_payload(
         transaction_payload,
-        expected_chain_id,
+        network_id,
         request["authority"],
         operation,
     )
@@ -865,16 +867,21 @@ def _zk_verifying_key_commitment_hex(backend: str, vk_bytes: bytes) -> str:
     return hashlib.sha256(preimage).hexdigest()
 
 
-def _normalize_local_signing_context_chain(value: Any, context: str) -> str:
-    chain_id = _require_exact_non_empty_string(value, context)
-    if (
-        len(chain_id.encode("utf-8")) > 128
-        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", chain_id) is None
-        or not chain_id[-1].isalnum()
-        or not chain_id[-1].isascii()
-    ):
-        raise ValueError(f"{context} must be a canonical Iroha ChainId")
-    return chain_id
+def _normalize_network_id(value: Any, context: str) -> "NetworkId":
+    from .crypto import _require_network_id
+
+    return _require_network_id(value, context)
+
+
+def _normalize_canonical_genesis_hash(value: Any, context: str) -> bytes:
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise TypeError(f"{context} must be bytes-like")
+    digest = bytes(value)
+    if len(digest) != 32:
+        raise ValueError(f"{context} must be exactly 32 bytes")
+    if digest == bytes(32):
+        raise ValueError(f"{context} must not be the all-zero sentinel")
+    return digest
 
 
 def _normalize_optional_zk_verifying_key_status(value: Any, context: str) -> Optional[str]:
@@ -12561,103 +12568,72 @@ def _extract_pipeline_status_kind(payload: Any) -> Optional[str]:
 
     if not isinstance(payload, Mapping):
         return None
-
-    def coerce_status(status_obj: Any) -> Optional[str]:
-        if isinstance(status_obj, Mapping):
-            kind = status_obj.get("kind")
-            if kind is not None:
-                return str(kind)
-        elif status_obj is not None:
-            return str(status_obj)
+    status = payload.get("status")
+    if not isinstance(status, Mapping):
         return None
-
-    status = coerce_status(payload.get("status"))
-    if status is not None:
-        return status
-
-    content = payload.get("content")
-    if isinstance(content, Mapping):
-        return coerce_status(content.get("status"))
-
-    return None
+    kind = status.get("kind")
+    return kind if isinstance(kind, str) else None
 
 
-def _batch_transfer_receipt(payload: Any) -> Optional[Dict[str, Any]]:
-    """Project native durable batch outcomes into an ergonomic ordered receipt."""
+def _normalize_public_pipeline_status(payload: Any, expected_hash: str) -> Dict[str, Any]:
+    """Validate and copy the metadata-only public pipeline response."""
 
+    context = "transaction status response"
     if not isinstance(payload, Mapping):
-        return None
-    raw_outcomes = payload.get("batch_transfer_outcomes")
-    if not isinstance(raw_outcomes, Sequence) or isinstance(
-        raw_outcomes,
-        (str, bytes, bytearray, memoryview),
-    ):
-        content = payload.get("content")
-        if isinstance(content, Mapping):
-            return _batch_transfer_receipt(content)
-        return None
-
-    legs: List[Dict[str, Any]] = []
-    for index, raw_outcome in enumerate(raw_outcomes):
-        if not isinstance(raw_outcome, Mapping):
-            raise RuntimeError(
-                f"batch_transfer_outcomes[{index}] must be an object"
+        raise TypeError(f"{context} must be an object")
+    expected_fields = {"hash", "status", "scope", "resolved_from"}
+    actual_fields = set(payload)
+    if actual_fields != expected_fields:
+        extras = sorted(actual_fields - expected_fields)
+        missing = sorted(expected_fields - actual_fields)
+        if extras:
+            raise ValueError(
+                f"{context} contains retired or unsupported fields: {', '.join(extras)}"
             )
-        leg = dict(raw_outcome)
-        leg_id = leg.get("leg_id", leg.get("id"))
-        leg_index = leg.get("leg_index", leg.get("index", index))
-        status_payload = leg.get("status")
-        status: Optional[str] = None
-        rejection: Optional[Mapping[str, Any]] = None
-        if isinstance(status_payload, Mapping):
-            status_value = status_payload.get("status", status_payload.get("kind"))
-            if status_value is not None:
-                status = str(status_value)
-            value = status_payload.get("value")
-            if isinstance(value, Mapping):
-                rejection = value
-        elif status_payload is not None:
-            status = str(status_payload)
+        raise ValueError(f"{context} is missing required fields: {', '.join(missing)}")
 
-        code: Optional[str] = None
-        message: Optional[str] = None
-        if rejection is not None:
-            code_payload = rejection.get("code")
-            if isinstance(code_payload, Mapping):
-                code_value = code_payload.get("code", code_payload.get("kind"))
-                if code_value is not None:
-                    code = str(code_value)
-            elif code_payload is not None:
-                code = str(code_payload)
-            message_payload = rejection.get("message")
-            if message_payload is not None:
-                message = str(message_payload)
+    observed_hash = _normalize_hash_hex(payload.get("hash"), f"{context}.hash")
+    if not hmac.compare_digest(observed_hash, expected_hash):
+        raise ValueError(f"{context}.hash does not match the requested transaction")
 
-        leg["id"] = str(leg_id) if leg_id is not None else str(index)
-        leg["leg_id"] = leg["id"]
-        leg["index"] = leg_index
-        leg["leg_index"] = leg_index
-        if status is not None:
-            leg["status"] = status
-        if code is not None:
-            leg["code"] = code
-            leg["rejection_code"] = code
-        if message is not None:
-            leg["message"] = message
-        legs.append(leg)
+    status_value = payload.get("status")
+    if not isinstance(status_value, Mapping):
+        raise TypeError(f"{context}.status must be an object")
+    allowed_status_fields = {"kind", "block_height"}
+    extra_status_fields = sorted(set(status_value) - allowed_status_fields)
+    if extra_status_fields:
+        raise ValueError(
+            f"{context}.status contains retired or unsupported fields: "
+            f"{', '.join(extra_status_fields)}"
+        )
+    kind = _require_exact_non_empty_string(
+        status_value.get("kind"),
+        f"{context}.status.kind",
+    )
+    if kind not in {"Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"}:
+        raise ValueError(f"{context}.status.kind is unsupported")
+    status: Dict[str, Any] = {"kind": kind}
+    if "block_height" in status_value:
+        block_height = status_value["block_height"]
+        if isinstance(block_height, bool) or not isinstance(block_height, int) or block_height <= 0:
+            raise ValueError(f"{context}.status.block_height must be a positive integer")
+        status["block_height"] = block_height
 
-    return {"mode": "Independent", "legs": legs}
-
-
-def _with_batch_transfer_receipt(payload: Any) -> Any:
-    """Attach the stable convenience projection without hiding native evidence."""
-
-    receipt = _batch_transfer_receipt(payload)
-    if receipt is None or not isinstance(payload, Mapping):
-        return payload
-    projected = dict(payload)
-    projected["batch_receipt"] = receipt
-    return projected
+    scope = _require_exact_non_empty_string(payload.get("scope"), f"{context}.scope")
+    if scope not in {"local", "auto", "global"}:
+        raise ValueError(f"{context}.scope is unsupported")
+    resolved_from = _require_exact_non_empty_string(
+        payload.get("resolved_from"),
+        f"{context}.resolved_from",
+    )
+    if resolved_from not in {"cache", "queue", "state"}:
+        raise ValueError(f"{context}.resolved_from is unsupported")
+    return {
+        "hash": observed_hash,
+        "status": status,
+        "scope": scope,
+        "resolved_from": resolved_from,
+    }
 
 
 def _normalize_contract_call_metadata(
@@ -12803,63 +12779,6 @@ def _require_crypto() -> ModuleType:
         ) from exc
     _CRYPTO_MODULE = _crypto
     return _crypto
-
-
-def _require_active_privacy_capability_v1(
-    snapshot: PrivacyCapabilitySnapshotV1,
-    protocol_id: str,
-) -> Mapping[str, Any]:
-    """Return the unique live row only when its exact native profile is active."""
-
-    protocols = snapshot.get("protocols")
-    if not isinstance(protocols, list):
-        raise RuntimeError("privacy capability snapshot is missing canonical protocol rows")
-    matches: list[Mapping[str, Any]] = []
-    for row in protocols:
-        if not isinstance(row, Mapping):
-            continue
-        protocol_tag = row.get("protocol_id")
-        if isinstance(protocol_tag, Mapping) and protocol_tag.get("protocol") == protocol_id:
-            matches.append(row)
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"privacy capability snapshot must contain exactly one {protocol_id} row"
-        )
-
-    matched_row = matches[0]
-    compiled = matched_row.get("compiled_profile")
-    if not isinstance(compiled, Mapping) or compiled.get("status") != "available":
-        raise RuntimeError(f"privacy protocol {protocol_id} has no available compiled profile")
-    compiled_value = compiled.get("value")
-    compiled_protocol = (
-        compiled_value.get("protocol_id")
-        if isinstance(compiled_value, Mapping)
-        else None
-    )
-    if not isinstance(compiled_protocol, Mapping) or compiled_protocol.get(
-        "protocol"
-    ) != protocol_id:
-        raise RuntimeError(
-            f"privacy protocol {protocol_id} compiled profile has a mismatched binding"
-        )
-
-    activation = matched_row.get("activation")
-    if not isinstance(activation, Mapping):
-        raise RuntimeError(f"privacy protocol {protocol_id} has no governed activation")
-    activation_protocol = activation.get("protocol_id")
-    if not isinstance(activation_protocol, Mapping) or activation_protocol.get(
-        "protocol"
-    ) != protocol_id:
-        raise RuntimeError(
-            f"privacy protocol {protocol_id} activation has a mismatched binding"
-        )
-    lifecycle = activation.get("lifecycle")
-    if not isinstance(lifecycle, Mapping) or lifecycle.get("state") != "active":
-        state = lifecycle.get("state") if isinstance(lifecycle, Mapping) else None
-        raise RuntimeError(
-            f"privacy protocol {protocol_id} is not active (state={state!r})"
-        )
-    return matched_row
 
 
 def signed_transaction_envelope_from_json(envelope_json: str) -> "SignedTransactionEnvelope":
@@ -13318,27 +13237,36 @@ class ToriiClient(_BaseToriiClient):
             result = f"{result}#{scope}"
         return result
 
-    def privacy_capabilities_v1(self) -> PrivacyCapabilitySnapshotV1:
-        """Fetch and validate the authoritative committed privacy snapshot."""
+    def privacy_capabilities_v1(self) -> "PrivacyExact12CapabilityManifestV1":
+        """Fetch the authoritative committed manifest as exact canonical bytes.
+
+        The native decoder retains the byte-identical Torii payload and checks
+        its schema, bounds, canonical encoding, ordered rows, derived tuple
+        fields, activation state, and self-digest. A local compiled-profile
+        catalog is never used as network-availability authority.
+        """
 
         response = self._request(
             "GET",
             "/v1/privacy/capabilities",
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/x-norito"},
         )
+        crypto = _require_crypto()
         self._expect_status(
             response,
             [200],
-            maximum_body_bytes=PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1,
-            context="privacy capabilities",
+            maximum_body_bytes=(
+                crypto.PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1
+            ),
+            context="Exact12 privacy capability manifest",
         )
         content_type = response.headers.get("Content-Type", "")
         media_type = content_type.split(";", 1)[0].strip().lower()
-        if media_type != "application/json":
+        if media_type != "application/x-norito":
             raise ValueError(
-                "privacy capabilities response must use application/json media type"
+                "privacy capabilities response must use application/x-norito media type"
             )
-        return parse_privacy_capability_snapshot_json_v1(response.content)
+        return crypto.privacy_exact12_capability_manifest_v1(response.content)
 
     def submit_signed_privacy_zk_x509_identity_presentation_action_v1(
         self,
@@ -13363,11 +13291,26 @@ class ToriiClient(_BaseToriiClient):
         attempted when either check fails.
         """
 
+        signing_context = self._require_local_signing_context(
+            "submit_signed_privacy_zk_x509_identity_presentation_action_v1"
+        )
+        canonical_genesis_hash = _normalize_canonical_genesis_hash(
+            canonical_genesis_hash,
+            "canonical_genesis_hash",
+        )
+        signing_network_bytes = bytes(signing_context.network_id.to_bytes())
+        if not hmac.compare_digest(
+            canonical_genesis_hash,
+            signing_network_bytes,
+        ):
+            raise ValueError(
+                "canonical_genesis_hash does not match ToriiClient local_signing_context"
+            )
         crypto = _require_crypto()
         inspection = (
             crypto.inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
                 signed_transaction_versioned,
-                canonical_genesis_hash,
+                signing_network_bytes,
             )
         )
         if not isinstance(inspection, Mapping) or inspection.get(
@@ -13377,12 +13320,20 @@ class ToriiClient(_BaseToriiClient):
                 "native ZK-X509 inspector returned a mismatched privacy protocol"
             )
         wire = bytes(signed_transaction_versioned)
-        snapshot = self.privacy_capabilities_v1()
-        _require_active_privacy_capability_v1(
-            snapshot,
-            _ZK_X509_PRIVACY_PROTOCOL_ID_V1,
+        manifest = self.privacy_capabilities_v1()
+        capability = manifest.require_network_capability(
+            _ZK_X509_PRIVACY_PROTOCOL_ID_V1
         )
-        envelope = crypto.signed_transaction_envelope_from_versioned_v1(wire)
+        if not isinstance(capability, Mapping) or capability.get(
+            "protocol_id"
+        ) != _ZK_X509_PRIVACY_PROTOCOL_ID_V1:
+            raise RuntimeError(
+                "native Exact12 capability gate returned a mismatched privacy protocol"
+            )
+        envelope = crypto.signed_transaction_envelope_from_versioned_v1(
+            wire,
+            signing_context.network_id,
+        )
         authenticated_wire = getattr(envelope, "signed_transaction_versioned", None)
         if not isinstance(authenticated_wire, (bytes, bytearray, memoryview)) or bytes(
             authenticated_wire
@@ -13518,7 +13469,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         transaction_hash: str,
         authority: str,
-        canonical_genesis_hash: bytes,
+        network_id: "NetworkId",
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
     ) -> VerifiedCommittedTransaction:
@@ -13543,10 +13494,11 @@ class ToriiClient(_BaseToriiClient):
             private_key=private_key,
             private_key_hex=private_key_hex,
         )
+        network_id = _normalize_network_id(network_id, "network_id")
         transaction_request = build_find_committed_transaction_query(
             canonical_authority,
             signing_key,
-            canonical_genesis_hash,
+            network_id,
             normalized_hash,
         )
         transaction_response = self._request(
@@ -13571,7 +13523,7 @@ class ToriiClient(_BaseToriiClient):
         block_request = build_find_block_by_hash_query(
             canonical_authority,
             signing_key,
-            canonical_genesis_hash,
+            network_id,
             block_hash,
         )
         block_response = self._request(
@@ -13605,7 +13557,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         escrow_id: str,
         authority: str,
-        canonical_genesis_hash: bytes,
+        network_id: "NetworkId",
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
     ) -> Mapping[str, Any]:
@@ -13619,7 +13571,7 @@ class ToriiClient(_BaseToriiClient):
                 private_key=private_key,
                 private_key_hex=private_key_hex,
             ),
-            canonical_genesis_hash,
+            _normalize_network_id(network_id, "network_id"),
             _require_exact_non_empty_string(escrow_id, "escrow_id"),
         )
         response = self._request(
@@ -13698,7 +13650,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         account_id: str,
         authority: str,
-        canonical_genesis_hash: bytes,
+        network_id: "NetworkId",
         private_key: Optional[bytes],
         private_key_hex: Optional[str],
         party: str,
@@ -13722,18 +13674,19 @@ class ToriiClient(_BaseToriiClient):
             account_id,
             party,
         )
+        network_id = _normalize_network_id(network_id, "network_id")
         if party == "seller":
             request = build_find_asset_escrows_by_seller_query(
                 canonical_authority,
                 signing_key,
-                canonical_genesis_hash,
+                network_id,
                 canonical_account,
             )
         elif party == "buyer":
             request = build_find_asset_escrows_by_buyer_query(
                 canonical_authority,
                 signing_key,
-                canonical_genesis_hash,
+                network_id,
                 canonical_account,
             )
         else:  # pragma: no cover - private invariant
@@ -13774,7 +13727,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         seller: str,
         authority: str,
-        canonical_genesis_hash: bytes,
+        network_id: "NetworkId",
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         status: Optional[str] = None,
@@ -13785,7 +13738,7 @@ class ToriiClient(_BaseToriiClient):
         return self._list_asset_escrows_by_party(
             account_id=seller,
             authority=authority,
-            canonical_genesis_hash=canonical_genesis_hash,
+            network_id=network_id,
             private_key=private_key,
             private_key_hex=private_key_hex,
             party="seller",
@@ -13798,7 +13751,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         buyer: str,
         authority: str,
-        canonical_genesis_hash: bytes,
+        network_id: "NetworkId",
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         status: Optional[str] = None,
@@ -13809,7 +13762,7 @@ class ToriiClient(_BaseToriiClient):
         return self._list_asset_escrows_by_party(
             account_id=buyer,
             authority=authority,
-            canonical_genesis_hash=canonical_genesis_hash,
+            network_id=network_id,
             private_key=private_key,
             private_key_hex=private_key_hex,
             party="buyer",
@@ -16324,8 +16277,8 @@ class ToriiClient(_BaseToriiClient):
         additions: Sequence[Mapping[str, Any]],
         *,
         fee_payment: Mapping[str, Any],
+        network_id: "NetworkId",
         retire: Optional[Sequence[int]] = None,
-        chain_id: Optional[str] = None,
         authority: Optional[str] = None,
         key_pair: Optional[Any] = None,
         private_key: Optional[Union[str, bytes, bytearray, memoryview]] = None,
@@ -16338,18 +16291,18 @@ class ToriiClient(_BaseToriiClient):
         """Submit a signed consensus-replayed Nexus lane lifecycle transaction.
 
         The former operator-only POST shape is deliberately unsupported. Callers
-        must provide ``chain_id``, ``authority``, and raw private-key bytes for an
-        account holding ``CanSetParameters``. The status commitment is fetched
-        once and is never silently refreshed after a stale/concurrent rejection.
+        must provide the exact nominal ``network_id``, ``authority``, and raw
+        private-key bytes for an account holding ``CanSetParameters``. The status
+        commitment is fetched once and is never silently refreshed after a
+        stale/concurrent rejection.
         """
 
         if key_pair is not None or private_key_hex is not None or isinstance(private_key, str):
             raise RuntimeError(
-                "operator-only Nexus lifecycle calls are deprecated; provide chain_id, "
+                "operator-only Nexus lifecycle calls are deprecated; provide network_id, "
                 "authority, and private_key bytes to submit SetParameter(nexus_lane_lifecycle_v1)"
             )
-        if chain_id is None or not isinstance(chain_id, str) or not chain_id.strip():
-            raise ValueError("chain_id is required for signed Nexus lane lifecycle submission")
+        network_id = _normalize_network_id(network_id, "network_id")
         if authority is None or not isinstance(authority, str) or not authority.strip():
             raise ValueError("authority is required for signed Nexus lane lifecycle submission")
         if not isinstance(private_key, (bytes, bytearray, memoryview)):
@@ -16429,7 +16382,7 @@ class ToriiClient(_BaseToriiClient):
             json.dumps(plan, sort_keys=True, separators=(",", ":")),
         )
         return self.build_and_submit_transaction(
-            chain_id.strip(),
+            network_id,
             authority.strip(),
             private_key_bytes,
             fee_payment=fee_payment,
@@ -17590,7 +17543,7 @@ class ToriiClient(_BaseToriiClient):
 
     def build_and_submit_transaction(
         self,
-        chain_id: str,
+        network_id: "NetworkId",
         authority: str,
         private_key: bytes,
         *,
@@ -17615,11 +17568,13 @@ class ToriiClient(_BaseToriiClient):
 
         When `expect_json` is true, an empty or non-dict response from the
         submission endpoint is normalised to `{}` so callers can assume a mapping.
+        ``network_id`` must be the exact typed genesis-derived transaction
+        domain; labels and bare hash bytes are rejected.
         """
 
         crypto = _require_crypto()
         envelope = crypto.build_signed_transaction(
-            chain_id,
+            network_id,
             authority,
             private_key,
             fee_payment=fee_payment,
@@ -17661,19 +17616,118 @@ class ToriiClient(_BaseToriiClient):
         scope: str = "global",
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
-        """Fetch transaction pipeline status for the given hash (hex encoded)."""
+        """Fetch only non-sensitive public pipeline metadata for one transaction."""
 
+        normalized_hash = _normalize_hash_hex(hash_hex, "get_transaction_status.hash_hex")
         scope = _normalize_transaction_status_scope(scope, "get_transaction_status.scope")
         response = self._request(
             "GET",
             "/v1/pipeline/transactions/status",
-            params={"hash": hash_hex, "scope": scope},
+            params={"hash": normalized_hash, "scope": scope},
             timeout=timeout,
         )
         if response.status_code == 404:
             return None
         self._expect_status(response, {200, 202, 204})
-        return _with_batch_transfer_receipt(self._maybe_json(response))
+        if response.status_code == 204:
+            return None
+        return _normalize_public_pipeline_status(
+            self._maybe_json(response),
+            normalized_hash,
+        )
+
+    def get_pipeline_transaction_details(
+        self,
+        transaction_hash: str,
+        *,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Fetch authorized committed-transaction details with one signed query.
+
+        The native ``FindTransactions`` builder binds the query to the exact
+        NetworkId derived from this client's immutable canonical genesis hash.
+        Torii admits only an involved account or an operator and validates the
+        signature, freshness, nonce, and exact entrypoint hash. The nonce-bearing
+        request is sent once with redirects and retries disabled.
+        """
+
+        signing_context = self._require_local_signing_context(
+            "get_pipeline_transaction_details"
+        )
+        normalized_hash = _normalize_hash_hex(
+            transaction_hash,
+            "get_pipeline_transaction_details.transaction_hash",
+        )
+        canonical_authority = self._native_transaction_account_id(
+            authority,
+            "get_pipeline_transaction_details.authority",
+        )
+        signing_key = self._native_query_signing_key(
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+        )
+        from .crypto import build_find_committed_transaction_query
+
+        request = build_find_committed_transaction_query(
+            canonical_authority,
+            signing_key,
+            signing_context.network_id,
+            normalized_hash,
+        )
+        response = self._request(
+            "POST",
+            "/v1/pipeline/transactions/details",
+            data=request,
+            headers={
+                "Content-Type": "application/x-norito",
+                "Accept": "application/json",
+            },
+            timeout=timeout,
+            allow_retry=False,
+            allow_redirects=False,
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise TypeError("transaction details response must be an object")
+        expected_fields = {"hash", "transaction", "trigger_completions"}
+        actual_fields = set(payload)
+        if actual_fields != expected_fields:
+            extras = sorted(actual_fields - expected_fields)
+            missing = sorted(expected_fields - actual_fields)
+            if extras:
+                raise ValueError(
+                    "transaction details response contains unsupported fields: "
+                    + ", ".join(extras)
+                )
+            raise ValueError(
+                "transaction details response is missing required fields: "
+                + ", ".join(missing)
+            )
+        observed_hash = _normalize_hash_hex(
+            payload.get("hash"),
+            "transaction details response.hash",
+        )
+        if not hmac.compare_digest(observed_hash, normalized_hash):
+            raise ValueError(
+                "transaction details response.hash does not match the requested transaction"
+            )
+        transaction = payload.get("transaction")
+        if not isinstance(transaction, Mapping):
+            raise TypeError("transaction details response.transaction must be an object")
+        trigger_completions = payload.get("trigger_completions")
+        if not isinstance(trigger_completions, list):
+            raise TypeError(
+                "transaction details response.trigger_completions must be an array"
+            )
+        return {
+            "hash": observed_hash,
+            "transaction": dict(transaction),
+            "trigger_completions": list(trigger_completions),
+        }
 
     def wait_for_transaction_status(
         self,
@@ -17803,7 +17857,6 @@ class ToriiClient(_BaseToriiClient):
     def _transaction_draft(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         ttl_ms: Optional[int] = 900_000,
@@ -17812,14 +17865,16 @@ class ToriiClient(_BaseToriiClient):
     ) -> "TransactionDraft":
         from .tx import TransactionConfig, TransactionDraft, authority_fee_payment
 
-        effective_chain_id = _require_exact_non_empty_string(chain_id, "chain_id")
         effective_authority = self._native_transaction_account_id(
             _require_exact_non_empty_string(authority, "authority"),
             "authority",
         )
+        signing_context = self._require_local_signing_context(
+            "local transaction construction"
+        )
         return TransactionDraft(
             TransactionConfig(
-                chain_id=effective_chain_id,
+                network_id=signing_context.network_id,
                 authority=effective_authority,
                 fee_payment=(
                     fee_payment
@@ -17887,7 +17942,6 @@ class ToriiClient(_BaseToriiClient):
     def submit_instructions_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -17905,7 +17959,6 @@ class ToriiClient(_BaseToriiClient):
         """Submit arbitrary instructions in one signed transaction."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             ttl_ms=ttl_ms,
@@ -17927,7 +17980,6 @@ class ToriiClient(_BaseToriiClient):
     def register_domain_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -17942,7 +17994,6 @@ class ToriiClient(_BaseToriiClient):
         """Register a domain and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -17960,7 +18011,6 @@ class ToriiClient(_BaseToriiClient):
     def register_account_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -17975,7 +18025,6 @@ class ToriiClient(_BaseToriiClient):
         """Register an account and optionally wait for commit."""
 
         return self.register_accounts_and_wait(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             private_key=private_key,
@@ -17991,7 +18040,6 @@ class ToriiClient(_BaseToriiClient):
     def register_accounts_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18006,7 +18054,6 @@ class ToriiClient(_BaseToriiClient):
         """Register multiple accounts in one transaction."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18040,7 +18087,6 @@ class ToriiClient(_BaseToriiClient):
     def grant_account_permission_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18056,7 +18102,6 @@ class ToriiClient(_BaseToriiClient):
         """Grant one account permission and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18078,7 +18123,6 @@ class ToriiClient(_BaseToriiClient):
     def revoke_account_permission_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18094,7 +18138,6 @@ class ToriiClient(_BaseToriiClient):
         """Revoke one account permission and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18116,7 +18159,6 @@ class ToriiClient(_BaseToriiClient):
     def register_asset_definition_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18138,7 +18180,6 @@ class ToriiClient(_BaseToriiClient):
         """Register an asset owned by ``authority`` and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18166,7 +18207,6 @@ class ToriiClient(_BaseToriiClient):
     def mint_asset_quantity_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18181,7 +18221,6 @@ class ToriiClient(_BaseToriiClient):
         """Mint an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18207,7 +18246,6 @@ class ToriiClient(_BaseToriiClient):
     def mint_assets_quantity_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18221,7 +18259,6 @@ class ToriiClient(_BaseToriiClient):
         """Mint multiple exact nominal asset quantities in one transaction."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18263,7 +18300,6 @@ class ToriiClient(_BaseToriiClient):
     def burn_asset_quantity_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18278,7 +18314,6 @@ class ToriiClient(_BaseToriiClient):
         """Burn an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18304,7 +18339,6 @@ class ToriiClient(_BaseToriiClient):
     def transfer_asset_quantity_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18320,7 +18354,6 @@ class ToriiClient(_BaseToriiClient):
         """Transfer an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18347,7 +18380,6 @@ class ToriiClient(_BaseToriiClient):
     def transfer_asset_batch_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18387,7 +18419,6 @@ class ToriiClient(_BaseToriiClient):
             normalized_payments.append(payload)
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18424,7 +18455,6 @@ class ToriiClient(_BaseToriiClient):
     def set_asset_transfer_availability_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18443,7 +18473,6 @@ class ToriiClient(_BaseToriiClient):
         """Update directional transfer availability and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18468,7 +18497,6 @@ class ToriiClient(_BaseToriiClient):
     def set_asset_transfer_blacklist_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18484,7 +18512,6 @@ class ToriiClient(_BaseToriiClient):
         """Blacklist or restore outbound transfers and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18506,7 +18533,6 @@ class ToriiClient(_BaseToriiClient):
     def set_asset_transfer_control_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18522,7 +18548,6 @@ class ToriiClient(_BaseToriiClient):
         """Replace outbound DAY/WEEK/MONTH caps and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18544,7 +18569,6 @@ class ToriiClient(_BaseToriiClient):
     def set_asset_holding_limit_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18560,7 +18584,6 @@ class ToriiClient(_BaseToriiClient):
         """Set or clear one account holding limit and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18582,7 +18605,6 @@ class ToriiClient(_BaseToriiClient):
     def open_asset_lock_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18602,7 +18624,6 @@ class ToriiClient(_BaseToriiClient):
         """Open a native asset lock and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18635,7 +18656,6 @@ class ToriiClient(_BaseToriiClient):
     def open_conditional_escrow_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18691,7 +18711,6 @@ class ToriiClient(_BaseToriiClient):
             normalized_conditions.append(payload)
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18720,7 +18739,6 @@ class ToriiClient(_BaseToriiClient):
     def attest_escrow_condition_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18752,7 +18770,6 @@ class ToriiClient(_BaseToriiClient):
             )
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18775,7 +18792,6 @@ class ToriiClient(_BaseToriiClient):
     def expire_conditional_escrow_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18789,7 +18805,6 @@ class ToriiClient(_BaseToriiClient):
         """Expire a conditional escrow and atomically refund its opener."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18807,7 +18822,6 @@ class ToriiClient(_BaseToriiClient):
     def drawdown_asset_lock_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18815,7 +18829,6 @@ class ToriiClient(_BaseToriiClient):
         escrow_id: str,
         amount: QuantityLike,
         expected_remaining_amount: Optional[QuantityLike] = None,
-        canonical_genesis_hash: Optional[bytes] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
@@ -18829,14 +18842,13 @@ class ToriiClient(_BaseToriiClient):
         """
 
         if expected_remaining_amount is None:
-            if canonical_genesis_hash is None:
-                raise ValueError(
-                    "canonical_genesis_hash is required when the SDK reads the current escrow"
-                )
+            signing_context = self._require_local_signing_context(
+                "drawdown_asset_lock_and_wait"
+            )
             escrow = self.get_asset_escrow(
                 escrow_id=escrow_id,
                 authority=authority,
-                canonical_genesis_hash=canonical_genesis_hash,
+                network_id=signing_context.network_id,
                 private_key=private_key,
                 private_key_hex=private_key_hex,
             )
@@ -18846,7 +18858,6 @@ class ToriiClient(_BaseToriiClient):
                     "native escrow record omitted remaining_amount"
                 )
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18864,7 +18875,6 @@ class ToriiClient(_BaseToriiClient):
     def cancel_asset_lock_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18879,7 +18889,6 @@ class ToriiClient(_BaseToriiClient):
         """Cancel a lock with the caller's exact remaining-amount precondition."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18897,7 +18906,6 @@ class ToriiClient(_BaseToriiClient):
     def expire_asset_lock_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
@@ -18911,7 +18919,6 @@ class ToriiClient(_BaseToriiClient):
         """Expire a native asset lock and optionally wait for commit."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18929,7 +18936,6 @@ class ToriiClient(_BaseToriiClient):
     def transfer_assets_quantity_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -18943,7 +18949,6 @@ class ToriiClient(_BaseToriiClient):
         """Transfer multiple exact nominal asset quantities in one transaction."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -18993,7 +18998,6 @@ class ToriiClient(_BaseToriiClient):
     def register_zk_asset_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -19009,7 +19013,6 @@ class ToriiClient(_BaseToriiClient):
         """Register ZK policy metadata for an asset definition."""
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -19031,7 +19034,6 @@ class ToriiClient(_BaseToriiClient):
     def verify_proof_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
@@ -19047,7 +19049,6 @@ class ToriiClient(_BaseToriiClient):
         if not isinstance(proof, Mapping):
             raise TypeError("proof must be a mapping")
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             metadata=transaction_metadata,
@@ -19539,7 +19540,7 @@ class ToriiClient(_BaseToriiClient):
         return _normalize_zk_verifying_key_transaction_draft(
             self._maybe_json(response),
             "register_zk_verifying_key response",
-            expected_chain_id=signing_context.chain_id,
+            network_id=signing_context.network_id,
             operation="register",
             request=request,
         )
@@ -19584,7 +19585,7 @@ class ToriiClient(_BaseToriiClient):
         return _normalize_zk_verifying_key_transaction_draft(
             self._maybe_json(response),
             "update_zk_verifying_key response",
-            expected_chain_id=signing_context.chain_id,
+            network_id=signing_context.network_id,
             operation="update",
             request=request,
         )
@@ -20710,7 +20711,6 @@ class ToriiClient(_BaseToriiClient):
     def call_contract_batch_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         entries: Sequence[Any],
         fee_payment: Optional[Mapping[str, Any]] = None,
@@ -20743,7 +20743,6 @@ class ToriiClient(_BaseToriiClient):
         from .crypto import _NativeInstruction
 
         draft = self._transaction_draft(
-            chain_id=chain_id,
             authority=authority,
             fee_payment=fee_payment,
             ttl_ms=ttl_ms,
@@ -20814,7 +20813,6 @@ class ToriiClient(_BaseToriiClient):
     def call_contract_and_wait(
         self,
         *,
-        chain_id: str,
         authority: str,
         fee_payment: Optional[Mapping[str, Any]] = None,
         entrypoint: str,
@@ -20854,7 +20852,6 @@ class ToriiClient(_BaseToriiClient):
         )
         result = dict(
             self.call_contract_batch_and_wait(
-                chain_id=chain_id,
                 authority=authority,
                 fee_payment=fee_payment,
                 entries=[intent],

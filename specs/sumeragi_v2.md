@@ -110,10 +110,14 @@ Stake controls NPoS eligibility and backed committee seats, not vote weight or
 leader frequency. The remaining seats use the finalized epoch seed's
 deterministic PRF order.
 
-NPoS epochs contain exactly the configured `3,600` finalized non-empty blocks.
-This remains a height-derived boundary because ordinary block validation
-rejects an empty block before it can be voted, applied, or finalized; therefore
-every advancing consensus height contributes exactly one non-empty block.
+NPoS epochs contain exactly the configured `3,600` finalized consensus heights.
+Ordinary proposal production remains workload-driven and therefore contributes
+a non-empty block only when user, internal, or autonomous work exists. An
+explicitly armed recovery heartbeat may instead finalize one truly empty block;
+it advances the consensus and epoch height while leaving the non-empty-block
+counter unchanged. Generic block validation accepts that canonical carrier,
+while the local proposal-work gate is responsible for never manufacturing it
+from a clean idle height.
 The old committee authenticates the complete next-epoch roster, proofs of
 possession, equal-vote quorum, seed, and end height in the terminal height
 context before the successor committee can activate. A configured validator
@@ -259,11 +263,12 @@ The final Sumeragi handoff repeats that source isolation instead of collapsing a
 traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane, authenticated
 non-validator sources receive on-demand lanes capped by
 `sumeragi.queues.authenticated_non_validator_sources = H`, and anonymous traffic retains its own
-persistent lane. Each validator owns an ordinary first-message slot, a non-timeout Progress slot,
-a distinct signer-bounded TimeoutVote slot, and a TransportCompletion slot. Each materialized
-authenticated non-validator lane owns a generic slot and a TransportCompletion slot; the anonymous
-lane owns the same pair for a non-empty roster. Configuration must therefore provide at least
-`4 * roster_len + 2 * H + 2` slots, or `2 * H + 1` for the no-roster diagnostic geometry, and body
+persistent lane. Each validator owns an ordinary first-message slot, an ordinary Progress slot,
+a certified-fence-escape slot, a distinct signer-bounded TimeoutVote slot, and a
+TransportCompletion slot. Each materialized authenticated non-validator lane owns a generic slot,
+a certified-fence-escape slot, and a TransportCompletion slot; the anonymous
+lane owns only the generic and TransportCompletion pair for a non-empty roster. Configuration must therefore provide at least
+`5 * roster_len + 3 * H + 2` slots, or `3 * H + 1` for the no-roster diagnostic geometry, and body
 bytes must isolate `(roster_len + H + 1) * body_source_bytes`. A semantic duplicate carrying an
 alternate authenticated reply route attaches to its existing request before the new-lane `H` gate
 is evaluated. Exact-output route capacity remains the independent effective
@@ -286,8 +291,10 @@ still require a current-roster semantic origin.
 Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
 remains in its source lane unless the single runtime FIFO has room in that payload's Normal or
 Progress prefix. TimeoutVote, Commit votes, QCs, TCs, payload chunks, certified-body requests and
-responses, and Commit-certificate requests and responses all receive outer Progress ownership;
-TimeoutVote keeps its distinct signer-bounded reservation. A commit-certificate response is also
+responses, and Commit-certificate requests and responses all receive outer Progress ownership.
+TC, direct CommitQC, and a Commit-certificate response carrying CommitQC additionally use the
+isolated certified-fence-escape count and byte owner; TimeoutVote keeps its distinct signer-bounded
+reservation. A commit-certificate response is also
 charged to runtime Progress because successful authentication unwraps it into a CommitQC. A
 current-height certified-body request remains queued until the ordered I/O FIFO has room in its
 authenticated service prefix. One dequeue attempt examines at most one head from every ready
@@ -296,6 +303,99 @@ message, so a blocked Normal head cannot hide later progress that still fits its
 full unsuccessful scan restores the ready order. The capacity check, fair rotation, and removal
 occur under the ingress lock, and the runner is the sole downstream producer, so an admitted head
 cannot become a pop-then-drop race between queues.
+
+Restart keeps a productive leader-wire lifecycle's immutable logical token but not its volatile
+queue position. Its exact retransmission therefore receives a fresh physical carrier after the
+restored admission high-water mark. Equality between token admission and carrier admission
+identifies a fresh lifecycle and receives no recovery authority. A direct authenticated TC or
+CommitQC whose token is strictly older than its carrier may enter the isolated certified prefix;
+the already-frozen absolute timeout still executes first. A Commit-certificate response has no
+productive leader-wire token of its own and follows its ordinary authenticated projected-CommitQC
+path.
+
+TimeoutVote service uses a separate finite producer episode. The absolute timeout first persists
+and dispatches its exact `BeginTimeout` owner `T`, freezing one TimeoutVote slot for every
+authenticated roster source. Every restart-dormant token is restored into the shared ordinal source
+before `T`. A pre-cut owner below `T` is rank descent: its original carrier has token admission equal
+to physical admission and strictly below the frozen physical cut; a restored token remains below
+that cut while its new carrier is at or above it. A first post-cut token above `T` may instead
+increase the collected-vote count once for its frozen source slot; its equal token/carrier admission
+is at or above the cut. This replenishment is not itself protocol progress. Runtime admission
+projects those cases as exact `0→1` first admission, `1→1` same-owner coalescence, or `0→0`
+non-candidate service, and rejects a different token or carrier for an occupied slot before reducer
+refinement. A best-effort retransmit already frozen below `T` is atomically superseded by the
+successful timeout transition. Fresh post-timeout retransmits remain enabled above `T` but cannot
+take precedence over the finite vote episode. TimeoutVotes stay in ordinary Progress capacity,
+receive no certified-fence credit or signature-fence authority, and retained terminals prevent
+resurrection. The inclusive `<= T` completion prefix separately admits the timeout signer's callback
+while an older transport response is retained; completions from fresh roots above `T` remain
+excluded.
+
+The serialized runtime FIFO has physical capacity `C`, Progress reserve `P`, and Completion reserve
+`K`. Ordinary Normal work is bounded by `C-P-K-1`, ordinary non-Completion work by `C-K-1`, and all
+ordinary work by `C-1`. The remaining physical slot is credited to at most one queued authenticated
+TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root; additional certificates consume ordinary Progress capacity. The credit is
+derived from the immutable queued command, so a certificate which arrives before ordinary work
+cannot make later Completion work lose any of the `K` reserved positions. The same accounting is
+used by direct Completion admission and by the reserved `BodyAvailable` handoff. Publishing an
+unmaterialized `BodyAvailable` reservation atomically retires every queued Proposal which conflicts
+with that canonical body; capacity is never computed against the post-retirement queue while the
+conflicting commands remain live.
+
+If a process stops after the stage-7 `BodyAvailable` producer reservation is durable but before its
+runtime handoff, restart restores the same logical lifecycle key and first-admission ordinal without
+claiming a dormant FIFO position: the body bytes are still volatile. A fresh exact `FetchBody`
+reconstruction reacquires those bytes, and its `BodyAvailable` completion spends exactly one new
+physical Completion position. An exact retry reuses that unpublished position, and the completed
+handoff removes the durable stage-7 record so a later restart cannot resurrect the consumed stage.
+Specifically, claiming the restored reservation marks the pending handoff as volatile: it neither
+stores a durable producer terminal nor advertises durable terminal evidence. Acknowledgement keeps
+the exact process-local terminal, persists removal of the durable producer reservation, and only
+then clears the restored-handoff metadata. A second same-height restart therefore has no stage-7
+producer record to reopen.
+
+Terminal supersession before reducer service uses the same persistence boundary. Before an
+unpublished or materialized restored `BodyAvailable` owner can be removed, the runtime extracts
+one exact `(causal lifecycle key, first-admission ordinal, producer stage 7)` tuple from the sole
+serialized owner. The adapter accepts only the matching Reserved, volatile-body record which is
+present in its process, durable, and restart-dormant indexes and has no deferred or pending-handoff
+alias. It removes all three records and persists the new producer table before the runtime releases
+the Completion token or queued command. A persistence failure restores all three in-memory records
+and leaves the volatile runtime owner intact while the runtime fails closed. This ordering applies
+to exact `BodyAvailable` retirement and whole body-pipeline retirement. The same transaction covers
+producer reservations attached to Busy-deferred work: every exact process and durable alias is
+validated, the complete producer-release batch is persisted, and only then may the deferred queues
+lose their owners. Duplicate addresses, a missing Busy owner, or a failed store leaves both the
+queue and all producer maps unchanged. None of those paths can leave a crash window in which the
+runtime owner is gone but a second restart resurrects its producer.
+
+A restored `FetchBody` may also become terminal before it has bytes with which to reserve a
+`BodyAvailable` token. Restart deliberately gives that Fetch a fresh physical runtime lifecycle, so
+its volatile ownership cannot claim the old producer key. After the runtime proves the exact Fetch
+effect binding, the adapter resolves its persisted route-neutral `(context, height, round, subject)`
+coordinates; a supplied manifest must reproduce the complete serviced-candidate identity, while a
+manifest-less fetch may select only one unique dormant stage-7 record. The adapter persists that
+record's retirement before the pending Fetch or certified-request owner is released. The absence of
+an unpublished Completion token is therefore not permission to leave its restart-dormant parent
+behind.
+
+Restart performs an additional producer-frontier reconciliation after safety-WAL replay and before
+runtime capacity is installed. Current-view Reserved producers remain eligible. Older-view Reserved
+records are persistently pruned unless they are one of the four exact body-pipeline stages
+(`LocalProposalReady`, `BodyAvailable`, `BodyStored`, or `ValidationCompleted`) for the durable
+protected lock's proposal view and subject. Future-view Reserved records or inexact
+process/durable/dormant aliases fail closed. This cut is restart-only: a live `EnterView` cannot
+erase an older producer while its process owner may still be completing the explicit handoff.
+
+A certified-body response retained after retryable backpressure owns one finite certificate-escape
+episode. The episode starts `Fresh`, or `Charged` when a certificate already owns the physical
+credit. `Fresh` may admit one new authenticated TC/CommitQC root (including the exact response
+wrapper); `Charged` drains the already-owned
+certificate prefix without admitting a replacement, and becomes `Spent` when the last credit
+disappears while Completion admission remains closed. `Spent` cannot reset until the exact response
+retires. The runner still services one already-owned pacemaker root on every retry, but fresh
+network certificates cannot replenish the same physical credit forever and starve the retained
+Completion handoff.
 
 Trusted completion admission has a matching finite invariant. The shared configuration bounds
 outstanding asynchronous effect work by the runtime completion reserve. The ordered I/O worker has
@@ -953,11 +1053,46 @@ commitment-bearing evidence is rejected before serialized runtime ownership.
 Body-availability rebind requires the reducer's installed destination tag and
 preflights both source and destination ownership before mutation. One exact
 source moves to an empty destination or coalesces into one exact destination
-owner. An uninstalled destination tag is a recoverable caller-contract
-rejection with no mutation; conflicting or duplicate ownership fails closed
-without a partial move. Body-pipeline and Decision retirement likewise
+owner. Coalescence first classifies persistent producer backing on both sides.
+If only the source is persistent, the ordinary destination is retired and the
+persistent source is retagged; if only the destination is persistent, source
+ownership is validated against the already-persistent destination before the
+ordinary volatile source disappears. Two
+independent persistent roots fail closed before either side changes. Thus one
+persistent root always survives a successful coalescence. An uninstalled
+destination tag is a recoverable caller-contract rejection with no mutation;
+conflicting or duplicate ownership fails closed without a partial move. If a
+certified response has already reserved an
+unpublished `BodyAvailable` position when its service handoff returns typed
+`Retryable`, a protecting `EnterView` retags that same physical token together
+with its `PendingFetch`. The token keeps its admission ordinal, lifecycle
+owner, exact manifest, and restart backing; a later retry can publish exactly
+once at the installed incarnation instead of colliding with its old-view
+owner. That exact retry reclaims the already charged token before consulting
+the reducer's new-view admission projection, which may legitimately differ
+after `EnterView` but has no authority to remint the physical slot.
+Body-pipeline and Decision retirement likewise
 preflight all ingress and Busy-deferred owners transactionally before removing
-any of them.
+any of them. Retiring a pending fetch also retires its exact unpublished
+`BodyAvailable` token before releasing the request and pipeline owner; a TC
+which protects another body or carries no body lock therefore cannot leave an
+old-view Completion slot permanently occupied. If that token or a queued
+completion replaces a restart-restored stage-7 producer, any required durable
+producer removal is persisted before its runtime lane is changed. A failed
+store rolls the producer maps and dormant index back and therefore cannot
+partially coalesce or partially retire a body pipeline.
+
+The generic productive leader-wire lifecycle gate advances from the same
+durable safety frontier. After a certified `EnterView`, and again after the
+first durable Decision, the service derives a monotone process-local recovery
+authority. While holding the fair-ingress mirror lock it asks the persistent
+gate to remove exactly the obsolete restart-dormant slots, publishes that
+snapshot first, and only then removes the same mirror records. Persistence
+failure restores the prior gate state and leaves the mirror untouched. Live
+Ingress and Runtime owners are never pruned by this cut, admission rejects an
+identity below the durable view (or every identity after Decision), and both
+admission-ordinal high-watermarks survive retirement so the freed slot cannot
+resurrect an old identity or reuse an ordinal.
 At the transport boundary, a locally conflicting certified-body request is a
 nonfatal remote rejection, while a conflicting Commit-certificate response
 leaves discovery outstanding and retryable through another authenticated peer.
@@ -993,7 +1128,8 @@ paper argument assumes that, after GST:
 - body transfer, reconstruction, validation, signing, certificate formation, application, and
   fsync terminate within the declared service bounds;
 - an honest leader can construct a deterministically valid non-empty proposal
-  from available user, internal, or recovery work;
+  from available user or internal work, or an empty carrier from explicitly
+  armed recovery-heartbeat work;
 - correct nodes eventually recover with intact WAL state;
 - an honest leader recurs within one roster rotation;
 - honest Prepare signers continue serving their durable bodies; and

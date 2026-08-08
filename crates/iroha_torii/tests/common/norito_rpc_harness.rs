@@ -24,7 +24,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     isi::Log,
     query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
@@ -70,6 +70,8 @@ pub struct NoritoRpcHarness {
     #[allow(dead_code)]
     /// Effective configuration used to initialise the harness.
     pub cfg: ActualRoot,
+    /// Exact genesis-lineage identity shared by the state and Torii admission.
+    pub network_id: NetworkId,
 }
 
 impl NoritoRpcHarness {
@@ -79,10 +81,13 @@ impl NoritoRpcHarness {
         let kiso = KisoHandle::mock(&cfg);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
+        let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             World::default(),
             kura.clone(),
             query,
+            cfg.common.chain.clone(),
+            network_id,
         ));
         let queue_cfg = QueueConfig::default();
         let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -92,7 +97,7 @@ impl NoritoRpcHarness {
 
         let torii = Torii::new_with_handle(
             cfg.common.chain.clone(),
-            NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
+            network_id,
             kiso,
             cfg.torii.clone(),
             queue.clone(),
@@ -109,6 +114,7 @@ impl NoritoRpcHarness {
         Self {
             app: torii.api_router_for_tests(),
             cfg,
+            network_id,
         }
     }
 
@@ -139,7 +145,9 @@ impl NoritoRpcHarness {
         }
 
         let mut req = builder
-            .body(Body::from(sample_transaction_bytes()))
+            .body(Body::from(
+                sample_signed_transaction_for_network(self.network_id).encode_versioned(),
+            ))
             .expect("request");
         req.extensions_mut().insert(loopback_connect_info());
 
@@ -150,11 +158,17 @@ impl NoritoRpcHarness {
 /// Construct a signed transaction payload suitable for Norito-RPC ingress tests.
 #[allow(dead_code)]
 pub fn sample_signed_transaction() -> SignedTransaction {
-    let chain_id: ChainId = ChainId::from("test-chain");
+    let config = iroha_torii::test_utils::mk_minimal_root_cfg();
+    sample_signed_transaction_for_network(NetworkId::from_genesis_hash(
+        config.genesis.expected_hash,
+    ))
+}
+
+fn sample_signed_transaction_for_network(network_id: NetworkId) -> SignedTransaction {
     let key_pair = checked_norito_rpc_ed25519_key_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
     TransactionBuilder::new(
-        chain_id,
+        network_id,
         account,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

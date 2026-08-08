@@ -190,9 +190,9 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
             return Ok(IrohaRuntimeDeps::default());
         }
 
-        // Every currently defined V1 slot is enumerated explicitly. Unknown
-        // or future roles remain deliberately fail-closed until their bounded
-        // protocol surface is reviewed and added here.
+        // Every stock-supported active V1 slot is enumerated explicitly.
+        // Reserved, unknown, or future roles remain deliberately fail-closed
+        // until their bounded protocol surface is reviewed and added here.
         if bindings.iter().any(|binding| {
             !matches!(
                 binding.slot(),
@@ -263,6 +263,43 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
         {
             let _ = bindings;
             Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        }
+    }
+}
+
+#[cfg(test)]
+mod stock_registry_tests {
+    use super::*;
+
+    #[test]
+    fn reserved_musubi_attestation_slots_fail_before_broker_connection() {
+        let registry = StockRuntimeProviderBrokerRegistryV1::new();
+        for (slot, handle) in [
+            (
+                IrohaRuntimeProviderSlotV1::MusubiProviderAttestationClockSeal,
+                "sealed://musubi/provider-attestation/clock",
+            ),
+            (
+                IrohaRuntimeProviderSlotV1::MusubiProviderAttestationApprovalSigner,
+                "hsm://musubi/provider-attestation/approval",
+            ),
+            (
+                IrohaRuntimeProviderSlotV1::MusubiProviderAttestationAuthenticatedInventory,
+                "inventory://musubi/provider-attestation/coordinator",
+            ),
+        ] {
+            let bindings = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+                "stock-broker-musubi-test-chain",
+                slot,
+                handle,
+                1,
+                [0xA5; 32],
+            );
+
+            assert!(matches!(
+                registry.resolve(&bindings),
+                Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+            ));
         }
     }
 }

@@ -4,6 +4,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
@@ -14,6 +15,7 @@ public final class HttpClientTransportSubmissionContractTests {
   /** Runs the submission contract checks from the Gradle main-test harness. */
   public static void main(final String[] args) {
     submitTransactionJsonBuildsJsonIngressRequest();
+    replayPolicyIsSafeOnlyForUnsignedBodylessReads();
     System.out.println("[IrohaAndroid] HTTP submission contract tests passed.");
   }
 
@@ -39,6 +41,28 @@ public final class HttpClientTransportSubmissionContractTests {
     assert request.headers().get("Accept").contains(WireFormatPreference.JSON_PREFERRED.acceptHeader())
         : "JSON submit Accept header must use configured wire preference";
     assert java.util.Arrays.equals(body, request.body()) : "JSON submit body must be preserved";
+    assert request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "transaction bodies must be one-shot";
+  }
+
+  private static void replayPolicyIsSafeOnlyForUnsignedBodylessReads() {
+    final TransportRequest unsignedRead =
+        TransportRequest.builder()
+            .setMethod("GET")
+            .setUri(URI.create("https://127.0.0.1:8080/v1/status"))
+            .build();
+    final TransportRequest signedQuery =
+        TransportRequest.builder()
+            .setMethod("GET")
+            .setUri(URI.create("https://127.0.0.1:8080/v1/query"))
+            .addHeader("X-Iroha-Signature", "signature")
+            .addHeader("X-Iroha-Nonce", "nonce")
+            .build();
+
+    assert unsignedRead.replayPolicy() == RequestReplayPolicy.RETRY_SAFE
+        : "unsigned bodyless reads may be retried";
+    assert signedQuery.replayPolicy() == RequestReplayPolicy.ONE_SHOT
+        : "nonce-bearing signed queries must be one-shot";
   }
 
   static boolean isCapabilitiesRequest(final TransportRequest request) {

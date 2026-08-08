@@ -555,7 +555,13 @@ pub(crate) fn certified_merge_projection_calls_for_test() -> usize {
     CERTIFIED_MERGE_PROJECTION_CALLS.get()
 }
 
-fn certified_merge_committed_transactions(
+/// Project the authenticated transaction/result pairs carried by a certified merge entry.
+///
+/// The compact carrier reference, execution-batch commitments, transcript hashes, and Merkle
+/// roots are all revalidated before any transaction is returned.  Consumers outside the query
+/// executor use this projection so transaction lifecycle status never trusts an unauthenticated
+/// merge sidecar or reimplements only a subset of these checks.
+pub fn certified_merge_committed_transactions(
     carrier_hash: HashOf<BlockHeader>,
     reference: &CertifiedMergeLedgerReference,
     entry: &MergeLedgerEntry,
@@ -1145,7 +1151,7 @@ pub(crate) mod tests {
             MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
         },
         prelude::{
-            AccountId, ChainId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, PeerId,
+            AccountId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, NetworkId, PeerId,
             TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
         transaction::error::TransactionRejectionReason,
@@ -1158,13 +1164,15 @@ pub(crate) mod tests {
     };
 
     fn sample_certified_merge_execution_entry(epoch: u64, result_ok: bool) -> MergeLedgerEntry {
-        let chain_id: ChainId = "merge-query-projection".parse().expect("chain id");
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"merge-query-network")),
+        );
         let entrypoints = (0..2)
             .map(|index| {
                 let key_pair = KeyPair::random();
                 let authority = AccountId::new(key_pair.public_key().clone());
                 let mut builder = TransactionBuilder::new(
-                    chain_id.clone(),
+                    network_id,
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )

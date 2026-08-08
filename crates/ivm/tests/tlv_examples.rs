@@ -215,7 +215,8 @@ fn tlv_asset_handle_roundtrip() {
         manifest_view_root: vec![0x11; 32],
         expiry_slot: 9_999,
         max_clock_skew_ms: Some(500),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
 
     let payload = to_bytes(&handle).expect("encode handle");

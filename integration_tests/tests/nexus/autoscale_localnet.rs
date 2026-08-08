@@ -64,7 +64,7 @@ use iroha_core::{
     kura::Kura,
     lane_consensus::{validate_lane_block_proposal, validate_lane_block_qc_aggregate},
     merge::{
-        MergeLedgerCandidate, merge_chain_id_digest, merge_execution_batch_commitments_match,
+        MergeLedgerCandidate, merge_network_id_digest, merge_execution_batch_commitments_match,
         merge_qc_message_digest,
     },
     merge_sidecar::decode_certified_merge_sidecar,
@@ -4547,7 +4547,7 @@ fn validate_lane_drain_certificate_evidence(
     );
     ensure!(intent.version == 1, "unsupported drain intent version");
     ensure!(
-        intent.chain_id_digest == merge_chain_id_digest(chain_id),
+        intent.chain_id_digest == merge_network_id_digest(chain_id),
         "drain intent chain binding mismatch"
     );
     ensure!(intent.lane_id == lane_id, "drain intent names another lane");
@@ -6033,7 +6033,7 @@ fn validate_merge_qc_evidence(chain_id: &ChainId, entry: &MergeLedgerEntry) -> R
     let qc = &entry.merge_qc;
     ensure!(qc.epoch_id == entry.epoch_id, "merge QC epoch mismatch");
     ensure!(
-        qc.chain_id_digest == merge_chain_id_digest(chain_id),
+        qc.chain_id_digest == merge_network_id_digest(chain_id),
         "merge QC chain binding mismatch"
     );
     ensure!(

@@ -413,9 +413,36 @@ struct TerminalProfile {
     nifs_verifier_digest: [u8; 32],
 }
 
-struct MaterializedProtocol {
+/// Opaque, non-serializable capability for one native materialized opening.
+///
+/// Construction recomputes the complete relaxed-R1CS assignment and both
+/// Hyrax commitments from `W,rW,E,rE`.  The capability is deliberately local
+/// to the terminal prover: it is not an RNS-Link receipt and makes no claim
+/// that the materialized scalars equal plaintexts in untrusted BGV records.
+struct VerifiedZkAmsPhase23NativeMaterializedOpeningV1 {
+    context_digest: [u8; 32],
+    materialized_digest: [u8; 32],
     instance: RelaxedInstance,
     witness: RelaxedWitness,
+}
+
+impl VerifiedZkAmsPhase23NativeMaterializedOpeningV1 {
+    /// Consume the single-use capability only for the exact context and
+    /// canonical materialized artifact that were checked at construction.
+    fn consume_for(
+        self,
+        context: ZkAmsPhase3TerminalContextV1,
+        materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
+    ) -> Result<(RelaxedInstance, RelaxedWitness), ZkAmsMkheErrorV1> {
+        if self.context_digest != context.digest
+            || self.materialized_digest != materialized.digest
+            || self.context_digest == [0; 32]
+            || self.materialized_digest == [0; 32]
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        Ok((self.instance, self.witness))
+    }
 }
 
 /// Compute the exact terminal NIFS verifier identity for canonical paper-order
@@ -487,6 +514,8 @@ fn prove_terminal_inner(
     shape: &Shape,
     require_release_profile: bool,
 ) -> Result<ZkAmsPhase3TerminalProverOutputV1, ZkAmsMkheErrorV1> {
+    // Keep malformed artifacts on the cheap boundary. The opaque native
+    // opening constructor below repeats these checks before it can mint.
     validate_terminal_context(context)?;
     validate_materialized_accumulators_v1(materialized)?;
     validate_context_materialized_binding(context, materialized, require_release_profile)?;
@@ -500,13 +529,17 @@ fn prove_terminal_inner(
     }
     let (mask, strict_instances, folds) =
         fold_history_to_protocol(context, governed_batch, fold_history, &profile.shape)?;
-    let materialized_protocol = materialized_to_protocol(
+    let verified_materialization = verify_native_materialized_opening_v1(
+        context,
         materialized,
         &profile.shape,
         &profile.commitment_key,
         MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
+        require_release_profile,
     )?;
-    let batch_anchor = batch_anchor_from_instance(context, &materialized_protocol.instance)?;
+    let (materialized_instance, materialized_witness) =
+        verified_materialization.consume_for(context, materialized)?;
+    let batch_anchor = batch_anchor_from_instance(context, &materialized_instance)?;
     let context_frame = terminal_composition_context_frame(proof_context, context, governed_batch)?;
     let history_proof = prove_precomputed_masked_relaxed_v1(
         super::super::COMPOSITION_DOMAIN_V1,
@@ -516,7 +549,7 @@ fn prove_terminal_inner(
         &mask,
         &strict_instances,
         &folds,
-        materialized_protocol.witness,
+        materialized_witness,
         1,
     )
     .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -1128,12 +1161,17 @@ fn nifs_verifier_digest(
     Ok(keccak256(&frame))
 }
 
-fn materialized_to_protocol(
+fn verify_native_materialized_opening_v1(
+    context: ZkAmsPhase3TerminalContextV1,
     materialized: &ZkAmsPhase23MaterializedAccumulatorsV1,
     shape: &Shape,
     key: &CommitmentKey,
     commitment_columns: usize,
-) -> Result<MaterializedProtocol, ZkAmsMkheErrorV1> {
+    require_release_profile: bool,
+) -> Result<VerifiedZkAmsPhase23NativeMaterializedOpeningV1, ZkAmsMkheErrorV1> {
+    validate_terminal_context(context)?;
+    validate_materialized_accumulators_v1(materialized)?;
+    validate_context_materialized_binding(context, materialized, require_release_profile)?;
     if materialized.x.len() != shape.public_input_count()
         || materialized.u.len() != 1
         || materialized.e.len() != shape.constraint_count()
@@ -1170,7 +1208,12 @@ fn materialized_to_protocol(
         public_inputs,
         relaxation,
     };
-    Ok(MaterializedProtocol { instance, witness })
+    Ok(VerifiedZkAmsPhase23NativeMaterializedOpeningV1 {
+        context_digest: context.digest,
+        materialized_digest: materialized.digest,
+        instance,
+        witness,
+    })
 }
 
 fn terminal_proof_bytes_digest(encoded: &[u8]) -> [u8; 32] {
@@ -1732,6 +1775,66 @@ mod tests {
                 &fixture.output.proof_bytes,
             ),
             Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
+        );
+    }
+
+    #[test]
+    fn native_materialized_opening_receipt_is_equation_checked_and_context_bound() {
+        let fixture = fixture();
+        let profile = build_terminal_profile(map_refs(&fixture.maps), &fixture.shape, false)
+            .expect("synthetic terminal profile");
+
+        let receipt = verify_native_materialized_opening_v1(
+            fixture.context,
+            &fixture.materialized,
+            &profile.shape,
+            &profile.commitment_key,
+            MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
+            false,
+        )
+        .expect("valid relaxed assignment and both Hyrax openings");
+        let (instance, witness) = receipt
+            .consume_for(fixture.context, &fixture.materialized)
+            .expect("exact checked artifact consumes the capability");
+        assert_eq!(
+            batch_anchor_from_instance(fixture.context, &instance).unwrap(),
+            fixture.output.batch_anchor
+        );
+        assert_eq!(witness.values.len(), fixture.materialized.w.len());
+        assert_eq!(witness.error.len(), fixture.materialized.e.len());
+
+        let receipt = verify_native_materialized_opening_v1(
+            fixture.context,
+            &fixture.materialized,
+            &profile.shape,
+            &profile.commitment_key,
+            MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
+            false,
+        )
+        .unwrap();
+        let mut wrong_context = fixture.context;
+        wrong_context.digest[0] ^= 1;
+        assert!(
+            receipt
+                .consume_for(wrong_context, &fixture.materialized)
+                .is_err()
+        );
+
+        let receipt = verify_native_materialized_opening_v1(
+            fixture.context,
+            &fixture.materialized,
+            &profile.shape,
+            &profile.commitment_key,
+            MASKED_RELAXED_COMMITMENT_COLUMNS_V1,
+            false,
+        )
+        .unwrap();
+        let mut wrong_materialized = fixture.materialized.clone();
+        wrong_materialized.digest[0] ^= 1;
+        assert!(
+            receipt
+                .consume_for(fixture.context, &wrong_materialized)
+                .is_err()
         );
     }
 

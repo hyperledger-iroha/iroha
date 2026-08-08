@@ -17,21 +17,24 @@ use iroha_core::{
     state::{State, StateReadOnly, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     Encode,
     account::AccountAddress,
     isi::{
+        oracle::RegisterOracleFeed,
         settlement::{
-            FxCorridorPolicy, FxCorridorSource, SetFxCorridorPolicy, SettleFxCorridor,
+            FxCorridorOracleEvidence, FxCorridorPolicy, SetFxCorridorPolicy, SettleFxCorridor,
             SettlementInstructionBox,
         },
         smart_contract_code::{ActivateContractInstance, RegisterSmartContractBytes},
     },
     nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
+    oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
     prelude::*,
     sns::{NameControllerV1, NameRecordV1},
 };
+use iroha_executor_data_model::permission::oracle::CanRegisterOracleFeed;
 use iroha_executor_data_model::permission::settlement::CanManageFxCorridors;
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{
@@ -153,19 +156,23 @@ fn corridor() -> FxCorridorPolicy {
     FxCorridorPolicy {
         policy_id: "mobile_aed_pkr".parse().expect("FX policy id"),
         revision: 1,
+        owner: CARPENTER_ID.clone(),
         source_dataspace: SOURCE_DATASPACE,
-        source: FxCorridorSource::TransactionAuthority,
         source_asset_definition_id: source_asset_definition_id(),
-        source_sink: CARPENTER_ID.clone(),
         destination_dataspace: DESTINATION_DATASPACE,
-        destination_reserve: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
         destination_asset_definition_id: destination_asset_definition_id(),
         allowed_destination_alias_domains: BTreeSet::from([
             DomainId::try_new("hbl", "sbp").expect("HBL alias domain"),
             DomainId::try_new("ubl", "sbp").expect("UBL alias domain"),
         ]),
-        rate_numerator: 76,
-        rate_denominator: 1,
+        oracle_feed_id: "mobile_aed_pkr_rate".parse().expect("FX oracle feed id"),
+        max_oracle_age_ms: 60_000,
+        max_source_amount_per_settlement: Quantity::from(1_000_u32),
+        max_destination_amount_per_settlement: Quantity::from(100_000_u32),
+        velocity_window_ms: 60_000,
+        max_settlements_per_window: 100,
+        max_source_amount_per_window: Quantity::from(10_000_u32),
+        max_destination_amount_per_window: Quantity::from(1_000_000_u32),
         enabled: true,
     }
 }
@@ -227,12 +234,18 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     );
     world.account_permissions_mut_for_testing().insert(
         ALICE_ID.clone(),
-        BTreeSet::from([Permission::from(CanManageFxCorridors)]),
+        BTreeSet::from([
+            Permission::from(CanManageFxCorridors),
+            Permission::from(CanRegisterOracleFeed),
+        ]),
     );
     if let Some(alias) = active_sns_alias {
         seed_active_sns_dataspace(&mut world, alias);
     }
 
+    let corridor = corridor();
+    let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
+    feed.feed_id = corridor.oracle_feed_id.clone();
     let mut state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -251,7 +264,6 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
         .set_nexus(nexus)
         .expect("pre-genesis Nexus configuration must be valid");
 
-    let corridor = corridor();
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero block height"),
         None,
@@ -262,6 +274,9 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     );
     let mut block = state.block(header);
     let mut transaction = block.transaction();
+    RegisterOracleFeed { feed }
+        .execute(&ALICE_ID, &mut transaction)
+        .expect("oracle registrar must install the FX feed");
     SetFxCorridorPolicy {
         policy: corridor.clone(),
     }
@@ -282,7 +297,7 @@ fn accepted_transaction(
     instructions: Vec<InstructionBox>,
 ) -> AcceptedTransaction<'static> {
     let mut builder = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -297,7 +312,7 @@ fn accepted_transaction(
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
     AcceptedTransaction::accept_with_time_source(
         signed,
-        &state.chain_id,
+        state.network_id_ref(),
         max_clock_drift,
         transaction_parameters,
         crypto.as_ref(),
@@ -307,6 +322,17 @@ fn accepted_transaction(
 }
 
 fn settlement_instruction(corridor: &FxCorridorPolicy, settlement_id: &str) -> InstructionBox {
+    let request_hash = Hash::new(b"fx-routing-review-oracle-request");
+    let oracle_event = FeedEvent {
+        feed_id: corridor.oracle_feed_id.clone(),
+        feed_config_version: FeedConfigVersion(1),
+        slot: 1,
+        request_hash,
+        outcome: FeedEventOutcome::Success(FeedSuccess {
+            value: ObservationValue::new(76, 0),
+            entries: Vec::new(),
+        }),
+    };
     InstructionBox::from(SettlementInstructionBox::SettleFxCorridor(
         SettleFxCorridor {
             policy_id: corridor.policy_id.clone(),
@@ -316,6 +342,14 @@ fn settlement_instruction(corridor: &FxCorridorPolicy, settlement_id: &str) -> I
             settlement_id: settlement_id.parse().expect("settlement id"),
             recipient: BOB_ID.clone(),
             source_amount: Quantity::from(10_u32),
+            expected_destination_amount: Quantity::from(760_u32),
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: oracle_event.feed_id.clone(),
+                feed_config_version: oracle_event.feed_config_version,
+                slot: oracle_event.slot,
+                request_hash: oracle_event.request_hash,
+                event_hash: HashOf::new(&oracle_event),
+            },
         },
     ))
 }

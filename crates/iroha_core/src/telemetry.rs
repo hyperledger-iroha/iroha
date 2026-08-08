@@ -610,10 +610,10 @@ pub struct AxtRejectHint {
     pub dataspace: DataSpaceId,
     /// Target lane for the handle.
     pub target_lane: LaneId,
-    /// Next minimum handle era required by the policy.
-    pub next_min_handle_era: u64,
-    /// Next minimum sub-nonce required by the policy.
-    pub next_min_sub_nonce: u64,
+    /// Exact active handle era required by the policy.
+    pub active_handle_era: u64,
+    /// Exact next handle counter required by the policy.
+    pub next_handle_counter: u64,
     /// Reason label for the rejection (e.g., `era`, `sub_nonce`, `expiry`).
     pub reason: AxtRejectReason,
 }
@@ -3069,8 +3069,8 @@ impl StateTelemetry {
         &self,
         dsid: DataSpaceId,
         target_lane: LaneId,
-        next_min_handle_era: u64,
-        next_min_sub_nonce: u64,
+        active_handle_era: u64,
+        next_handle_counter: u64,
         reason: AxtRejectReason,
     ) {
         if !self.is_enabled() {
@@ -3082,8 +3082,8 @@ impl StateTelemetry {
                 AxtRejectHint {
                     dataspace: dsid,
                     target_lane,
-                    next_min_handle_era,
-                    next_min_sub_nonce,
+                    active_handle_era,
+                    next_handle_counter,
                     reason,
                 },
             );
@@ -8833,21 +8833,7 @@ impl Telemetry {
     /// to the last snapshot when the telemetry actor is unavailable.
     #[cfg(feature = "telemetry")]
     pub async fn metrics_fresh(&self) -> &Metrics {
-        let sync_result = async {
-            let (tx, rx) = oneshot::channel();
-            self.sync_requested.store(true, Ordering::Release);
-            self.actor
-                .try_send(Message::Sync { reply: Some(tx) })
-                .map_err(|err| format!("schedule telemetry sync: {err}"))?;
-            tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
-                .await
-                .map_err(|_| "telemetry sync timed out")?
-                .map_err(|_| "telemetry actor closed")?;
-            Ok::<(), String>(())
-        }
-        .await;
-
-        if let Err(err) = sync_result {
+        if let Err(err) = self.synchronize_metrics().await {
             self.sync_requested.store(false, Ordering::Release);
             iroha_logger::warn!(
                 ?err,
@@ -8857,6 +8843,32 @@ impl Telemetry {
         }
         refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
+    }
+
+    /// Refresh lazy metrics and report synchronization failure to callers that
+    /// must not publish a stale mixed-frontier snapshot.
+    #[cfg(feature = "telemetry")]
+    pub async fn metrics_fresh_checked(&self) -> Result<&Metrics, String> {
+        if let Err(err) = self.synchronize_metrics().await {
+            self.sync_requested.store(false, Ordering::Release);
+            return Err(err);
+        }
+        refresh_ivm_cache_metrics(&self.metrics);
+        Ok(&self.metrics)
+    }
+
+    #[cfg(feature = "telemetry")]
+    async fn synchronize_metrics(&self) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.sync_requested.store(true, Ordering::Release);
+        self.actor
+            .try_send(Message::Sync { reply: Some(tx) })
+            .map_err(|err| format!("schedule telemetry sync: {err}"))?;
+        tokio::time::timeout(METRICS_SYNC_TIMEOUT, rx)
+            .await
+            .map_err(|_| "telemetry sync timed out".to_owned())?
+            .map_err(|_| "telemetry actor closed".to_owned())?;
+        Ok(())
     }
 
     /// Access the `SoraNet` privacy aggregator.
@@ -9675,7 +9687,7 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_data_model::social::ViralEscrowRecord;
     use iroha_data_model::{
-        ChainId, Level, Registrable,
+        Level, NetworkId, Registrable,
         account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
         block::consensus_v2::{NPOS_TAG, PERMISSIONED_TAG},
@@ -11235,8 +11247,8 @@ mod tests {
             policy: AxtPolicyEntry {
                 manifest_root: [1; 32],
                 target_lane: lane,
-                min_handle_era: 5,
-                min_sub_nonce: 7,
+                active_handle_era: 5,
+                next_handle_counter: 7,
                 current_slot: 0,
             },
         };
@@ -11392,8 +11404,8 @@ mod tests {
                 policy: AxtPolicyEntry {
                     manifest_root: [0x11; 32],
                     target_lane: LaneId::new(3),
-                    min_handle_era: 4,
-                    min_sub_nonce: 2,
+                    active_handle_era: 4,
+                    next_handle_counter: 2,
                     current_slot: 9,
                 },
             },
@@ -11402,8 +11414,8 @@ mod tests {
                 policy: AxtPolicyEntry {
                     manifest_root: [0x22; 32],
                     target_lane: LaneId::new(4),
-                    min_handle_era: 5,
-                    min_sub_nonce: 3,
+                    active_handle_era: 5,
+                    next_handle_counter: 3,
                     current_slot: 10,
                 },
             },
@@ -11436,7 +11448,7 @@ mod tests {
         time_source: TimeSource,
         kura: Arc<Kura>,
         state: Arc<State>,
-        chain_id: ChainId,
+        network_id: NetworkId,
         account_id: AccountId,
         account_keypair: KeyPair,
         leader_private_key: PrivateKey,
@@ -13513,7 +13525,7 @@ mod tests {
                 true,
             );
 
-            let chain_id = state.chain_id.clone();
+            let network_id = state.network_id;
             let topology = Topology::new(vec![local_peer_id.clone()]);
 
             Self {
@@ -13523,7 +13535,7 @@ mod tests {
                 time_source,
                 kura,
                 state,
-                chain_id,
+                network_id,
                 online_peers_tx: peers_tx,
                 account_id,
                 account_keypair,
@@ -13545,7 +13557,7 @@ mod tests {
             };
 
             let tx = TransactionBuilder::new_with_time_source(
-                self.chain_id.clone(),
+                self.network_id,
                 self.account_id.clone(),
                 &self.time_source,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -13555,7 +13567,7 @@ mod tests {
             let crypto_cfg = self.state.crypto();
             AcceptedTransaction::accept(
                 tx,
-                &self.chain_id,
+                &self.network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
@@ -15456,6 +15468,70 @@ mod tests {
         assert!(block_counts_as_non_empty(&block));
     }
 
+    #[test]
+    fn block_payload_detects_npos_consensus_effect_blocks() {
+        use iroha_data_model::consensus::{
+            NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
+        };
+
+        let mut block = empty_block(2);
+        block.set_npos_consensus_effects(Some(NposConsensusEffects {
+            vrf_epoch_seals: Vec::new(),
+            v2_evidence_admissions: Vec::new(),
+            penalty_actions: vec![NposPenaltyAction::MarkVrfPenaltiesApplied(
+                NposMarkVrfPenaltiesAppliedAction {
+                    epoch: 0,
+                    height: 2,
+                },
+            )],
+        }));
+
+        assert!(
+            block_counts_as_non_empty(&block),
+            "deterministic NPoS state effects are semantic block work"
+        );
+    }
+
+    #[test]
+    fn block_payload_detects_autonomous_lane_payload_carriers() {
+        use iroha_data_model::block::{
+            AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
+            BlockExecutionContextBundle,
+        };
+
+        let mut block = empty_block(6);
+        let producer = PeerId::new(
+            checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let envelope = AutonomousLanePayloadEnvelopeV1 {
+            version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
+            chain_id_hash: Hash::new(b"telemetry-autonomous-chain"),
+            epoch: 4,
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(10),
+            lane_incarnation: Hash::new(b"telemetry-autonomous-incarnation"),
+            proposal_height: 6,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            proposal_hash: Hash::new(b"telemetry-autonomous-proposal"),
+            descriptor_hash: Hash::new(b"telemetry-autonomous-descriptor"),
+            payload_hash: Hash::new(b"telemetry-autonomous-payload"),
+            producer,
+            canonical_payload: vec![0x44, 0x50, 0x4E],
+        };
+        block.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_autonomous_lane_payloads(vec![envelope]),
+        ));
+
+        assert!(
+            block_counts_as_non_empty(&block),
+            "autonomous lane payload carriers are semantic block work"
+        );
+    }
+
     fn empty_block(height: u64) -> iroha_data_model::block::SignedBlock {
         use std::num::NonZeroU64;
 
@@ -15528,17 +15604,19 @@ mod tests {
         use std::num::NonZeroU64;
 
         use iroha_data_model::{
-            ChainId,
             block::{BlockHeader, BlockSignature},
             transaction::signed::SignedTransaction,
         };
 
         fn dummy_transaction() -> SignedTransaction {
-            let chain_id: ChainId = "test-chain".parse().expect("chain id");
+            let network_id =
+                NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                    Hash::new(b"telemetry-block-transaction"),
+                ));
             let key_pair = checked_keypair();
             let authority = AccountId::new(key_pair.public_key().clone());
             TransactionBuilder::new(
-                chain_id,
+                network_id,
                 authority,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

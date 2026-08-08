@@ -395,6 +395,21 @@ const fn native_release_capture_open_with_pins_v1(pins: ZkX509ReleaseCapturePins
         && pins.maximum_peak_address_space_bytes == 0
 }
 
+const fn native_release_capture_pins_complete_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
+    release_evidence_pins_are_complete_v1(
+        pins.kat_proof_bytes,
+        pins.kat_proof_sha256,
+        pins.expectations_norito_sha256,
+        pins.expectations_json_sha256,
+    ) && digest_is_nonzero_v1(pins.resource_certificate_sha256)
+        && pins.positive_elapsed_millis > 0
+        && pins.positive_peak_rss_bytes > 0
+        && pins.positive_peak_address_space_bytes > 0
+        && pins.maximum_elapsed_millis > 0
+        && pins.maximum_peak_rss_bytes > 0
+        && pins.maximum_peak_address_space_bytes > 0
+}
+
 const fn native_release_expectation_digests_match_with_pins_v1(
     expected_norito_sha256: [u8; 32],
     expected_json_sha256: [u8; 32],
@@ -485,18 +500,26 @@ impl ZkX509ReadinessV1 {
 /// Canonical production checklist derived from concrete release pins and
 /// independently validated certificate payloads.
 pub(crate) fn zk_x509_activation_readiness_v1() -> ZkX509ReadinessV1 {
-    let deterministic_release_corpus = ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1 > 0
-        && ZK_X509_RELEASE_KAT_EXPECTED_PROOF_BYTES_V1 <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1
-        && digest_is_nonzero_v1(ZK_X509_RELEASE_KAT_EXPECTED_PROOF_SHA256_V1);
+    let source_capture_pins = source_release_capture_pins_v1();
+    // A proof digest by itself is not evidence that either canonical projection
+    // of the 48-stage native corpus was captured. Keep the KAT and adversarial
+    // bits false until the proof and both distinct fixture digests are present.
+    let deterministic_release_corpus = release_evidence_pins_are_complete_v1(
+        source_capture_pins.kat_proof_bytes,
+        source_capture_pins.kat_proof_sha256,
+        source_capture_pins.expectations_norito_sha256,
+        source_capture_pins.expectations_json_sha256,
+    );
+    let resource_source_pins_complete =
+        native_release_capture_pins_complete_v1(source_capture_pins);
     let soundness_pin_populated = digest_is_nonzero_v1(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1);
-    let resource_pin_populated = digest_is_nonzero_v1(ZK_X509_RESOURCE_CERTIFICATE_SHA256_V1);
-    let compiled_profile_digest = (soundness_pin_populated || resource_pin_populated)
+    let compiled_profile_digest = (soundness_pin_populated || resource_source_pins_complete)
         .then(|| super::engine::construct_zk_x509_compiled_profile_v1().ok())
         .flatten()
         .map(super::engine::ZkX509CompiledProfileV1::digest);
     let soundness_analysis = soundness_pin_populated
         && compiled_profile_digest.is_some_and(soundness_certificate_is_pinned_v1);
-    let resource_benchmarks = resource_pin_populated
+    let resource_benchmarks = resource_source_pins_complete
         && compiled_profile_digest.is_some_and(resource_certificate_is_pinned_v1);
     ZkX509ReadinessV1 {
         der_and_rfc5280_air: true,
@@ -795,27 +818,12 @@ mod tests {
         Mixed,
     }
 
-    const fn release_capture_pins_are_fully_populated_v1(pins: ZkX509ReleaseCapturePinsV1) -> bool {
-        release_evidence_pins_are_complete_v1(
-            pins.kat_proof_bytes,
-            pins.kat_proof_sha256,
-            pins.expectations_norito_sha256,
-            pins.expectations_json_sha256,
-        ) && digest_is_nonzero_v1(pins.resource_certificate_sha256)
-            && pins.positive_elapsed_millis > 0
-            && pins.positive_peak_rss_bytes > 0
-            && pins.positive_peak_address_space_bytes > 0
-            && pins.maximum_elapsed_millis > 0
-            && pins.maximum_peak_rss_bytes > 0
-            && pins.maximum_peak_address_space_bytes > 0
-    }
-
     const fn source_release_pin_state_v1(
         pins: ZkX509ReleaseCapturePinsV1,
     ) -> SourceReleasePinStateV1 {
         if native_release_capture_open_with_pins_v1(pins) {
             SourceReleasePinStateV1::BootstrapOpen
-        } else if release_capture_pins_are_fully_populated_v1(pins) {
+        } else if native_release_capture_pins_complete_v1(pins) {
             SourceReleasePinStateV1::FullyPinned
         } else {
             SourceReleasePinStateV1::Mixed
@@ -1001,6 +1009,7 @@ mod tests {
             },
         ] {
             assert!(!native_release_capture_open_with_pins_v1(partial));
+            assert!(!native_release_capture_pins_complete_v1(partial));
             assert_eq!(
                 source_release_pin_state_v1(partial),
                 SourceReleasePinStateV1::Mixed,
@@ -1025,6 +1034,9 @@ mod tests {
             source_release_pin_state_v1(populated_capture_pins),
             SourceReleasePinStateV1::FullyPinned
         );
+        assert!(native_release_capture_pins_complete_v1(
+            populated_capture_pins
+        ));
 
         assert!(native_release_expectation_digests_match_with_pins_v1(
             norito, json, norito, json
@@ -1140,15 +1152,24 @@ mod tests {
     #[test]
     fn independent_readiness_requirements_fail_closed() {
         let canonical = zk_x509_activation_readiness_v1();
-        assert!(!canonical.is_complete());
-        assert_eq!(
-            require_activation_readiness_v1(canonical),
-            Err(ZkX509ProfileErrorV1::EngineIncomplete)
-        );
+        let expected = match source_release_pin_state_v1(source_release_capture_pins_v1()) {
+            SourceReleasePinStateV1::BootstrapOpen => {
+                assert!(!canonical.is_complete());
+                Err(ZkX509ProfileErrorV1::EngineIncomplete)
+            }
+            SourceReleasePinStateV1::FullyPinned => {
+                assert!(canonical.is_complete());
+                Ok(())
+            }
+            SourceReleasePinStateV1::Mixed => {
+                panic!("source release pins must be wholly open or wholly installed")
+            }
+        };
+        assert_eq!(require_activation_readiness_v1(canonical), expected);
         assert_eq!(
             require_activation_readiness_v1(complete_readiness()),
-            Err(ZkX509ProfileErrorV1::EngineIncomplete),
-            "a caller-supplied all-true checklist cannot bypass derived readiness"
+            expected,
+            "a caller-supplied all-true checklist must equal derived readiness"
         );
 
         let gates = [

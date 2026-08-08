@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{BufWriter, Write},
+    io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -62,8 +62,11 @@ pub struct Args {
     bound_manifest_out: Option<PathBuf>,
     /// Write the exact signed consensus-header hash as one lowercase line.
     ///
-    /// Provision this value as `genesis.expected_hash` independently of the
-    /// signed block body before starting any validator.
+    /// This also atomically publishes a sibling `*.identity.toml` containing
+    /// the same exact value as both client `network_id` and
+    /// `genesis.expected_hash`. Deployment tooling must consume that paired
+    /// identity artifact rather than assembling the two trust domains
+    /// independently.
     #[clap(long, value_name = "PATH")]
     expected_hash_out: Option<PathBuf>,
     /// Use this topology instead of specified in genesis.json.
@@ -120,6 +123,114 @@ const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+const MAX_DEPLOYMENT_IDENTITY_BYTES: u64 = 4 * 1024;
+
+fn deployment_identity_path(expected_hash_path: &Path) -> PathBuf {
+    expected_hash_path.with_extension("identity.toml")
+}
+
+fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
+    let body = format!(
+        "network_id = \"{expected_hash}\"\n\n[genesis]\nexpected_hash = \"{expected_hash}\"\n"
+    );
+    if body.len() as u64 > MAX_DEPLOYMENT_IDENTITY_BYTES {
+        return Err(eyre!(
+            "generated deployment identity exceeds the {MAX_DEPLOYMENT_IDENTITY_BYTES}-byte limit"
+        ));
+    }
+
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(eyre!(
+                "deployment identity output must be a regular file: {}",
+                path.display()
+            ));
+        }
+        if metadata.len() > MAX_DEPLOYMENT_IDENTITY_BYTES {
+            return Err(eyre!(
+                "existing deployment identity exceeds the {MAX_DEPLOYMENT_IDENTITY_BYTES}-byte limit: {}",
+                path.display()
+            ));
+        }
+        let mut existing = String::new();
+        File::open(path)?
+            .take(MAX_DEPLOYMENT_IDENTITY_BYTES + 1)
+            .read_to_string(&mut existing)
+            .wrap_err_with(|| format!("read existing deployment identity {}", path.display()))?;
+        if existing == body {
+            return Ok(());
+        }
+        return Err(eyre!(
+            "refusing to replace a different deployment identity: {}",
+            path.display()
+        ));
+    }
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".genesis-identity-")
+        .tempfile_in(parent)
+        .wrap_err_with(|| {
+            format!(
+                "create temporary deployment identity beside {}",
+                path.display()
+            )
+        })?;
+    temporary
+        .write_all(body.as_bytes())
+        .wrap_err("write temporary deployment identity")?;
+    temporary
+        .flush()
+        .wrap_err("flush temporary deployment identity")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .wrap_err("sync temporary deployment identity")?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => {}
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+                format!("inspect raced deployment identity {}", path.display())
+            })?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() > MAX_DEPLOYMENT_IDENTITY_BYTES
+            {
+                return Err(eyre!(
+                    "raced deployment identity is not the expected regular bounded file: {}",
+                    path.display()
+                ));
+            }
+            let mut existing = String::new();
+            File::open(path)?
+                .take(MAX_DEPLOYMENT_IDENTITY_BYTES + 1)
+                .read_to_string(&mut existing)
+                .wrap_err_with(|| format!("read raced deployment identity {}", path.display()))?;
+            if existing != body {
+                return Err(eyre!(
+                    "refusing raced deployment identity with different contents: {}",
+                    path.display()
+                ));
+            }
+        }
+        Err(error) => {
+            return Err(error.error).wrap_err_with(|| {
+                format!(
+                    "publish deployment identity atomically to {}",
+                    path.display()
+                )
+            });
+        }
+    }
+    #[cfg(unix)]
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .wrap_err_with(|| format!("sync deployment identity directory {}", parent.display()))?;
+    Ok(())
+}
 
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
@@ -261,18 +372,12 @@ fn public_xor_profile_for_manifest(
 
 fn configured_npos_bootstrap_stake_asset_id(
     manifest: &RawGenesisTransaction,
-    config_path: Option<&Path>,
+    config: Option<&actual::Root>,
 ) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
     let public_profile = public_xor_profile_for_manifest(manifest);
-    let stake_asset_id = if let Some(config_path) = config_path {
-        let config = load_peer_config(config_path)?;
+    let stake_asset_id = if let Some(config) = config {
         resolve_npos_bootstrap_stake_asset_id(manifest, &config.nexus.staking.stake_asset_id)
-            .map_err(|err| {
-                eyre!(
-                    "failed to resolve nexus.staking.stake_asset_id from {}: {err}",
-                    config_path.display(),
-                )
-            })?
+            .map_err(|err| eyre!("failed to resolve nexus.staking.stake_asset_id: {err}"))?
     } else if public_profile.is_some() {
         let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
         resolve_asset_definition_alias(manifest, &public_xor_alias)?.ok_or_else(|| {
@@ -437,22 +542,25 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
     })
 }
 
-pub fn bind_staged_sumeragi_v2_context(
-    genesis: RawGenesisTransaction,
-    genesis_key_pair: &KeyPair,
-    config: Option<&actual::Root>,
-    da_proof_policies: Option<DaProofPolicyBundle>,
-    confidential_policy_hash: [u8; 32],
-) -> Result<iroha_genesis::GenesisBlock, color_eyre::eyre::Error> {
-    let (_, block) = bind_and_sign_staged_sumeragi_v2_context(
-        genesis,
-        genesis_key_pair,
-        config,
-        da_proof_policies,
-        confidential_policy_hash,
-        None,
-    )?;
-    Ok(block)
+fn ensure_peer_config_matches_manifest(
+    config: &actual::Root,
+    manifest: &RawGenesisTransaction,
+) -> Result<(), color_eyre::eyre::Error> {
+    if config.common.chain != *manifest.chain_id() {
+        return Err(eyre!(
+            "peer config chain `{}` does not match genesis manifest chain `{}`",
+            config.common.chain,
+            manifest.chain_id()
+        ));
+    }
+    let configured_discriminant = *config.common.chain_discriminant.value();
+    if configured_discriminant != manifest.chain_discriminant() {
+        return Err(eyre!(
+            "peer config chain discriminant {configured_discriminant} does not match genesis manifest chain discriminant {}",
+            manifest.chain_discriminant()
+        ));
+    }
+    Ok(())
 }
 
 fn build_signed_genesis(
@@ -867,21 +975,18 @@ fn install_staged_nexus_policies(
     Ok(())
 }
 
-fn should_auto_bootstrap_npos_validators(
-    config_path: Option<&Path>,
-) -> Result<bool, color_eyre::eyre::Error> {
-    let Some(config_path) = config_path else {
-        return Ok(true);
+fn should_auto_bootstrap_npos_validators(config: Option<&actual::Root>) -> bool {
+    let Some(config) = config else {
+        return true;
     };
 
-    let config = load_peer_config(config_path)?;
-    Ok(matches!(
+    matches!(
         config
             .nexus
             .staking
             .validator_mode(LaneId::SINGLE, &config.nexus.lane_catalog),
         actual::LaneValidatorMode::StakeElected
-    ))
+    )
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -900,6 +1005,12 @@ impl<T: Write> RunArgs<T> for Args {
             ));
         }
         if let Some(expected_hash) = self.expected_hash_out.as_deref() {
+            let deployment_identity = deployment_identity_path(expected_hash);
+            if deployment_identity == expected_hash {
+                return Err(eyre!(
+                    "genesis expected-hash output must not use the reserved `.identity.toml` deployment-identity path"
+                ));
+            }
             for (label, path) in [
                 ("signed genesis output", self.out_file.as_deref()),
                 ("bound manifest output", self.bound_manifest_out.as_deref()),
@@ -908,6 +1019,11 @@ impl<T: Write> RunArgs<T> for Args {
                 if path == Some(expected_hash) {
                     return Err(eyre!(
                         "genesis expected-hash output and {label} must use different paths"
+                    ));
+                }
+                if path == Some(deployment_identity.as_path()) {
+                    return Err(eyre!(
+                        "paired deployment-identity output and {label} must use different paths"
                     ));
                 }
             }
@@ -920,6 +1036,13 @@ impl<T: Write> RunArgs<T> for Args {
         // serialization on the manifest's network. Staged execution re-enters
         // this discriminant on its worker thread.
         let _chain_discriminant = staged_genesis_chain_discriminant(&genesis);
+        // Parse the peer configuration exactly once. Every policy projection
+        // below borrows this immutable snapshot, so replacing the source file
+        // concurrently cannot create a mixed genesis generation.
+        let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
+        if let Some(config) = peer_config.as_ref() {
+            ensure_peer_config_matches_manifest(config, &genesis)?;
+        }
         let manifest_consensus_mode = genesis.consensus_mode();
         require_v2_wire_protocol_only(&genesis)?;
         let consensus_mode = consensus_mode_override.unwrap_or(manifest_consensus_mode);
@@ -942,7 +1065,7 @@ impl<T: Write> RunArgs<T> for Args {
             .unwrap_or_else(|| collect_topology_peers(&genesis));
         ensure_valid_genesis_committee(&final_topology)?;
         let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
-        let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(self.config.as_deref())?;
+        let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(peer_config.as_ref());
         let topology_peers = if uses_npos {
             final_topology
         } else {
@@ -962,7 +1085,7 @@ impl<T: Write> RunArgs<T> for Args {
             }
         };
         let bootstrap_stake_asset_id = if needs_npos_bootstrap {
-            configured_npos_bootstrap_stake_asset_id(&genesis, self.config.as_deref())?
+            configured_npos_bootstrap_stake_asset_id(&genesis, peer_config.as_ref())?
         } else {
             default_npos_bootstrap_stake_asset_id()
         };
@@ -978,9 +1101,8 @@ impl<T: Write> RunArgs<T> for Args {
             self.algorithm,
         )?;
         ensure_expected_public_key(&genesis_key_pair, self.expected_public_key.as_ref())?;
-        let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
-        let confidential_policy_hash = resolve_confidential_policy_hash(self.config.as_deref())?;
-        let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
+        let da_proof_policies = resolve_da_proof_policies(peer_config.as_ref());
+        let confidential_policy_hash = resolve_confidential_policy_hash(peer_config.as_ref());
         if let Some(config) = peer_config.as_ref()
             && config.genesis.public_key != *genesis_key_pair.public_key()
         {
@@ -1073,6 +1195,8 @@ impl<T: Write> RunArgs<T> for Args {
         if let Some(path) = self.expected_hash_out.as_deref() {
             fs::write(path, format!("{genesis_expected_hash}\n"))
                 .wrap_err_with(|| format!("write genesis expected hash to {}", path.display()))?;
+            let identity_path = deployment_identity_path(path);
+            publish_deployment_identity(&identity_path, &genesis_expected_hash.to_string())?;
         }
         tui::success("Genesis block signed");
 
@@ -1243,31 +1367,15 @@ fn ensure_valid_genesis_committee(topology: &[PeerId]) -> Result<(), color_eyre:
     Ok(())
 }
 
-fn resolve_da_proof_policies(
-    config_path: Option<&Path>,
-) -> Result<Option<DaProofPolicyBundle>, color_eyre::eyre::Error> {
-    let Some(config_path) = config_path else {
-        return Ok(None);
-    };
-
-    let config = load_peer_config(config_path)?;
-
-    Ok(Some(iroha_core::da::proof_policy_bundle(
-        &config.nexus.lane_config,
-    )))
+fn resolve_da_proof_policies(config: Option<&actual::Root>) -> Option<DaProofPolicyBundle> {
+    config.map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config))
 }
 
-fn resolve_confidential_policy_hash(
-    config_path: Option<&Path>,
-) -> Result<[u8; 32], color_eyre::eyre::Error> {
-    let Some(config_path) = config_path else {
-        return Ok(iroha_core::state::default_genesis_confidential_policy_hash());
-    };
-
-    let config = load_peer_config(config_path)?;
-    Ok(iroha_core::state::compute_genesis_confidential_policy_hash(
-        &config.zk,
-    ))
+fn resolve_confidential_policy_hash(config: Option<&actual::Root>) -> [u8; 32] {
+    config.map_or_else(
+        iroha_core::state::default_genesis_confidential_policy_hash,
+        |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
+    )
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
@@ -2246,6 +2354,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn expected_hash_output_matches_the_signed_consensus_header() {
         let temp = tempfile::tempdir().expect("expected hash output temp dir");
         let expected_hash_path = temp.path().join("genesis.expected_hash");
+        let identity_path = deployment_identity_path(&expected_hash_path);
         let args = Args {
             genesis_file: minimal_genesis_file(),
             out_file: None,
@@ -2276,6 +2385,47 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(
             fs::read_to_string(expected_hash_path).expect("read expected hash output"),
             format!("{}\n", block.hash()),
+        );
+        assert_eq!(
+            fs::read_to_string(identity_path).expect("read paired deployment identity"),
+            format!(
+                "network_id = \"{}\"\n\n[genesis]\nexpected_hash = \"{}\"\n",
+                block.hash(),
+                block.hash()
+            ),
+        );
+    }
+
+    #[test]
+    fn deployment_identity_publication_is_idempotent_and_refuses_drift() {
+        let temp = tempfile::tempdir().expect("deployment identity temp dir");
+        let identity_path = temp.path().join("genesis.identity.toml");
+        let expected_hash = Hash::new(b"deployment identity").to_string();
+        let different_hash = Hash::new(b"different deployment identity").to_string();
+
+        publish_deployment_identity(&identity_path, &expected_hash)
+            .expect("publish deployment identity");
+        let published = fs::read(&identity_path).expect("read deployment identity");
+        publish_deployment_identity(&identity_path, &expected_hash)
+            .expect("same deployment identity must be idempotent");
+        publish_deployment_identity(&identity_path, &different_hash)
+            .expect_err("different deployment identity must not replace the trust root");
+
+        assert_eq!(
+            fs::read(&identity_path).expect("reread deployment identity"),
+            published,
+        );
+        assert!(
+            fs::read_dir(temp.path())
+                .expect("list deployment identity directory")
+                .all(|entry| {
+                    !entry
+                        .expect("deployment identity directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".genesis-identity-")
+                }),
+            "atomic publication must not retain temporary files"
         );
     }
 
@@ -2648,7 +2798,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut invalid_compliance_config = config.clone();
         invalid_compliance_config.nexus.compliance.enabled = true;
         invalid_compliance_config.nexus.compliance.policy_dir = None;
-        let invalid_compliance_error = bind_staged_sumeragi_v2_context(
+        let invalid_compliance_error = bind_and_sign_staged_sumeragi_v2_context(
             RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
                 .expect("reload generated genesis manifest"),
             &genesis_key_pair,
@@ -2659,6 +2809,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             iroha_core::state::compute_genesis_confidential_policy_hash(
                 &invalid_compliance_config.zk,
             ),
+            None,
         )
         .expect_err("compliance-enabled staging must require a policy directory");
         assert!(
@@ -3303,6 +3454,40 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .and_then(|path| path.parent())
             .expect("workspace root")
             .join("defaults/nexus/config.toml")
+    }
+
+    #[test]
+    fn peer_config_chain_must_match_manifest() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = RawGenesisTransaction::from_path(root.join("defaults/genesis.json"))
+            .expect("parse genesis fixture");
+        let mut config = checked_in_config(&root.join("defaults/nexus/config.toml"));
+        ensure_peer_config_matches_manifest(&config, &manifest)
+            .expect("baseline config and manifest match");
+
+        config.common.chain = ChainId::from("concurrently-replaced-chain");
+        let error = ensure_peer_config_matches_manifest(&config, &manifest)
+            .expect_err("chain mismatch must fail before signing");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match genesis manifest chain")
+        );
+    }
+
+    #[test]
+    fn peer_config_discriminant_must_match_manifest() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = RawGenesisTransaction::from_path(root.join("defaults/genesis.json"))
+            .expect("parse genesis fixture");
+        let mut config = checked_in_config(&root.join("defaults/nexus/config.toml"));
+        *config.common.chain_discriminant.value_mut() = manifest
+            .chain_discriminant()
+            .checked_add(1)
+            .expect("fixture discriminant can increase");
+        let error = ensure_peer_config_matches_manifest(&config, &manifest)
+            .expect_err("discriminant mismatch must fail before signing");
+        assert!(error.to_string().contains("chain discriminant"));
     }
 
     #[test]

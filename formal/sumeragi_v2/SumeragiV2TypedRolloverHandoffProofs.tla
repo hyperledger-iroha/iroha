@@ -1265,10 +1265,7 @@ PROOF
       BY <2>2, IsaT(120)
          DEF typedRolloverVars, TypedRolloverSafetyInvariant
     <2> QED BY <2>1, <2>2
-  <1>3. TypedRolloverSafetyInvariant /\ [][Next]_typedRolloverVars
-         => []TypedRolloverSafetyInvariant
-    BY <1>2, RuleINV1
-  <1> QED BY <1>1, <1>3, PTL DEF TypedRolloverSpec
+  <1> QED BY <1>1, <1>2, PTL DEF TypedRolloverSpec
 
 (***************************************************************************
 Responsive durable-output corridor.
@@ -1491,11 +1488,7 @@ PROOF
          /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
          => DurableOutputCorridorBase'
     BY ResponsiveDurableOutputStepPreservesCorridorBase
-  <1>3. DurableOutputCorridorBase
-         /\ [][ResponsiveDurableExactOutputNext]_typedRolloverVars
-         => []DurableOutputCorridorBase
-    BY <1>2, RuleINV1
-  <1> QED BY <1>1, <1>3, PTL
+  <1> QED BY <1>1, <1>2, PTL
        DEF ResponsiveDurableExactOutputSpec
 
 LOCAL THEOREM DurableOutputPending0IsNotOrphaned ==
@@ -1564,7 +1557,26 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(CreateServiceTransportOwnerPair)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending0 /\ ~DurableOutputStage1
+             => ENABLED
+                  <<CreateServiceTransportOwnerPair>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending0 /\ ~DurableOutputStage1
+             /\ <<CreateServiceTransportOwnerPair>>_typedRolloverVars
+             => DurableOutputStage1')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending0 /\ ~DurableOutputStage1
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage1'
+                \/ DurableOutputPending0')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending0
 
 LOCAL THEOREM DurableOutputPending1IsNotOrphaned ==
@@ -1628,7 +1640,25 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(CloseWorkerIngress)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending1 /\ ~DurableOutputStage2
+             => ENABLED <<CloseWorkerIngress>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending1 /\ ~DurableOutputStage2
+             /\ <<CloseWorkerIngress>>_typedRolloverVars
+             => DurableOutputStage2')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending1 /\ ~DurableOutputStage2
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage2'
+                \/ DurableOutputPending1')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending1
 
 LOCAL THEOREM DurableOutputPending2IsExactlyFirstClear ==
@@ -1704,7 +1734,25 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(ClearOneWorkerExactOutput)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending2 /\ ~DurableOutputStage3
+             => ENABLED <<ClearOneWorkerExactOutput>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending2 /\ ~DurableOutputStage3
+             /\ <<ClearOneWorkerExactOutput>>_typedRolloverVars
+             => DurableOutputStage3')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending2 /\ ~DurableOutputStage3
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage3'
+                \/ DurableOutputPending2')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending2
 
 LOCAL THEOREM DurableOutputPending3IsExactlySecondClear ==
@@ -1780,7 +1828,25 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(ClearOneWorkerExactOutput)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending3 /\ ~DurableOutputStage4
+             => ENABLED <<ClearOneWorkerExactOutput>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending3 /\ ~DurableOutputStage4
+             /\ <<ClearOneWorkerExactOutput>>_typedRolloverVars
+             => DurableOutputStage4')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending3 /\ ~DurableOutputStage4
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage4'
+                \/ DurableOutputPending3')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending3
 
 LOCAL THEOREM DurableOutputPending4IsNotOrphaned ==
@@ -1843,7 +1909,25 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(BuildImmediateSuccessor)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending4 /\ ~DurableOutputStage5
+             => ENABLED <<BuildImmediateSuccessor>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending4 /\ ~DurableOutputStage5
+             /\ <<BuildImmediateSuccessor>>_typedRolloverVars
+             => DurableOutputStage5')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending4 /\ ~DurableOutputStage5
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage5'
+                \/ DurableOutputPending4')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending4
 
 LOCAL THEOREM DurableOutputPending5IsNotOrphaned ==
@@ -1908,7 +1992,26 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(SealAppliedHeightOutputHandoff)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending5 /\ ~DurableOutputStage6
+             => ENABLED
+                  <<SealAppliedHeightOutputHandoff>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending5 /\ ~DurableOutputStage6
+             /\ <<SealAppliedHeightOutputHandoff>>_typedRolloverVars
+             => DurableOutputStage6')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending5 /\ ~DurableOutputStage6
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage6'
+                \/ DurableOutputPending5')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending5
 
 LOCAL THEOREM DurableOutputPending6IsNotOrphaned ==
@@ -1976,7 +2079,25 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(RetainExactHandoffReceipt)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending6 /\ ~DurableOutputStage7
+             => ENABLED <<RetainExactHandoffReceipt>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending6 /\ ~DurableOutputStage7
+             /\ <<RetainExactHandoffReceipt>>_typedRolloverVars
+             => DurableOutputStage7')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending6 /\ ~DurableOutputStage7
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage7'
+                \/ DurableOutputPending6')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending6
 
 LOCAL THEOREM DurableOutputPending7IsNotOrphaned ==
@@ -2051,7 +2172,28 @@ PROOF
           WF_typedRolloverVars(
             PublishDurableExactOutputSuccessorLifecycleStateSlotV3)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending7 /\ ~DurableOutputStage8
+             => ENABLED
+                  <<PublishDurableExactOutputSuccessorLifecycleStateSlotV3>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending7 /\ ~DurableOutputStage8
+             /\ <<PublishDurableExactOutputSuccessorLifecycleStateSlotV3>>_
+                   typedRolloverVars
+             => DurableOutputStage8')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending7 /\ ~DurableOutputStage8
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage8'
+                \/ DurableOutputPending7')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending7
 
 LOCAL THEOREM DurableOutputPending8IsNotOrphaned ==
@@ -2117,7 +2259,28 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(SyncSuccessorLifecycleStateDirectoryV3)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending8 /\ ~DurableOutputStage9
+             => ENABLED
+                  <<SyncSuccessorLifecycleStateDirectoryV3>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending8 /\ ~DurableOutputStage9
+             /\ <<SyncSuccessorLifecycleStateDirectoryV3>>_
+                   typedRolloverVars
+             => DurableOutputStage9')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending8 /\ ~DurableOutputStage9
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage9'
+                \/ DurableOutputPending8')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending8
 
 LOCAL THEOREM DurableOutputPending9IsNotOrphaned ==
@@ -2182,7 +2345,26 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(ReplaceSuccessorLifecycleRootV3)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending9 /\ ~DurableOutputStage10
+             => ENABLED
+                  <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending9 /\ ~DurableOutputStage10
+             /\ <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars
+             => DurableOutputStage10')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending9 /\ ~DurableOutputStage10
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage10'
+                \/ DurableOutputPending9')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending9
 
 LOCAL THEOREM DurableOutputPending10IsNotOrphaned ==
@@ -2249,7 +2431,26 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(CommitSuccessorLifecycleRootV3)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending10 /\ ~DurableOutputStage11
+             => ENABLED
+                  <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending10 /\ ~DurableOutputStage11
+             /\ <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars
+             => DurableOutputStage11')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending10 /\ ~DurableOutputStage11
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputStage11'
+                \/ DurableOutputPending10')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending10
 
 LOCAL THEOREM DurableOutputPending11IsNotOrphaned ==
@@ -2313,7 +2514,27 @@ PROOF
   <1>4. ResponsiveDurableExactOutputSpec =>
           WF_typedRolloverVars(PublishCommittedLifecycleV3ToMemory)
     BY DEF ResponsiveDurableExactOutputSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveDurableExactOutputSpec =>
+          [][ResponsiveDurableExactOutputNext]_typedRolloverVars
+    BY DEF ResponsiveDurableExactOutputSpec
+  <1>6. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending11 /\ ~DurableOutputGoal
+             => ENABLED
+                  <<PublishCommittedLifecycleV3ToMemory>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending11 /\ ~DurableOutputGoal
+             /\ <<PublishCommittedLifecycleV3ToMemory>>_typedRolloverVars
+             => DurableOutputGoal')
+    BY <1>3, PTL
+  <1>8. ResponsiveDurableExactOutputSpec =>
+          [](DurableOutputPending11 /\ ~DurableOutputGoal
+             /\ [ResponsiveDurableExactOutputNext]_typedRolloverVars
+             => \/ DurableOutputGoal'
+                \/ DurableOutputPending11')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF DurableOutputPending11
 
 (***************************************************************************
@@ -2568,11 +2789,7 @@ PROOF
          /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
          => RestartRestoreCorridorBase'
     BY ResponsiveRestartRestoreStepPreservesCorridorBase
-  <1>3. RestartRestoreCorridorBase
-         /\ [][ResponsiveRestartRestoreNext]_typedRolloverVars
-         => []RestartRestoreCorridorBase
-    BY <1>2, RuleINV1
-  <1> QED BY <1>1, <1>3, PTL
+  <1> QED BY <1>1, <1>2, PTL
        DEF ResponsiveRestartRestoreSpec
 
 LOCAL THEOREM RestartRestorePending0IsNotOrphaned ==
@@ -2638,7 +2855,26 @@ PROOF
   <1>4. ResponsiveRestartRestoreSpec =>
           WF_typedRolloverVars(ValidateRootSelectedLifecycleV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending0 /\ ~RestartRestoreStage1
+             => ENABLED
+                  <<ValidateRootSelectedLifecycleV3>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending0 /\ ~RestartRestoreStage1
+             /\ <<ValidateRootSelectedLifecycleV3>>_typedRolloverVars
+             => RestartRestoreStage1')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending0 /\ ~RestartRestoreStage1
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage1'
+                \/ RestartRestorePending0')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending0
 
 LOCAL THEOREM RestartRestorePending1IsNotOrphaned ==
@@ -2703,7 +2939,28 @@ PROOF
           WF_typedRolloverVars(
             ResyncValidatedLifecycleStateDirectoryV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending1 /\ ~RestartRestoreStage2
+             => ENABLED
+                  <<ResyncValidatedLifecycleStateDirectoryV3>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending1 /\ ~RestartRestoreStage2
+             /\ <<ResyncValidatedLifecycleStateDirectoryV3>>_
+                   typedRolloverVars
+             => RestartRestoreStage2')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending1 /\ ~RestartRestoreStage2
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage2'
+                \/ RestartRestorePending1')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending1
 
 LOCAL THEOREM RestartRestorePending2IsNotOrphaned ==
@@ -2767,7 +3024,28 @@ PROOF
           WF_typedRolloverVars(
             ResyncValidatedLifecycleRootDirectoryV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending2 /\ ~RestartRestoreStage3
+             => ENABLED
+                  <<ResyncValidatedLifecycleRootDirectoryV3>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending2 /\ ~RestartRestoreStage3
+             /\ <<ResyncValidatedLifecycleRootDirectoryV3>>_
+                   typedRolloverVars
+             => RestartRestoreStage3')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending2 /\ ~RestartRestoreStage3
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage3'
+                \/ RestartRestorePending2')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending2
 
 LOCAL THEOREM RestartRestorePending3IsNotOrphaned ==
@@ -2834,7 +3112,28 @@ PROOF
   <1>4. ResponsiveRestartRestoreSpec =>
           WF_typedRolloverVars(CleanupValidatedLifecycleArtifactsV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending3 /\ ~RestartRestoreStage4
+             => ENABLED
+                  <<CleanupValidatedLifecycleArtifactsV3>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending3 /\ ~RestartRestoreStage4
+             /\ <<CleanupValidatedLifecycleArtifactsV3>>_
+                   typedRolloverVars
+             => RestartRestoreStage4')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending3 /\ ~RestartRestoreStage4
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage4'
+                \/ RestartRestorePending3')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending3
 
 LOCAL THEOREM RestartRestorePending4IsNotOrphaned ==
@@ -2900,7 +3199,26 @@ PROOF
   <1>4. ResponsiveRestartRestoreSpec =>
           WF_typedRolloverVars(RecoverPredecessorLifecycleV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending4 /\ ~RestartRestoreStage5
+             => ENABLED
+                  <<RecoverPredecessorLifecycleV3>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending4 /\ ~RestartRestoreStage5
+             /\ <<RecoverPredecessorLifecycleV3>>_typedRolloverVars
+             => RestartRestoreStage5')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending4 /\ ~RestartRestoreStage5
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage5'
+                \/ RestartRestorePending4')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending4
 
 LOCAL THEOREM RestartRestorePending5IsNotOrphaned ==
@@ -2975,7 +3293,28 @@ PROOF
           WF_typedRolloverVars(
             PublishRestartRestoreSuccessorLifecycleStateSlotV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending5 /\ ~RestartRestoreStage6
+             => ENABLED
+                  <<PublishRestartRestoreSuccessorLifecycleStateSlotV3>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending5 /\ ~RestartRestoreStage6
+             /\ <<PublishRestartRestoreSuccessorLifecycleStateSlotV3>>_
+                   typedRolloverVars
+             => RestartRestoreStage6')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending5 /\ ~RestartRestoreStage6
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage6'
+                \/ RestartRestorePending5')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending5
 
 LOCAL THEOREM RestartRestorePending6IsNotOrphaned ==
@@ -3042,7 +3381,28 @@ PROOF
   <1>4. ResponsiveRestartRestoreSpec =>
           WF_typedRolloverVars(SyncSuccessorLifecycleStateDirectoryV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending6 /\ ~RestartRestoreStage7
+             => ENABLED
+                  <<SyncSuccessorLifecycleStateDirectoryV3>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending6 /\ ~RestartRestoreStage7
+             /\ <<SyncSuccessorLifecycleStateDirectoryV3>>_
+                   typedRolloverVars
+             => RestartRestoreStage7')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending6 /\ ~RestartRestoreStage7
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage7'
+                \/ RestartRestorePending6')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending6
 
 LOCAL THEOREM RestartRestorePending7IsNotOrphaned ==
@@ -3108,7 +3468,26 @@ PROOF
   <1>4. ResponsiveRestartRestoreSpec =>
           WF_typedRolloverVars(ReplaceSuccessorLifecycleRootV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending7 /\ ~RestartRestoreStage8
+             => ENABLED
+                  <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending7 /\ ~RestartRestoreStage8
+             /\ <<ReplaceSuccessorLifecycleRootV3>>_typedRolloverVars
+             => RestartRestoreStage8')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending7 /\ ~RestartRestoreStage8
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage8'
+                \/ RestartRestorePending7')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending7
 
 LOCAL THEOREM RestartRestorePending8IsNotOrphaned ==
@@ -3176,7 +3555,26 @@ PROOF
   <1>4. ResponsiveRestartRestoreSpec =>
           WF_typedRolloverVars(CommitSuccessorLifecycleRootV3)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending8 /\ ~RestartRestoreStage9
+             => ENABLED
+                  <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending8 /\ ~RestartRestoreStage9
+             /\ <<CommitSuccessorLifecycleRootV3>>_typedRolloverVars
+             => RestartRestoreStage9')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending8 /\ ~RestartRestoreStage9
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreStage9'
+                \/ RestartRestorePending8')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending8
 
 LOCAL THEOREM RestartRestorePending9IsNotOrphaned ==
@@ -3241,7 +3639,27 @@ PROOF
   <1>4. ResponsiveRestartRestoreSpec =>
           WF_typedRolloverVars(PublishCommittedLifecycleV3ToMemory)
     BY DEF ResponsiveRestartRestoreSpec
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, RuleWF1, PTL
+  <1>5. ResponsiveRestartRestoreSpec =>
+          [][ResponsiveRestartRestoreNext]_typedRolloverVars
+    BY DEF ResponsiveRestartRestoreSpec
+  <1>6. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending9 /\ ~RestartRestoreGoal
+             => ENABLED
+                  <<PublishCommittedLifecycleV3ToMemory>>_
+                    typedRolloverVars)
+    BY <1>2, PTL
+  <1>7. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending9 /\ ~RestartRestoreGoal
+             /\ <<PublishCommittedLifecycleV3ToMemory>>_typedRolloverVars
+             => RestartRestoreGoal')
+    BY <1>3, PTL
+  <1>8. ResponsiveRestartRestoreSpec =>
+          [](RestartRestorePending9 /\ ~RestartRestoreGoal
+             /\ [ResponsiveRestartRestoreNext]_typedRolloverVars
+             => \/ RestartRestoreGoal'
+                \/ RestartRestorePending9')
+    BY <1>1, PTL
+  <1> QED BY <1>4, <1>5, <1>6, <1>7, <1>8, PTL
        DEF RestartRestorePending9
 
 THEOREM ResponsiveRestartRestoreRolloverLivenessObligation ==

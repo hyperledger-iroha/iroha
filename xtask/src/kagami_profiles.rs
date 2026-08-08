@@ -19,7 +19,7 @@ use iroha_data_model::{
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
     },
     peer::PeerId,
-    transaction::Executable,
+    transaction::{Executable, TransactionDomain},
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
@@ -64,6 +64,20 @@ struct PeerMaterial {
     streaming_private_key: String,
     pop: Vec<u8>,
     pop_hex: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateKeyRendering {
+    InlineStaging,
+    RuntimeFiles,
+}
+
+fn published_private_key_rendering(spec: &ProfileSpec) -> PrivateKeyRendering {
+    if spec.slug == "iroha3-dev" {
+        PrivateKeyRendering::InlineStaging
+    } else {
+        PrivateKeyRendering::RuntimeFiles
+    }
 }
 
 struct StagedGenesis {
@@ -197,6 +211,7 @@ fn write_profile_bundle(
         genesis_key.public_key(),
         &bundle_root,
         GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        PrivateKeyRendering::InlineStaging,
     )?;
     let config_path = bundle_root.join(peer_config_file_name(0));
     let staged_genesis =
@@ -220,6 +235,7 @@ fn write_profile_bundle(
         genesis_key.public_key(),
         &bundle_root,
         &staged_genesis.expected_hash,
+        published_private_key_rendering(spec),
     )?;
 
     let vrf_seed_hex = if spec.requires_seed {
@@ -558,11 +574,11 @@ fn bind_staged_context(
         .zip(&actual_transactions)
         .enumerate()
     {
-        if transaction.chain() != bound_manifest.chain_id()
+        if transaction.domain() != &TransactionDomain::Genesis
             || transaction.authority() != &genesis_account
         {
             return Err(format!(
-                "staged {} transaction {index} has the wrong chain or genesis authority",
+                "staged {} transaction {index} has the wrong genesis domain or authority",
                 spec.slug
             )
             .into());
@@ -590,7 +606,7 @@ fn bind_staged_context(
             .into());
         }
     }
-    iroha_core::validate_genesis_block(&block, &genesis_account, bound_manifest.chain_id())
+    iroha_core::validate_genesis_block(&block, &genesis_account)
         .map_err(|err| format!("staged {} genesis failed full validation: {err}", spec.slug))?;
     Ok(StagedGenesis {
         manifest: bound_manifest,
@@ -647,7 +663,14 @@ fn render_config(
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_expected_hash: &str,
 ) -> String {
-    render_peer_config(spec, peers, 0, genesis_public_key, genesis_expected_hash)
+    render_peer_config_with_private_keys(
+        spec,
+        peers,
+        0,
+        genesis_public_key,
+        genesis_expected_hash,
+        published_private_key_rendering(spec),
+    )
 }
 
 fn render_peer_config(
@@ -657,14 +680,60 @@ fn render_peer_config(
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_expected_hash: &str,
 ) -> String {
+    render_peer_config_with_private_keys(
+        spec,
+        peers,
+        peer_index,
+        genesis_public_key,
+        genesis_expected_hash,
+        published_private_key_rendering(spec),
+    )
+}
+
+fn render_peer_config_with_private_keys(
+    spec: &ProfileSpec,
+    peers: &[PeerMaterial],
+    peer_index: usize,
+    genesis_public_key: &iroha_crypto::PublicKey,
+    genesis_expected_hash: &str,
+    private_key_rendering: PrivateKeyRendering,
+) -> String {
     let genesis_expected_hash = if genesis_expected_hash == GENESIS_EXPECTED_HASH_PLACEHOLDER {
         genesis_expected_hash.to_owned()
     } else {
         norito::literal::format("hash", &genesis_expected_hash.to_ascii_uppercase())
     };
+    let genesis_identity_source = if genesis_expected_hash == GENESIS_EXPECTED_HASH_PLACEHOLDER
+        && private_key_rendering == PrivateKeyRendering::RuntimeFiles
+    {
+        "expected_hash_file = \"/run/iroha/genesis.expected_hash\"".to_owned()
+    } else {
+        format!("expected_hash = \"{genesis_expected_hash}\"")
+    };
     let node = peers
         .get(peer_index)
         .expect("peer config index must address signed topology");
+    let (node_private_key, soranet_transport_private_key, streaming_private_key) =
+        match private_key_rendering {
+            PrivateKeyRendering::InlineStaging => (
+                format!("private_key = \"{}\"", node.private_key),
+                format!(
+                    "soranet_transport_private_key = \"{}\"",
+                    node.soranet_transport_private_key
+                ),
+                format!("identity_private_key = \"{}\"", node.streaming_private_key),
+            ),
+            PrivateKeyRendering::RuntimeFiles => {
+                let prefix = format!("/run/secrets/iroha/{}-peer-{peer_index}", spec.slug);
+                (
+                    format!("private_key_file = \"{prefix}-validator-private-key\""),
+                    format!(
+                        "soranet_transport_private_key_file = \"{prefix}-soranet-private-key\""
+                    ),
+                    format!("identity_private_key_file = \"{prefix}-streaming-private-key\""),
+                )
+            }
+        };
     let trusted_peers = peers
         .iter()
         .map(|peer| format!("  \"{}@{}\"", peer.public_key, peer.address))
@@ -803,9 +872,9 @@ allow_tool_prefixes = ["iroha."]
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
 {chain_discriminant}public_key = "{node_pk}"
-private_key = "{node_sk}"
+{node_private_key}
 soranet_transport_public_key = "{soranet_transport_pk}"
-soranet_transport_private_key = "{soranet_transport_sk}"
+{soranet_transport_private_key}
 
 trusted_peers = [
 {trusted_peers}
@@ -838,7 +907,7 @@ max_content_len = {torii_max_content_len}
 
 [streaming]
 identity_public_key = "{stream_pub}"
-identity_private_key = "{stream_priv}"
+{streaming_private_key}
 {sorafs_site_bindings}
 
 [nexus]
@@ -850,15 +919,15 @@ lane_count = 3
 [genesis]
 public_key = "{genesis_pk}"
 file = "genesis.signed.nrt"
-expected_hash = "{genesis_expected_hash}"
+{genesis_identity_source}
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
         chain_discriminant = chain_discriminant,
         node_pk = node.public_key,
-        node_sk = node.private_key,
+        node_private_key = node_private_key,
         soranet_transport_pk = node.soranet_transport_public_key,
-        soranet_transport_sk = node.soranet_transport_private_key,
+        soranet_transport_private_key = soranet_transport_private_key,
         trusted_peers = trusted_peers,
         trusted_peers_pop = trusted_peers_pop,
         max_transactions = max_transactions,
@@ -875,9 +944,9 @@ expected_hash = "{genesis_expected_hash}"
         taira_mcp_overrides = taira_mcp_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
-        genesis_expected_hash = genesis_expected_hash,
+        genesis_identity_source = genesis_identity_source,
         stream_pub = node.streaming_public_key,
-        stream_priv = node.streaming_private_key,
+        streaming_private_key = streaming_private_key,
     )
 }
 
@@ -887,19 +956,17 @@ fn write_peer_configs(
     genesis_public_key: &iroha_crypto::PublicKey,
     bundle_root: &Path,
     genesis_expected_hash: &str,
+    private_key_rendering: PrivateKeyRendering,
 ) -> AnyResult<()> {
     for peer_index in 0..peers.len() {
-        let rendered = if peer_index == 0 {
-            render_config(spec, peers, genesis_public_key, genesis_expected_hash)
-        } else {
-            render_peer_config(
-                spec,
-                peers,
-                peer_index,
-                genesis_public_key,
-                genesis_expected_hash,
-            )
-        };
+        let rendered = render_peer_config_with_private_keys(
+            spec,
+            peers,
+            peer_index,
+            genesis_public_key,
+            genesis_expected_hash,
+            private_key_rendering,
+        );
         fs::write(
             bundle_root.join(peer_config_file_name(peer_index)),
             &rendered,
@@ -910,6 +977,12 @@ fn write_peer_configs(
 }
 
 fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
+    let runtime_secrets_volume =
+        if published_private_key_rendering(spec) == PrivateKeyRendering::RuntimeFiles {
+            "\n      - /run/secrets/iroha:/run/secrets/iroha:ro"
+        } else {
+            ""
+        };
     let services = peers
         .iter()
         .enumerate()
@@ -944,7 +1017,7 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
     volumes:
       - ./{config_file}:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
-      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{site_bindings_volume}
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{site_bindings_volume}{runtime_secrets_volume}
     ports:
       - "{torii_port}:{torii_port}"
       - "{p2p_port}:{p2p_port}"
@@ -1023,6 +1096,13 @@ fn render_readme(
     } else {
         String::new()
     };
+    let runtime_key_note = if published_private_key_rendering(spec)
+        == PrivateKeyRendering::RuntimeFiles
+    {
+        "\nRuntime keys:\n- Validator, SoraNet transport, and streaming signing keys are not embedded. Provision the per-peer files named by each config under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required file is absent.\n"
+    } else {
+        ""
+    };
 
     format!(
         r#"# {slug} sample bundle
@@ -1044,6 +1124,7 @@ Files:
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 {site_bindings_file}- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
+{runtime_key_note}
 
 Regenerate:
 - cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
@@ -1059,6 +1140,7 @@ Regenerate:
         verify_vrf_seed_arg = verify_vrf_seed_arg,
         nexus_regeneration_arg = nexus_regeneration_arg,
         site_bindings_file = site_bindings_file,
+        runtime_key_note = runtime_key_note,
     )
 }
 
@@ -1366,7 +1448,18 @@ mod tests {
         assert!(rendered.contains(peers[0].public_key.as_str()));
         assert!(rendered.contains(&genesis_key.public_key().to_string()));
         assert!(rendered.contains(&peers[0].streaming_public_key));
-        assert!(rendered.contains(&peers[0].streaming_private_key));
+        assert!(!rendered.contains(&peers[0].private_key));
+        assert!(!rendered.contains(&peers[0].soranet_transport_private_key));
+        assert!(!rendered.contains(&peers[0].streaming_private_key));
+        assert!(rendered.contains(
+            "private_key_file = \"/run/secrets/iroha/iroha3-nexus-peer-0-validator-private-key\""
+        ));
+        assert!(rendered.contains(
+            "soranet_transport_private_key_file = \"/run/secrets/iroha/iroha3-nexus-peer-0-soranet-private-key\""
+        ));
+        assert!(rendered.contains(
+            "identity_private_key_file = \"/run/secrets/iroha/iroha3-nexus-peer-0-streaming-private-key\""
+        ));
         assert!(
             !rendered.contains("round_timeout_ms"),
             "round timing is derived from the signed genesis cadence"
@@ -1396,7 +1489,14 @@ mod tests {
                 Algorithm::Ed25519,
             )
             .expect("derive deterministic genesis key");
-            let rendered = render_config(profile, &peers, genesis_key.public_key(), &expected_hash);
+            let rendered = render_peer_config_with_private_keys(
+                profile,
+                &peers,
+                0,
+                genesis_key.public_key(),
+                &expected_hash,
+                PrivateKeyRendering::InlineStaging,
+            );
             let table = rendered
                 .parse::<toml::Table>()
                 .expect("rendered profile config is valid TOML");
@@ -1416,6 +1516,52 @@ mod tests {
     }
 
     #[test]
+    fn published_profiles_keep_runtime_keys_outside_production_configs() {
+        for profile in [&PROFILES[1], &PROFILES[2]] {
+            let peers = build_peers(profile).expect("build deterministic peers");
+            let genesis_key = deterministic_keypair(
+                &format!("config-{}-public-only-genesis", profile.slug),
+                Algorithm::Ed25519,
+            )
+            .expect("derive deterministic genesis key");
+            let rendered = render_config(
+                profile,
+                &peers,
+                genesis_key.public_key(),
+                GENESIS_EXPECTED_HASH_PLACEHOLDER,
+            );
+
+            for peer in &peers {
+                assert!(!rendered.contains(&peer.private_key));
+                assert!(!rendered.contains(&peer.soranet_transport_private_key));
+                assert!(!rendered.contains(&peer.streaming_private_key));
+            }
+            assert!(rendered.contains("private_key_file = \"/run/secrets/iroha/"));
+            assert!(
+                rendered.contains("soranet_transport_private_key_file = \"/run/secrets/iroha/")
+            );
+            assert!(rendered.contains("identity_private_key_file = \"/run/secrets/iroha/"));
+            assert!(rendered.contains("expected_hash_file = \"/run/iroha/genesis.expected_hash\""));
+            assert!(!rendered.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
+        }
+
+        let profile = &PROFILES[0];
+        let peers = build_peers(profile).expect("build deterministic dev peers");
+        let genesis_key = deterministic_keypair("config-dev-inline-genesis", Algorithm::Ed25519)
+            .expect("derive deterministic genesis key");
+        let rendered = render_config(
+            profile,
+            &peers,
+            genesis_key.public_key(),
+            GENESIS_EXPECTED_HASH_PLACEHOLDER,
+        );
+        assert!(rendered.contains(&peers[0].private_key));
+        assert!(rendered.contains(&peers[0].soranet_transport_private_key));
+        assert!(rendered.contains(&peers[0].streaming_private_key));
+        assert!(!rendered.contains("private_key_file"));
+    }
+
+    #[test]
     fn final_peer_configs_pin_the_exact_genesis_hash_and_prepared_names() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("prepared-config-genesis", Algorithm::Ed25519)
@@ -1431,6 +1577,7 @@ mod tests {
             genesis_key.public_key(),
             bundle.path(),
             &expected_hash,
+            PrivateKeyRendering::InlineStaging,
         )
         .expect("write prepared validator configs");
 
@@ -1808,11 +1955,20 @@ mod tests {
             "Taira compose must mount the startup-configured binding document"
         );
         assert!(!rendered.contains("IROHA_SORAFS_SITE_BINDINGS_FILE"));
+        assert_eq!(
+            rendered
+                .matches("/run/secrets/iroha:/run/secrets/iroha:ro")
+                .count(),
+            peers.len(),
+            "each production validator must receive the runtime key directory read-only"
+        );
         let dev_peers = build_peers(&PROFILES[0]).expect("build deterministic dev peers");
+        let dev_compose = render_docker_compose(&PROFILES[0], &dev_peers);
         assert!(
-            !render_docker_compose(&PROFILES[0], &dev_peers).contains("sorafs_sites.json"),
+            !dev_compose.contains("sorafs_sites.json"),
             "profiles without a configured binding document must not mount one"
         );
+        assert!(!dev_compose.contains("/run/secrets/iroha"));
 
         let genesis_key = deterministic_keypair("readme-taira-sites", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");

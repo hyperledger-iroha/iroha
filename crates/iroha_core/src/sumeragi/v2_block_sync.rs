@@ -24,7 +24,7 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::{ChainId, block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
 use thiserror::Error;
 
 use super::v2_transport::{
@@ -108,7 +108,7 @@ pub(crate) struct V2BlockSyncDiscovery {
 /// response before reuse so the signed identity always matches the current
 /// authenticated outer peer.
 pub(crate) struct V2BlockSyncServer {
-    chain_id: ChainId,
+    network_id: NetworkId,
     capacity: usize,
     responses: BTreeMap<HashOf<wire::CommitCertificateRequest>, wire::ConsensusMessageV2>,
     identities: BTreeMap<CommitCertificateServerIdentity, HashOf<wire::CommitCertificateRequest>>,
@@ -119,13 +119,13 @@ pub(crate) struct V2BlockSyncServer {
 }
 
 impl V2BlockSyncServer {
-    /// Construct an empty bounded server for one configured chain.
-    pub(crate) fn new(chain_id: ChainId, capacity: usize) -> Result<Self, V2BlockSyncError> {
+    /// Construct an empty bounded server for one exact network identity.
+    pub(crate) fn new(network_id: NetworkId, capacity: usize) -> Result<Self, V2BlockSyncError> {
         if capacity == 0 {
             return Err(V2TransportError::ZeroCapacity.into());
         }
         Ok(Self {
-            chain_id,
+            network_id,
             capacity,
             responses: BTreeMap::new(),
             identities: BTreeMap::new(),
@@ -249,7 +249,7 @@ impl V2BlockSyncServer {
         ) -> Result<Option<wire::ConsensusMessageV2>, V2BlockSyncError>,
     {
         authenticate_commit_certificate_request_identity(&request, authenticated_requester)?;
-        if request.chain_id != self.chain_id || request.height == 0 {
+        if request.network_id != self.network_id || request.height == 0 {
             return Err(wire::ValidationError::WrongHeightContext.into());
         }
         let request_hash = HashOf::new(&request);
@@ -392,7 +392,7 @@ impl V2BlockSyncDiscovery {
         ensure_key_identity(requester_key, &self.requester)?;
         let mut request = wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            chain_id: self.context.chain_id.clone(),
+            network_id: self.context.network_id,
             context_id: self.context.id(),
             height: self.context.height,
             requester: self.requester.clone(),
@@ -805,10 +805,16 @@ pub(super) mod tests {
     use std::{cell::Cell, num::NonZeroU64, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash};
-    use iroha_data_model::{ChainId, block::BlockHeader};
+    use iroha_data_model::{NetworkId, block::BlockHeader};
 
     use super::*;
     use crate::{block::ValidBlock, sumeragi::v2_transport::OutstandingCertifiedBodyRequests};
+
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
 
     struct Fixture {
         context: wire::HeightContext,
@@ -836,7 +842,7 @@ pub(super) mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: ChainId::from("v2-block-sync-test"),
+                network_id: test_network_id(0x81),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -1109,7 +1115,7 @@ pub(super) mod tests {
         let requester = peer(&fixture.requester);
         let mut commit_request = wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             context_id: context.id(),
             height: context.height,
             requester: requester.clone(),
@@ -1243,7 +1249,7 @@ pub(super) mod tests {
         let request = fixture.signed_request(&mut discovery);
 
         let mut cross_chain = request.clone();
-        cross_chain.chain_id = ChainId::from("another-chain");
+        cross_chain.network_id = test_network_id(0x82);
         resign_request(&mut cross_chain, &fixture.requester);
         assert!(matches!(
             serve_commit_certificate_from_artifact(
@@ -1448,7 +1454,7 @@ pub(super) mod tests {
         let mut discovery = fixture.discovery();
         let request = fixture.signed_request(&mut discovery);
         let mut server =
-            V2BlockSyncServer::new(fixture.context.chain_id.clone(), 1).expect("server");
+            V2BlockSyncServer::new(fixture.context.network_id.clone(), 1).expect("server");
         let builds = Cell::new(0_u32);
 
         let first = server
@@ -1549,7 +1555,7 @@ pub(super) mod tests {
         let request = fixture.signed_request(&mut discovery);
         let kura = Kura::blank_kura_for_testing();
         let mut server =
-            V2BlockSyncServer::new(fixture.context.chain_id.clone(), 2).expect("server");
+            V2BlockSyncServer::new(fixture.context.network_id.clone(), 2).expect("server");
 
         assert!(
             server
@@ -1571,7 +1577,7 @@ pub(super) mod tests {
         let mut discovery = fixture.discovery();
         let request = fixture.signed_request(&mut discovery);
         let mut server =
-            V2BlockSyncServer::new(fixture.context.chain_id.clone(), 2).expect("server");
+            V2BlockSyncServer::new(fixture.context.network_id.clone(), 2).expect("server");
 
         let spoof = peer(&fixture.old_validators[0]);
         assert!(matches!(
@@ -1589,7 +1595,7 @@ pub(super) mod tests {
         ));
 
         let mut cross_chain = request;
-        cross_chain.chain_id = ChainId::from("cross-chain-replay");
+        cross_chain.network_id = test_network_id(0x83);
         resign_request(&mut cross_chain, &fixture.requester);
         assert!(matches!(
             server.serve_with(
@@ -1612,7 +1618,7 @@ pub(super) mod tests {
         let fixture = Fixture::new();
         let request = fixture.body_request(fixture.artifact.commit_qc.clone());
         let mut server =
-            V2BlockSyncServer::new(fixture.context.chain_id.clone(), 2).expect("server");
+            V2BlockSyncServer::new(fixture.context.network_id.clone(), 2).expect("server");
         assert!(matches!(
             server.serve_historical_body_with(
                 request,
@@ -1655,7 +1661,7 @@ pub(super) mod tests {
         prepare_qc.aggregate_signature = aggregate_certificate(&prepare_qc, &history.validators);
         let request = sign_body_request(prepare_qc.clone());
         let request_hash = HashOf::new(&request);
-        let mut server = V2BlockSyncServer::new(context.chain_id.clone(), 1).expect("body server");
+        let mut server = V2BlockSyncServer::new(context.network_id.clone(), 1).expect("body server");
         let response = server
             .serve_historical_body(
                 history.kura.as_ref(),
@@ -1688,7 +1694,7 @@ pub(super) mod tests {
         mismatched_qc.aggregate_signature =
             aggregate_certificate(&mismatched_qc, &history.validators);
         let mut mismatch_server =
-            V2BlockSyncServer::new(context.chain_id.clone(), 1).expect("mismatch server");
+            V2BlockSyncServer::new(context.network_id.clone(), 1).expect("mismatch server");
         assert!(matches!(
             mismatch_server.serve_historical_body(
                 history.kura.as_ref(),
@@ -1703,7 +1709,7 @@ pub(super) mod tests {
         let mut invalid_qc = prepare_qc;
         invalid_qc.aggregate_signature = vec![0xEE; 96];
         let mut invalid_server =
-            V2BlockSyncServer::new(context.chain_id.clone(), 1).expect("invalid-proof server");
+            V2BlockSyncServer::new(context.network_id.clone(), 1).expect("invalid-proof server");
         assert!(matches!(
             invalid_server.serve_historical_body(
                 history.kura.as_ref(),
@@ -1795,7 +1801,7 @@ pub(super) mod tests {
 
         let request = fixture.body_request(certificate.clone());
         let request_hash = HashOf::new(&request);
-        let mut server = V2BlockSyncServer::new(context.chain_id.clone(), 2).expect("sync server");
+        let mut server = V2BlockSyncServer::new(context.network_id.clone(), 2).expect("sync server");
         let response = server
             .serve_historical_body(
                 kura.as_ref(),

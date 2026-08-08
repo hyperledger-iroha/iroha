@@ -9,7 +9,7 @@ Features:
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
-- Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
+- One-shot pipeline submission helpers (POST `/v1/pipeline/transactions` plus hash-bound status polling)
 - Ed25519 signing with CryptoKit plus native-bridge secp256k1, ML-DSA, GOST R 34.10-2012, BLS normal/small, and SM2 support
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
@@ -238,11 +238,14 @@ let onboarding = try await torii.applyAccountOnboarding(
 )
 
 // Operator alias setup is plan-only on Torii. The wallet verifies the plan
-// hash and byte-identical instruction frames, signs one ordinary transaction,
-// and submits it through the existing pipeline endpoint.
+// hash, its genesis-derived network identity, and byte-identical instruction
+// frames, signs one ordinary transaction, and submits it through the existing
+// pipeline endpoint.
 let setupPlan = try await torii.planAliasSetup(setupRequest, canonicalAuth: canonicalAuth)
+let networkId = try NetworkId(literal: configuredNetworkIdLiteral)
 try await sdk.submitAliasSetupPlan(
     setupRequest,
+    networkId: networkId,
     plan: setupPlan,
     bodyEncoder: encodeCanonicalAliasPlanBody,
     feePayment: feePayment,
@@ -265,7 +268,7 @@ torii.listAttachments { result in
 
 // Build and submit a signed transfer.
 let transfer = TransferRequest(
-    chainId: "00000000-0000-0000-0000-000000000000",
+    networkId: networkId,
     authority: accountId,
     assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     quantity: "1.23",
@@ -287,7 +290,7 @@ let invocation = try TransactionContractInvocation(
     arguments: argumentRecord
 )
 let mixedEnvelope = try sdk.buildSignedExecutableBatch(
-    chainId: "00000000-0000-0000-0000-000000000000",
+    networkId: networkId,
     authority: accountId,
     entries: [
         .instruction(registerFrame),
@@ -363,9 +366,17 @@ Credential-bearing headers are rejected over plain HTTP or host-mismatched
 requests by the shared transport-security check.
 
 `TransferRequest`, `MintRequest`, and `BurnRequest` expect
-canonical unprefixed Base58 asset-definition IDs on the Swift surface.
+an exact genesis-derived `NetworkId` plus canonical unprefixed Base58
+asset-definition IDs on the Swift surface. Human chain labels are display and
+configuration values only and are never converted into a signing domain.
 
-`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
+`IrohaSDK` validates the exact network identity and canonical account/asset
+identifiers before signing and fails fast on malformed inputs. Override
+`creationTimeProvider` when you need deterministic timestamps for fixture
+generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK
+helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair`
+convenience APIs are Ed25519-only while native-backed algorithms use
+`NoritoBridge`.
 
 ### Offline peer transport V1
 
@@ -672,7 +683,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 ```
 
 Preparation fails closed unless ABI-22 native inspection proves the versioned
-scaffold has the exact authority, chain, definition, source scope, amount,
+scaffold has the exact authority, network identity, protocol receipt chain, definition, source scope, amount,
 destination, memo, typed fee payer, creation time, TTL, and no extra metadata.
 The prepare route obtains the canonical fee quote and replaces only the charge
 maxima before returning the scaffold. To select sponsorship, pass
@@ -689,6 +700,9 @@ payload without changing any other field. `quoteFees` and
 `getFeeSponsorProgram` expose the underlying account-signed
 `/v1/fees/quote` and exact program lookup routes. Transaction metadata named
 `fee_sponsor`, `gas_asset_id`, or `gas_limit` is retired and rejected.
+The unsigned payload must carry the closed transaction domain as
+`"domain": {"kind":"network","value":"hash:<64 uppercase hex>#<CRC16>"}`;
+the retired `chain`, `chainId`, and `chain_id` keys and the genesis marker are rejected.
 
 ### Kotodama contract manifests
 
@@ -902,7 +916,7 @@ let transferRwa = try sdk.buildTransferRwa(
 
 let metadata = try NoritoJSON(["serial": "vault-01"])
 let setMetadata = SetMetadataRequest(
-    chainId: "00000000-0000-0000-0000-000000000000",
+    networkId: networkId,
     authority: "<source_i105>",
     target: .rwa("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"),
     key: "serial",
@@ -963,7 +977,7 @@ Use the new `NoritoJSON` helper to encode values deterministically before signin
 
 ```swift
 let metadata = try NoritoJSON(["region": "eu-west", "tier": 2])
-let setMetadata = try SetMetadataRequest(chainId: chainId,
+let setMetadata = try SetMetadataRequest(networkId: networkId,
                                          authority: accountId,
                                          target: .account(accountId),
                                          key: "profile",
@@ -1033,16 +1047,18 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-`PipelineTransactionState` covers Torii status strings (`.queued`, `.approved`,
-`.committed`, `.applied`, `.rejected`, `.expired`) and maps unrecognized values to
-`.other("NAME")`.
+The public status response is deliberately metadata-only: canonical transaction hash,
+closed status kind, optional committed height, read scope, and resolution source. The
+decoder rejects unknown status kinds and retired rejection, diagnostic, trigger, or batch
+fields. Detailed committed-transaction data requires an involved account or operator to
+submit a canonical signed `FindTransactions` query; Swift does not expose that method until
+its generated signed-query surface is available.
 
 Completion-based variants return a `Task<Void, Never>` so callers can cancel outstanding
 polls. The success state is intentionally not configurable: only exact `Applied` proves
 execution. Failures bubble up as `PipelineStatusError.failure` (rejected/expired) or
-`PipelineStatusError.timeout` when no terminal status arrives in time. When Torii includes
-`rejection_reason`, it is exposed via `PipelineStatusError.rejectionReason` and the localized
-error message.
+`PipelineStatusError.timeout` when no terminal status arrives in time. Failure errors expose
+the status kind but never public rejection or execution details.
 
 Need to monitor a transaction initiated elsewhere? Use the dedicated helper:
 
@@ -1057,23 +1073,25 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-### Offline transaction queue
+### Caller-managed transaction archive
 
-Set `sdk.pendingTransactionQueue` to automatically persist signed envelopes when submissions
-exhaust their retry budget (for example, while offline). The SDK drains the queue before
-each new submission and replays stored envelopes in FIFO order:
+`FilePendingTransactionQueue` can persist signed envelopes for explicit application recovery,
+but `IrohaSDK` never drains or submits that archive. A signed transaction submission is one
+HTTP attempt: redirects, transport failures, and 429/5xx responses are surfaced immediately.
+After an ambiguous outcome, query pipeline status by the envelope hash before deciding whether
+to construct a new transaction or explicitly resubmit an archived envelope:
 
 ```swift
-let queueURL = FileManager.default
+let archiveURL = FileManager.default
     .urls(for: .documentDirectory, in: .userDomainMask)[0]
     .appendingPathComponent("pending.queue")
-sdk.pendingTransactionQueue = try FilePendingTransactionQueue(fileURL: queueURL)
+let archive = try FilePendingTransactionQueue(fileURL: archiveURL)
+try archive.enqueue(envelope)
 ```
 
 `FilePendingTransactionQueue` stores base64-encoded `SignedTransactionEnvelope` blobs, so
-operators can archive or inspect them later. When Torii rejects a replayed transaction the
-SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries untouched so
-apps can decide how to remediate.
+operators can archive or inspect them later. Archiving does not authorize automatic replay;
+the application owns reconciliation and any later explicit submission.
 
 ### Kagemusha Torii API
 
@@ -1149,8 +1167,23 @@ archive. Do not reconstruct or mutate proof material outside the typed codecs.
 `compiledProfileCatalogV1()` returns this binary's canonical typed
 `PrivacyCompiledProfileCatalogV1` Norito archive, while `protocolsV1` exposes
 the closed `PrivacyProtocolIdV1` enum in exact wire order. The local catalog
-contains no governance or readiness state; fetch a fresh committed
-`PrivacyCapabilitySnapshotV1` from live Torii before proof submission.
+contains no governance or readiness state. Call
+`ToriiClient.getPrivacyExact12CapabilityManifestV1(canonicalAuth:)` over HTTPS
+to fetch the exact canonical committed manifest; redirects, JSON, compressed
+representations, missing canonical request authentication, and a missing or
+stale native bridge fail closed. `PrivacyExact12CapabilityAdmissionV1` issues
+an opaque per-protocol token only when the committed row is active, ready, and
+byte-identical to the ABI22 native-validated compiled catalog. The generic
+transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
+factory revalidates the native catalog, manifest, consensus action ceiling, and
+complete envelope profile tuple both at construction and final encoding.
+
+ABI22 intentionally remains exactly the five approved privacy C exports. It
+has no manifest validator export: Swift performs the strict bounded canonical
+and semantic manifest decode, anchored by the native catalog getter and native
+catalog validator on every authority-bearing path. A Rust-native semantic
+manifest-validation claim therefore requires separate evidence and is not
+implied by this Swift lane.
 `exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
@@ -1209,9 +1242,6 @@ duplicate JSON keys, noncanonical integer
 fields, non-lowercase fixed32 hex, depth/count drift, root drift,
 direction-bit drift, or non-verifying paths before wallet code receives proof
 material.
-
-Submission retries can be tuned with `PipelineSubmitOptions` (default: 3 retries, 0.5s
-backoff, retrying 429/5xx responses and transport errors). For example:
 
 ### Confidential key derivation
 
@@ -1334,7 +1364,7 @@ Submit the registration via the new Norito-backed transaction builders:
 
 ```swift
 let request = MultisigRegisterRequest(
-    chainId: "sora-mainnet",
+    networkId: try NetworkId(literal: configuredNetworkIdLiteral),
     authority: "<authority_account_i105>",
     accountId: "<multisig_account_i105>",
     spec: specPayload,
@@ -1440,12 +1470,18 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
+`PipelineSubmitOptions` controls only the optional idempotency key attached to the single
+submission attempt. The default uses the transaction hash:
+
 ```swift
-sdk.pipelineSubmitOptions = PipelineSubmitOptions(maxRetries: 5,
-                                                 initialBackoffSeconds: 0.25,
-                                                 backoffMultiplier: 1.5)
+sdk.pipelineSubmitOptions = PipelineSubmitOptions(
+    idempotencyKeyFactory: { envelope in envelope.hashHex }
+)
 ```
-Pipeline submissions always use `/v1/pipeline/transactions` and `/v1/pipeline/transactions/status`.
+Pipeline submissions always use `/v1/pipeline/transactions` and
+`/v1/pipeline/transactions/status`. The owned Torii transport rejects redirects and does not
+retry signed bodies. A custom `ToriiTransactionSubmitting` implementation must provide the
+same one-shot contract.
 
 ### Verifying key registry
 
@@ -1466,14 +1502,16 @@ if #available(iOS 15, macOS 12, *) {
 Direct register/update helpers send only the public authority and verifier
 metadata. Torii never receives a private key and never submits the transaction;
 it returns a validated `ToriiVerifyingKeyTransactionDraft` for local signing.
-Configure one immutable chain trust context on clients that prepare signing
+Configure one immutable network trust context on clients that prepare signing
 payloads; read-only clients may omit it:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
     let torii = ToriiClient(
         baseURL: toriiURL,
-        localSigningContext: try ToriiLocalSigningContext(chainId: "production-chain")
+        localSigningContext: ToriiLocalSigningContext(
+            networkId: try NetworkId(literal: configuredNetworkIdLiteral)
+        )
     )
     let draft = try await torii.registerVerifyingKey(
         ToriiVerifyingKeyRegisterRequest(

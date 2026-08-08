@@ -52,11 +52,12 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{AccountId, QueryBuilderExt},
     privacy::{
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyActiveLifecycleV1, PrivacyCapabilityRowV1,
-        PrivacyCapabilitySnapshotV1, PrivacyChallengeV1, PrivacyCompiledProfileResultV1,
-        PrivacyCompiledProfileSnapshotV1, PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1,
-        PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyActiveLifecycleV1, PrivacyChallengeV1,
+        PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+        PrivacyCredentialDocumentTypeV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyExact12CapabilityRowV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
+        PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
         PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         PrivacyRootV1, PrivacySessionTranscriptDigestV1, PrivacyStatementDigestV1,
         PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordDigestV1,
@@ -250,9 +251,9 @@ fn is_exact_replay_error(error: &eyre::Report) -> bool {
 }
 
 fn protocol_row(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
-) -> Result<PrivacyCapabilityRowV1> {
+) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
         .iter()
@@ -262,7 +263,7 @@ fn protocol_row(
 }
 
 fn assert_exact_protocol_row(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
@@ -369,7 +370,7 @@ async fn wait_for_all_peer_activations(
         Option<PrivacyProtocolActivationRecordV1>,
     )],
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
     let mut last_observed = Vec::new();
     loop {
@@ -716,6 +717,7 @@ fn zk_ams_transaction_context(
     nonce: u32,
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
+        network_id: client.network_id,
         chain_id: client.chain.clone(),
         authority: client.account.clone(),
         creation_time,
@@ -732,7 +734,7 @@ fn build_transaction_from_envelope(
     client: &Client,
 ) -> Result<SignedTransaction> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -1291,6 +1293,7 @@ fn build_vega_action(
         .map_err(|_| eyre!("Vega trusted timestamp exceeded u64"))?;
     let fixture = vega_fixture(trusted_timestamp_ms, challenge_byte)?;
     let context = VegaPrivacyActionTransactionContextV1 {
+        network_id: client.network_id,
         chain_id: client.chain.clone(),
         authority: client.account.clone(),
         creation_time,
@@ -2117,12 +2120,11 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn canonical_vega_action_survives_four_validator_activation_replay_and_restart()
--> Result<()> {
+async fn canonical_vega_action_survives_four_validator_activation_replay_and_restart() -> Result<()>
+{
     init_instruction_registry();
-    let context = stringify!(
-        canonical_vega_action_survives_four_validator_activation_replay_and_restart
-    );
+    let context =
+        stringify!(canonical_vega_action_survives_four_validator_activation_replay_and_restart);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()

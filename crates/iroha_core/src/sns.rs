@@ -4312,7 +4312,6 @@ mod tests {
 
     #[test]
     fn seed_genesis_alias_bootstrap_covers_domains_and_account_labels() {
-        let chain_id = iroha_data_model::ChainId::from("sns-genesis-alias-bootstrap");
         let genesis_key = checked_keypair();
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let domain_id: DomainId = DomainId::try_new("cbuae", "universal").expect("domain");
@@ -4382,8 +4381,7 @@ mod tests {
                 valid_until_ms: u64::MAX,
             },
         );
-        let tx = TransactionBuilder::new(
-            chain_id,
+        let tx = TransactionBuilder::new_genesis(
             genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

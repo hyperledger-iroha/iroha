@@ -4389,6 +4389,10 @@
             ],
             "type": "object"
           },
+          "payout_account": {
+            "description": "Immutable registered bare I105 account receiving vault withdrawals.",
+            "type": "string"
+          },
           "scheduled_activation": {
             "additionalProperties": false,
             "properties": {
@@ -4417,6 +4421,7 @@
         },
         "required": [
           "id",
+          "payout_account",
           "lifecycle"
         ],
         "type": "object"
@@ -16316,7 +16321,7 @@
           "asset_definition_id": {
             "const": "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
           },
-          "custody_account_id": {
+          "custody_owner": {
             "$ref": "#/components/schemas/SccpTairaI105Account"
           },
           "payload_amount_scale": {
@@ -16328,7 +16333,7 @@
         },
         "required": [
           "asset_definition_id",
-          "custody_account_id",
+          "custody_owner",
           "payload_amount_scale"
         ],
         "type": "object"

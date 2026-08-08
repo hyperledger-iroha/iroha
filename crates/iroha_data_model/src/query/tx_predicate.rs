@@ -2031,6 +2031,14 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed(zero))
     }
 
+    fn test_network_id() -> crate::NetworkId {
+        crate::NetworkId::from_genesis_hash(
+            HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"transaction-predicate-test-genesis",
+            )),
+        )
+    }
+
     fn frame_predicate_nodes(nodes: &[wire::Node]) -> Vec<u8> {
         let (payload, flags) = norito::codec::encode_with_header_flags(&nodes.to_vec());
         norito::core::frame_bare_with_header_flags::<CommittedTxPredicate>(&payload, flags)
@@ -2045,7 +2053,7 @@ mod tests {
                 .expect("fixture seed derives Ed25519 keypair")
                 .into_parts();
         let mut builder = TransactionBuilder::new(
-            "test-chain".parse().expect("chain"),
+            test_network_id(),
             crate::account::AccountId::new(public_key),
             FeePaymentIntent::authority(Vec::new(), None),
         );

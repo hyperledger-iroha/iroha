@@ -12,13 +12,16 @@ use std::{
 
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    block::consensus_v2::{
-        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, ExecutionCommitment,
-        GlobalPhase, HeightContextId, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-        ValidatorPower,
+    block::{
+        BlockHeader,
+        consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout,
+            ExecutionCommitment, GlobalPhase, HeightContextId, PROTOCOL_VERSION, PayloadEncoding,
+            QuorumCertificate, ValidatorPower,
+        },
     },
     offline::{
         KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
@@ -280,6 +283,7 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
 
 fn finality_evidence(
     chain_id: &ChainId,
+    network_id: NetworkId,
     asset: &AssetDefinitionId,
     amount: KagemushaScaledAmountV2,
     binding: &KagemushaRecursiveSpendArtifactBindingV4,
@@ -340,7 +344,7 @@ fn finality_evidence(
         commit_qc: KagemushaTopUpFinalityCompactQcV2 {
             height_context: KagemushaTopUpFinalityHeightContextV2 {
                 context_id,
-                chain_id: chain_id.clone(),
+                network_id,
                 protocol_version: PROTOCOL_VERSION,
                 height: anchor.finalized_height,
                 epoch: 0,
@@ -396,6 +400,9 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
         .validate_public_binding()
         .expect("fixture recipient request must be canonical");
     let chain_id = request.chain_id().clone();
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"swift-kagemusha-abi21-fixture-network"),
+    ));
     let asset = request.asset().clone();
     let binding = KagemushaRecursiveSpendArtifactBindingV4 {
         version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
@@ -407,6 +414,7 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
     let roster = KagemushaTopUpFinalityRosterArtifactV2 {
         version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
         chain_id: chain_id.clone(),
+        network_id,
         artifact_generation: binding.generation.clone(),
         windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
             activates_at_height: 1,
@@ -419,7 +427,14 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
             validator_set_pops: vec![[0x62; 96]],
         }],
     };
-    let evidence = finality_evidence(&chain_id, &asset, request.amount(), &binding, 0x31);
+    let evidence = finality_evidence(
+        &chain_id,
+        network_id,
+        &asset,
+        request.amount(),
+        &binding,
+        0x31,
+    );
     let anchor_ref = evidence
         .topup_anchor
         .compact_ref()

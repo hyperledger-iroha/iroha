@@ -93,8 +93,8 @@ flowchart LR
   always requires `manifest_payload` so malformed full manifests can be rejected
   early, regardless of whether approval is automatic or governed. This host-side check is not the authority
   boundary: consensus keeps the record pending until `ApprovePinManifest`
-  verifies the supplied council envelope under an account carrying
-  `CanApproveSorafsPin`.
+  verifies the supplied threshold council envelope. Any authenticated account
+  may relay that envelope; relaying it grants no registry authority.
 - A pending manifest reserves its digest and alias claim against conflicts but
   does not publish the alias or create a replication order. Alias claims can
   only be supplied by an authority carrying `CanBindSorafsAlias`. The approval

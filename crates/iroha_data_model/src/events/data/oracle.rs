@@ -27,6 +27,8 @@ use crate::{
 pub struct FeedEventRecord {
     /// Feed event describing the aggregation outcome.
     pub event: FeedEvent,
+    /// Consensus block time at which the event became durable.
+    pub recorded_at_ms: u64,
     /// Optional hashes of external evidence (e.g., `SoraFS` bundles).
     #[cfg_attr(feature = "json", norito(default))]
     pub evidence_hashes: Vec<Hash>,

@@ -30,7 +30,7 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
-            new FakeNativeBoundary { Abi = 22 }));
+            new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { SymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
@@ -50,7 +50,7 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
-            new FakeNativeBoundary { Abi = 22 }));
+            new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary { AppealFinanceSymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
@@ -68,7 +68,7 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
-            new FakeNativeBoundary { Abi = 22 }));
+            new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { OrderbookPdpSymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
@@ -86,7 +86,7 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
-            new FakeNativeBoundary { Abi = 22 }));
+            new FakeNativeBoundary { Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion + 1 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { FixtureBundleSymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(

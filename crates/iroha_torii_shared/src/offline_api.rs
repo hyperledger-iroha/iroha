@@ -203,8 +203,16 @@ impl OfflineRecipientRegistrationLineage {
                 "finality chain checkpoint does not match the caller's durable context".to_owned(),
             );
         }
+        // The caller-pinned context id authenticates the complete HeightContext,
+        // including its exact genesis-derived network identity. Read the identity
+        // only after that anchor comparison; the signed request's ChainId remains
+        // business metadata and is never used as a finality security domain.
+        let trusted_network_id = self.finality_chain[trusted_index]
+            .finality_artifact
+            .height_context
+            .network_id;
         let mut verifier =
-            BridgeFinalityVerifier::with_context(request.chain_id().clone(), trusted_context);
+            BridgeFinalityVerifier::with_context(trusted_network_id, trusted_context);
         for proof in &self.finality_chain[trusted_index..] {
             verifier
                 .verify(proof)

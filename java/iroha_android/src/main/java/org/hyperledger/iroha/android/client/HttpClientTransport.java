@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.android.client;
 
-import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.math.BigInteger;
 import java.net.URI;
@@ -19,13 +18,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.alias.AccountAliasName;
 import org.hyperledger.iroha.android.alias.AliasSetupPlanRequestV1;
 import org.hyperledger.iroha.android.alias.AliasAutoRenewPlanRequestV1;
@@ -44,10 +43,7 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
-import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
-import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
-import org.hyperledger.iroha.android.crypto.export.KeyExportException;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
 import org.hyperledger.iroha.android.nexus.UaidJsonParser;
@@ -59,17 +55,21 @@ import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
+import org.hyperledger.iroha.android.privacy.PrivacyNativeBridge;
+import org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.NetworkContext;
 import org.hyperledger.iroha.android.telemetry.NetworkContextProvider;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
-import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotJsonV1;
-import org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityTupleAdmissionV1;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
@@ -87,7 +87,6 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 public final class HttpClientTransport implements IrohaClient {
   private static final String ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token";
 
-  private static final String RETRY_SIGNAL_ID = "android.torii.http.retry";
   private static final String PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status";
   private static final String REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure";
   private static final long U32_MAX = 4_294_967_295L;
@@ -111,12 +110,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<ClientResponse> submitTransaction(final SignedTransaction transaction) {
     Objects.requireNonNull(transaction, "transaction");
     final String hashHex = SignedTransactionHasher.hashHex(transaction);
-    return flushPendingQueue()
-        .exceptionally(ex -> null)
-        .thenCompose(
-            ignored ->
-                submitWithRetryInternal(
-                    transaction, hashHex, 1, false));
+    return submitOnce(transaction, hashHex);
   }
 
   @Override
@@ -462,13 +456,26 @@ public final class HttpClientTransport implements IrohaClient {
     return getLedgerExecutedBlockWire(BigInteger.valueOf(height));
   }
 
-  /** Fetch and validate the authoritative committed privacy capability snapshot. */
-  public CompletableFuture<PrivacyCapabilitySnapshotV1> getPrivacyCapabilities() {
-    return fetchExactJson(
-        buildExactJsonGetRequest(
-            "/v1/privacy/capabilities", PrivacyCapabilitySnapshotJsonV1.MAX_RESPONSE_BYTES),
-        PrivacyCapabilitySnapshotJsonV1::parse,
-        "privacy capabilities");
+  /** Fetch the exact canonical committed Exact12 manifest and require native validation. */
+  public CompletableFuture<PrivacyExact12CapabilityManifestV1> getPrivacyCapabilities() {
+    return fetchExactNoritoBytes(
+            buildExactNoritoGetRequest(
+                "/v1/privacy/capabilities",
+                (long) PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES),
+            "privacy capabilities")
+        .thenApply(PrivacyNativeBridge::decodeExact12CapabilityManifestV1);
+  }
+
+  /** Require committed/native tuple agreement before retained privacy construction. */
+  public CompletableFuture<PrivacyExact12CapabilityTupleAdmissionV1>
+      requirePrivacyExact12CapabilityAdmission(final PrivacyProtocolIdV1 protocolId) {
+    return getPrivacyCapabilities()
+        .thenApply(
+            manifest ->
+                PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
+                    manifest,
+                    org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.fromCanonicalLabel(
+                        protocolId.canonicalLabel())));
   }
 
   /** Fetch and strictly decode exact-lane SCCP capability discovery. */
@@ -794,7 +801,7 @@ public final class HttpClientTransport implements IrohaClient {
    * Prepares an unsigned verifier registration transaction for local signing.
    *
    * <p>Requires {@link ClientConfig#localSigningContext()} and rejects any draft not bound to that
-   * chain, the requested authority, and the exact requested registry record.
+   * exact network, the requested authority, and the exact requested registry record.
    */
   public CompletableFuture<VerifyingKeyTransactionDraft> registerVerifyingKey(
       final VerifyingKeyRegisterRequest requestBody) {
@@ -805,7 +812,7 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(
         request,
         bytes -> VerifyingKeyTransactionDraft.parseRegister(
-            bytes, signingContext.chainId(), payload),
+            bytes, signingContext.networkId(), payload),
         "verifying key register draft",
         200);
   }
@@ -814,7 +821,7 @@ public final class HttpClientTransport implements IrohaClient {
    * Prepares an unsigned verifier update transaction for local signing.
    *
    * <p>Requires {@link ClientConfig#localSigningContext()} and rejects any draft not bound to that
-   * chain, the requested authority, and the exact requested registry record.
+   * exact network, the requested authority, and the exact requested registry record.
    */
   public CompletableFuture<VerifyingKeyTransactionDraft> updateVerifyingKey(
       final VerifyingKeyUpdateRequest requestBody) {
@@ -825,7 +832,7 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(
         request,
         bytes -> VerifyingKeyTransactionDraft.parseUpdate(
-            bytes, signingContext.chainId(), payload),
+            bytes, signingContext.networkId(), payload),
         "verifying key update draft",
         200);
   }
@@ -836,6 +843,7 @@ public final class HttpClientTransport implements IrohaClient {
       final ToriiCanonicalRequestAuth canonicalAuth) {
     Objects.requireNonNull(unsignedPayload, "unsignedPayload");
     Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    requireNetworkTransactionDomain(unsignedPayload);
     final Object authority = unsignedPayload.get("authority");
     if (!(authority instanceof String) || !authority.equals(canonicalAuth.accountId())) {
       throw new IllegalArgumentException(
@@ -859,6 +867,29 @@ public final class HttpClientTransport implements IrohaClient {
               }
               return quote;
             });
+  }
+
+  private static NetworkId requireNetworkTransactionDomain(
+      final Map<String, Object> unsignedPayload) {
+    for (final String field : Arrays.asList("chain", "chainId", "chain_id")) {
+      if (unsignedPayload.containsKey(field)) {
+        throw new IllegalArgumentException(
+            "unsignedPayload contains retired transaction identity field `" + field + "`");
+      }
+    }
+    final Object rawDomain = unsignedPayload.get("domain");
+    if (!(rawDomain instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException(
+          "unsignedPayload.domain must be TransactionDomain::Network");
+    }
+    final Map<?, ?> domain = (Map<?, ?>) rawDomain;
+    if (!domain.keySet().equals(Set.of("kind", "value"))
+        || !"network".equals(domain.get("kind"))
+        || !(domain.get("value") instanceof String)) {
+      throw new IllegalArgumentException(
+          "unsignedPayload.domain must contain exactly kind=network and a NetworkId value");
+    }
+    return NetworkId.parse((String) domain.get("value"));
   }
 
   /** Fetches one exact on-chain fee sponsor program under canonical request authentication. */
@@ -1215,7 +1246,7 @@ public final class HttpClientTransport implements IrohaClient {
   /**
    * Returns a copy of {@code config} with a directory-backed pending queue rooted at {@code
    * queueDir}. Each queued transaction is persisted as its own envelope file to satisfy OEM or
-   * managed-device storage policies.
+   * managed-device storage policies. Transaction submission never drains or fills this queue.
    */
   public static ClientConfig withDirectoryPendingQueue(
       final ClientConfig config, final Path queueDir) {
@@ -1223,7 +1254,7 @@ public final class HttpClientTransport implements IrohaClient {
     return config.toBuilder().enableDirectoryPendingQueue(queueDir).build();
   }
 
-  /** Returns a copy of {@link ClientConfig} with a file-backed pending queue enabled. */
+  /** Returns a copy with explicit local staging; transaction submission never drains or fills it. */
   public static ClientConfig withFilePendingQueue(
       final ClientConfig config, final Path queueFile) {
     Objects.requireNonNull(config, "config");
@@ -1238,53 +1269,8 @@ public final class HttpClientTransport implements IrohaClient {
     return config.toSubscriptionToriiClient(executor);
   }
 
-  private CompletableFuture<Void> flushPendingQueue() {
-    final PendingTransactionQueue queue = config.pendingQueue();
-    if (queue == null) {
-      return CompletableFuture.completedFuture(null);
-    }
-    final List<SignedTransaction> pending;
-    try {
-      pending = queue.drain();
-    } catch (final IOException ex) {
-      final CompletableFuture<Void> failed = new CompletableFuture<>();
-      failed.completeExceptionally(new RuntimeException("Failed to drain pending queue", ex));
-      return failed;
-    }
-    recordPendingQueueDepth(queue);
-    if (pending.isEmpty()) {
-      return CompletableFuture.completedFuture(null);
-    }
-    CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
-    for (int i = 0; i < pending.size(); i++) {
-      final int index = i;
-      final SignedTransaction queuedTx = pending.get(i);
-      chain = chain.thenCompose(
-          ignored -> {
-            final CompletableFuture<ClientResponse> submission =
-                submitWithRetryInternal(
-                    queuedTx, SignedTransactionHasher.hashHex(queuedTx), 1, true);
-            CompletableFuture<Void> stage = submission.thenApply(response -> null);
-            stage = stage.exceptionally(ex -> {
-              final Throwable cause = unwrapCompletion(ex);
-              final int requeueFrom =
-                  cause instanceof ToriiTransactionCompatibilityException ? index : index + 1;
-              requeueRemaining(pending, requeueFrom);
-              throw ex instanceof CompletionException
-                  ? (CompletionException) ex
-                  : new CompletionException(ex);
-            });
-            return stage;
-          });
-    }
-    return chain;
-  }
-
-  private CompletableFuture<ClientResponse> submitWithRetryInternal(
-      final SignedTransaction transaction,
-      final String hashHex,
-      final int attempt,
-      final boolean queuedReplay) {
+  private CompletableFuture<ClientResponse> submitOnce(
+      final SignedTransaction transaction, final String hashHex) {
     final TransportRequest request =
         ToriiRequestBuilder.buildSubmitRequest(
             config.baseUri(),
@@ -1294,18 +1280,6 @@ public final class HttpClientTransport implements IrohaClient {
             config.wireFormatPreference().acceptHeader());
 
     return ensureTransactionSubmissionCompatibility()
-        .handle(
-            (ignored, throwable) -> {
-              if (throwable != null) {
-                final Throwable cause = unwrapCompletion(throwable);
-                if (!queuedReplay
-                    && cause instanceof ToriiTransactionCompatibilityProbeException) {
-                  enqueuePending(transaction);
-                }
-                throw new CompletionException(cause);
-              }
-              return null;
-            })
         .thenCompose(
             ignored -> {
               notifyRequest(request);
@@ -1315,15 +1289,13 @@ public final class HttpClientTransport implements IrohaClient {
                       (response, throwable) -> {
                         if (throwable != null) {
                           final Throwable cause = unwrapCompletion(throwable);
-                          notifyFailure(request, cause);
-                          return scheduleRetry(
-                              transaction,
-                              hashHex,
-                              attempt,
-                              queuedReplay,
-                              request,
-                              null,
-                              cause);
+                          final AmbiguousTransactionSubmissionException error =
+                              new AmbiguousTransactionSubmissionException(hashHex, null, cause);
+                          notifyFailure(request, error);
+                          final CompletableFuture<ClientResponse> failed =
+                              new CompletableFuture<>();
+                          failed.completeExceptionally(error);
+                          return failed;
                         }
                         final ClientResponse clientResponse =
                             new ClientResponse(
@@ -1332,36 +1304,15 @@ public final class HttpClientTransport implements IrohaClient {
                                 response.message(),
                                 extractTransactionHash(response).orElse(hashHex),
                                 extractRejectCode(response));
-                        if (clientResponse.statusCode() < 200
-                            || clientResponse.statusCode() >= 300) {
-                          if (config
-                              .retryPolicy()
-                              .shouldRetryResponse(attempt, clientResponse)) {
-                            return scheduleRetry(
-                                transaction,
-                                hashHex,
-                                attempt,
-                                queuedReplay,
-                                request,
-                                clientResponse,
-                                null);
-                          }
-                          if (config
-                              .retryPolicy()
-                              .isRetryableStatus(clientResponse.statusCode())) {
-                            final RuntimeException error =
-                                new RuntimeException(
-                                    "Torii request failed with status "
-                                        + clientResponse.statusCode());
-                            notifyFailure(request, error);
-                            enqueuePending(transaction);
-                            final CompletableFuture<ClientResponse> failed =
-                                new CompletableFuture<>();
-                            failed.completeExceptionally(error);
-                            return failed;
-                          }
-                          notifyResponse(request, clientResponse);
-                          return CompletableFuture.completedFuture(clientResponse);
+                        if (submissionOutcomeIsAmbiguous(clientResponse.statusCode())) {
+                          final AmbiguousTransactionSubmissionException error =
+                              new AmbiguousTransactionSubmissionException(
+                                  hashHex, Integer.valueOf(clientResponse.statusCode()), null);
+                          notifyFailure(request, error);
+                          final CompletableFuture<ClientResponse> failed =
+                              new CompletableFuture<>();
+                          failed.completeExceptionally(error);
+                          return failed;
                         }
                         notifyResponse(request, clientResponse);
                         return CompletableFuture.completedFuture(clientResponse);
@@ -1370,127 +1321,12 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
-  private CompletableFuture<ClientResponse> scheduleRetry(
-      final SignedTransaction transaction,
-      final String hashHex,
-      final int attempt,
-      final boolean queuedReplay,
-      final TransportRequest request,
-      final ClientResponse lastResponse,
-      final Throwable lastError) {
-    final boolean isNetworkFailure = lastError != null && lastResponse == null;
-    final boolean hasAnotherAttempt =
-        isNetworkFailure
-            ? config.retryPolicy().shouldRetryError(attempt)
-            : config.retryPolicy().allowsRetry(attempt);
-    if (!hasAnotherAttempt) {
-      enqueuePending(transaction);
-      if (lastResponse != null && lastError == null) {
-        notifyFailure(request, new RuntimeException("Retry attempts exhausted"));
-      }
-      final RuntimeException runtime =
-          lastError instanceof RuntimeException
-              ? (RuntimeException) lastError
-              : new RuntimeException(
-                  lastResponse != null
-                      ? "Retry attempts exhausted after status code " + lastResponse.statusCode()
-                      : "Retry attempts exhausted; transaction queued for later submission",
-                  lastError);
-      final CompletableFuture<ClientResponse> failed = new CompletableFuture<>();
-      failed.completeExceptionally(runtime);
-      return failed;
-    }
-
-    final Duration delay = config.retryPolicy().delayForAttempt(attempt);
-    final long delayMillis = Math.max(0L, Math.min(delay.toMillis(), Long.MAX_VALUE));
-    emitRetryTelemetry(request, attempt, delayMillis, lastResponse, lastError);
-    return CompletableFuture
-        .supplyAsync(
-            () -> null, CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS))
-        .thenCompose(
-            ignored ->
-                submitWithRetryInternal(
-                    transaction, hashHex, attempt + 1, queuedReplay));
-  }
-
-  private void enqueuePending(final SignedTransaction transaction) {
-    final PendingTransactionQueue queue = config.pendingQueue();
-    if (queue == null) {
-      return;
-    }
-    try {
-      final SignedTransaction enriched = maybeAttachExportBundle(transaction);
-      queue.enqueue(enriched);
-      recordPendingQueueDepth(queue);
-    } catch (final IOException ex) {
-      throw new RuntimeException("Failed to persist pending transaction", ex);
-    }
-  }
-
-  private SignedTransaction maybeAttachExportBundle(final SignedTransaction transaction) {
-    if (transaction.keyAlias().isEmpty() || transaction.exportedKeyBundle().isPresent()) {
-      return transaction;
-    }
-    final ClientConfig.ExportOptions exportOptions = config.exportOptions();
-    if (exportOptions == null) {
-      return transaction;
-    }
-    final char[] passphrase = exportOptions.passphraseForAlias(transaction.keyAlias().get());
-    if (passphrase.length == 0) {
-      return transaction;
-    }
-    try {
-      final KeyExportBundle bundle =
-          exportOptions.keyManager().exportDeterministicKey(transaction.keyAlias().get(), passphrase);
-      final byte[] encoded = bundle.encode();
-      return new SignedTransaction(
-          transaction.encodedPayload(),
-          transaction.signature(),
-          transaction.publicKey(),
-          transaction.schemaName(),
-          transaction.keyAlias().orElse(null),
-          encoded);
-    } catch (final KeyExportException | org.hyperledger.iroha.android.KeyManagementException ex) {
-      throw new RuntimeException("Failed to export key for pending transaction", ex);
-    } finally {
-      Arrays.fill(passphrase, '\0');
-    }
-  }
-
-  private void requeueRemaining(final List<SignedTransaction> pending, final int startIndex) {
-    final PendingTransactionQueue queue = config.pendingQueue();
-    if (queue == null) {
-      return;
-    }
-    for (int i = startIndex; i < pending.size(); i++) {
-      enqueuePending(pending.get(i));
-    }
-  }
-
-  private void recordPendingQueueDepth(final PendingTransactionQueue queue) {
-    if (queue == null) {
-      return;
-    }
-    if (!config.telemetryOptions().enabled()) {
-      return;
-    }
-    final Optional<TelemetrySink> sink = config.telemetrySink();
-    if (!sink.isPresent()) {
-      return;
-    }
-    final int depth;
-    try {
-      depth = queue.size();
-    } catch (final IOException ex) {
-      return;
-    }
-    final long depthValue = Integer.toUnsignedLong(depth);
-    sink.get()
-        .emitSignal(
-            "android.pending_queue.depth",
-            objectMapOf(
-                "queue", queue.telemetryQueueName(),
-                "depth", depthValue));
+  private static boolean submissionOutcomeIsAmbiguous(final int statusCode) {
+    return (statusCode >= 300 && statusCode <= 399)
+        || statusCode == 408
+        || statusCode == 425
+        || statusCode == 429
+        || statusCode >= 500;
   }
 
   private void emitDeviceProfileTelemetry() {
@@ -1534,28 +1370,6 @@ public final class HttpClientTransport implements IrohaClient {
     sink
         .get()
         .emitSignal("android.telemetry.network_context", context.get().toTelemetryFields());
-  }
-
-  private void emitRetryTelemetry(
-      final TransportRequest request,
-      final int attempt,
-      final long delayMillis,
-      final ClientResponse lastResponse,
-      final Throwable lastError) {
-    if (!config.telemetryOptions().enabled()) {
-      return;
-    }
-    final Optional<TelemetrySink> sink = config.telemetrySink();
-    if (!sink.isPresent()) {
-      return;
-    }
-    final Map<String, Object> fields = new LinkedHashMap<>();
-    maybePutAuthorityHash(fields, request, sink.get(), RETRY_SIGNAL_ID);
-    fields.put("route", resolveRoute(request));
-    fields.put("retry_count", attempt);
-    fields.put("error_code", buildRetryErrorCode(lastResponse, lastError));
-    fields.put("backoff_ms", delayMillis);
-    sink.get().emitSignal(RETRY_SIGNAL_ID, fields);
   }
 
   private void emitPipelineStatusTelemetry(
@@ -1603,17 +1417,6 @@ public final class HttpClientTransport implements IrohaClient {
     } else {
       emitRedactionFailure(sink, signalId, "hash_failed");
     }
-  }
-
-  private static String buildRetryErrorCode(
-      final ClientResponse lastResponse, final Throwable lastError) {
-    if (lastResponse != null) {
-      return Integer.toString(lastResponse.statusCode());
-    }
-    if (lastError != null) {
-      return lastError.getClass().getSimpleName();
-    }
-    return "unknown";
   }
 
   private static String resolveRoute(final TransportRequest request) {
@@ -1751,14 +1554,19 @@ public final class HttpClientTransport implements IrohaClient {
                 // Torii returns 202 while the transaction is still queued and
                 // 200 once an authoritative terminal status is available.
                 // Both responses carry the same validated status envelope.
-                if (statusCode != 200 && statusCode != 202 && statusCode != 404) {
+                if (statusCode != 200
+                    && statusCode != 202
+                    && statusCode != 204
+                    && statusCode != 404) {
                   future.completeExceptionally(
                       buildPipelineStatusHttpException(hashHex, clientResponse));
                   return;
                 }
 
                 final Map<String, Object> payload =
-                    statusCode == 404 ? null : parsePipelineStatusPayload(clientResponse.body());
+                    statusCode == 204 || statusCode == 404
+                        ? null
+                        : parsePipelineStatusPayload(clientResponse.body());
                 final int nextAttempts = attemptsSoFar + 1;
                 final String statusLiteral =
                     payload == null
@@ -1784,14 +1592,8 @@ public final class HttpClientTransport implements IrohaClient {
                   return;
                 }
                 if (isFailure) {
-                  final String rejectionReason =
-                      PipelineStatusExtractor.extractRejectionReason(payload).orElse(null);
                   future.completeExceptionally(
-                      new TransactionStatusException(
-                          hashHex,
-                          statusLiteral,
-                          rejectionReason,
-                          payload));
+                      new TransactionStatusException(hashHex, statusLiteral, payload));
                   return;
                 }
 
@@ -1879,7 +1681,7 @@ public final class HttpClientTransport implements IrohaClient {
     }
     final Object parsed = JsonParser.parse(json);
     if (parsed instanceof Map) {
-      return (Map<String, Object>) parsed;
+      return PipelineStatusExtractor.normalizePublicStatus((Map<String, Object>) parsed);
     }
     throw new IllegalStateException("Pipeline status response must be a JSON object");
   }
@@ -2398,11 +2200,16 @@ public final class HttpClientTransport implements IrohaClient {
                 if (body.length == 0) {
                   throw new IllegalStateException(errorContext + " response must not be empty");
                 }
-                if ((long) body.length > EXECUTED_BLOCK_WIRE_MAX_BYTES) {
+                final Long maximumResponseBytes = request.maximumResponseBytes();
+                if (maximumResponseBytes == null) {
+                  throw new IllegalStateException(
+                      errorContext + " request must declare a response-body limit");
+                }
+                if ((long) body.length > maximumResponseBytes.longValue()) {
                   throw new IllegalStateException(
                       errorContext
                           + " response exceeds "
-                          + EXECUTED_BLOCK_WIRE_MAX_BYTES
+                          + maximumResponseBytes
                           + " bytes");
                 }
                 requireExactOptionalContentLength(response.headers(), body.length, errorContext);

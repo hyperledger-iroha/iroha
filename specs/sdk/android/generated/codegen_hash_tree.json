@@ -1,15 +1,15 @@
 {
   "root": "specs/sdk/android/generated",
-  "tree_sha256": "60d5f0272d2d73534326af8c9851f521f27c039d8ab3674ce4e83ad08deaf7c7",
+  "tree_sha256": "f866de2d71f38825342f1124fdc72e2109c2eda7c16eceae4bacc82d56f797ec",
   "files": [
     {
       "path": "specs/sdk/android/generated/builders.md",
-      "sha256": "54b191daf456131d02a07ba1508f819553962a44f9fa2a6f967b1dc26c1885dc",
-      "size": 43376
+      "sha256": "af2932c53eaa0cae5a1de02fb9bc5242dd4122c402fb8605579a7afdcf1cf7ba",
+      "size": 44164
     },
     {
       "path": "specs/sdk/android/generated/codegen_manifest_metadata.json",
-      "sha256": "f48a838ead49f3c8f240697e4bb55e80c0e267f2e7713df6bbf46fe71391477a",
+      "sha256": "a6946b22cca01e873d54822e18b4c71415fff86cc82caaec62b3bdacdd1f1ab2",
       "size": 272
     },
     {
@@ -19,18 +19,18 @@
     },
     {
       "path": "specs/sdk/android/generated/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json",
-      "sha256": "807f144f981bf1452bad7aa92e2a27678a8c9d6edd0c74236f30320ee4a6276b",
-      "size": 1432
+      "sha256": "8b81d51f1ebc5bf2fe1ffc51044183d7641e5b4d9f2cbe3cf556437714ccd9d3",
+      "size": 1397
     },
     {
       "path": "specs/sdk/android/generated/instructions.md",
-      "sha256": "bc43257f51e3a8192eb4b6821949d4bb0628e19cf08e5a95212270adf8d60fd1",
-      "size": 56570
+      "sha256": "daaa57c8699420c3ba3681f31ad0986d119c35035a9b3e364781d5a2cad2f87e",
+      "size": 57796
     },
     {
       "path": "specs/sdk/android/generated/manifest_catalog.md",
-      "sha256": "a2cb27ba21d20e0b8b3a0f92dce4359b823b07d2e5c71d12ef20c70fb0854cb0",
-      "size": 57012
+      "sha256": "ab2601bae8b00374b74d62a2d4f80e0b50d0d027a7852a7336c2325441f1fb7c",
+      "size": 57980
     }
   ]
 }

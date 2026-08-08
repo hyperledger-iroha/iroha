@@ -56,17 +56,67 @@ fn run(registry: &dyn IrohaRuntimeProviderRegistryV1) -> irohad::ReportResult<()
 ```
 
 The registry receives an `IrohaRuntimeProviderBindingsV1` containing only the
-chain ID and an ordered set of public slot/handle/revision/policy-digest
-bindings. It does not receive the full node configuration, validator key,
-provider credentials, API tokens, or private evidence. Registry selection is a
-compile-time/launcher decision; the standard launcher has no environment or
-config selector that dynamically loads executable provider code.
+chain ID, an optional genesis-derived `NetworkId`, and an ordered set of public
+slot/handle/revision/policy-digest bindings. It does not receive the full node
+configuration, validator key, provider credentials, API tokens, or private
+evidence. Registry selection is a compile-time/launcher decision; the standard
+launcher has no environment or config selector that dynamically loads
+executable provider code.
 
 The stock `irohad` binary does not embed deployment providers. With the default
 empty binding catalog it starts without external adapters. With a non-empty
-catalog it uses the stock local-broker client and
-fail before subsystem startup if the broker or any exact requested role is
+catalog it uses the stock local-broker client and fails before subsystem
+startup if the broker or any exact requested role is
 missing, substituted, stale, or unsupported.
+
+An enabled Musubi provider-attestation journal projects its combined durability
+seal, approval-only signer, and authenticated coordinator inventory as three
+independent public bindings in exact slots 55, 56, and 57. Slot 55 exposes
+separate authenticated small-record namespaces for the monotonic UNIX-time
+floor and checkpoint head, plus immutable content-addressed checkpoint blobs;
+one qualification covers that complete durability contract. The binding
+catalog and resolved dependency set are all-or-none and contain no endpoint,
+credential, token, or private key. Registry resolution snapshots each exact
+production handle/revision/policy digest before and after qualification, but it
+does not call readiness or perform a durability, signing, or inventory effect.
+The stock broker does not implement these roles.
+
+These slots remain inert. Private daemon wrappers now pin the signer to its
+configured adapter, chain/genesis/provider context, and finalized
+`State::provider_owners()` value, and pin inventory calls and returned data to
+their configured adapter and exact chain/genesis/archive/order scope, with
+put/get restricted to the local provider. Neither wrapper is installed or
+supervised. Stock `irohad` still rejects journal
+activation before supervisor startup until one non-generic daemon coordinator
+owns authenticated archive provenance and the private drivers, concrete
+combined durability/signer/inventory adapters and broker readiness exist, and
+the supervised fault/chaos/platform qualification is complete. Deployment must
+also enforce one rooted journal session for each exact external provider scope
+across machines, or an equivalent authenticated provider-side session fence;
+the local OS lease coordinates only processes sharing one state root.
+
+The journal's raw checkpoint/CAS types, abstract store, transition engine, and
+runtime constructor are crate-private, as is checkpoint-head orchestration. The
+public root-fenced file store exposes no raw load/CAS operation. On Linux and
+macOS its explicit initialization path proves the local cache empty and installs
+the canonical empty external `H0`; ordinary open requires an existing `H0` or
+later head, never initializes from local bytes, and consumes the store only
+after matching chain/genesis/provider plus the exact retained journal-policy
+digest. Canonical domain-separated hashes bind that scope and every
+predecessor-linked head record.
+
+A mutation exactly reads back an immutable content-addressed checkpoint blob,
+then the external head CAS, before advancing the local two-slot cache. The
+external head/blob remains authoritative after local rollback: only an exact
+direct predecessor proved by the retained predecessor record and blob can be
+repaired forward; deeper rollback, ahead/fork, missing, or substituted state
+fails closed. The separate sealed time floor bounds the checkpoint timestamp.
+The external-to-local window is protected by a nonblocking process and
+cross-process lease on the two-slot initialization lock whose exact identity is
+committed in the immutable slot headers. Contention returns unavailable,
+cancellation releases the lease, and exact retry completes recovery. Other
+platforms fail closed, and this runtime remains inert and unwired in stock
+`irohad`.
 
 There are two supported injection boundaries. A deployment-owned embedding
 binary can statically link this crate, keep credentials inside reviewed

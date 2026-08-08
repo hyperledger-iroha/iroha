@@ -20,7 +20,7 @@ use iroha_data_model::{
     asset::AssetBalanceScope,
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, AssetDefinitionId, ChainId},
+    prelude::{AccountId, AssetDefinitionId, ChainId, NetworkId},
     privacy::{
         PRIVACY_MAX_CHAIN_ID_BYTES_V1, PrivacyConsensusLimitsV1, PrivacyNullifierV1,
         PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
@@ -132,6 +132,8 @@ impl ZkAcePrivacyTransferV1 {
 /// Exact signature-bound transaction fields for one direct ZK-ACE action.
 #[derive(Clone, Debug)]
 pub struct ZkAcePrivacyActionTransactionContextV1 {
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Exact chain identifier.
     pub chain_id: ChainId,
     /// Exact single-key transaction authority.
@@ -370,6 +372,8 @@ pub enum ZkAcePrivacyActionBuildErrorV1 {
     IdentityCommitmentMismatch,
     /// The caller supplied the all-zero genesis sentinel.
     ZeroGenesisHash,
+    /// The signed transaction domain differs from the supplied canonical genesis hash.
+    NetworkIdMismatch,
     /// The chain identifier is empty or exceeds the consensus maximum.
     InvalidChainId,
     /// Creation time cannot be represented in the transaction wire.
@@ -427,6 +431,9 @@ impl core::fmt::Display for ZkAcePrivacyActionBuildErrorV1 {
                     "ZK-ACE witness identity commitment differs from the governed policy"
                 }
                 Self::ZeroGenesisHash => "ZK-ACE action requires a non-zero canonical genesis hash",
+                Self::NetworkIdMismatch => {
+                    "ZK-ACE action transaction network does not match the canonical genesis hash"
+                }
                 Self::InvalidChainId => {
                     "ZK-ACE action chain id is outside the first-release byte bound"
                 }
@@ -521,7 +528,7 @@ fn transaction_payload_without_instructions_v1(
     context: &ZkAcePrivacyActionTransactionContextV1,
 ) -> Result<TransactionPayload, ()> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -555,7 +562,7 @@ fn transaction_payload_v1(
     envelope: PrivacyProofEnvelopeV1,
 ) -> Result<TransactionPayload, ZkAcePrivacyActionBuildErrorV1> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -607,6 +614,9 @@ where
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(ZkAcePrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(ZkAcePrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
     validate_transaction_context_v1(&context)?;
     transfer
@@ -910,6 +920,11 @@ mod tests {
 
     fn context(authority: AccountId) -> ZkAcePrivacyActionTransactionContextV1 {
         ZkAcePrivacyActionTransactionContextV1 {
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::prehashed([0x77; 32])
+            )),
             chain_id: ChainId::from("taira-zk-ace-builder-test"),
             authority,
             creation_time: Duration::from_secs(1_700_000_000),

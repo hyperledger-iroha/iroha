@@ -24,7 +24,7 @@ const V2_STARTUP_INHERITED_AUTHORITY_DOMAIN: &[u8] =
 #[derive(Encode)]
 struct V2StartupInheritedAuthoritySeal {
     version: u16,
-    chain_id: ChainId,
+    network_id: iroha_data_model::NetworkId,
     protocol_version: u16,
     height: u64,
     epoch: u64,
@@ -45,7 +45,7 @@ impl V2StartupInheritedAuthoritySeal {
     fn from_context(context: &HeightContext, validator_set_pops: &[Vec<u8>]) -> Self {
         Self {
             version: Self::VERSION,
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id.clone(),
             protocol_version: context.protocol_version,
             height: context.height,
             epoch: context.epoch,
@@ -94,7 +94,7 @@ impl V2StartupInheritedAuthoritySeal {
                 );
         Some(Self {
             version: Self::VERSION,
-            chain_id: artifact.height_context.chain_id.clone(),
+            network_id: artifact.height_context.network_id.clone(),
             protocol_version: artifact.height_context.protocol_version,
             height,
             epoch,
@@ -328,4 +328,3 @@ struct BoundProgressNamespace {
     /// Bound directories in durability order: immediate parent through Kura root.
     directories: Vec<BoundProgressDirectory>,
 }
-

@@ -106,7 +106,7 @@ public final class NexusAppClient {
         .signingPublicKey(signingPublicKey)
         .build();
     final TransactionPayload payload = TransactionPayload.builder()
-        .setChainId(config.chainId())
+        .setNetworkId(config.networkId())
         .setAuthority(authority)
         .setCreationTimeMs(
             normalized.creationTimeMs() == null

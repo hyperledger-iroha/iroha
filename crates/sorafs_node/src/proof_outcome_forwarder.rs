@@ -1479,6 +1479,14 @@ mod tests {
 
     use super::*;
 
+    fn test_network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"proof-outcome-forwarder-test"),
+        ))
+    }
+
     #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
     struct NestedSourceDepthBomb(Option<Box<NestedSourceDepthBomb>>);
 
@@ -1706,7 +1714,7 @@ mod tests {
     fn signed_transaction(pending: &ProofOutcomePendingDeliveryV1, seed: u8) -> SignedTransaction {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
         let mut builder = TransactionBuilder::new(
-            ChainId::from("proof-outcome-forwarder-test"),
+            test_network_id(),
             AccountId::new(key.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )

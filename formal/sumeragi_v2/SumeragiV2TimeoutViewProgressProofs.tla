@@ -1362,7 +1362,7 @@ PROOF
                       owner, mode)>>_AsyncAllVars)
       BY <2>1, TimeoutFixedClockDueNodeModeHasEnabledFairAction,
          PTL
-    <2>3. [](TimeoutFixedClockDueNodeOwnerAtMode(
+    <2>3. (TimeoutFixedClockDueNodeOwnerAtMode(
                 source, sourceView, clockValue, deadlineValue,
                 sourceRank, owner, mode)
               /\ ~TimeoutFixedClockDueNodeModeGoal(
@@ -1377,7 +1377,7 @@ PROOF
          TimeoutFixedClockDueNodeFairOccurrenceReachesRankGoal,
          PTL
          DEF TimeoutFixedClockDueNodeModeGoal
-    <2>4. [](TimeoutFixedClockDueNodeOwnerAtMode(
+    <2>4. (TimeoutFixedClockDueNodeOwnerAtMode(
                 source, sourceView, clockValue, deadlineValue,
                 sourceRank, owner, mode)
               /\ ~TimeoutFixedClockDueNodeModeGoal(
@@ -1445,7 +1445,7 @@ PROOF
                       owner, mode)>>_AsyncAllVars)
       BY <2>1, TimeoutFixedClockDueIoModeHasEnabledFairAction,
          PTL
-    <2>3. [](TimeoutFixedClockDueIoOwnerAtMode(
+    <2>3. (TimeoutFixedClockDueIoOwnerAtMode(
                 source, sourceView, clockValue, deadlineValue,
                 sourceRank, owner, mode)
               /\ ~TimeoutFixedClockDueIoModeGoal(
@@ -1460,7 +1460,7 @@ PROOF
          TimeoutFixedClockDueIoFairOccurrenceReachesRankGoal,
          PTL
          DEF TimeoutFixedClockDueIoModeGoal
-    <2>4. [](TimeoutFixedClockDueIoOwnerAtMode(
+    <2>4. (TimeoutFixedClockDueIoOwnerAtMode(
                 source, sourceView, clockValue, deadlineValue,
                 sourceRank, owner, mode)
               /\ ~TimeoutFixedClockDueIoModeGoal(
@@ -1755,7 +1755,7 @@ PROOF
                    sourceRank)
              => ENABLED <<AsyncTick>>_AsyncAllVars)
       BY TimeoutFixedClockTickBlockedHasEnabledExactTick, PTL
-    <2>3. [](TimeoutFixedClockTickBlockedAtRank(
+    <2>3. (TimeoutFixedClockTickBlockedAtRank(
                 source, sourceView, clockValue, deadlineValue,
                 sourceRank)
               /\ ~TimeoutFixedClockStrictRankGoal(
@@ -1767,7 +1767,7 @@ PROOF
                   sourceRank)')
       BY TimeoutFixedClockExactTickReachesRankGoal, PTL
          DEF AsyncTick
-    <2>4. [](TimeoutFixedClockTickBlockedAtRank(
+    <2>4. (TimeoutFixedClockTickBlockedAtRank(
                 source, sourceView, clockValue, deadlineValue,
                 sourceRank)
               /\ ~TimeoutFixedClockStrictRankGoal(
@@ -1794,89 +1794,97 @@ THEOREM AsyncSpecClosesTimeoutFixedClockNonPacketService ==
     TimeoutFixedClockNonPacketServiceProperty(
       AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE TimeoutFixedClockNonPacketServiceProperty(
-                 AsyncSpecAt(initialContext))
-    <2>1. CASE AsyncSpecAt(initialContext)
-      <3>1. ASSUME NEW source \in AsyncCurrentResponsiveVoters,
-                    NEW sourceView \in Views,
-                    NEW clockValue, NEW deadlineValue \in Nat,
-                    NEW sourceRank \in
-                      HistoricalDiscoveryFixedClockBlockerCarrier
-             PROVE (/\ TimeoutFixedClockBlockedAtRank(
-                           source, sourceView, clockValue,
-                           deadlineValue, sourceRank)
-                      /\ OverdueResponsivePackets = {})
-                     ~> TimeoutFixedClockStrictRankGoal(
-                          source, sourceView, clockValue,
-                          deadlineValue, sourceRank)
-        <4>1. \A owner:
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext)
+         PROVE \A source \in AsyncCurrentResponsiveVoters,
+                   sourceView \in Views,
+                   clockValue, deadlineValue \in Nat,
+                   sourceRank \in
+                     HistoricalDiscoveryFixedClockBlockerCarrier:
                  (/\ TimeoutFixedClockBlockedAtRank(
                         source, sourceView, clockValue,
                         deadlineValue, sourceRank)
-                  /\ OverdueResponsivePackets = {}
-                  /\ owner
-                       \in HistoricalDiscoveryNodeBlockersAt(clockValue))
-                  ~> TimeoutFixedClockStrictRankGoal(
-                       source, sourceView, clockValue,
-                       deadlineValue, sourceRank)
-          BY <2>1, AsyncSpecTimeoutDueNodeOwnerReachesRankGoal
-        <4>2. \A owner:
-                 (/\ TimeoutFixedClockBlockedAtRank(
+                  /\ OverdueResponsivePackets = {})
+                   ~> TimeoutFixedClockStrictRankGoal(
                         source, sourceView, clockValue,
                         deadlineValue, sourceRank)
-                  /\ OverdueResponsivePackets = {}
-                  /\ HistoricalDiscoveryNodeBlockersAt(clockValue) = {}
-                  /\ owner
-                       \in HistoricalDiscoveryActiveIoBlockersAt(
-                            clockValue))
-                  ~> TimeoutFixedClockStrictRankGoal(
-                       source, sourceView, clockValue,
-                       deadlineValue, sourceRank)
-          BY <2>1, AsyncSpecTimeoutDueIoOwnerReachesRankGoal
-        <4>3. TimeoutFixedClockTickBlockedAtRank(
-                 source, sourceView, clockValue, deadlineValue,
-                 sourceRank)
+    <2>1. ASSUME NEW source \in AsyncCurrentResponsiveVoters,
+                  NEW sourceView \in Views,
+                  NEW clockValue, NEW deadlineValue \in Nat,
+                  NEW sourceRank \in
+                    HistoricalDiscoveryFixedClockBlockerCarrier
+           PROVE (/\ TimeoutFixedClockBlockedAtRank(
+                         source, sourceView, clockValue,
+                         deadlineValue, sourceRank)
+                    /\ OverdueResponsivePackets = {})
+                   ~> TimeoutFixedClockStrictRankGoal(
+                        source, sourceView, clockValue,
+                        deadlineValue, sourceRank)
+      <3>1. \A owner:
+               (/\ TimeoutFixedClockBlockedAtRank(
+                      source, sourceView, clockValue,
+                      deadlineValue, sourceRank)
+                /\ OverdueResponsivePackets = {}
+                /\ owner
+                     \in HistoricalDiscoveryNodeBlockersAt(clockValue))
                 ~> TimeoutFixedClockStrictRankGoal(
-                     source, sourceView, clockValue, deadlineValue,
-                     sourceRank)
-          BY <2>1, AsyncSpecTimeoutFixedClockTickReachesRankGoal
-        <4>4. (/\ TimeoutFixedClockBlockedAtRank(
-                       source, sourceView, clockValue,
-                       deadlineValue, sourceRank)
-                 /\ OverdueResponsivePackets = {})
-                ~> (TimeoutFixedClockStrictRankGoal(
-                       source, sourceView, clockValue,
-                       deadlineValue, sourceRank)
-                     \/ \E owner:
-                          /\ TimeoutFixedClockBlockedAtRank(
-                               source, sourceView, clockValue,
-                               deadlineValue, sourceRank)
-                          /\ OverdueResponsivePackets = {}
-                          /\ owner
-                               \in HistoricalDiscoveryNodeBlockersAt(
-                                    clockValue)
-                     \/ \E owner:
-                          /\ TimeoutFixedClockBlockedAtRank(
-                               source, sourceView, clockValue,
-                               deadlineValue, sourceRank)
-                          /\ OverdueResponsivePackets = {}
-                          /\ HistoricalDiscoveryNodeBlockersAt(
-                               clockValue) = {}
-                          /\ owner
-                               \in HistoricalDiscoveryActiveIoBlockersAt(
-                                    clockValue)
-                     \/ TimeoutFixedClockTickBlockedAtRank(
-                          source, sourceView, clockValue,
-                          deadlineValue, sourceRank))
-          BY Isa, PTL
-             DEF TimeoutFixedClockTickBlockedAtRank
-        <4> QED BY <4>1, <4>2, <4>3, <4>4, PTL
-      <3> QED BY <3>1
-    <2>2. CASE ~AsyncSpecAt(initialContext)
-      BY <2>2 DEF TimeoutFixedClockNonPacketServiceProperty
-    <2> QED BY <2>1, <2>2
+                     source, sourceView, clockValue,
+                     deadlineValue, sourceRank)
+        BY <1>1, AsyncSpecTimeoutDueNodeOwnerReachesRankGoal
+      <3>2. \A owner:
+               (/\ TimeoutFixedClockBlockedAtRank(
+                      source, sourceView, clockValue,
+                      deadlineValue, sourceRank)
+                /\ OverdueResponsivePackets = {}
+                /\ HistoricalDiscoveryNodeBlockersAt(clockValue) = {}
+                /\ owner
+                     \in HistoricalDiscoveryActiveIoBlockersAt(
+                          clockValue))
+                ~> TimeoutFixedClockStrictRankGoal(
+                     source, sourceView, clockValue,
+                     deadlineValue, sourceRank)
+        BY <1>1, AsyncSpecTimeoutDueIoOwnerReachesRankGoal
+      <3>3. TimeoutFixedClockTickBlockedAtRank(
+               source, sourceView, clockValue, deadlineValue,
+               sourceRank)
+              ~> TimeoutFixedClockStrictRankGoal(
+                   source, sourceView, clockValue, deadlineValue,
+                   sourceRank)
+        BY <1>1, AsyncSpecTimeoutFixedClockTickReachesRankGoal
+      <3>4. (/\ TimeoutFixedClockBlockedAtRank(
+                     source, sourceView, clockValue,
+                     deadlineValue, sourceRank)
+               /\ OverdueResponsivePackets = {})
+              ~> (TimeoutFixedClockStrictRankGoal(
+                     source, sourceView, clockValue,
+                     deadlineValue, sourceRank)
+                   \/ (\E nodeOwner:
+                        /\ TimeoutFixedClockBlockedAtRank(
+                             source, sourceView, clockValue,
+                             deadlineValue, sourceRank)
+                        /\ OverdueResponsivePackets = {}
+                        /\ nodeOwner
+                             \in HistoricalDiscoveryNodeBlockersAt(
+                                  clockValue))
+                   \/ (\E ioOwner:
+                        /\ TimeoutFixedClockBlockedAtRank(
+                             source, sourceView, clockValue,
+                             deadlineValue, sourceRank)
+                        /\ OverdueResponsivePackets = {}
+                        /\ HistoricalDiscoveryNodeBlockersAt(
+                             clockValue) = {}
+                        /\ ioOwner
+                             \in HistoricalDiscoveryActiveIoBlockersAt(
+                                  clockValue))
+                   \/ TimeoutFixedClockTickBlockedAtRank(
+                        source, sourceView, clockValue,
+                        deadlineValue, sourceRank))
+        BY Isa, PTL
+           DEF TimeoutFixedClockTickBlockedAtRank
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
+    <2> QED BY <2>1
   <1> QED BY <1>1
+       DEF TimeoutFixedClockNonPacketServiceProperty
 
 THEOREM AsyncLiveClosesTimeoutFixedClockNonPacketService ==
   \A initialContext:
@@ -2568,7 +2576,7 @@ PROOF
                    CandidateScheduled, AsyncProgressOwnershipInvariant,
                    AsyncOutstandingCarrierInvariant,
                    AsyncLogicalCandidateOwnershipInvariant
-          <5>3. [](TimeoutSigningCandidateWitness(
+          <5>3. (TimeoutSigningCandidateWitness(
                        source, sourceView, vote, candidate)
                      /\ ~TimeoutOriginOutcome(
                           source, sourceView, vote, recipient)
@@ -2615,7 +2623,7 @@ PROOF
                    CandidateScheduled, AsyncProgressOwnershipInvariant,
                    AsyncOutstandingCarrierInvariant,
                    AsyncLogicalCandidateOwnershipInvariant
-          <5>3. [](TimeoutPendingCandidateWitness(
+          <5>3. (TimeoutPendingCandidateWitness(
                        source, sourceView, vote, candidate)
                      /\ ~TimeoutPendingContinuationGoal(
                           source, sourceView, vote, recipient)
@@ -2934,18 +2942,21 @@ TimeoutFrozenOlderCandidateOwners(
 
 TimeoutFrozenOlderCandidateWorkTokens(
     source, ownerOrdinal, physicalCut, predecessorOrigins) ==
-  {<<"Candidate", candidate, token>>:
-     candidate \in TimeoutFrozenOlderCandidateOwners(
-                       source, ownerOrdinal, physicalCut,
-                       predecessorOrigins),
-     token \in
-       1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}
+  UNION
+    {{<<"Candidate", candidate, token>>:
+        token \in
+          1..AsyncCandidateProducerContinuationCausalWeight(
+               candidate.kind)}:
+       candidate \in TimeoutFrozenOlderCandidateOwners(
+                         source, ownerOrdinal, physicalCut,
+                         predecessorOrigins)}
     \cup
-  {<<"Continuation", record.identity, token>>:
-     record \in TimeoutFrozenOlderContinuationRecords(
-                  source, ownerOrdinal, predecessorOrigins),
-     token \in
-       1..AsyncCandidateProducerContinuationStatusRank(record.status)}
+  UNION
+    {{<<"Continuation", record.identity, token>>:
+        token \in
+          1..AsyncCandidateProducerContinuationStatusRank(record.status)}:
+       record \in TimeoutFrozenOlderContinuationRecords(
+                    source, ownerOrdinal, predecessorOrigins)}
 
 TimeoutFrozenOlderCandidateWorkBudget(
     source, ownerOrdinal, physicalCut, predecessorOrigins) ==
@@ -3508,25 +3519,116 @@ THEOREM AsyncLiveClosesTimeoutFrozenOlderProducerResolvedRankStep ==
   \A initialContext:
     TimeoutFrozenOlderProducerResolvedRankStepProperty(
       AsyncLiveSpecAt(initialContext))
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   AsyncSpecAlwaysUsesFixedResponsiveVoters,
-   TimeoutFrozenOlderProducerEpisodeStepIsDescentOrFrame,
-   TimeoutFrozenOlderProducerResolvedSelectedOwnerIsEnabled,
-   TimeoutFrozenOlderProducerResolvedFairActionConsumesRankCell,
-   TimeoutFrozenOlderProducerFairOwnerPersistsInResolvedRankCell,
-   AsyncRunnerEpisodeConcreteOwnerUsesExistingFairness,
-   AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion,
-   WF1, PTL, IsaT(1800)
-   DEF TimeoutFrozenOlderProducerResolvedRankStepProperty,
-       TimeoutFrozenOlderProducerResolvedAtRank,
-       TimeoutFrozenOlderProducerRankGoal,
-       TimeoutFrozenOlderProducerFairOwner,
-       TimeoutFrozenOlderProducerSelectedFairAction,
-       AsyncLiveSpecAt
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE TimeoutFrozenOlderProducerResolvedRankStepProperty(
+                 AsyncLiveSpecAt(initialContext))
+    <2>1. ASSUME NEW mode \in TimeoutRuntimeModeCarrier,
+                  NEW source \in AsyncCurrentResponsiveVoters,
+                  NEW sourceView \in Views,
+                  NEW ownerContext \in ContextRecords,
+                  NEW ownerOrigin \in AsyncCandidateCausalOriginSet,
+                  NEW ownerOrdinal \in Nat \ {0},
+                  NEW physicalCut \in Nat,
+                  NEW predecessorOrigins,
+                  NEW rank
+                    \in TimeoutFrozenOlderProducerEpisodeRankCarrier,
+                  AsyncLiveSpecAt(initialContext)
+           PROVE TimeoutFrozenOlderProducerResolvedAtRank(
+                   mode, source, sourceView,
+                   ownerContext, ownerOrigin, ownerOrdinal,
+                   physicalCut, predecessorOrigins, rank)
+                   ~> TimeoutFrozenOlderProducerRankGoal(
+                        mode, source, sourceView,
+                        ownerContext, ownerOrigin, ownerOrdinal,
+                        physicalCut, predecessorOrigins, rank)
+      <3>1. [](/\ AsyncStrongTypeInvariant
+                /\ AsyncProgressOwnershipInvariant
+                /\ AsyncCandidateServiceLifecycleInvariant
+                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                /\ AsyncCurrentResponsiveVoters
+                     = AsyncVotersAt(initialContext))
+        BY <2>1, AsyncLiveSpecProjectsAsyncSpec,
+           AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncSpecAlwaysProgressOwnershipInvariant,
+           AsyncFiniteRunnerSpecAlwaysCandidateServiceTombstoneLifecycle,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+           AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL
+           DEF AsyncCandidateServiceTombstoneLifecycleInvariant
+      <3>2. [](TimeoutFrozenOlderProducerResolvedAtRank(
+                  mode, source, sourceView,
+                  ownerContext, ownerOrigin, ownerOrdinal,
+                  physicalCut, predecessorOrigins, rank)
+                /\ ~TimeoutFrozenOlderProducerRankGoal(
+                     mode, source, sourceView,
+                     ownerContext, ownerOrigin, ownerOrdinal,
+                     physicalCut, predecessorOrigins, rank)
+               => ENABLED
+                    <<TimeoutFrozenOlderProducerSelectedFairAction(
+                         source, ownerOrdinal)>>_AsyncAllVars)
+        BY <3>1,
+           TimeoutFrozenOlderProducerResolvedSelectedOwnerIsEnabled, PTL
+      <3>3. (TimeoutFrozenOlderProducerResolvedAtRank(
+                  mode, source, sourceView,
+                  ownerContext, ownerOrigin, ownerOrdinal,
+                  physicalCut, predecessorOrigins, rank)
+                /\ ~TimeoutFrozenOlderProducerRankGoal(
+                     mode, source, sourceView,
+                     ownerContext, ownerOrigin, ownerOrdinal,
+                     physicalCut, predecessorOrigins, rank)
+                /\ <<TimeoutFrozenOlderProducerSelectedFairAction(
+                         source, ownerOrdinal)>>_AsyncAllVars
+               => TimeoutFrozenOlderProducerRankGoal(
+                    mode, source, sourceView,
+                    ownerContext, ownerOrigin, ownerOrdinal,
+                    physicalCut, predecessorOrigins, rank)')
+        BY <3>1,
+           TimeoutFrozenOlderProducerResolvedFairActionConsumesRankCell,
+           PTL
+      <3>4. (TimeoutFrozenOlderProducerResolvedAtRank(
+                  mode, source, sourceView,
+                  ownerContext, ownerOrigin, ownerOrdinal,
+                  physicalCut, predecessorOrigins, rank)
+                /\ ~TimeoutFrozenOlderProducerRankGoal(
+                     mode, source, sourceView,
+                     ownerContext, ownerOrigin, ownerOrdinal,
+                     physicalCut, predecessorOrigins, rank)
+                /\ [AsyncNext]_AsyncAllVars
+               => \/ TimeoutFrozenOlderProducerRankGoal(
+                       mode, source, sourceView,
+                       ownerContext, ownerOrigin, ownerOrdinal,
+                       physicalCut, predecessorOrigins, rank)'
+                  \/ TimeoutFrozenOlderProducerResolvedAtRank(
+                       mode, source, sourceView,
+                       ownerContext, ownerOrigin, ownerOrdinal,
+                       physicalCut, predecessorOrigins, rank)')
+        BY <3>1,
+           TimeoutFrozenOlderProducerEpisodeStepIsDescentOrFrame,
+           TimeoutFrozenOlderProducerResolvedFairActionConsumesRankCell,
+           AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion, PTL
+           DEF TimeoutFrozenOlderProducerResolvedAtRank,
+               TimeoutFrozenOlderProducerSelectedFairAction,
+               TimeoutFrozenOlderProducerFairOwner,
+               AsyncProtectedCandidateFairAction,
+               AsyncCausalEpisodeFairAction
+      <3>5. WF_AsyncAllVars(
+               TimeoutFrozenOlderProducerSelectedFairAction(
+                 source, ownerOrdinal))
+        BY <2>1, <3>1,
+           AsyncLiveSpecProjectsAsyncSpec,
+           AsyncRunnerEpisodeConcreteOwnerUsesExistingFairness, PTL, Isa
+           DEF TimeoutFrozenOlderProducerSelectedFairAction,
+               TimeoutFrozenOlderProducerFairOwner,
+               AsyncProtectedCandidateFairOwnerKinds,
+               AsyncCurrentResponsiveVoters
+      <3>6. [][AsyncNext]_AsyncAllVars
+        BY <2>1, AsyncLiveSpecProjectsAsyncSpec DEF AsyncSpecAt
+      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, PTL
+    <2> QED BY <2>1
+         DEF TimeoutFrozenOlderProducerResolvedRankStepProperty
+  <1> QED BY <1>1
 
 TimeoutFrozenOlderCandidateRankStepProperty(specification) ==
   specification
@@ -4306,6 +4408,7 @@ THEOREM TimeoutEarlierServeFrozenSelectorRejectsPostCutIngress ==
        /\ index >
             AsyncServeIngressAdmissionPredecessorCounts(
               source, identity)[laneSource]
+       /\ ~AsyncCertifiedFenceEscapeItem(item)
        /\ \/ item.kind \notin AsyncReplyRequestKinds
           \/ AsyncServeLogicalRequestIdentity(source, item) # identity
        => ~AsyncServeIngressIndexMayPrecedeAdmittedTarget(
@@ -4717,7 +4820,7 @@ TimeoutEarlierServeConcreteActionOriginProperty(specification) ==
                       <<TimeoutEarlierServeSelectedConcreteFairAction(
                           source, identity)>>_AsyncAllVars)
   /\ specification
-       => [](\A mode \in TimeoutRuntimeModeCarrier,
+       => [][(\A mode \in TimeoutRuntimeModeCarrier,
                   source \in AsyncCurrentResponsiveVoters,
                   sourceView \in Views,
                   ownerContext \in ContextRecords,
@@ -4751,9 +4854,9 @@ TimeoutEarlierServeConcreteActionOriginProperty(specification) ==
                     /\ TimeoutEarlierServeConcreteFairOwner(
                          source, identity)'
                          = TimeoutEarlierServeConcreteFairOwner(
-                             source, identity))
+                             source, identity))]_AsyncAllVars
   /\ specification
-       => [](\A mode \in TimeoutRuntimeModeCarrier,
+       => [][(\A mode \in TimeoutRuntimeModeCarrier,
                   source \in AsyncCurrentResponsiveVoters,
                   sourceView \in Views,
                   ownerContext \in ContextRecords,
@@ -4779,11 +4882,11 @@ TimeoutEarlierServeConcreteActionOriginProperty(specification) ==
                    mode, source, sourceView,
                    ownerContext, ownerOrigin, ownerOrdinal,
                    physicalCut, predecessorOrigins,
-                   identity, rank, budget)')
+                   identity, rank, budget)')]_AsyncAllVars
 
 TimeoutEarlierServeExactIngressRankStepProperty(specification) ==
   /\ specification
-       => [](\A mode \in TimeoutRuntimeModeCarrier,
+       => [][(\A mode \in TimeoutRuntimeModeCarrier,
                   source \in AsyncCurrentResponsiveVoters,
                   sourceView \in Views,
                   ownerContext \in ContextRecords,
@@ -4795,7 +4898,7 @@ TimeoutEarlierServeExactIngressRankStepProperty(specification) ==
               TimeoutEarlierServeLifecycleStepClassification(
                 mode, source, sourceView,
                 ownerContext, ownerOrigin, ownerOrdinal,
-                physicalCut, predecessorOrigins, identity))
+                physicalCut, predecessorOrigins, identity))]_AsyncAllVars
   /\ TimeoutEarlierServeConcreteActionOriginProperty(specification)
 
 THEOREM TimeoutEarlierServeLifecycleStepClassificationIsExhaustive ==
@@ -7294,28 +7397,6 @@ DirectTimeoutViewClosureResidualProperty(specification) ==
   /\ TimeoutVoteDeliveryPhysicalKernelProperties(specification)
   /\ TimeoutCertificateDecisionPhysicalKernelProperties(specification)
 
-THEOREM DirectTimeoutPhysicalKernelsDischargeCompositeSeams ==
-  \A initialContext:
-    DirectTimeoutViewClosureResidualProperty(
-         AsyncLiveSpecAt(initialContext))
-      => /\ TimeoutFixedClockLifecycleOwnerServiceProperty(
-               AsyncLiveSpecAt(initialContext))
-         /\ TimeoutArmedExactWalEndpointProperty(
-              AsyncLiveSpecAt(initialContext))
-         /\ TimeoutSourceIsolatedDeliveryConvergenceProperty(
-              AsyncLiveSpecAt(initialContext))
-         /\ TimeoutCertificateAndDecisionConvergenceProperty(
-              AsyncLiveSpecAt(initialContext))
-BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure,
-   AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels,
-   TimeoutFixedClockPhysicalKernelsDischargeLifecycleService,
-   AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
-   TimeoutFixedOwnerPriorityTicketNonReplenishmentDischargesArmedWalPhysicalKernels,
-   TimeoutArmedWalPhysicalKernelsDischargeExactEndpoint,
-   TimeoutVotePhysicalKernelsDischargeSourceIsolatedDelivery,
-   TimeoutCertificateDecisionPhysicalKernelsDischargeConvergence
-   DEF DirectTimeoutViewClosureResidualProperty
-
 (***************************************************************************
 Catch-up temporal composition.
 
@@ -7527,7 +7608,7 @@ PROOF
                     /\ TimeoutOrigin(signer, roundView, vote))
                    ~> TimeoutMissingSignerServiceGoal(
                         target, roundView, signer)
-      <3>1. [](TimeoutRoundStable(target, roundView)
+      <3>1. (TimeoutRoundStable(target, roundView)
                  /\ ~TimeoutDirectGoal(target, roundView)
                  /\ [AsyncNext]_AsyncAllVars
                 => TimeoutRoundStable(target, roundView)')
@@ -7740,7 +7821,7 @@ PROOF
            DEF TimeoutCatchupSourcePendingAtRank,
                TimeoutProgressRankFrontier,
                TimeoutCatchupDebtAtRank
-      <3>2. [](TimeoutCatchupSourcePendingAtRank(
+      <3>2. (TimeoutCatchupSourcePendingAtRank(
                    target, roundView, sourceRank, laggingSource)
                  /\ ~TimeoutProgressRankStrictGoal(
                       target, roundView, sourceRank)
@@ -7822,7 +7903,7 @@ PROOF
                    target, roundView, signer)
         BY <1>1, <2>2,
            TimeoutMissingReceiptSignerReachesServiceGoal
-      <3>2. [](TimeoutReceiptSignerPendingAtRank(
+      <3>2. (TimeoutReceiptSignerPendingAtRank(
                    target, roundView, sourceRank, signer)
                  /\ ~TimeoutProgressRankStrictGoal(
                       target, roundView, sourceRank)
@@ -7862,20 +7943,26 @@ PROOF
                   AsyncLiveSpecAt(initialContext))
          PROVE TimeoutFiniteRankDescentProperty(
                  AsyncLiveSpecAt(initialContext))
-    <2>1. CASE /\ TimeoutDeadlineClockConvergenceProperty(
-                      AsyncLiveSpecAt(initialContext))
-                 /\ TimeoutSemanticOwnerHandoffProperty(
-                      AsyncLiveSpecAt(initialContext))
-                 /\ TimeoutSourceIsolatedDeliveryConvergenceProperty(
-                      AsyncLiveSpecAt(initialContext))
-      <3>1. AsyncLiveSpecAt(initialContext)
-               => []AsyncStrongTypeInvariant
-        BY AsyncLiveSpecProjectsAsyncSpec,
+    <2>1. ASSUME TimeoutDeadlineClockConvergenceProperty(
+                    AsyncLiveSpecAt(initialContext)),
+                  TimeoutSemanticOwnerHandoffProperty(
+                    AsyncLiveSpecAt(initialContext)),
+                  TimeoutSourceIsolatedDeliveryConvergenceProperty(
+                    AsyncLiveSpecAt(initialContext)),
+                  AsyncLiveSpecAt(initialContext)
+           PROVE \A target \in AsyncCurrentResponsiveVoters,
+                     roundView \in Views,
+                     rank \in TimeoutProgressRankCarrier:
+                   TimeoutProgressRankFrontier(
+                     target, roundView, rank)
+                     ~> TimeoutProgressRankStrictGoal(
+                          target, roundView, rank)
+      <3>1. []AsyncStrongTypeInvariant
+        BY <2>1, AsyncLiveSpecProjectsAsyncSpec,
            AsyncSpecAlwaysStrongTypeInvariant
       <3>2. ASSUME NEW target \in AsyncCurrentResponsiveVoters,
                     NEW roundView \in Views,
-                    NEW rank \in TimeoutProgressRankCarrier,
-                    AsyncLiveSpecAt(initialContext)
+                    NEW rank \in TimeoutProgressRankCarrier
              PROVE TimeoutProgressRankFrontier(
                      target, roundView, rank)
                      ~> TimeoutProgressRankStrictGoal(
@@ -7944,20 +8031,10 @@ PROOF
              DEF TimeoutProgressRankCarrier
         <4> QED BY <3>2, <4>1, <4>2, Isa
            DEF TimeoutProgressRankCarrier
-      <3>3. TimeoutFiniteRankDescentProperty(
-               AsyncLiveSpecAt(initialContext))
-        BY <2>1, <3>1, <3>2
-           DEF TimeoutFiniteRankDescentProperty,
-               TimeoutProgressRankStrictGoal
-      <3> QED BY <3>3
-    <2>2. CASE ~(/\ TimeoutDeadlineClockConvergenceProperty(
-                       AsyncLiveSpecAt(initialContext))
-                  /\ TimeoutSemanticOwnerHandoffProperty(
-                       AsyncLiveSpecAt(initialContext))
-                  /\ TimeoutSourceIsolatedDeliveryConvergenceProperty(
-                       AsyncLiveSpecAt(initialContext)))
-      BY <2>2 DEF TimeoutFiniteRankDescentProperty
-    <2> QED BY <2>1, <2>2
+      <3> QED BY <3>2
+    <2> QED BY <2>1
+         DEF TimeoutFiniteRankDescentProperty,
+             TimeoutProgressRankStrictGoal
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -8083,100 +8160,6 @@ BY PTL
    DEF TimeoutCertificateAndDecisionConvergenceProperty,
        TimeoutDirectOwnerFrontier, TimeoutDirectGoal,
        TimeoutCertificateFormationFrontier
-
-(***************************************************************************
-Direct release reduction.
-
-Every premise is below timeout/view progress.  No rotating-leader or aggregate
-Decision-convergence result appears in this module's dependency path.
-***************************************************************************)
-
-THEOREM DirectTimeoutViewDecompositionClosesTimeoutViewProgress ==
-  \A initialContext:
-    DirectTimeoutViewClosureResidualProperty(
-         AsyncLiveSpecAt(initialContext))
-      => TimeoutViewProgressProperty(
-           AsyncLiveSpecAt(initialContext))
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                DirectTimeoutViewClosureResidualProperty(
-                  AsyncLiveSpecAt(initialContext))
-         PROVE TimeoutViewProgressProperty(
-                 AsyncLiveSpecAt(initialContext))
-    <2>0f. ProtectedServiceFiniteRunnerEpisodeClosureProperty(
-               AsyncSpecAt(initialContext))
-      BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure
-    <2>0o. TimeoutViewOwnershipPreservationProperty(
-               AsyncLiveSpecAt(initialContext))
-      BY TimeoutViewOwnershipPreservationObligation
-    <2>0k. TimeoutFixedClockLifecycleOwnerServiceProperty(
-               AsyncLiveSpecAt(initialContext))
-      BY AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels,
-         TimeoutFixedClockPhysicalKernelsDischargeLifecycleService
-    <2>0p. TimeoutArmedWalPhysicalKernelProperties(
-               AsyncLiveSpecAt(initialContext))
-      BY <2>0f,
-         AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
-         TimeoutFixedOwnerPriorityTicketNonReplenishmentDischargesArmedWalPhysicalKernels
-    <2>0w. TimeoutArmedExactWalEndpointProperty(
-               AsyncLiveSpecAt(initialContext))
-      BY <2>0p,
-         TimeoutArmedWalPhysicalKernelsDischargeExactEndpoint
-    <2>0v. TimeoutSourceIsolatedDeliveryConvergenceProperty(
-               AsyncLiveSpecAt(initialContext))
-      BY <1>1,
-         TimeoutVotePhysicalKernelsDischargeSourceIsolatedDelivery
-         DEF DirectTimeoutViewClosureResidualProperty
-    <2>0c. TimeoutCertificateAndDecisionConvergenceProperty(
-               AsyncLiveSpecAt(initialContext))
-      BY <1>1,
-         TimeoutCertificateDecisionPhysicalKernelsDischargeConvergence
-         DEF DirectTimeoutViewClosureResidualProperty
-    <2>0a. TimeoutFixedClockServicePrerequisites(
-               AsyncLiveSpecAt(initialContext))
-      BY <2>0k,
-         TimeoutLifecycleOwnerServiceSuppliesLiveFixedClockPrerequisites
-    <2>0. TimeoutDeadlineClockConvergenceProperty(
-              AsyncLiveSpecAt(initialContext))
-      BY <2>0a, TimeoutPredeadlineRankDescentClosesDeadlineClock
-    <2>1. TimeoutSemanticOwnerHandoffProperty(
-            AsyncLiveSpecAt(initialContext))
-      BY <2>0f, <2>0w,
-         TimeoutSemanticOwnerHandoffFromExactWalEndpoint
-    <2>1a. TimeoutFiniteRankDescentProperty(
-              AsyncLiveSpecAt(initialContext))
-      BY <2>0o, <2>0c, TimeoutFiniteRankCoordinationIsDischarged
-    <2>2. AsyncLiveSpecAt(initialContext)
-            => \A target \in AsyncCurrentResponsiveVoters,
-                  roundView \in Views:
-                 TimeoutDirectReleaseSource(target, roundView)
-                   ~> (TimeoutDirectGoal(target, roundView)
-                        \/ TimeoutDirectOwnerFrontier(
-                             target, roundView)
-                        \/ TimeoutProgressRankedFrontier(
-                             target, roundView))
-      BY <2>0o,
-         TimeoutOwnershipPreservationSuppliesExactFrontierExposure
-    <2>3. AsyncLiveSpecAt(initialContext)
-            => \A target \in AsyncCurrentResponsiveVoters,
-                  roundView \in Views:
-                 TimeoutProgressRankedFrontier(target, roundView)
-                   ~> (TimeoutDirectGoal(target, roundView)
-                        \/ TimeoutDirectOwnerFrontier(
-                             target, roundView))
-      BY <2>0, <2>1, <2>0v, <2>1a,
-         TimeoutFiniteRankDescentClosesRankedFrontier
-    <2>4. AsyncLiveSpecAt(initialContext)
-            => \A target \in AsyncCurrentResponsiveVoters,
-                  roundView \in Views:
-                 TimeoutDirectOwnerFrontier(target, roundView)
-                   ~> TimeoutDirectGoal(target, roundView)
-      BY <2>0c, TimeoutExactOwnerConvergenceClosesOwnerFrontier
-    <2> QED BY <2>2, <2>3, <2>4, PTL
-         DEF TimeoutViewProgressProperty,
-             TimeoutDirectReleaseSource,
-             TimeoutDirectGoal
-  <1> QED BY <1>1
 
 (***************************************************************************
 Route-neutral exact Candidate and Serve service.
@@ -9439,6 +9422,122 @@ THEOREM AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels ==
 BY AsyncSpecProvidesTimeoutFixedClockLifecyclePhysicalKernels
    DEF AsyncLiveSpecAt
 
+THEOREM DirectTimeoutPhysicalKernelsDischargeCompositeSeams ==
+  \A initialContext:
+    DirectTimeoutViewClosureResidualProperty(
+         AsyncLiveSpecAt(initialContext))
+      => /\ TimeoutFixedClockLifecycleOwnerServiceProperty(
+               AsyncLiveSpecAt(initialContext))
+         /\ TimeoutArmedExactWalEndpointProperty(
+              AsyncLiveSpecAt(initialContext))
+         /\ TimeoutSourceIsolatedDeliveryConvergenceProperty(
+              AsyncLiveSpecAt(initialContext))
+         /\ TimeoutCertificateAndDecisionConvergenceProperty(
+              AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure,
+   AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels,
+   TimeoutFixedClockPhysicalKernelsDischargeLifecycleService,
+   AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
+   TimeoutFixedOwnerPriorityTicketNonReplenishmentDischargesArmedWalPhysicalKernels,
+   TimeoutArmedWalPhysicalKernelsDischargeExactEndpoint,
+   TimeoutVotePhysicalKernelsDischargeSourceIsolatedDelivery,
+   TimeoutCertificateDecisionPhysicalKernelsDischargeConvergence
+   DEF DirectTimeoutViewClosureResidualProperty
+
+(***************************************************************************
+Direct release reduction.
+
+Every premise is below timeout/view progress.  No rotating-leader or aggregate
+Decision-convergence result appears in this module's dependency path.
+***************************************************************************)
+
+THEOREM DirectTimeoutViewDecompositionClosesTimeoutViewProgress ==
+  \A initialContext:
+    DirectTimeoutViewClosureResidualProperty(
+         AsyncLiveSpecAt(initialContext))
+      => TimeoutViewProgressProperty(
+           AsyncLiveSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                DirectTimeoutViewClosureResidualProperty(
+                  AsyncLiveSpecAt(initialContext))
+         PROVE TimeoutViewProgressProperty(
+                 AsyncLiveSpecAt(initialContext))
+    <2>0f. ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+               AsyncSpecAt(initialContext))
+      BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure
+    <2>0o. TimeoutViewOwnershipPreservationProperty(
+               AsyncLiveSpecAt(initialContext))
+      BY TimeoutViewOwnershipPreservationObligation
+    <2>0k. TimeoutFixedClockLifecycleOwnerServiceProperty(
+               AsyncLiveSpecAt(initialContext))
+      BY AsyncLiveProvidesTimeoutFixedClockLifecyclePhysicalKernels,
+         TimeoutFixedClockPhysicalKernelsDischargeLifecycleService
+    <2>0p. TimeoutArmedWalPhysicalKernelProperties(
+               AsyncLiveSpecAt(initialContext))
+      BY <2>0f,
+         AsyncLiveClosesTimeoutFixedOwnerPriorityTicketNonReplenishment,
+         TimeoutFixedOwnerPriorityTicketNonReplenishmentDischargesArmedWalPhysicalKernels
+    <2>0w. TimeoutArmedExactWalEndpointProperty(
+               AsyncLiveSpecAt(initialContext))
+      BY <2>0p,
+         TimeoutArmedWalPhysicalKernelsDischargeExactEndpoint
+    <2>0v. TimeoutSourceIsolatedDeliveryConvergenceProperty(
+               AsyncLiveSpecAt(initialContext))
+      BY <1>1,
+         TimeoutVotePhysicalKernelsDischargeSourceIsolatedDelivery
+         DEF DirectTimeoutViewClosureResidualProperty
+    <2>0c. TimeoutCertificateAndDecisionConvergenceProperty(
+               AsyncLiveSpecAt(initialContext))
+      BY <1>1,
+         TimeoutCertificateDecisionPhysicalKernelsDischargeConvergence
+         DEF DirectTimeoutViewClosureResidualProperty
+    <2>0a. TimeoutFixedClockServicePrerequisites(
+               AsyncLiveSpecAt(initialContext))
+      BY <2>0k,
+         TimeoutLifecycleOwnerServiceSuppliesLiveFixedClockPrerequisites
+    <2>0. TimeoutDeadlineClockConvergenceProperty(
+              AsyncLiveSpecAt(initialContext))
+      BY <2>0a, TimeoutPredeadlineRankDescentClosesDeadlineClock
+    <2>1. TimeoutSemanticOwnerHandoffProperty(
+            AsyncLiveSpecAt(initialContext))
+      BY <2>0f, <2>0w,
+         TimeoutSemanticOwnerHandoffFromExactWalEndpoint
+    <2>1a. TimeoutFiniteRankDescentProperty(
+              AsyncLiveSpecAt(initialContext))
+      BY <2>0o, <2>0c, TimeoutFiniteRankCoordinationIsDischarged
+    <2>2. AsyncLiveSpecAt(initialContext)
+            => \A target \in AsyncCurrentResponsiveVoters,
+                  roundView \in Views:
+                 TimeoutDirectReleaseSource(target, roundView)
+                   ~> (TimeoutDirectGoal(target, roundView)
+                        \/ TimeoutDirectOwnerFrontier(
+                             target, roundView)
+                        \/ TimeoutProgressRankedFrontier(
+                             target, roundView))
+      BY <2>0o,
+         TimeoutOwnershipPreservationSuppliesExactFrontierExposure
+    <2>3. AsyncLiveSpecAt(initialContext)
+            => \A target \in AsyncCurrentResponsiveVoters,
+                  roundView \in Views:
+                 TimeoutProgressRankedFrontier(target, roundView)
+                   ~> (TimeoutDirectGoal(target, roundView)
+                        \/ TimeoutDirectOwnerFrontier(
+                             target, roundView))
+      BY <2>0, <2>1, <2>0v, <2>1a,
+         TimeoutFiniteRankDescentClosesRankedFrontier
+    <2>4. AsyncLiveSpecAt(initialContext)
+            => \A target \in AsyncCurrentResponsiveVoters,
+                  roundView \in Views:
+                 TimeoutDirectOwnerFrontier(target, roundView)
+                   ~> TimeoutDirectGoal(target, roundView)
+      BY <2>0c, TimeoutExactOwnerConvergenceClosesOwnerFrontier
+    <2> QED BY <2>2, <2>3, <2>4, PTL
+         DEF TimeoutViewProgressProperty,
+             TimeoutDirectReleaseSource,
+             TimeoutDirectGoal
+  <1> QED BY <1>1
+
 (***************************************************************************
 Exact delivery-candidate service.
 
@@ -9766,25 +9865,29 @@ THEOREM AsyncSpecAlwaysTimeoutImportedCertificateReducerTail ==
     AsyncSpecAt(initialContext)
       => []TimeoutImportedCertificateReducerTailInvariant
 PROOF
-  <1>1. AsyncInitAt(initialContext)
-           => TimeoutImportedCertificateReducerTailInvariant
-    BY AsyncInitEstablishesTimeoutImportedCertificateReducerTail
-  <1>2. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
-    BY AsyncSpecAlwaysStrongTypeInvariant
-  <1>3. AsyncSpecAt(initialContext) => []AsyncProgressOwnershipInvariant
-    BY AsyncSpecAlwaysProgressOwnershipInvariant
-  <1>4. AsyncSpecAt(initialContext)
-           => []AsyncCandidateServiceLifecycleInvariant
-    BY ExactDecisionAsyncSpecAlwaysCandidateTombstones
-  <1>5. /\ AsyncStrongTypeInvariant
-         /\ AsyncProgressOwnershipInvariant
-         /\ AsyncCandidateServiceLifecycleInvariant
-         /\ TimeoutImportedCertificateReducerTailInvariant
-         /\ [AsyncNext]_AsyncAllVars
-         => TimeoutImportedCertificateReducerTailInvariant'
-    BY AsyncBracketPreservesTimeoutImportedCertificateReducerTail
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, PTL
-       DEF AsyncSpecAt
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []TimeoutImportedCertificateReducerTailInvariant
+    <2>1. AsyncInitAt(initialContext)
+             => TimeoutImportedCertificateReducerTailInvariant
+      BY AsyncInitEstablishesTimeoutImportedCertificateReducerTail
+    <2>2. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+      BY AsyncSpecAlwaysStrongTypeInvariant
+    <2>3. AsyncSpecAt(initialContext) => []AsyncProgressOwnershipInvariant
+      BY AsyncSpecAlwaysProgressOwnershipInvariant
+    <2>4. AsyncSpecAt(initialContext)
+             => []AsyncCandidateServiceLifecycleInvariant
+      BY ExactDecisionAsyncSpecAlwaysCandidateTombstones
+    <2>5. /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ AsyncCandidateServiceLifecycleInvariant
+           /\ TimeoutImportedCertificateReducerTailInvariant
+           /\ [AsyncNext]_AsyncAllVars
+           => TimeoutImportedCertificateReducerTailInvariant'
+      BY AsyncBracketPreservesTimeoutImportedCertificateReducerTail
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
+         DEF AsyncSpecAt
+  <1> QED BY <1>1
 
 TimeoutImportedCertificateCandidateTailKernelProperties(specification) ==
   /\ (specification

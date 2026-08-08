@@ -20,7 +20,8 @@ public final class PipelineStatusExtractorTests {
     rejectDirectStatusString();
     rejectNonCanonicalStatusKinds();
     extractStatusKindMissingStatus();
-    extractRejectionReasonFromCurrentDiagnostics();
+    normalizeMetadataOnlyStatus();
+    rejectRetiredStatusDetails();
     extractRejectCodeFromErrorEnvelopeBody();
     extractRejectCodeFromNoritoErrorEnvelopeBody();
     System.out.println("[IrohaAndroid] Pipeline status extractor tests passed.");
@@ -73,19 +74,45 @@ public final class PipelineStatusExtractorTests {
         : "Expected empty optional when payload is null";
   }
 
-  private static void extractRejectionReasonFromCurrentDiagnostics() {
-    final Map<String, Object> diagnostic = new HashMap<>();
-    diagnostic.put("decoded_reason", "missing exact permission");
-    diagnostic.put("message", "fallback message");
+  private static void normalizeMetadataOnlyStatus() {
+    final String hash = String.join("", Collections.nCopies(32, "ab"));
+    final Map<String, Object> statusRecord = new HashMap<>();
+    statusRecord.put("kind", "Applied");
+    statusRecord.put("block_height", 7L);
+    final Map<String, Object> payload = new HashMap<>();
+    payload.put("hash", hash);
+    payload.put("status", statusRecord);
+    payload.put("scope", "global");
+    payload.put("resolved_from", "state");
+
+    final Map<String, Object> normalized = PipelineStatusExtractor.normalizePublicStatus(payload);
+    assert normalized.keySet().equals(
+        new java.util.HashSet<>(
+            Arrays.asList("hash", "status", "scope", "resolved_from")))
+        : "Public status must expose only metadata";
+    assert PipelineStatusExtractor.requireAuthoritativeStatus(normalized, hash)
+        .equals("Applied") : "Expected canonical Applied status";
+  }
+
+  private static void rejectRetiredStatusDetails() {
+    final String hash = String.join("", Collections.nCopies(32, "cd"));
     final Map<String, Object> statusRecord = new HashMap<>();
     statusRecord.put("kind", "Rejected");
+    statusRecord.put("rejection_reason", "secret");
     final Map<String, Object> payload = new HashMap<>();
+    payload.put("hash", hash);
     payload.put("status", statusRecord);
-    payload.put("diagnostics", Collections.singletonList(diagnostic));
+    payload.put("scope", "global");
+    payload.put("resolved_from", "state");
+    payload.put("diagnostics", Collections.singletonList("secret"));
 
-    final Optional<String> reason = PipelineStatusExtractor.extractRejectionReason(payload);
-    assert reason.isPresent() : "Expected current diagnostic reason to be present";
-    assert "missing exact permission".equals(reason.get()) : "Expected decoded reason";
+    try {
+      PipelineStatusExtractor.normalizePublicStatus(payload);
+      throw new AssertionError("Retired status details must be rejected");
+    } catch (final IllegalStateException expected) {
+      assert expected.getMessage().contains("retired or unsupported fields")
+          : "Expected closed public status fields";
+    }
   }
 
   private static void extractRejectCodeFromErrorEnvelopeBody() {

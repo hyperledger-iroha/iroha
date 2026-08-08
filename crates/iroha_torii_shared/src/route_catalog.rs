@@ -81,6 +81,10 @@ pub enum AuthenticationPolicy {
     /// The route requires canonical `X-Iroha-*` request authentication bound to
     /// an on-ledger account identity.
     CanonicalAccountSignature,
+    /// The handler verifies a canonical signed transaction, query, or typed
+    /// intent after bounded framing/shape parsing and before fee, state, or
+    /// expensive principal-owned work.
+    CanonicalSignedBody,
     /// Access is selected by the authenticated content manifest.
     ///
     /// `Public` manifests admit anonymous reads. `RoleGate` and `Sponsor`
@@ -106,6 +110,37 @@ pub enum AuthenticationPolicy {
     ///
     /// Listener-wide controls can still restrict this route.
     Unauthenticated,
+}
+
+/// Deterministic effect class for one Torii route.
+///
+/// The classification describes the strongest server-side effect reachable
+/// through the route. A handler which can both read and mutate is therefore a
+/// [`Mutation`](Self::Mutation), while a transport which remains open is a
+/// [`LongLivedStream`](Self::LongLivedStream).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RouteEffect {
+    /// Bounded reads which neither mutate durable state nor enqueue retained work.
+    ReadOnly,
+    /// Bounded but attacker-amplifiable computation, including proof jobs.
+    ExpensiveCompute,
+    /// Ledger, durable-service, or retained-job mutation.
+    Mutation,
+    /// SSE, WebSocket, or another response which deliberately remains open.
+    LongLivedStream,
+}
+
+/// Principal eligibility required before a route may perform its effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AdmissionPolicy {
+    /// No application principal is required.
+    Public,
+    /// A canonical on-ledger account principal is required.
+    AuthenticatedAccount,
+    /// A current validator or roster member is required.
+    ValidatorRosterMember,
+    /// A node operator principal is required.
+    Operator,
 }
 
 /// Router path normalization accepted by a route.
@@ -297,6 +332,8 @@ pub struct RouteDescriptor {
     path: &'static str,
     surface: ApiSurface,
     listener: Listener,
+    effect: RouteEffect,
+    admission: AdmissionPolicy,
     authentication: AuthenticationPolicy,
     feature_gate: FeatureGate,
     projections: RouteProjections,
@@ -308,7 +345,10 @@ pub struct RouteDescriptor {
 }
 
 impl RouteDescriptor {
-    /// Construct a route with conservative defaults and no generated exposure.
+    /// Construct a route with explicit effect and admission metadata.
+    ///
+    /// No effect or admission default exists: every descriptor must state both
+    /// security axes at its declaration site.
     #[must_use]
     pub const fn new(
         stable_route_id: &'static str,
@@ -316,6 +356,8 @@ impl RouteDescriptor {
         path: &'static str,
         surface: ApiSurface,
         listener: Listener,
+        effect: RouteEffect,
+        admission: AdmissionPolicy,
     ) -> Self {
         Self {
             stable_route_id,
@@ -323,6 +365,8 @@ impl RouteDescriptor {
             path,
             surface,
             listener,
+            effect,
+            admission,
             authentication: AuthenticationPolicy::ToriiDefault,
             feature_gate: FeatureGate::Always,
             projections: RouteProjections::NONE,
@@ -345,6 +389,20 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn with_authentication(mut self, authentication: AuthenticationPolicy) -> Self {
         self.authentication = authentication;
+        self
+    }
+
+    /// Replace the explicitly declared effect with a more precise classification.
+    #[must_use]
+    pub const fn with_effect(mut self, effect: RouteEffect) -> Self {
+        self.effect = effect;
+        self
+    }
+
+    /// Replace the explicitly declared admission policy with a more precise classification.
+    #[must_use]
+    pub const fn with_admission(mut self, admission: AdmissionPolicy) -> Self {
+        self.admission = admission;
         self
     }
 
@@ -411,6 +469,18 @@ impl RouteDescriptor {
     #[must_use]
     pub const fn listener(self) -> Listener {
         self.listener
+    }
+
+    /// Return the strongest server-side effect reachable through the route.
+    #[must_use]
+    pub const fn effect(self) -> RouteEffect {
+        self.effect
+    }
+
+    /// Return the principal eligibility required before executing the route.
+    #[must_use]
+    pub const fn admission(self) -> AdmissionPolicy {
+        self.admission
     }
 
     /// Return the route-specific authentication policy.
@@ -607,6 +677,25 @@ pub enum CatalogValidationErrorKind {
     OperatorSurfaceRequiresAuthentication,
     /// Operator credential exchange is valid only on the operator surface.
     OperatorCredentialExchangeRequiresOperatorSurface,
+    /// A mutation can never be admitted without an eligible principal.
+    PublicMutation,
+    /// Attacker-amplifiable computation can never be admitted without an eligible principal.
+    PublicExpensiveCompute,
+    /// Long-lived transports can never be admitted without an eligible principal.
+    PublicLongLivedStream,
+    /// An operator audience must require an operator principal.
+    OperatorSurfaceRequiresOperatorAdmission,
+    /// Account admission lacks a canonical account, manifest, signed-body, or
+    /// authenticated streaming boundary.
+    AuthenticatedAccountRequiresAuthentication,
+    /// Validator/roster admission lacks a peer or operator identity boundary.
+    ValidatorAdmissionRequiresAuthentication,
+    /// Operator admission lacks an operator-capable credential boundary.
+    OperatorAdmissionRequiresAuthentication,
+    /// Long-lived streams must use GET or a reviewed protocol catch-all.
+    LongLivedStreamRequiresGetOrAny,
+    /// Long-lived streams require handler or middleware authentication.
+    LongLivedStreamRequiresAuthentication,
     /// Only GET descriptors may request implicit HEAD handling.
     ImplicitHeadRequiresGet,
     /// Axum GET routing always provides framework-level HEAD handling.
@@ -739,6 +828,100 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 stable_route_id: route_id,
                 kind: CatalogValidationErrorKind::OperatorCredentialExchangeRequiresOperatorSurface,
             });
+        }
+
+        match (route.effect, route.admission) {
+            (RouteEffect::Mutation, AdmissionPolicy::Public) => {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::PublicMutation,
+                });
+            }
+            (RouteEffect::ExpensiveCompute, AdmissionPolicy::Public) => {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::PublicExpensiveCompute,
+                });
+            }
+            (RouteEffect::LongLivedStream, AdmissionPolicy::Public) => {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::PublicLongLivedStream,
+                });
+            }
+            _ => {}
+        }
+
+        if route.surface == ApiSurface::Operator && route.admission != AdmissionPolicy::Operator {
+            errors.push(CatalogValidationError {
+                stable_route_id: route_id,
+                kind: CatalogValidationErrorKind::OperatorSurfaceRequiresOperatorAdmission,
+            });
+        }
+
+        if route.admission == AdmissionPolicy::AuthenticatedAccount
+            && !matches!(
+                route.authentication,
+                AuthenticationPolicy::CanonicalAccountSignature
+                    | AuthenticationPolicy::CanonicalSignedBody
+                    | AuthenticationPolicy::ManifestConditionalContent
+            )
+            && !(route.effect == RouteEffect::LongLivedStream
+                && route.authentication == AuthenticationPolicy::ProtocolHandshake)
+        {
+            errors.push(CatalogValidationError {
+                stable_route_id: route_id,
+                kind: CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
+            });
+        }
+
+        if route.admission == AdmissionPolicy::ValidatorRosterMember
+            && !matches!(
+                route.authentication,
+                AuthenticationPolicy::ProtocolHandshake
+                    | AuthenticationPolicy::IdentityBoundSignature
+                    | AuthenticationPolicy::OperatorSignature
+            )
+        {
+            errors.push(CatalogValidationError {
+                stable_route_id: route_id,
+                kind: CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
+            });
+        }
+
+        if route.admission == AdmissionPolicy::Operator
+            && !matches!(
+                route.authentication,
+                AuthenticationPolicy::RequiredApiToken
+                    | AuthenticationPolicy::OnboardingToken
+                    | AuthenticationPolicy::IdentityBoundSignature
+                    | AuthenticationPolicy::OperatorSignature
+                    | AuthenticationPolicy::OperatorCredentialExchange
+                    | AuthenticationPolicy::ProtocolHandshake
+            )
+        {
+            errors.push(CatalogValidationError {
+                stable_route_id: route_id,
+                kind: CatalogValidationErrorKind::OperatorAdmissionRequiresAuthentication,
+            });
+        }
+
+        if route.effect == RouteEffect::LongLivedStream {
+            if !matches!(route.method, HttpMethod::Get | HttpMethod::Any) {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::LongLivedStreamRequiresGetOrAny,
+                });
+            }
+            if matches!(
+                route.authentication,
+                AuthenticationPolicy::ToriiDefault | AuthenticationPolicy::Unauthenticated
+            ) {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::LongLivedStreamRequiresAuthentication,
+                });
+            }
         }
 
         if route.implicit_head && route.method != HttpMethod::Get {
@@ -962,7 +1145,10 @@ fn validate_feature_name(
 
 /// Universal offline-wallet protocol route descriptors.
 pub mod offline {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteProjections,
+    };
 
     /// Fetch the node's universal offline-wallet interface capability.
     pub const READINESS_PATH: &str = "/v1/offline/readiness";
@@ -982,6 +1168,8 @@ pub mod offline {
         READINESS_PATH,
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
@@ -994,6 +1182,8 @@ pub mod offline {
         RECIPIENT_LINEAGE_PATH,
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
@@ -1005,7 +1195,10 @@ pub mod offline {
         TOP_UP_PATH,
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
@@ -1016,7 +1209,10 @@ pub mod offline {
         REDEEM_PATH,
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
@@ -1027,6 +1223,8 @@ pub mod offline {
         OPERATION_PATH,
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
@@ -1041,8 +1239,8 @@ pub mod offline {
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
-        RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     const fn public_lookup(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -1052,6 +1250,8 @@ pub mod aliases {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::ALL)
@@ -1063,15 +1263,18 @@ pub mod aliases {
     /// Plan one atomic declarative alias setup transaction.
     pub const SETUP_PLAN: RouteDescriptor =
         public_lookup("aliases.setup_plan", "/v1/aliases/setup/plan")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Plan one guarded absolute-expiry alias lease renewal.
     pub const LEASE_RENEW_PLAN: RouteDescriptor =
         public_lookup("aliases.lease_renew_plan", "/v1/aliases/lease/renew/plan")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Plan one owner-only alias auto-renew configuration CAS.
     pub const AUTO_RENEW_PLAN: RouteDescriptor =
         public_lookup("aliases.auto_renew_plan", "/v1/aliases/auto-renew/plan")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Resolve the deterministic numeric alias index.
     pub const RESOLVE_INDEX: RouteDescriptor =
         public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index");
@@ -1081,11 +1284,13 @@ pub mod aliases {
     /// Resolve a retail recipient reference.
     pub const RETAIL_RECIPIENT_LOOKUP: RouteDescriptor =
         public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Resolve a privacy-minimized retail recipient route.
     pub const RETAIL_RECIPIENT_ROUTE: RouteDescriptor =
         public_lookup("retail.recipient.route", "/v1/retail/recipients/route")
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Resolve an asset alias.
     pub const ASSET_RESOLVE: RouteDescriptor =
         public_lookup("assets.alias.resolve", "/v1/assets/aliases/resolve");
@@ -1107,8 +1312,8 @@ pub mod aliases {
 /// Fee quoting and sponsor-program read descriptors.
 pub mod fees {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
-        RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     /// Canonical fee quote path.
@@ -1119,6 +1324,7 @@ pub mod fees {
     const fn account_signed_post(
         stable_route_id: &'static str,
         path: &'static str,
+        effect: RouteEffect,
     ) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -1126,6 +1332,8 @@ pub mod fees {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            effect,
+            AdmissionPolicy::AuthenticatedAccount,
         )
         .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
         .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -1134,10 +1342,14 @@ pub mod fees {
     }
 
     /// Quote the required signature-bound fee intent for one unsigned payload.
-    pub const QUOTE: RouteDescriptor = account_signed_post("fees.quote", QUOTE_PATH);
+    pub const QUOTE: RouteDescriptor =
+        account_signed_post("fees.quote", QUOTE_PATH, RouteEffect::ExpensiveCompute);
     /// Read one exact on-chain sponsor program.
-    pub const SPONSOR_PROGRAM_BY_ID: RouteDescriptor =
-        account_signed_post("fee_sponsor_program.by_id", SPONSOR_PROGRAM_BY_ID_PATH);
+    pub const SPONSOR_PROGRAM_BY_ID: RouteDescriptor = account_signed_post(
+        "fee_sponsor_program.by_id",
+        SPONSOR_PROGRAM_BY_ID_PATH,
+        RouteEffect::ReadOnly,
+    );
 
     /// Canonical first-release fee API catalog.
     pub const ROUTES: &[RouteDescriptor] = &[QUOTE, SPONSOR_PROGRAM_BY_ID];
@@ -1146,7 +1358,8 @@ pub mod fees {
 /// Operator `WebAuthn` credential-registration and login descriptors.
 pub mod operator_authentication {
     use super::{
-        ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor,
+        RouteEffect, RouteProjections,
     };
 
     const fn credential_exchange(
@@ -1159,6 +1372,8 @@ pub mod operator_authentication {
             path,
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::OperatorCredentialExchange)
         .with_projections(RouteProjections::OPENAPI)
@@ -1198,8 +1413,8 @@ pub mod operator_authentication {
 /// Core node information and operator configuration descriptors.
 pub mod core {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     /// Node API/build information.
@@ -1209,6 +1424,8 @@ pub mod core {
         "/v1/api/version",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
@@ -1220,6 +1437,8 @@ pub mod core {
         "/v1/peers",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
@@ -1231,6 +1450,8 @@ pub mod core {
         "/health",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_projections(RouteProjections::ALL)
@@ -1245,6 +1466,8 @@ pub mod core {
         "/livez",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_projections(RouteProjections::ALL)
@@ -1259,6 +1482,8 @@ pub mod core {
         "/readyz",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_projections(RouteProjections::ALL)
@@ -1273,6 +1498,8 @@ pub mod core {
         "/v1/configuration",
         ApiSurface::Operator,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI)
@@ -1284,6 +1511,8 @@ pub mod core {
         "/v1/configuration",
         ApiSurface::Operator,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI);
@@ -1294,6 +1523,8 @@ pub mod core {
         "/v1/nexus/lifecycle",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1305,6 +1536,8 @@ pub mod core {
         "/v1/ledger/headers",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1316,6 +1549,8 @@ pub mod core {
         "/v1/ledger/state/{height}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1327,6 +1562,8 @@ pub mod core {
         "/v1/ledger/state-proof/{height}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1338,6 +1575,8 @@ pub mod core {
         "/v1/ledger/block/{height}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1349,6 +1588,8 @@ pub mod core {
         "/v1/ledger/block/{height}/proof/{entry_hash}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1360,6 +1601,8 @@ pub mod core {
         "/v1/internal/torii/proxy",
         ApiSurface::Operator,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::Operator,
     )
     .with_feature_gate(FeatureGate::Any(&["p2p_ws", "connect"]))
     .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
@@ -1370,6 +1613,8 @@ pub mod core {
         "/v1/vpn/profile",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1381,6 +1626,8 @@ pub mod core {
         "/v1/vpn/quotes",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1392,6 +1639,8 @@ pub mod core {
         "/v1/vpn/sessions",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1403,6 +1652,8 @@ pub mod core {
         "/v1/vpn/receipts",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1415,6 +1666,8 @@ pub mod core {
         "/v1/vpn/receipts",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1426,6 +1679,8 @@ pub mod core {
         "/v1/vpn/sessions/{session_id}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1438,6 +1693,8 @@ pub mod core {
         "/v1/vpn/sessions/{session_id}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1449,6 +1706,8 @@ pub mod core {
         "/v1/time/now",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1460,6 +1719,8 @@ pub mod core {
         "/v1/time/status",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1496,8 +1757,8 @@ pub mod core {
 /// Diagnostic and self-description protocol exceptions.
 pub mod diagnostic {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteMatch, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
 
     /// Root diagnostic status document.
@@ -1507,6 +1768,8 @@ pub mod diagnostic {
         "/status",
         ApiSurface::Diagnostic,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("telemetry"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
@@ -1522,6 +1785,8 @@ pub mod diagnostic {
         "/status/{*tail}",
         ApiSurface::Diagnostic,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("telemetry"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
@@ -1538,6 +1803,8 @@ pub mod diagnostic {
         "/metrics",
         ApiSurface::Diagnostic,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("telemetry"))
     .with_authentication(AuthenticationPolicy::Unauthenticated)
@@ -1553,9 +1820,11 @@ pub mod diagnostic {
         "/debug/pprof/profile",
         ApiSurface::Diagnostic,
         Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::Operator,
     )
     .with_feature_gate(FeatureGate::Feature("profiling"))
-    .with_authentication(AuthenticationPolicy::Unauthenticated)
+    .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "pprof tooling convention",
@@ -1568,6 +1837,8 @@ pub mod diagnostic {
         "/v1/schema",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("schema"))
     .with_projections(RouteProjections::OPENAPI)
@@ -1579,6 +1850,8 @@ pub mod diagnostic {
         "/openapi.json",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
@@ -1592,6 +1865,8 @@ pub mod diagnostic {
         "/openapi",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI)
     .with_path_policy(PathPolicy::ProtocolException {
@@ -1621,8 +1896,8 @@ pub mod diagnostic {
 /// Transaction, query, proof, and pipeline routes.
 pub mod pipeline {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
-        RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     /// Submit one signed transaction.
@@ -1632,7 +1907,10 @@ pub mod pipeline {
         "/v1/pipeline/transactions",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Submit a transaction entrypoint envelope.
@@ -1642,7 +1920,10 @@ pub mod pipeline {
         "/v1/pipeline/transaction-entrypoints",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Submit a batch of signed transactions.
@@ -1652,7 +1933,10 @@ pub mod pipeline {
         "/v1/pipeline/transactions/batch",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Execute a signed query.
@@ -1662,7 +1946,10 @@ pub mod pipeline {
         "/v1/query",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Read one proof record.
@@ -1672,6 +1959,8 @@ pub mod pipeline {
         "/v1/proofs/{id}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1684,6 +1973,8 @@ pub mod pipeline {
         "/v1/proofs/retention",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1695,9 +1986,24 @@ pub mod pipeline {
         "/v1/pipeline/transactions/status",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
+    .with_cors_options(true);
+    /// Read exact committed transaction details through a one-shot signed query.
+    pub const TRANSACTION_DETAILS: RouteDescriptor = RouteDescriptor::new(
+        "pipeline.transaction_details",
+        HttpMethod::Post,
+        "/v1/pipeline/transactions/details",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Read pipeline admission readiness before submitting work.
     pub const PREFLIGHT: RouteDescriptor = RouteDescriptor::new(
@@ -1706,6 +2012,8 @@ pub mod pipeline {
         "/v1/pipeline/preflight",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1717,6 +2025,8 @@ pub mod pipeline {
         "/v1/triggers/completed",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1728,6 +2038,8 @@ pub mod pipeline {
         "/v1/pipeline/recovery/{height}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1739,6 +2051,8 @@ pub mod pipeline {
         "/v1/pipeline/recovery/{height}/fastpq-proofs",
         ApiSurface::Operator,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Operator,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -1751,6 +2065,8 @@ pub mod pipeline {
         "/v1/policy",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
@@ -1765,6 +2081,7 @@ pub mod pipeline {
         PROOF,
         PROOF_RETENTION,
         TRANSACTION_STATUS,
+        TRANSACTION_DETAILS,
         PREFLIGHT,
         TRIGGER_COMPLETIONS,
         RECOVERY,
@@ -1776,7 +2093,8 @@ pub mod pipeline {
 /// ISO 20022 bridge submission, record, audit, and XML-view descriptors.
 pub mod iso20022 {
     use super::{
-        ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor,
+        RouteEffect, RouteProjections,
     };
 
     const fn public_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -1786,6 +2104,8 @@ pub mod iso20022 {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::RequiredApiToken)
         .with_projections(RouteProjections::ALL)
@@ -1799,6 +2119,8 @@ pub mod iso20022 {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::RequiredApiToken)
         .with_projections(RouteProjections::ALL)
@@ -1888,7 +2210,10 @@ pub mod iso20022 {
 
 /// Data-availability ingestion, proof-policy, commitment, and pin descriptors.
 pub mod data_availability {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteProjections,
+    };
 
     const fn public_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -1897,6 +2222,8 @@ pub mod data_availability {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::ALL)
         .with_cors_options(true)
@@ -1909,6 +2236,8 @@ pub mod data_availability {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::ALL)
         .with_implicit_head(true)
@@ -1917,7 +2246,10 @@ pub mod data_availability {
 
     /// Ingest a data-availability blob and routing manifest.
     pub const INGEST: RouteDescriptor = public_post("data_availability.ingest", "/v1/da/ingest")
-        .with_feature_gate(FeatureGate::Feature("app_api"));
+        .with_feature_gate(FeatureGate::Feature("app_api"))
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        .with_effect(RouteEffect::Mutation)
+        .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// Read the manifest addressed by a storage ticket.
     pub const MANIFEST: RouteDescriptor = public_get(
         "data_availability.manifest.read",
@@ -1941,12 +2273,18 @@ pub mod data_availability {
     pub const COMMITMENTS_PROVE: RouteDescriptor = public_post(
         "data_availability.commitment.prove",
         "/v1/da/commitments/prove",
-    );
+    )
+    .with_effect(RouteEffect::ExpensiveCompute)
+    .with_admission(AdmissionPolicy::AuthenticatedAccount)
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Verify a proof for a data-availability commitment.
     pub const COMMITMENTS_VERIFY: RouteDescriptor = public_post(
         "data_availability.commitment.verify",
         "/v1/da/commitments/verify",
-    );
+    )
+    .with_effect(RouteEffect::ExpensiveCompute)
+    .with_admission(AdmissionPolicy::AuthenticatedAccount)
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// List pin intents selected by a typed filter request.
     pub const PIN_INTENTS: RouteDescriptor =
         public_post("data_availability.pin_intent.list", "/v1/da/pin-intents");
@@ -1954,12 +2292,18 @@ pub mod data_availability {
     pub const PIN_INTENTS_PROVE: RouteDescriptor = public_post(
         "data_availability.pin_intent.prove",
         "/v1/da/pin-intents/prove",
-    );
+    )
+    .with_effect(RouteEffect::ExpensiveCompute)
+    .with_admission(AdmissionPolicy::AuthenticatedAccount)
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Verify a proof for a pin intent.
     pub const PIN_INTENTS_VERIFY: RouteDescriptor = public_post(
         "data_availability.pin_intent.verify",
         "/v1/da/pin-intents/verify",
-    );
+    )
+    .with_effect(RouteEffect::ExpensiveCompute)
+    .with_admission(AdmissionPolicy::AuthenticatedAccount)
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
 
     /// Complete data-availability route family.
     pub const ROUTES: &[RouteDescriptor] = &[
@@ -1978,7 +2322,10 @@ pub mod data_availability {
 
 /// First-release Musubi typed-query and unsigned-instruction descriptors.
 pub mod musubi {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        AdmissionPolicy, ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor,
+        RouteEffect, RouteProjections,
+    };
 
     const fn app_post(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -1987,6 +2334,8 @@ pub mod musubi {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::ALL)
@@ -2182,8 +2531,8 @@ pub mod musubi {
 /// Protocol-native event and peer transports.
 pub mod streaming {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     /// Peer-to-peer WebSocket upgrade endpoint.
@@ -2193,6 +2542,8 @@ pub mod streaming {
         "/p2p",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::LongLivedStream,
+        AdmissionPolicy::ValidatorRosterMember,
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
     .with_projections(RouteProjections::OPENAPI)
@@ -2207,6 +2558,8 @@ pub mod streaming {
         "/v1/events/sse",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::LongLivedStream,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -2222,6 +2575,8 @@ pub mod streaming {
         "/v1/contracts/events/sse",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::LongLivedStream,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -2237,6 +2592,8 @@ pub mod streaming {
         "/v1/events/ws",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::LongLivedStream,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -2252,6 +2609,8 @@ pub mod streaming {
         "/v1/blocks/stream",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::LongLivedStream,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -2268,7 +2627,10 @@ pub mod streaming {
 
 /// Native MCP transport routes.
 pub mod mcp_transport {
-    use super::{ApiSurface, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        AdmissionPolicy, ApiSurface, HttpMethod, Listener, RouteDescriptor, RouteEffect,
+        RouteProjections,
+    };
 
     /// Read MCP server capabilities.
     pub const CAPABILITIES: RouteDescriptor = RouteDescriptor::new(
@@ -2277,6 +2639,8 @@ pub mod mcp_transport {
         "/v1/mcp",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI)
     .with_implicit_head(true)
@@ -2288,6 +2652,8 @@ pub mod mcp_transport {
         "/v1/mcp",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_projections(RouteProjections::OPENAPI)
     .with_cors_options(true);
@@ -2299,8 +2665,8 @@ pub mod mcp_transport {
 /// Iroha Connect pairing and relay routes.
 pub mod connect {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     /// Create a wallet-pairing session.
@@ -2310,8 +2676,11 @@ pub mod connect {
         "/v1/connect/session",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("connect"))
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Delete a wallet-pairing session using its management token.
@@ -2321,9 +2690,11 @@ pub mod connect {
         "/v1/connect/session/{sid}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("connect"))
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
     /// Upgrade to the authenticated Connect relay WebSocket.
@@ -2333,9 +2704,11 @@ pub mod connect {
         "/v1/connect/ws",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::LongLivedStream,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("connect"))
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "Connect WebSocket transport endpoint",
@@ -2348,6 +2721,8 @@ pub mod connect {
         "/v1/connect/status",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("connect"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -2361,8 +2736,8 @@ pub mod connect {
 /// Telemetry-gated operator diagnostics, privacy ingestion, and asset-holder routes.
 pub mod telemetry {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
-        RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     const fn telemetry_operator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2372,6 +2747,8 @@ pub mod telemetry {
             path,
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_feature_gate(FeatureGate::Feature("telemetry"))
@@ -2386,6 +2763,8 @@ pub mod telemetry {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("telemetry"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -2399,6 +2778,8 @@ pub mod telemetry {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::ALL)
@@ -2413,6 +2794,8 @@ pub mod telemetry {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::ALL)
@@ -2464,8 +2847,8 @@ pub mod telemetry {
 /// Consensus evidence, SCCP, VRF, finality, and Sumeragi introspection routes.
 pub mod sumeragi {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2475,6 +2858,8 @@ pub mod sumeragi {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::ALL)
         .with_implicit_head(true)
@@ -2496,6 +2881,8 @@ pub mod sumeragi {
             path,
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::LongLivedStream,
+            AdmissionPolicy::ValidatorRosterMember,
         )
         .with_authentication(AuthenticationPolicy::ProtocolHandshake)
         .with_feature_gate(FeatureGate::Feature("telemetry"))
@@ -2646,8 +3033,8 @@ pub mod sumeragi {
 /// Runtime, zero-knowledge, node-projection, and governance routes.
 pub mod runtime_governance {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2657,6 +3044,8 @@ pub mod runtime_governance {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_implicit_head(true)
@@ -2670,6 +3059,8 @@ pub mod runtime_governance {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
@@ -2680,7 +3071,9 @@ pub mod runtime_governance {
     }
 
     const fn app_signed_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
 
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2694,6 +3087,8 @@ pub mod runtime_governance {
             path,
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::OPENAPI)
@@ -2707,6 +3102,8 @@ pub mod runtime_governance {
             path,
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::OPENAPI)
@@ -2730,10 +3127,15 @@ pub mod runtime_governance {
     /// Derive an IVM zero-knowledge executable.
     pub const ZK_IVM_DERIVE: RouteDescriptor = app_post("zk.ivm.derive", "/v1/zk/ivm/derive");
     /// Start an IVM zero-knowledge proving job.
-    pub const ZK_IVM_PROVE: RouteDescriptor = app_post("zk.ivm.prove", "/v1/zk/ivm/prove");
+    pub const ZK_IVM_PROVE: RouteDescriptor = app_post("zk.ivm.prove", "/v1/zk/ivm/prove")
+        .with_effect(RouteEffect::ExpensiveCompute)
+        .with_admission(AdmissionPolicy::AuthenticatedAccount)
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Read an IVM zero-knowledge proving job.
     pub const ZK_IVM_PROVE_GET: RouteDescriptor =
-        app_get("zk.ivm.prove_job.read", "/v1/zk/ivm/prove/{job_id}");
+        app_get("zk.ivm.prove_job.read", "/v1/zk/ivm/prove/{job_id}")
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Cancel and delete an IVM zero-knowledge proving job.
     pub const ZK_IVM_PROVE_DELETE: RouteDescriptor = RouteDescriptor::new(
         "zk.ivm.prove_job.delete",
@@ -2741,7 +3143,10 @@ pub mod runtime_governance {
         "/v1/zk/ivm/prove/{job_id}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
     )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
@@ -2765,6 +3170,8 @@ pub mod runtime_governance {
         "/v1/zk/attachments/{id}",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -2955,6 +3362,8 @@ pub mod runtime_governance {
         "/v1/gov/stream",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::LongLivedStream,
+        AdmissionPolicy::AuthenticatedAccount,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -3048,8 +3457,8 @@ pub mod runtime_governance {
 /// `SoraFS` discovery, storage, transparency, reputation, and gateway routes.
 pub mod sorafs {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteMatch, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
 
     const fn public_get(
@@ -3063,6 +3472,8 @@ pub mod sorafs {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(projections)
@@ -3081,6 +3492,8 @@ pub mod sorafs {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(projections)
@@ -3101,6 +3514,7 @@ pub mod sorafs {
     ) -> RouteDescriptor {
         documented_get(stable_route_id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
 
     const fn authenticated_documented_post(
@@ -3109,6 +3523,8 @@ pub mod sorafs {
     ) -> RouteDescriptor {
         documented_post(stable_route_id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
 
     const fn local_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3125,6 +3541,8 @@ pub mod sorafs {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -3142,6 +3560,8 @@ pub mod sorafs {
             path,
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::LongLivedStream,
+            AdmissionPolicy::AuthenticatedAccount,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -3161,6 +3581,8 @@ pub mod sorafs {
             path,
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -3473,7 +3895,9 @@ pub mod sorafs {
     /// Request a storage access token.
     pub const STORAGE_TOKEN: RouteDescriptor =
         documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token")
-            .with_authentication(AuthenticationPolicy::RequiredApiToken);
+            .with_authentication(AuthenticationPolicy::RequiredApiToken)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::Operator);
     /// Read CAR bytes for a stored manifest.
     pub const STORAGE_CAR: RouteDescriptor = documented_get(
         "sorafs.storage_car.read",
@@ -3487,26 +3911,35 @@ pub mod sorafs {
     /// Build a bounded proof-stream payload.
     pub const PROOF_STREAM: RouteDescriptor =
         documented_post("sorafs.proof_stream.build", "/v1/sorafs/proof/stream")
-            .with_authentication(AuthenticationPolicy::OperatorSignature);
+            .with_authentication(AuthenticationPolicy::OperatorSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::Operator);
     /// Enqueue one council-admitted PDP challenge.
     pub const PDP_CHALLENGE: RouteDescriptor =
         documented_post("sorafs.pdp.challenge", "/v1/sorafs/pdp/challenge")
-            .with_authentication(AuthenticationPolicy::OperatorSignature);
+            .with_authentication(AuthenticationPolicy::OperatorSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::Operator);
     /// Fetch the next pending PDP challenge for one provider.
     pub const PDP_NEXT: RouteDescriptor = documented_post("sorafs.pdp.next", "/v1/sorafs/pdp/next")
-        .with_authentication(AuthenticationPolicy::OperatorSignature);
+        .with_authentication(AuthenticationPolicy::OperatorSignature)
+        .with_admission(AdmissionPolicy::Operator);
     /// Submit one challenge-bound PDP proof.
     pub const PDP_PROOF: RouteDescriptor =
         documented_post("sorafs.pdp.proof", "/v1/sorafs/pdp/proof")
-            .with_authentication(AuthenticationPolicy::OperatorSignature);
+            .with_authentication(AuthenticationPolicy::OperatorSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::Operator);
     /// Read one retained PDP challenge status.
     pub const PDP_STATUS: RouteDescriptor =
         documented_post("sorafs.pdp.status", "/v1/sorafs/pdp/status")
-            .with_authentication(AuthenticationPolicy::OperatorSignature);
+            .with_authentication(AuthenticationPolicy::OperatorSignature)
+            .with_admission(AdmissionPolicy::Operator);
     /// Export one bounded page of retained PDP statuses.
     pub const PDP_EXPORT: RouteDescriptor =
         documented_post("sorafs.pdp.export", "/v1/sorafs/pdp/export")
-            .with_authentication(AuthenticationPolicy::OperatorSignature);
+            .with_authentication(AuthenticationPolicy::OperatorSignature)
+            .with_admission(AdmissionPolicy::Operator);
     /// Submit one canonical encrypted `PoP` enrollment.
     pub const POP_ENROLLMENT: RouteDescriptor =
         documented_post("sorafs.pop.enrollment.submit", "/v1/sorafs/pop/enrollments")
@@ -3697,8 +4130,8 @@ pub mod sorafs {
 /// Application-facing resource, explorer, webhook, and protocol routes.
 pub mod application_api {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteMatch, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
 
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3708,6 +4141,8 @@ pub mod application_api {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -3722,6 +4157,8 @@ pub mod application_api {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::NONE)
@@ -3735,6 +4172,8 @@ pub mod application_api {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -3750,11 +4189,16 @@ pub mod application_api {
     }
 
     const fn onboarding_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_post(id, path).with_authentication(AuthenticationPolicy::OnboardingToken)
+        app_post(id, path)
+            .with_authentication(AuthenticationPolicy::OnboardingToken)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::Operator)
     }
 
     const fn onboarding_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_authentication(AuthenticationPolicy::OnboardingToken)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::OnboardingToken)
+            .with_admission(AdmissionPolicy::Operator)
     }
 
     const fn app_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3764,6 +4208,8 @@ pub mod application_api {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -3771,15 +4217,23 @@ pub mod application_api {
     }
 
     const fn app_api_token_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_authentication(AuthenticationPolicy::RequiredApiToken)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::RequiredApiToken)
+            .with_admission(AdmissionPolicy::Operator)
     }
 
     const fn app_api_token_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_post(id, path).with_authentication(AuthenticationPolicy::RequiredApiToken)
+        app_post(id, path)
+            .with_authentication(AuthenticationPolicy::RequiredApiToken)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::Operator)
     }
 
     const fn app_api_token_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_delete(id, path).with_authentication(AuthenticationPolicy::RequiredApiToken)
+        app_delete(id, path)
+            .with_authentication(AuthenticationPolicy::RequiredApiToken)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::Operator)
     }
 
     const fn app_wildcard_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3793,12 +4247,16 @@ pub mod application_api {
     const fn push_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_post(id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
             .with_feature_gate(FeatureGate::All(&["app_api", "push"]))
     }
 
     const fn push_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_delete(id, path)
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
             .with_feature_gate(FeatureGate::All(&["app_api", "push"]))
     }
 
@@ -3809,6 +4267,8 @@ pub mod application_api {
             path,
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::LongLivedStream,
+            AdmissionPolicy::AuthenticatedAccount,
         )
         .with_authentication(AuthenticationPolicy::ProtocolHandshake)
         .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -3834,6 +4294,8 @@ pub mod application_api {
             path,
             ApiSurface::Diagnostic,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::All(&["app_api", "telemetry"]))
         .with_implicit_head(true)
@@ -4056,8 +4518,8 @@ pub mod application_api {
 /// Contract execution, multisig, verification-key, and proof-service routes.
 pub mod contracts_and_verification_keys {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
 
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -4067,6 +4529,8 @@ pub mod contracts_and_verification_keys {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -4075,7 +4539,9 @@ pub mod contracts_and_verification_keys {
     }
 
     const fn app_signed_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
 
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -4085,6 +4551,8 @@ pub mod contracts_and_verification_keys {
             path,
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
@@ -4092,7 +4560,10 @@ pub mod contracts_and_verification_keys {
     }
 
     const fn app_signed_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_post(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+        app_post(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount)
     }
 
     const fn app_unprojected_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -4129,6 +4600,8 @@ pub mod contracts_and_verification_keys {
             path,
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -4142,6 +4615,8 @@ pub mod contracts_and_verification_keys {
             path,
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::LongLivedStream,
+            AdmissionPolicy::AuthenticatedAccount,
         )
         .with_authentication(AuthenticationPolicy::ProtocolHandshake)
         .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -4322,8 +4797,8 @@ pub mod contracts_and_verification_keys {
 /// Protocol-native `SoraCloud` public gateway routes.
 pub mod soracloud_gateway {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
-        RouteDescriptor, RouteMatch,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        PathPolicy, RouteDescriptor, RouteEffect, RouteMatch,
     };
 
     /// Resolve a `SoraDNS` name to the root of its active public runtime.
@@ -4333,6 +4808,8 @@ pub mod soracloud_gateway {
         "/soradns/{fqdn}",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -4346,6 +4823,8 @@ pub mod soracloud_gateway {
         "/soradns/{fqdn}/{*path}",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -4360,6 +4839,8 @@ pub mod soracloud_gateway {
         "/api",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -4373,6 +4854,8 @@ pub mod soracloud_gateway {
         "/api/{*tail}",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::Unauthenticated)
     .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -4388,8 +4871,8 @@ pub mod soracloud_gateway {
 /// Raw content and `SoraDNS` directory routes.
 pub mod content_directory {
     use super::{
-        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
-        RouteMatch, RouteProjections,
+        AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
+        RouteDescriptor, RouteEffect, RouteMatch, RouteProjections,
     };
 
     /// Read one path from a registered content bundle.
@@ -4399,6 +4882,8 @@ pub mod content_directory {
         "/v1/content/{bundle}/{*path}",
         ApiSurface::Protocol,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::ManifestConditionalContent)
     .with_feature_gate(FeatureGate::Feature("app_api"))
@@ -4413,6 +4898,8 @@ pub mod content_directory {
         "/v1/soradns/directory/latest",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)
@@ -4425,6 +4912,8 @@ pub mod content_directory {
         "/v1/soradns/directory/events",
         ApiSurface::Public,
         Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI)
@@ -4492,6 +4981,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     pipeline::PROOF,
     pipeline::PROOF_RETENTION,
     pipeline::TRANSACTION_STATUS,
+    pipeline::TRANSACTION_DETAILS,
     pipeline::PREFLIGHT,
     pipeline::TRIGGER_COMPLETIONS,
     pipeline::RECOVERY,
@@ -5113,6 +5603,8 @@ mod tests {
             "/v1/tests/always",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::ALL),
         RouteDescriptor::new(
@@ -5121,6 +5613,8 @@ mod tests {
             "/v1/tests/featured",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK),
@@ -5130,6 +5624,8 @@ mod tests {
             "/v1/tests/diagnostic",
             ApiSurface::Diagnostic,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         ),
     ];
 
@@ -5150,6 +5646,11 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), offline::ROUTES.len());
         assert_eq!(method_paths.len(), offline::ROUTES.len());
+    }
+
+    #[test]
+    fn canonical_catalog_satisfies_closed_security_axes() {
+        assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
 
     #[test]
@@ -5349,6 +5850,8 @@ mod tests {
             "/v1/tests/identity-bound-operator",
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
         let errors = validate_catalog(&[generic_identity_bound_operator])
@@ -5736,6 +6239,8 @@ mod tests {
                 invalid_path,
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_implicit_head(true);
             assert!(
@@ -5750,6 +6255,8 @@ mod tests {
             "/sorafs/cid/{cid}/",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "adversarial trailing-slash test",
@@ -6135,6 +6642,8 @@ mod tests {
             "/content/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_authentication(AuthenticationPolicy::ProtocolHandshake)
@@ -6192,6 +6701,8 @@ mod tests {
                 "/v1/tests/one",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.duplicate",
@@ -6199,6 +6710,8 @@ mod tests {
                 "/v1/tests/two",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.same_path",
@@ -6206,6 +6719,8 @@ mod tests {
                 "/v1/tests/one",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.same_shape_one",
@@ -6213,6 +6728,8 @@ mod tests {
                 "/v1/tests/shapes/{first_id}",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.same_shape_two",
@@ -6220,6 +6737,8 @@ mod tests {
                 "/v1/tests/shapes/{second_id}",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
         ];
 
@@ -6266,6 +6785,8 @@ mod tests {
                 path,
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             );
             assert!(
                 validate_catalog(&[descriptor]).is_err(),
@@ -6283,6 +6804,8 @@ mod tests {
                 "/v1/tests/resources/list",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_get_post",
@@ -6290,6 +6813,8 @@ mod tests {
                 "/v1/tests/resources/get",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_list_get",
@@ -6297,6 +6822,8 @@ mod tests {
                 "/v1/tests/resources/list",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_list_post",
@@ -6304,6 +6831,8 @@ mod tests {
                 "/v1/tests/resources/list/details",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_query_post",
@@ -6311,6 +6840,8 @@ mod tests {
                 "/v1/tests/resources/list",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
         ] {
             assert_eq!(
@@ -6326,6 +6857,8 @@ mod tests {
                 "/v1/tests/resources/json",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
             RouteDescriptor::new(
                 "test.resources_sse_post",
@@ -6333,6 +6866,8 @@ mod tests {
                 "/v1/tests/resources/sse",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             ),
         ] {
             assert_eq!(
@@ -6350,6 +6885,8 @@ mod tests {
             "/v1/content/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_route_match(RouteMatch::Wildcard)
         .with_implicit_head(true);
@@ -6359,6 +6896,8 @@ mod tests {
             "/health",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_path_policy(PathPolicy::ProtocolException {
             reason: "orchestrator health-probe convention",
@@ -6372,6 +6911,8 @@ mod tests {
             "/v1/content/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         );
         assert!(validate_catalog(&[implicit_wildcard]).is_err());
     }
@@ -6385,6 +6926,8 @@ mod tests {
                 "/v1/tests/diagnostic-sdk",
                 ApiSurface::Diagnostic,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_projections(RouteProjections::SDK),
             RouteDescriptor::new(
@@ -6393,6 +6936,8 @@ mod tests {
                 "/v1/tests/protocol-handshake",
                 ApiSurface::Protocol,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_authentication(AuthenticationPolicy::ProtocolHandshake)
             .with_projections(RouteProjections::MCP),
@@ -6402,6 +6947,8 @@ mod tests {
                 "/v1/tests/operator-without-signature",
                 ApiSurface::Operator,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Operator,
             )
             .with_projections(RouteProjections::MCP),
             RouteDescriptor::new(
@@ -6410,6 +6957,8 @@ mod tests {
                 "/v1/tests/head-on-post",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_implicit_head(true),
             RouteDescriptor::new(
@@ -6418,6 +6967,8 @@ mod tests {
                 "/v1/tests/public-credential-exchange",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_authentication(AuthenticationPolicy::OperatorCredentialExchange),
         ];
@@ -6444,6 +6995,135 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_unsafe_effect_and_principal_combinations() {
+        let routes = [
+            RouteDescriptor::new(
+                "test.public_mutation",
+                HttpMethod::Post,
+                "/v1/tests/public-mutation",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::Public,
+            ),
+            RouteDescriptor::new(
+                "test.public_expensive_compute",
+                HttpMethod::Post,
+                "/v1/tests/public-expensive-compute",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::ExpensiveCompute,
+                AdmissionPolicy::Public,
+            ),
+            RouteDescriptor::new(
+                "test.account_without_account_auth",
+                HttpMethod::Post,
+                "/v1/tests/account-without-account-auth",
+                ApiSurface::Public,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::AuthenticatedAccount,
+            )
+            .with_authentication(AuthenticationPolicy::IdentityBoundSignature),
+            RouteDescriptor::new(
+                "test.validator_without_roster_auth",
+                HttpMethod::Post,
+                "/v1/tests/validator-without-roster-auth",
+                ApiSurface::Protocol,
+                Listener::Torii,
+                RouteEffect::Mutation,
+                AdmissionPolicy::ValidatorRosterMember,
+            )
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature),
+            RouteDescriptor::new(
+                "test.post_stream",
+                HttpMethod::Post,
+                "/v1/tests/post-stream",
+                ApiSurface::Protocol,
+                Listener::Torii,
+                RouteEffect::LongLivedStream,
+                AdmissionPolicy::ValidatorRosterMember,
+            )
+            .with_authentication(AuthenticationPolicy::ProtocolHandshake),
+        ];
+
+        let errors = validate_catalog(&routes).expect_err("unsafe admission metadata must fail");
+        for expected in [
+            CatalogValidationErrorKind::PublicMutation,
+            CatalogValidationErrorKind::PublicExpensiveCompute,
+            CatalogValidationErrorKind::AuthenticatedAccountRequiresAuthentication,
+            CatalogValidationErrorKind::ValidatorAdmissionRequiresAuthentication,
+            CatalogValidationErrorKind::LongLivedStreamRequiresGetOrAny,
+        ] {
+            assert!(
+                errors.iter().any(|error| error.kind == expected),
+                "missing catalog validation error: {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn critical_routes_expose_closed_effect_and_admission_axes() {
+        for route in [
+            pipeline::TRANSACTION,
+            pipeline::TRANSACTION_ENTRYPOINT,
+            pipeline::TRANSACTIONS_BATCH,
+        ] {
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalSignedBody
+            );
+        }
+        assert_eq!(pipeline::QUERY.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(
+            pipeline::QUERY.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            pipeline::QUERY.authentication(),
+            AuthenticationPolicy::CanonicalSignedBody
+        );
+        assert_eq!(pipeline::TRANSACTION_STATUS.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            pipeline::TRANSACTION_STATUS.admission(),
+            AdmissionPolicy::Public
+        );
+        assert_eq!(
+            pipeline::TRANSACTION_DETAILS.effect(),
+            RouteEffect::ExpensiveCompute
+        );
+        assert_eq!(
+            pipeline::TRANSACTION_DETAILS.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            pipeline::TRANSACTION_DETAILS.authentication(),
+            AuthenticationPolicy::CanonicalSignedBody
+        );
+
+        assert_eq!(core::HEALTH.effect(), RouteEffect::ReadOnly);
+        assert_eq!(core::HEALTH.admission(), AdmissionPolicy::Public);
+        assert_eq!(
+            runtime_governance::ZK_IVM_PROVE.effect(),
+            RouteEffect::ExpensiveCompute
+        );
+        assert_eq!(
+            runtime_governance::ZK_IVM_PROVE.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            streaming::SUBSCRIPTION_WS.effect(),
+            RouteEffect::LongLivedStream
+        );
+        assert_eq!(
+            streaming::P2P.admission(),
+            AdmissionPolicy::ValidatorRosterMember
+        );
+    }
+
+    #[test]
     fn implicit_head_and_cors_routes_are_separate_from_explicit_operations() {
         let routes = [
             RouteDescriptor::new(
@@ -6452,6 +7132,8 @@ mod tests {
                 "/v1/tests/resource",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_implicit_head(true)
             .with_cors_options(true),
@@ -6461,6 +7143,8 @@ mod tests {
                 "/v1/tests/resource",
                 ApiSurface::Public,
                 Listener::Torii,
+                RouteEffect::ReadOnly,
+                AdmissionPolicy::Public,
             )
             .with_cors_options(true),
         ];
@@ -6493,6 +7177,8 @@ mod tests {
             "/gateway/{*tail}",
             ApiSurface::Protocol,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_route_match(RouteMatch::Wildcard)
         .with_path_policy(PathPolicy::ProtocolException {
@@ -6506,6 +7192,8 @@ mod tests {
             "/v1/tests/{*tail}",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_route_match(RouteMatch::Wildcard)
         .with_projections(RouteProjections::OPENAPI);

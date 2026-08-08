@@ -15,6 +15,7 @@ from iroha_python import (
     AggregateMetric,
     AggregateSpec,
     MultisigResponse,
+    NetworkId,
     QueryEnvelope,
     ToriiClient,
     TriggerCompletionList,
@@ -92,12 +93,18 @@ def _client_with_session() -> tuple[ToriiClient, RecordingSession]:
 
 def test_get_transaction_status_defaults_to_global_scope() -> None:
     client, session = _client_with_session()
-    session._response = StubResponse(payload={"status": "Committed"})
     tx_hash = "aa" * 32
+    status = {
+        "hash": tx_hash,
+        "status": {"kind": "Committed"},
+        "scope": "global",
+        "resolved_from": "queue",
+    }
+    session._response = StubResponse(payload=status)
 
     payload = client.get_transaction_status(tx_hash)
 
-    assert payload == {"status": "Committed"}
+    assert payload == status
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["url"] == "http://localhost:8080/v1/pipeline/transactions/status"
     assert session.calls[0]["params"] == {"hash": tx_hash, "scope": "global"}
@@ -105,8 +112,14 @@ def test_get_transaction_status_defaults_to_global_scope() -> None:
 
 def test_wait_for_transaction_status_forwards_explicit_scope() -> None:
     client, session = _client_with_session()
-    session._response = StubResponse(payload={"status": "Committed"})
     tx_hash = "bb" * 32
+    status = {
+        "hash": tx_hash,
+        "status": {"kind": "Committed"},
+        "scope": "local",
+        "resolved_from": "queue",
+    }
+    session._response = StubResponse(payload=status)
 
     payload = client.wait_for_transaction_status(
         tx_hash,
@@ -115,7 +128,7 @@ def test_wait_for_transaction_status_forwards_explicit_scope() -> None:
         scope="local",
     )
 
-    assert payload == {"status": "Committed"}
+    assert payload == status
     assert session.calls[0]["params"] == {"hash": tx_hash, "scope": "local"}
 
 
@@ -138,6 +151,24 @@ def test_transaction_status_scope_rejects_auto_and_injected_values() -> None:
     assert session.calls == []
 
 
+def test_get_transaction_status_rejects_retired_sensitive_fields() -> None:
+    client, session = _client_with_session()
+    tx_hash = "dd" * 32
+    session._response = StubResponse(
+        payload={
+            "hash": tx_hash,
+            "status": {"kind": "Rejected", "rejection_reason": "secret"},
+            "summary": "Rejected: secret",
+            "diagnostics": [{"message": "secret"}],
+            "scope": "global",
+            "resolved_from": "state",
+        }
+    )
+
+    with pytest.raises(ValueError, match="retired or unsupported fields"):
+        client.get_transaction_status(tx_hash)
+
+
 def test_build_and_submit_transaction_forwards_wait_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,7 +178,8 @@ def test_build_and_submit_transaction_forwards_wait_scope(
 
     class FakeCrypto:
         @staticmethod
-        def build_signed_transaction(*_args: Any, **_kwargs: Any) -> Any:
+        def build_signed_transaction(*args: Any, **_kwargs: Any) -> Any:
+            captured["network_id"] = args[0]
             return envelope
 
     def fake_submit_transaction_envelope_and_wait(
@@ -165,8 +197,9 @@ def test_build_and_submit_transaction_forwards_wait_scope(
         fake_submit_transaction_envelope_and_wait,
     )
 
+    network_id = NetworkId.from_bytes(b"\xA5" * 32)
     envelope_out, result = client.build_and_submit_transaction(
-        "00000000-0000-0000-0000-000000000000",
+        network_id,
         "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         b"\x11" * 32,
         fee_payment={
@@ -179,6 +212,7 @@ def test_build_and_submit_transaction_forwards_wait_scope(
     assert envelope_out is envelope
     assert result == {"status": "Committed"}
     assert captured["envelope"] is envelope
+    assert captured["network_id"] == network_id
     assert captured["scope"] == "local"
 
 

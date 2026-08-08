@@ -11,7 +11,7 @@ use std::{num::NonZeroU32, time::Duration};
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     metadata::Metadata,
-    prelude::{AccountId, AssetDefinitionId, ChainId},
+    prelude::{AccountId, AssetDefinitionId, ChainId, NetworkId},
     privacy::{
         OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1, PrivacyConsensusLimitsV1,
         PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1, PrivacyOrchardPoolBootstrapV1,
@@ -50,6 +50,8 @@ use crate::privacy_engines::orchard::{OrchardBundleDraftV1, OrchardChangeProverI
 /// action builder.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseTransactionContextV1 {
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Actual network chain identifier.
     pub chain_id: ChainId,
     /// Actual submitting account.
@@ -147,8 +149,11 @@ fn transaction_payload_v1(
     context: &PrivacyReleaseTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
 ) -> Result<TransactionPayload, PrivacyReleaseEvidenceErrorClassV1> {
+    if context.network_id.as_bytes() != &context.genesis_hash {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )

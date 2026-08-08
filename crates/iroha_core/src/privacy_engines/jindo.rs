@@ -19,7 +19,7 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, ChainId},
+    prelude::{AccountId, ChainId, NetworkId},
     privacy::{
         IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_MAX_POLYNOMIALS_V1,
         IROHA_JINDO_RING_DEGREE_V1, IrohaJindoPolynomialCommitmentStatementV1,
@@ -35,6 +35,15 @@ use iroha_data_model::{
 };
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use thiserror::Error;
+
+#[cfg(test)]
+fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(hash),
+        ),
+    )
+}
 
 #[path = "jindo/codec.rs"]
 mod codec;
@@ -319,6 +328,8 @@ impl From<JindoCanonicalPolynomialErrorV1> for JindoPrivacyActionWitnessErrorV1 
 /// Exact signature-bound transaction fields for one direct Jindo action.
 #[derive(Clone, Debug)]
 pub struct JindoPrivacyActionTransactionContextV1 {
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Exact chain identifier.
     pub chain_id: ChainId,
     /// Exact single-key transaction authority.
@@ -574,6 +585,9 @@ pub enum JindoPrivacyActionBuildErrorV1 {
     /// The caller supplied the all-zero genesis sentinel.
     #[error("Jindo action requires a non-zero canonical genesis hash")]
     ZeroGenesisHash,
+    /// The signed transaction domain does not equal the supplied canonical genesis hash.
+    #[error("Jindo action transaction network does not match the canonical genesis hash")]
+    NetworkIdMismatch,
     /// The chain identifier is empty or exceeds the consensus maximum.
     #[error("Jindo action chain id is outside the first-release byte bound")]
     InvalidChainId,
@@ -649,7 +663,7 @@ fn validate_transaction_context_v1(
     }
 
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -686,7 +700,7 @@ fn transaction_payload_v1(
     envelope: PrivacyProofEnvelopeV1,
 ) -> Result<TransactionPayload, JindoPrivacyActionBuildErrorV1> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -760,6 +774,9 @@ where
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(JindoPrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(JindoPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
     validate_transaction_context_v1(&context)?;
     witness.validate()?;
@@ -1135,6 +1152,7 @@ mod tests {
 
     fn action_context() -> JindoPrivacyActionTransactionContextV1 {
         JindoPrivacyActionTransactionContextV1 {
+            network_id: network_id_from_genesis_hash_bytes([0xA7; 32]),
             chain_id: ChainId::from("jindo-signed-action-kat-v1"),
             authority: authority(),
             creation_time: Duration::from_millis(1_800_000_000_123),

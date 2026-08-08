@@ -6,7 +6,7 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_data_model::{ChainId, prelude::Peer};
+use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{NetworkHandle, network, network::message::*};
 use norito::codec::{Decode, Encode};
@@ -94,7 +94,7 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr, cap_high: usize, cap_low: usize
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn drops_increment_for_high_post_queue() {
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp = super::random_node_key_pair();
     let addr = super::next_addr();
     let (net, _child) = match NetworkHandle::<Msg>::start(
@@ -134,7 +134,7 @@ async fn drops_increment_for_high_post_queue() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn drops_increment_for_low_broadcast_queue() {
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp = super::random_node_key_pair();
     let addr = super::next_addr();
     let (net, _child) = match NetworkHandle::<Msg>::start(
@@ -171,7 +171,7 @@ async fn per_peer_post_channel_overflow_disconnects() {
     // This exercises the bounded per-peer post channels (capacity = p2p_post_queue_cap).
     // With a tiny cap and a burst of posts, the sender's try_send will fail and the
     // network actor will drop the peer according to current policy.
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
@@ -260,7 +260,7 @@ impl iroha_p2p::network::message::ClassifyTopic for HiMsg {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn per_peer_overflow_drop_policy_keeps_connection() {
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();
@@ -341,7 +341,7 @@ async fn per_peer_overflow_drop_policy_keeps_connection() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn overflow_metrics_increment_for_consensus_and_other() {
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let a1 = super::next_addr();

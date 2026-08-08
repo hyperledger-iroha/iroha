@@ -1180,15 +1180,15 @@ PROOF
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>16, <4>1
-      <3>17. CASE \/ \E node \in AsyncVotersAt(initialContext):
-                        PostGstResolveLocalCandidateProducerContinuation(node)
-                    \/ \E node \in AsyncVotersAt(initialContext):
-                        PostGstServiceConditionalTransportProducerContinuation(
-                          node)
-                    \/ \E node \in AsyncVotersAt(initialContext):
-                        PostGstServiceVolatileBodyProducerContinuation(node)
-                    \/ \E slot \in AsyncLeaderWireLifecycleSlotSet:
-                        PostGstRetireLeaderWireLifecycleSlot(slot)
+      <3>17. CASE \/ (\E node \in AsyncVotersAt(initialContext):
+                         PostGstResolveLocalCandidateProducerContinuation(node))
+                    \/ (\E node \in AsyncVotersAt(initialContext):
+                         PostGstServiceConditionalTransportProducerContinuation(
+                           node))
+                    \/ (\E node \in AsyncVotersAt(initialContext):
+                         PostGstServiceVolatileBodyProducerContinuation(node))
+                    \/ (\E slot \in AsyncLeaderWireLifecycleSlotSet:
+                         PostGstRetireLeaderWireLifecycleSlot(slot))
         <4>1. \A node:
                  PostGstResolveLocalCandidateProducerContinuation(node)
                    => [Next]_vars
@@ -1593,15 +1593,15 @@ PROOF
                /\ AsyncNonRunnerOuterFrame
           BY <3>16, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
-      <3>17. CASE \/ \E node \in AsyncVotersAt(initialContext):
-                        PostGstResolveLocalCandidateProducerContinuation(node)
-                    \/ \E node \in AsyncVotersAt(initialContext):
-                        PostGstServiceConditionalTransportProducerContinuation(
-                          node)
-                    \/ \E node \in AsyncVotersAt(initialContext):
-                        PostGstServiceVolatileBodyProducerContinuation(node)
-                    \/ \E slot \in AsyncLeaderWireLifecycleSlotSet:
-                        PostGstRetireLeaderWireLifecycleSlot(slot)
+      <3>17. CASE \/ (\E node \in AsyncVotersAt(initialContext):
+                         PostGstResolveLocalCandidateProducerContinuation(node))
+                    \/ (\E node \in AsyncVotersAt(initialContext):
+                         PostGstServiceConditionalTransportProducerContinuation(
+                           node))
+                    \/ (\E node \in AsyncVotersAt(initialContext):
+                         PostGstServiceVolatileBodyProducerContinuation(node))
+                    \/ (\E slot \in AsyncLeaderWireLifecycleSlotSet:
+                         PostGstRetireLeaderWireLifecycleSlot(slot))
         <4>1. \A node:
                  PostGstResolveLocalCandidateProducerContinuation(node)
                    => /\ AsyncNonRunnerStep

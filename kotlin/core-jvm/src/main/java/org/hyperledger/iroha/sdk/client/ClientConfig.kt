@@ -67,7 +67,9 @@ class ClientConfig private constructor(builder: Builder) {
     fun wireFormatPreference(): WireFormatPreference = wireFormatPreference
     /** Registered observers that receive request lifecycle callbacks. */
     fun observers(): List<ClientObserver> = observers
+    /** Policy available to caller-managed replay-safe reads; signed submissions ignore it. */
     fun retryPolicy(): RetryPolicy = retryPolicy
+    /** Explicit local staging queue; [HttpClientTransport] never drains or fills it automatically. */
     fun pendingQueue(): PendingTransactionQueue? = pendingQueue
     fun exportOptions(): ExportOptions? = exportOptions
     fun noritoRpcFlowController(): NoritoRpcFlowController = noritoRpcFlowController
@@ -146,7 +148,7 @@ class ClientConfig private constructor(builder: Builder) {
         internal var crashTelemetryEnabled: Boolean = false
         internal var crashMetadataProvider: MetadataProvider = CrashTelemetryHandler.defaultMetadataProvider()
 
-        /** Enables local draft signing with one immutable, caller-owned chain context. */
+        /** Enables local draft signing with one immutable, caller-owned network context. */
         fun setLocalSigningContext(context: LocalSigningContext): Builder {
             this.localSigningContext = context
             return this
@@ -161,15 +163,19 @@ class ClientConfig private constructor(builder: Builder) {
         fun addObserver(observer: ClientObserver): Builder { observers.add(observer); return this }
         fun clearObservers(): Builder { observers.clear(); return this }
         fun setObservers(observers: List<ClientObserver>?): Builder { clearObservers(); observers?.forEach { addObserver(it) }; return this }
+        /** Configures caller-managed replay-safe read retries; one-shot requests ignore it. */
         fun setRetryPolicy(retryPolicy: RetryPolicy): Builder { this.retryPolicy = retryPolicy; return this }
+        /** Configures explicit local staging only; submission never drains or fills this queue. */
         fun setPendingQueue(pendingQueue: PendingTransactionQueue?): Builder { this.pendingQueue = pendingQueue; return this }
 
+        /** Enables an explicit directory-backed staging queue; submission never replays it. */
         fun enableDirectoryPendingQueue(rootDir: Path): Builder {
             try { pendingQueue = DirectoryPendingTransactionQueue(rootDir) }
             catch (ex: IOException) { throw IllegalStateException("Failed to initialise directory pending queue", ex) }
             return this
         }
 
+        /** Enables an explicit file-backed staging queue; submission never replays it. */
         fun enableFilePendingQueue(queueFile: Path): Builder {
             try { pendingQueue = FilePendingTransactionQueue(queueFile) }
             catch (ex: IOException) { throw IllegalStateException("Failed to initialise file pending queue", ex) }

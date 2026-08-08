@@ -73,7 +73,7 @@ fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
 }
 
 fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let max_clock_drift = state
         .view()
         .world()
@@ -83,7 +83,7 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
     let tx_params = state.view().world().parameters().transaction();
     let crypto = state.crypto.read().clone();
 
-    AcceptedTransaction::accept(tx, &chain_id, max_clock_drift, tx_params, crypto.as_ref())
+    AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_params, crypto.as_ref())
         .expect("transaction admission must succeed")
 }
 
@@ -134,11 +134,11 @@ fn install_global_policy(state: &State, authority: &AccountId, policy: AccountAd
 fn transfer_to_missing_account_creates_account_by_default() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Quantity::from(50_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(2);
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -187,11 +187,11 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Quantity::from(50_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(2);
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -232,11 +232,11 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
 fn multiple_receipts_in_one_tx_create_account_once() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Quantity::from(50_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(2);
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -269,12 +269,12 @@ fn transaction_quota_limits_implicit_accounts() {
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Quantity::from(40_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -324,12 +324,12 @@ fn block_quota_limits_creations_across_transactions() {
     };
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Quantity::from(60_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
     let tx1 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -342,7 +342,7 @@ fn block_quota_limits_creations_across_transactions() {
     let accepted1 = accept_transaction(&state, tx1);
 
     let tx2 = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -394,11 +394,11 @@ fn missing_default_role_rejects_in_pipeline() {
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Quantity::from(25_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest, _) = seeded_account(11);
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -441,11 +441,11 @@ fn missing_default_role_rejects_in_pipeline() {
 fn implicit_account_can_spend_without_roles() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Quantity::from(20_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (bob_id, bob_kp) = seeded_account(5);
 
     let tx1 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -468,7 +468,7 @@ fn implicit_account_can_spend_without_roles() {
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(13_u32));
 
     let tx2 = TransactionBuilder::new(
-        chain_id,
+        network_id,
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -497,12 +497,12 @@ fn implicit_account_can_spend_without_roles() {
 fn multi_receipts_within_transaction_succeed_in_open_domain() {
     let (state, alice_id, alice_kp, asset_def_id, alice_asset_id) =
         prepare_state(None, Quantity::from(50_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -551,12 +551,12 @@ fn tx_cap_rejects_multiple_implicit_creations() {
     };
     let (state, alice_id, alice_kp, _asset_def_id, alice_asset_id) =
         prepare_state(Some(policy), Quantity::from(50_u32));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
     let (dest1, _) = seeded_account(2);
     let (dest2, _) = seeded_account(3);
 
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

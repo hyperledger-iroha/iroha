@@ -177,6 +177,7 @@ impl fmt::Debug for QualifiedModerationCheckpointStoreV1 {
 pub(super) fn open_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
     chain_id: &iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     store: &QualifiedModerationCheckpointStoreV1,
 ) -> Result<
     (
@@ -191,7 +192,7 @@ pub(super) fn open_authoritative_checkpoint(
         .load_latest()
         .map_err(map_checkpoint_store_read_error)?;
     let (state, record) = match observed {
-        Some(record) => decode_validated_record(config, chain_id, &record, None)?,
+        Some(record) => decode_validated_record(config, chain_id, network_id, &record, None)?,
         None => {
             if local_cache.is_some() {
                 return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
@@ -209,13 +210,13 @@ pub(super) fn open_authoritative_checkpoint(
                         .load_latest()
                         .map_err(map_checkpoint_store_read_error)?
                         .ok_or(ModerationOrchestratorError::CheckpointStoreAmbiguous)?;
-                    decode_validated_record(config, chain_id, &authoritative, None)?
+                    decode_validated_record(config, chain_id, network_id, &authoritative, None)?
                 }
             }
         }
     };
     if let Some(bytes) = local_cache {
-        let cache = decode_checkpoint(config, chain_id, &bytes)?;
+        let cache = decode_checkpoint(config, chain_id, network_id, &bytes)?;
         if cache.generation > state.generation
             || (cache.generation == state.generation && bytes != record.checkpoint_bytes)
         {
@@ -229,6 +230,7 @@ pub(super) fn open_authoritative_checkpoint(
 pub(super) fn persist_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
     chain_id: &iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     store: &QualifiedModerationCheckpointStoreV1,
     previous: &mut ModerationCheckpointStoreRecordV1,
     state: &mut ModerationOrchestratorCheckpointV1,
@@ -238,7 +240,7 @@ pub(super) fn persist_authoritative_checkpoint(
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
     refresh_panel_notification_outbox_digest(state);
-    validate_checkpoint(state, config, chain_id)?;
+    validate_checkpoint(state, config, chain_id, network_id)?;
     let next = build_record(config, chain_id, state, Some(previous))?;
     let expected_revision = Some(previous.revision);
     match store.compare_and_swap_latest(expected_revision, &next) {
@@ -304,6 +306,7 @@ fn build_record(
 fn decode_validated_record(
     config: &ModerationOrchestratorConfigV1,
     chain_id: &iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     record: &ModerationCheckpointStoreRecordV1,
     previous: Option<&ModerationCheckpointStoreRecordV1>,
 ) -> Result<
@@ -314,7 +317,7 @@ fn decode_validated_record(
     ModerationOrchestratorError,
 > {
     validate_record(config, chain_id, record, previous)?;
-    let state = decode_checkpoint(config, chain_id, &record.checkpoint_bytes)?;
+    let state = decode_checkpoint(config, chain_id, network_id, &record.checkpoint_bytes)?;
     if state.generation != record.checkpoint_generation {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "sealed record generation does not match checkpoint".to_owned(),
@@ -362,6 +365,7 @@ fn validate_record(
 fn decode_checkpoint(
     config: &ModerationOrchestratorConfigV1,
     chain_id: &iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     bytes: &[u8],
 ) -> Result<ModerationOrchestratorCheckpointV1, ModerationOrchestratorError> {
     let limits = checkpoint_decode_limits(config.checkpoint_max_bytes)?;
@@ -380,7 +384,7 @@ fn decode_checkpoint(
             "checkpoint is not canonical Norito".to_owned(),
         ));
     }
-    validate_checkpoint(&checkpoint, config, chain_id)?;
+    validate_checkpoint(&checkpoint, config, chain_id, network_id)?;
     Ok(checkpoint)
 }
 

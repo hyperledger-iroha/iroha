@@ -11,6 +11,8 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 
 public final class ClientConfigManifestLoaderTests {
+  private static final String TEST_NETWORK_ID =
+      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 
   private final Path tempDir;
 
@@ -32,6 +34,7 @@ public final class ClientConfigManifestLoaderTests {
       tests.rejectsMalformedPresentNumericAndBooleanFields();
       tests.rejectsOutOfDomainNumericValuesInsteadOfUsingDefaults();
       tests.preservesIntegerAndBooleanStringCompatibility();
+      tests.clientConfigManifestRejectsLegacyChainIdKey();
       tests.rejectsGenesisPrivacyFingerprintsAsClientProofPolicyAtAnyDepth();
       System.out.println("[IrohaAndroid] ClientConfigManifestLoaderTests passed.");
     } finally {
@@ -53,13 +56,13 @@ public final class ClientConfigManifestLoaderTests {
 
     assertEquals(URI.create("https://torii.example"), config.baseUri(), "base URI mismatch");
     assertEquals(
-        "test-chain",
-        config.localSigningContext().get().chainId(),
-        "local signing chain mismatch");
+        TEST_NETWORK_ID,
+        config.localSigningContext().get().networkId().literal(),
+        "local signing network mismatch");
     assertEquals(
-        "test-chain",
-        config.toBuilder().build().localSigningContext().get().chainId(),
-        "toBuilder must preserve the local signing context");
+        TEST_NETWORK_ID,
+        config.toBuilder().build().localSigningContext().get().networkId().literal(),
+        "toBuilder must preserve the local signing network");
     assertEquals(Duration.ofMillis(7_000), config.requestTimeout(), "timeout mismatch");
     assertEquals("IrohaAndroidTests/1.0", config.defaultHeaders().get("User-Agent"), "header missing");
     assertTrue(config.retryPolicy().allowsRetry(2), "retry should allow attempt 2");
@@ -311,6 +314,18 @@ public final class ClientConfigManifestLoaderTests {
     assertFalse(config.retryPolicy().shouldRetryError(1), "network retry should be disabled");
   }
 
+  public void clientConfigManifestRejectsLegacyChainIdKey() throws Exception {
+    final String[] legacyFields = {"chain", "chainId", "chain_id"};
+    for (final String field : legacyFields) {
+      assertRejected(
+          "legacy_" + field + ".json",
+          manifest(
+              "{\"base_uri\":\"https://torii.example\"}",
+              "{\"enabled\":false}",
+              ",\"" + field + "\":\"test-chain\""));
+    }
+  }
+
   private void rejectsGenesisPrivacyFingerprintsAsClientProofPolicyAtAnyDepth()
       throws Exception {
     final String[] nonAuthoritative = {
@@ -367,7 +382,9 @@ public final class ClientConfigManifestLoaderTests {
     final StringBuilder builder =
         new StringBuilder()
             .append("{\n")
-            .append("  \"chain_id\": \"test-chain\",\n")
+            .append("  \"network_id\": \"")
+            .append(TEST_NETWORK_ID)
+            .append("\",\n")
             .append("  \"torii\": {\n")
             .append("    \"base_uri\": \"")
             .append(baseUri)

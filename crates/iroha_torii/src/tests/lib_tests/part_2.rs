@@ -474,12 +474,10 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
     let policy = FxCorridorPolicy {
         policy_id,
         revision: 1,
+        owner: account,
         source_dataspace: recipient_lookup_cbuae_dataspace_for_test(),
-        source: FxCorridorSource::TransactionAuthority,
         source_asset_definition_id: recipient_lookup_aed_definition_for_test(),
-        source_sink: account.clone(),
         destination_dataspace: recipient_lookup_sbp_dataspace_for_test(),
-        destination_reserve: account,
         destination_asset_definition_id: AssetDefinitionId::derive_from_components(
             DomainId::try_new("fx", "universal").expect("FX domain"),
             "pkr".parse().expect("PKR name"),
@@ -488,8 +486,14 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
             DomainId::try_new("hbl", "sbp").expect("HBL domain"),
             DomainId::try_new("ubl", "sbp").expect("UBL domain"),
         ]),
-        rate_numerator: 76,
-        rate_denominator: 1,
+        oracle_feed_id: "recipient_lookup_fx".parse().expect("feed id"),
+        max_oracle_age_ms: 60_000,
+        max_source_amount_per_settlement: Quantity::from(1_000_u32),
+        max_destination_amount_per_settlement: Quantity::from(100_000_u32),
+        velocity_window_ms: 60_000,
+        max_settlements_per_window: 100,
+        max_source_amount_per_window: Quantity::from(10_000_u32),
+        max_destination_amount_per_window: Quantity::from(1_000_000_u32),
         enabled: true,
     };
     let mut registry = FxCorridorPolicyRegistry::default();
@@ -835,7 +839,7 @@ async fn fee_sponsor_program_by_id_returns_the_exact_on_chain_program() {
     let sponsor = AccountId::new(sponsor_keypair.public_key().clone());
     let program_id =
         FeeSponsorProgramId::new(sponsor.clone(), "wallet_fx".parse().expect("program name"));
-    let program = FeeSponsorProgram::new(program_id.clone());
+    let program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&sponsor));
     register_fee_sponsor_program_for_test(&app, program_id.clone());
 
@@ -885,7 +889,7 @@ async fn fee_quote_returns_exact_routing_observation_and_fixed_point_intent() {
     let caller = AccountId::new(caller_keypair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
     let payload = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         caller.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -946,7 +950,7 @@ async fn fee_quote_accepts_an_absent_authority_that_self_registers_first() {
         "self-registering quote authority must start absent"
     );
     let payload = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         caller.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

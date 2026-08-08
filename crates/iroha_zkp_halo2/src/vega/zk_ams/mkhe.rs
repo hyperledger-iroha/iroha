@@ -83,6 +83,18 @@ mod phase23_ingress;
 mod phase23_mask_proof;
 #[path = "mkhe/phase23_rns_link.rs"]
 mod phase23_rns_link;
+#[allow(
+    dead_code,
+    reason = "the release-shape RNS-Link codec remains private while its relation responses are algebraically unverified"
+)]
+#[path = "mkhe/phase23_rns_link_wire.rs"]
+mod phase23_rns_link_wire;
+#[allow(
+    dead_code,
+    reason = "the verified-receipt audit remains fail-closed until every opaque handoff is wired"
+)]
+#[path = "mkhe/receipt_capability_audit.rs"]
+mod receipt_capability_audit;
 #[path = "mkhe/resource.rs"]
 mod resource;
 #[path = "mkhe/security.rs"]

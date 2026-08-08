@@ -6,7 +6,7 @@ instruction boxes; later additive revisions include the native Kagemusha V2
 surfaces and the bounded SoraFS Governance DAG block/head-chain reference
 validators consumed by the C# SDK. The ABI-22 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
-revision 4. Revision 4 seals the removal of generic `Shield`, `ZkTransfer`, and
+revision 5. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
 `Unshield` transaction encoders plus native anonymous-escrow and authority-free
 Kaigi helpers from the C and JNI surfaces. The bridge retains specialized
 Kagemusha proof and settlement helpers. `RegisterZkAsset` now carries exactly
@@ -14,6 +14,10 @@ Kagemusha proof and settlement helpers. `RegisterZkAsset` now carries exactly
 settlement role, with no mode, boolean enablement, or asset-bound transfer-key
 field. The JNI contract revision is checked separately so an older ABI-22
 artifact fails closed instead of exposing a retired transaction surface.
+Revision 5 hard-cuts native transaction signing from human chain labels to the
+exact genesis-derived `NetworkId`: JNI accepts exactly 32 marked hash bytes,
+while the C and Swift surface accepts only canonical checksummed `NetworkId`
+text. No label conversion or compatibility fallback exists.
 
 The exact-12 privacy KAT ABI is compiled through the narrow
 `iroha_data_model/privacy-exact12-conformance` feature. Shipping bridge builds
@@ -27,7 +31,7 @@ fresh authoritative `PrivacyCapabilitySnapshotV1` from live Torii before
 submitting a privacy proof.
 
 The archive checksums below are historical and do not establish a current
-ABI-22/revision-4 artifact. Regenerate, verify, and republish the bridge
+ABI-22/revision-5 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 

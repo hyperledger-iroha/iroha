@@ -49,7 +49,7 @@ raise the baseline merely to make an unexplained regression pass.
 
 ## Repository structure ratchets
 
-Four fast, read-only checks keep structural debt from returning:
+Five fast, read-only checks keep structural and provisioning debt from returning:
 
 - `python3 scripts/check_source_file_budget.py` caps new production and test
   source files and applies an exact no-growth ratchet to legacy files that are
@@ -66,6 +66,10 @@ Four fast, read-only checks keep structural debt from returning:
   `generated-files.toml`, requires reproducible ownership for checked-in
   generated source, and rejects tracked build, cache, package, and `dist`
   outputs.
+- `python3 scripts/check_nexus_provisioning_templates.py` rejects runtime
+  signing keys in production/default Nexus and Taira templates, requires
+  dedicated `/run/secrets/iroha` file handles, and checks paired client/server
+  exact-network identities.
 
 Their focused regression tests live under `scripts/tests/` and
 `pytests/scripts/`; the PR classifier runs them before selecting Rust lanes.

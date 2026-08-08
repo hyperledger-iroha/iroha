@@ -7,6 +7,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
@@ -25,6 +26,7 @@ object AliasLifecyclePlanApply {
     fun buildTransactionPayload(
         request: AliasLifecyclePlanRequestV1,
         plan: AliasLifecycleTransactionPlanV1,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
@@ -35,6 +37,7 @@ object AliasLifecyclePlanApply {
         plan,
         DefaultAliasLifecyclePlanBodyNoritoEncoder,
         DefaultAliasLifecycleInstructionFrameCodec,
+        networkId,
         chainDiscriminant,
         feePayment,
         creationTimeMs,
@@ -50,6 +53,7 @@ object AliasLifecyclePlanApply {
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: AliasLifecyclePlanBodyNoritoEncoder,
         frameCodec: AliasLifecycleInstructionFrameCodec,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
@@ -57,6 +61,9 @@ object AliasLifecyclePlanApply {
         metadata: Map<String, JsonValue> = emptyMap(),
     ): TransactionPayload {
         require(creationTimeMs >= 0) { "creationTimeMs must not be negative" }
+        require(plan.body.networkId == networkId) {
+            "alias lifecycle plan NetworkId does not match the trusted transaction network"
+        }
         require(plan.body.validUntilMs > creationTimeMs) { "alias lifecycle plan has expired" }
         require(plan.body.disposition == AliasLifecyclePlanDispositionV1.APPLY) {
             "alias lifecycle plan is an exact no-op and must not be submitted"
@@ -74,7 +81,7 @@ object AliasLifecyclePlanApply {
             "executable alias lifecycle plan is missing its instruction"
         }
         return TransactionPayload(
-            chainId = plan.body.chainId,
+            networkId = networkId,
             authority = plan.body.authority,
             creationTimeMs = creationTimeMs,
             executable = Executable.instructions(
@@ -94,6 +101,7 @@ object AliasLifecyclePlanApply {
         client: IrohaClient,
         request: AliasLifecyclePlanRequestV1,
         plan: AliasLifecycleTransactionPlanV1,
+        networkId: NetworkId,
         bodyEncoder: AliasLifecyclePlanBodyNoritoEncoder,
         frameCodec: AliasLifecycleInstructionFrameCodec,
         chainDiscriminant: Int,
@@ -109,6 +117,7 @@ object AliasLifecyclePlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            networkId,
             chainDiscriminant,
             feePayment,
             creationTimeMs,
@@ -125,6 +134,7 @@ object AliasLifecyclePlanApply {
         client: IrohaClient,
         request: AliasLifecyclePlanRequestV1,
         plan: AliasLifecycleTransactionPlanV1,
+        networkId: NetworkId,
         chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
@@ -136,6 +146,7 @@ object AliasLifecyclePlanApply {
         client,
         request,
         plan,
+        networkId,
         DefaultAliasLifecyclePlanBodyNoritoEncoder,
         DefaultAliasLifecycleInstructionFrameCodec,
         chainDiscriminant,

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-03
+Last updated: 2026-08-08
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -36,6 +36,17 @@ regressions, generated-artifact determinism, exact profile-config admission,
 and public consensus wire roundtrips are complete. The outstanding revision-4
 work is limited to:
 
+- Finish source-seal, proof, and release validation for the selected-Serve
+  Taira `missing_proposal` repair. The focused composed regression now drives a
+  completed predecessor claim, local absolute timeout, two responsive remote
+  TimeoutVotes, grouped three-signer TC, and `EnterView`; the post-retirement
+  queue handoff also blocks fresh Serve replenishment until one ordinary
+  producer turn runs. The remaining closure is the digest-refreshed mutation
+  matrix, strict non-promotional proof pass, complete four-peer release build,
+  deployment, and observed Taira height advancement. Keep exact semantic
+  retries on their immutable owner, reject owner replacement before refinement,
+  and retain only the separately typed monotone Fetch/Store/Validate authority
+  lineage.
 - Repair or isolate the unrelated committed `iroha_core`, `iroha_data_model`,
   and daemon test-harness compilation failures, and extend the host guard
   allowlist to the reviewed Python and pinned Java/TLC formal commands. Then
@@ -89,11 +100,68 @@ starving eviction, and verified-read failures retain their admitted byte charge.
 Completed provider-ingest and post-completion claim/request primitives are
 recorded in `status.md`. The completed claim is now accepted only by the
 lifecycle-leased fresh-reader verifier, and its raw verifier-evidence request
-constructor is crate-private. The outstanding provider-attestation gate is to
-submit the resulting externally inert request to an approval-only HSM/KMS or
-threshold signer, persist the result in a separate bounded attestation journal,
-and hand its canonical provider inventory to the archive-manager/publication
-coordinator.
+constructor is crate-private. The inert provider-attestation core now covers a
+stable cursor-independent completed-row identity with later-head rebasing, the
+approval-only replay-stable signer contract, and a bounded CAS journal with
+restart-ready pages, UNIX-time and claim fencing, dead-letter recovery, and
+opaque inventory acknowledgements. The outstanding gate is production
+activation. An effect-free bounded scanner with private claim minting and a
+dedicated stateless replay-safe archive reader now validates completed-Musubi
+pages without mutating an external service. The raw reader receives no claim
+factory or opaque claim; the scanner validates every private-field, non-codec
+projection before privately sealing it. It retains separate continuation,
+finalized-high-water, and completed-head state so exact retries and same-head
+suppression are deterministic. A crate-private one-page reconciler rederives
+each request under the admitted-payload lifecycle lease, idempotently enqueues
+it, and rolls scanner progress back on failure. The builder and reconciler stay
+crate-private because structurally valid raw rows do not authenticate their
+daemon-archive provenance. The default-off nested configuration provides
+independent 1--4,096 entry and 4--128 MiB checkpoint caps; `enabled = true`
+remains an activation request that stock `irohad` rejects before supervisor
+startup. The
+inert public root-fenced file adapter now provides an exact
+chain/genesis/provider-bound two-slot CAS with a fixed 128 MiB
+checkpoint/payload ceiling on Linux/macOS with nonblocking normal locks and a
+fixed five-second initialization deadline. Its sealed wrapper reuses the exact
+initialization-lock identity committed in the immutable two-slot headers as a
+nonblocking process/cross-process composite lease spanning external authority
+and local cache reconciliation; cancellation releases it and exact retry can
+complete a direct-predecessor repair. Raw checkpoint/CAS and checkpoint-head
+orchestration, the abstract store, sealed wrapper, transition engine, and
+journal runtime constructor are crate-private. The public file-store paths
+separate explicit empty-`H0` initialization from ordinary open, which rejects a
+missing external head and never promotes local bytes.
+
+Slot 55 now defines one qualified combined durability provider with separate
+small monotonic-time and checkpoint-head CAS namespaces plus immutable
+content-addressed checkpoint blobs. Canonical domain-separated hashes bind the
+checkpoint scope to chain, genesis, provider, and the exact journal-policy
+digest. Mutation order is blob put/readback, head CAS/readback, then local
+two-slot CAS. The external head/blob is authoritative; a local exact direct
+predecessor can be proved from the retained predecessor record/blob and repaired
+forward, while deeper rollback, ahead/fork, substitution, or missing state
+fails closed. The separate sealed time floor bounds every head timestamp.
+Restoring the local cache therefore cannot make an older checkpoint current.
+Exact successor replay remains idempotent after cancellation or response loss.
+
+The non-secret activation catalog reserves all-or-none runtime slots 55--57 for
+the combined durability seal, approval signer, and authenticated inventory.
+Registry resolution performs exact pre/post handle and qualification snapshots,
+but the stock broker has no implementations and resolution invokes neither
+readiness nor effects. Private daemon wrappers now pin signer calls to the
+configured adapter, chain/genesis/provider, and finalized
+`State::provider_owners()` value, and inventory calls/results to the configured
+adapter and exact local scope. They remain uninstantiated, as do the
+crate-private sealed-clock and checkpoint-head effect drivers.
+
+Keep the pre-supervisor rejection until a non-generic daemon coordinator owns
+authenticated archive provenance and those private drivers. It must also
+provide a concrete combined time/head/blob durability adapter, signer and
+inventory adapters, broker support, bounded readiness and supervision, and
+crash/cancellation/revocation/corruption/concurrency/platform chaos evidence.
+Deployment must enforce a singleton rooted runtime session for each exact
+external provider scope across machines, or equivalent provider-side session
+fencing; the implemented OS lease covers only processes sharing one state root.
 The provider must not mutate the attestation registry directly.
 Remaining release gates, in order, are:
 
@@ -178,11 +246,25 @@ Remaining release gates, in order, are:
   validator for that backend's future daemon reader, without exposing a route
   or duplicating revision-activation rules. The latest exact archive query can
   reproduce the immutable registration projection without a historical mutable
-  WSV. Complete the provider-attestation driver around the implemented opaque
-  completed-row claim and inert approval request: rerun the verifier, obtain
-  approval-only signatures, commit the result to a separate bounded attestation
-  journal, and pass the canonical provider inventory through the authenticated
-  archive-manager/coordinator boundary without direct registry mutation.
+  WSV. Activate the implemented provider-attestation foundation through one
+  non-generic deployment-owned coordinator: relocate scanner construction and
+  claim sealing beside the daemon-owned replay-safe archive reader (or move
+  authenticated archive verification under `sorafs_node`), then spawn the
+  capture/reconciliation child around the crate-private one-page primitive and
+  rediscover its paged ready work. Wrap concrete slot-56 and slot-57 providers
+  in the existing private governed signer and inventory adapters before calling
+  the crate-private effect drivers. Provision the implemented root-fenced
+  two-slot CAS adapter through its scope/policy-bound consuming constructor and
+  bind it to a qualified combined slot-55 provider implementing the separate
+  authenticated time/head namespaces and immutable checkpoint blobs. The
+  inventory/coordinator must not mutate the registry directly. Keep delivery
+  and the stock launch unavailable until concrete slot-55--57 broker support,
+  bounded readiness, supervision, and singleton rooted-session or provider-side
+  cross-machine session fencing are configured and authenticated. Qualify the
+  header-bound composite lease, dead-letter repair, timeout/revocation,
+  capacity, corruption, concurrent resume, cancellation after durable successor
+  installation, crash-at-every-transition, offline rollback, and
+  supported-platform paths.
   Same-ID renewal follows the current finalized pin, order, epochs, and exact
   provider evidence. Exercise the real fee-quote/submission transport and crash
   boundaries before send, after registry commit, after authoritative-record
@@ -477,7 +559,7 @@ evidence.
 ## Sumeragi V2 production multilane release closure
 
 On the current tree, the independent 81-leg release inventory contract is
-sealed at 826 production tests across 38 modules, 309 G-UNIT rows, and four
+sealed at 829 production tests across 38 modules, 309 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -534,11 +616,11 @@ multilane binding ledger keeps this as
 reservation, queue-order, Kura persistence/recovery, runner, and release
 receipt consumers, and requires a distinct fifth layout-only Apalache result
 after the four refinement rows. The schema-4 structural/source-binding checks,
-exact 826-test production inventory, 309-test G-UNIT source inventory, 12
+exact 829-test production inventory, 309-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The G-UNIT inventory has 310 TSV lines
 and SHA-256
-`b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb`.
+`bd13d718a1362dd242aad04a75d6c55113181f84545b061cf8517236ac6057fe`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and the total Rust transition projection
@@ -580,7 +662,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 826-test,
+  mutations before promotion, then finish the remaining 829-test,
   38-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -1792,15 +1874,18 @@ post-publication durability outcome closes the process-wide consensus output
 guard and requires restart recovery before admission, persistence, or network
 output can resume.
 
-Consensus owns one bounded `SccpRegistryV1`. Typed
-`ApplySccpRouteGovernance` actions register an exact route, change its
-directional activation, switch to the next revision, initialize or advance a
-lane trust anchor by compare-and-swap, or remove only an unused staged
-revision. Direct execution requires `CanManageSccpGovernance`; constitutional
-governance uses the same typed action. Generic parameter writes, node-local
-configuration, HTTP signing fields, and old route-manifest instructions cannot
-change SCCP policy. Registry changes follow normal transaction, block, MVCC,
-snapshot, and rollback semantics.
+Consensus owns one bounded `SccpRegistryV1`. A complete
+`SccpRouteGovernanceAnchorV1` binds the exact genesis-derived `NetworkId` and
+one closed compare-and-swap action. Only `EnactSccpRouteGovernance` may apply
+that action after a finalized threshold referendum; the old direct
+`ApplySccpRouteGovernance` surface rejects every caller, including genesis and
+legacy managers. Generic parameter writes, node-local configuration, HTTP
+signing fields, and old route-manifest instructions cannot change SCCP policy.
+Each route names an immutable custody owner, while Core derives a distinct
+non-signable protocol escrow from the exact network, route revision, and asset.
+Owner funding, proof-backed settlement, and inactive-route refund are the only
+movement corridors; generic transfer, burn, unregister, and rekey paths reject
+the escrow.
 
 Each governed route binds the exact transfer-only XOR settlement, source
 emitter, native inbound verifier and trust anchor, immutable token/verifier/
@@ -25865,7 +25950,8 @@ signed ancestor-linked solid-block header proof,
   verifier-key hashes, empty payloads, oversized payloads, and admission
   auxiliary bytes before backend-specific proof logic runs.
 - Fold focused ZK/FHE adversarial tests into the long workspace validation
-  corridor.
+  corridor, including the explicit full-domain PQ-MASP, IVM private-note, and
+  maximum-batch ZK-AMS release gates in a serial, resource-isolated lane.
 
 **Next checkpoints:** replace the generated full-bootstrap proof-key fixture
 payloads with externally audited prover/verifier artifacts, carry the
@@ -26023,11 +26109,12 @@ included in each edge-triggered record.
 
 Reliable transport ownership now covers the bounded local seams in both
 directions. For outer ingress, the exact non-empty-roster count geometry is
-`4N+2H+2`: each validator transport hop owns generic, non-timeout Progress,
-TimeoutVote, and TransportCompletion positions; each of the at most `H`
-simultaneously materialized authenticated non-validator lanes owns generic and
-TransportCompletion positions; and the persistent anonymous lane owns the
-final pair. The no-roster diagnostic minimum is `2H+1`. Semantic origin remains
+`5N+3H+2`: each validator transport hop owns generic, ordinary Progress,
+certified-fence-escape, TimeoutVote, and TransportCompletion positions; each of
+the at most `H` simultaneously materialized authenticated non-validator lanes
+owns generic, certified-fence-escape, and TransportCompletion positions; and
+the persistent anonymous lane owns the final pair. The no-roster diagnostic
+minimum is `3H+1`. Semantic origin remains
 available to the protocol, but authenticated `via` owns count, bytes, fairness,
 and reservations, so relay identity churn cannot multiply capacity or borrow a
 validator reserve. Semantic duplicate/alternate-route attachment precedes the
@@ -26194,7 +26281,7 @@ preflight allocates neither work nor request ownership on failure. An exact
 transport-only `CertifiedBodyResponse` with a still-live matching logical
 request registration may cross retained reducer-effect debt and release that
 request capacity, while `CommitCertificateResponse` remains
-reducer-ordered. The largest flattened persistence macro-step has five effects
+reducer-ordered. The largest flattened persistence macro-step has four effects
 against the eight-effect adapter/reducer bound. Runtime scheduling services one
 deferred adapter step per turn before timers and newer ingress once older
 WAL/signature work is serviceable; a subsequent unexpected `Busy` is terminal,
@@ -26264,7 +26351,7 @@ scheduler/adapter/effect regressions raised it to 218, and four final
 post-WAL, terminal-readiness, real-adapter-ordering, and production-capacity
 adversarial regressions raised the preceding inventory to 222. Six outer
 TransportCompletion-corridor regressions raise it to 228; explicitly pinning
-the four-per-validator plus two shared relay-lane owners (`4N+2` total)
+the five-per-validator plus two shared relay-lane owners (`5N+2` total)
 capacity-negative raises it to
 229; and the four-validator exact PrepareQC count-and-power quorum regression
 raised the preceding inventory to 230. Atomic lane-certificate, authenticated-
@@ -26433,7 +26520,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-826-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+829-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -26688,7 +26775,7 @@ runtime premise on the final signed source.
   fourteen scheduler/adapter/effect regressions raised it to 218, and four
   final adversarial regressions raised the preceding inventory to 222. Six
   outer TransportCompletion-corridor regressions, explicit inventory coverage
-  of the four-per-validator plus two shared relay-lane owners (`4N+2` total)
+  of the five-per-validator plus two shared relay-lane owners (`5N+2` total)
   capacity-negative, and one
   four-validator exact PrepareQC count-and-power quorum regression raise the
   preceding inventory to 230. Atomic lane, authenticated-via, historical-
@@ -26739,7 +26826,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  826-test target above supersedes that checkpoint. The 38-module pre-network
+  829-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

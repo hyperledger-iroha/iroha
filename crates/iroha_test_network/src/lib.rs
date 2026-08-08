@@ -4,6 +4,7 @@
 mod config;
 mod consensus_message_control;
 pub mod fslock_ports;
+pub mod genesis_support;
 
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
@@ -51,7 +52,7 @@ use iroha_config::base::{
 };
 use iroha_core::sumeragi::{
     consensus::{
-        NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
+        NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_parameters_fingerprint,
     },
     signed_genesis_voting_peers,
 };
@@ -3323,7 +3324,7 @@ struct ConsensusBootstrapProfile {
 
 impl ConsensusBootstrapProfile {
     fn fingerprint(&self) -> [u8; 32] {
-        compute_consensus_fingerprint_from_params(&self.chain_id, &self.params)
+        compute_consensus_parameters_fingerprint(&self.params)
             .expect("test-network consensus profile must be canonical")
     }
 }
@@ -3972,6 +3973,11 @@ impl Network {
     /// Chain ID of the network
     pub fn chain_id(&self) -> ChainId {
         self.consensus_profile.chain_id.clone()
+    }
+
+    /// Exact network identity derived from this network's signed genesis header.
+    pub fn network_id(&self) -> NetworkId {
+        NetworkId::from_genesis_hash(self.genesis().0.hash())
     }
 
     /// Torii URLs for all peers in the network.
@@ -6381,7 +6387,7 @@ fn normalize_genesis_consensus_handshake(
     genesis_post_topology_isi: &[Vec<InstructionBox>],
     consensus_handshake_meta: &Parameter,
     genesis_key_pair: &KeyPair,
-    fallback_chain_id: &ChainId,
+    _fallback_chain_id: &ChainId,
 ) -> GenesisBlock {
     let mut param_instructions = genesis_isi
         .iter()
@@ -6411,16 +6417,9 @@ fn normalize_genesis_consensus_handshake(
         consensus_handshake_meta.clone(),
     )));
 
-    let chain_id = source
-        .0
-        .transactions_vec()
-        .first()
-        .map(|tx| tx.chain().clone())
-        .unwrap_or_else(|| fallback_chain_id.clone());
     let authority = AccountId::new(genesis_key_pair.public_key().clone());
     let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-    let param_tx = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
-        chain_id,
+    let param_tx = iroha_data_model::transaction::TransactionBuilder::new_genesis_with_time_source(
         authority,
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -10747,7 +10746,7 @@ mod tests {
     };
 
     use iroha_config::parameters::defaults;
-    use iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params;
+    use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
         block::{
@@ -13664,9 +13663,8 @@ exit 0
             reconstructed, profile.params,
             "genesis must preserve the complete canonical consensus carrier"
         );
-        let expected_bytes =
-            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
-                .expect("profile must fingerprint");
+        let expected_bytes = compute_consensus_parameters_fingerprint(&profile.params)
+            .expect("profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         assert_eq!(
             actual.to_ascii_lowercase(),
@@ -13715,9 +13713,8 @@ exit 0
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
-        let expected_bytes =
-            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
-                .expect("NPoS profile must fingerprint");
+        let expected_bytes = compute_consensus_parameters_fingerprint(&profile.params)
+            .expect("NPoS profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         assert_eq!(
             actual, expected,
@@ -13770,7 +13767,7 @@ exit 0
         let expected = format!(
             "0x{}",
             hex_lower(
-                &compute_consensus_fingerprint_from_params(&network.chain_id(), &shared_params)
+                &compute_consensus_parameters_fingerprint(&shared_params)
                     .expect("shared NPoS params must fingerprint")
             )
         );
@@ -13795,9 +13792,8 @@ exit 0
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
         let profile = network.consensus_bootstrap_profile();
-        let expected_bytes =
-            compute_consensus_fingerprint_from_params(&network.chain_id(), &profile.params)
-                .expect("profile must fingerprint");
+        let expected_bytes = compute_consensus_parameters_fingerprint(&profile.params)
+            .expect("profile must fingerprint");
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         let reconstructed = reconstructed_consensus_params(&genesis);
 
@@ -16113,6 +16109,16 @@ exit 0
             decoded.version(),
             1,
             "decoded genesis must be a version 1 signed block"
+        );
+        assert_eq!(
+            decoded.header(),
+            block.0.header(),
+            "canonical genesis wire must preserve the exact signed header",
+        );
+        assert_eq!(
+            decoded.hash(),
+            block.0.hash(),
+            "canonical genesis wire must preserve the configured trust-anchor hash",
         );
     }
 

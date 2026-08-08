@@ -207,10 +207,6 @@ declare_permissions! {
     iroha_executor_data_model::permission::settlement::{CanExecuteSettlement},
     iroha_executor_data_model::permission::settlement::{CanManageFxCorridors},
     iroha_executor_data_model::permission::settlement::{CanSetFxCorridorPolicy},
-    iroha_executor_data_model::permission::settlement::{CanSettleFxCorridor},
-    iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsPin},
-    iroha_executor_data_model::permission::sorafs::{CanApproveSorafsPin},
-    iroha_executor_data_model::permission::sorafs::{CanRetireSorafsPin},
     iroha_executor_data_model::permission::sorafs::{CanBindSorafsAlias},
     iroha_executor_data_model::permission::sorafs::{CanDeclareSorafsCapacity},
     iroha_executor_data_model::permission::sorafs::{CanSubmitSorafsTelemetry},
@@ -239,7 +235,6 @@ declare_permissions! {
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForUaid},
     iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorProgram},
     iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorProgram},
-    iroha_executor_data_model::permission::nexus::{CanWithdrawFeeSponsorProgram},
 }
 
 impl AnyPermission {
@@ -528,7 +523,7 @@ mod smart_contract {
 
 mod settlement {
     use iroha_executor_data_model::permission::settlement::{
-        CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+        CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
 
     use super::*;
@@ -622,14 +617,12 @@ mod settlement {
     }
 
     impl_corridor_permission!(CanSetFxCorridorPolicy);
-    impl_corridor_permission!(CanSettleFxCorridor);
 }
 
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
         CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
-        CanWithdrawFeeSponsorProgram,
     };
 
     use super::*;
@@ -885,15 +878,13 @@ mod nexus {
     }
 
     impl_program_scoped_delegation!(CanEnrollFeeSponsorProgram);
-    impl_program_scoped_delegation!(CanWithdrawFeeSponsorProgram);
 }
 
 mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
-        CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanManageSorafsModeration, CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
+        CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
+        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
+        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsProviderOwner,
         CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
@@ -901,9 +892,6 @@ mod sorafs {
     use super::*;
 
     impl_owned_permission!(
-        CanRegisterSorafsPin,
-        CanApproveSorafsPin,
-        CanRetireSorafsPin,
         CanBindSorafsAlias,
         CanDeclareSorafsCapacity,
         CanSubmitSorafsTelemetry,
@@ -2469,7 +2457,7 @@ mod tests {
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
-            CanPublishSpaceDirectoryManifestForUaid, CanWithdrawFeeSponsorProgram,
+            CanPublishSpaceDirectoryManifestForUaid,
         },
         peer::CanManagePeers,
         query::{CanReadAccountData, CanReadAllLedgerData, CanReadRestrictedDataspace},
@@ -3348,7 +3336,7 @@ mod tests {
     }
 
     #[test]
-    fn fee_program_manager_can_delegate_exact_enrollment_and_withdrawal_scopes() {
+    fn fee_program_manager_can_delegate_exact_enrollment_scope() {
         let sponsor = make_account_id();
         let manager = make_other_account_id();
         let context = make_context(&manager, 2);
@@ -3356,7 +3344,6 @@ mod tests {
         let enrollment = CanEnrollFeeSponsorProgram {
             program_id: program_id.clone(),
         };
-        let withdrawal = CanWithdrawFeeSponsorProgram { program_id };
         let previous = test_override::replace_permissions(vec![PermissionObject::from(
             CanManageFeeSponsorProgram { sponsor },
         )]);
@@ -3364,8 +3351,6 @@ mod tests {
         for result in [
             enrollment.validate_grant(&manager, &context, &Iroha),
             enrollment.validate_revoke(&manager, &context, &Iroha),
-            withdrawal.validate_grant(&manager, &context, &Iroha),
-            withdrawal.validate_revoke(&manager, &context, &Iroha),
         ] {
             assert!(result.is_ok(), "program manager must delegate exact scopes");
         }
@@ -3435,12 +3420,7 @@ mod tests {
         let program_id = make_fee_sponsor_program_id(sponsor.clone(), "retail");
         let permissions = [
             AnyPermission::CanManageFeeSponsorProgram(CanManageFeeSponsorProgram { sponsor }),
-            AnyPermission::CanEnrollFeeSponsorProgram(CanEnrollFeeSponsorProgram {
-                program_id: program_id.clone(),
-            }),
-            AnyPermission::CanWithdrawFeeSponsorProgram(CanWithdrawFeeSponsorProgram {
-                program_id,
-            }),
+            AnyPermission::CanEnrollFeeSponsorProgram(CanEnrollFeeSponsorProgram { program_id }),
         ];
 
         for permission in permissions {

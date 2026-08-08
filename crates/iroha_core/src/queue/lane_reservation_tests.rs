@@ -476,6 +476,156 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
 }
 
 #[test]
+fn release_recomputes_fifo_after_unrelated_admission_during_append() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let reserved_transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let reserved_hash = reserved_transaction.hash();
+    push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        reserved_transaction,
+    );
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"release-admission-owner",
+                b"release-admission-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve release-race transaction")[0]
+        .key();
+    let unrelated = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let unrelated_hash = unrelated.hash();
+    let reached = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    queue
+        .lane_reservation_journal
+        .lock()
+        .as_mut()
+        .expect("installed reservation journal")
+        .install_append_handoff(Arc::clone(&reached), Arc::clone(&resume));
+
+    thread::scope(|scope| {
+        let queue_for_release = Arc::clone(&queue);
+        let release = scope.spawn(move || queue_for_release.release_lane_reservation(&key));
+
+        reached.wait();
+        assert!(queue.durability_transition_active(&reserved_hash));
+        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
+        {
+            let _queue_guard = queue.push_remove_lock.lock();
+            assert_eq!(queue.fifo_snapshot_locked(), vec![unrelated_hash]);
+        }
+        resume.wait();
+
+        assert_eq!(
+            release
+                .join()
+                .expect("release thread")
+                .expect("release after unrelated admission"),
+            LaneQueueReservationOutcome::Finalized
+        );
+    });
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        assert_eq!(
+            queue.fifo_snapshot_locked(),
+            vec![reserved_hash, unrelated_hash],
+            "post-journal publication must merge an unrelated concurrent admission by durable ordinal"
+        );
+    }
+    assert_eq!(queue.active_len(), 2);
+    assert_eq!(queue.queued_len(), 2);
+    assert!(!queue.transaction_selection_durability_faulted());
+}
+
+#[test]
+fn release_recomputes_fifo_while_unrelated_pop_is_held() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let dir = tempdir().expect("tempdir");
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let reserved_transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let reserved_hash = reserved_transaction.hash();
+    push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        reserved_transaction,
+    );
+    let unrelated = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let unrelated_hash = unrelated.hash();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
+    let key = *queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"release-pop-owner",
+                b"release-pop-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve release-race transaction")[0]
+        .key();
+    let reached = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    queue
+        .lane_reservation_journal
+        .lock()
+        .as_mut()
+        .expect("installed reservation journal")
+        .install_append_handoff(Arc::clone(&reached), Arc::clone(&resume));
+
+    thread::scope(|scope| {
+        let queue_for_release = Arc::clone(&queue);
+        let release = scope.spawn(move || queue_for_release.release_lane_reservation(&key));
+
+        reached.wait();
+        let held = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].as_ref().hash(), unrelated_hash);
+        assert!(queue.tx_hashes.is_empty());
+        resume.wait();
+
+        assert_eq!(
+            release
+                .join()
+                .expect("release thread")
+                .expect("release while unrelated pop is held"),
+            LaneQueueReservationOutcome::Finalized
+        );
+        {
+            let _queue_guard = queue.push_remove_lock.lock();
+            assert_eq!(
+                queue.fifo_snapshot_locked(),
+                vec![reserved_hash],
+                "post-journal publication must not resurrect an unrelated held pop"
+            );
+        }
+        drop(held);
+    });
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        assert_eq!(
+            queue.fifo_snapshot_locked(),
+            vec![reserved_hash, unrelated_hash],
+            "dropping the held guard restores its own durable FIFO position"
+        );
+    }
+    assert!(!queue.transaction_selection_durability_faulted());
+}
+
+#[test]
 fn global_candidate_lease_excludes_autonomous_reservation_until_exact_drop() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
@@ -578,6 +728,54 @@ fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
         !queue.lane_reservation_group_is_finalized_for_diagnostics(&[malformed]),
         "malformed identities must fail closed"
     );
+}
+
+#[test]
+fn globally_admitted_transaction_commits_from_a_later_reservation_height() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Queue::test(config_factory(), &time_source);
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let binding = push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        accepted_tx_by_someone(&time_source),
+    );
+    assert_eq!(
+        binding.admission_context.proposal_height, 1,
+        "the durable admission is certified for the first proposal height"
+    );
+
+    seed_committed_height_for_queue_test(&state, 4);
+    let mut later_scope = lane_reservation_scope(
+        &state,
+        b"delayed-reservation-owner",
+        b"delayed-reservation-proposal",
+    );
+    later_scope.proposal_height = 5;
+    later_scope.lane_incarnation = state
+        .lane_incarnation_at_height(LaneId::SINGLE, later_scope.proposal_height)
+        .expect("the canonical lane remains active at the later proposal height");
+    let reserved = queue
+        .reserve_transactions_for_lane(&state, later_scope, nonzero!(1_usize))
+        .expect("reserve the still-owned globally admitted transaction at a later height");
+    assert_eq!(reserved.len(), 1);
+    let key = *reserved[0].key();
+    assert_eq!(key.proposal_height, 5);
+    assert_ne!(
+        key.proposal_height, binding.admission_context.proposal_height,
+        "the reservation slot height and admission-certification height are distinct domains"
+    );
+
+    assert_eq!(
+        queue
+            .commit_lane_reservation(&key)
+            .expect("the later exact reservation must consume its durable admission claim"),
+        LaneQueueReservationOutcome::Finalized
+    );
+    assert!(!queue.transaction_selection_durability_faulted());
 }
 
 #[test]
@@ -1497,6 +1695,103 @@ fn committing_reservation_owned_transaction_does_not_create_fifo_tombstone() {
         queue.removed_hashes.is_empty(),
         "a reservation-owned hash has no stale FIFO cell and must not leave a tombstone"
     );
+}
+
+#[test]
+fn lane_reservation_drains_committed_physical_fifo_tombstone() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let committed = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let committed_hash = committed.hash();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, committed);
+    let candidate = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let candidate_hash = candidate.hash();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, candidate);
+
+    assert_eq!(queue.remove_committed_hashes([committed_hash], None), 1);
+    assert!(queue.removed_hashes.contains_key(&committed_hash));
+    assert!(!queue.txs.contains_key(&committed_hash));
+    assert!(!queue.fifo_order_by_hash.contains_key(&committed_hash));
+    let unrelated_non_fifo_fence = accepted_unique_entrypoint_tx_by_someone(&time_source).hash();
+    queue.removed_hashes.insert(unrelated_non_fifo_fence, ());
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        assert_eq!(
+            queue.fifo_snapshot_locked(),
+            vec![committed_hash, candidate_hash],
+            "committed removal intentionally leaves its physical FIFO cell for the next consumer"
+        );
+    }
+
+    let reserved = queue
+        .reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"committed-tombstone-owner",
+                b"committed-tombstone-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("terminal committed tombstone must not block autonomous reservation");
+    assert_eq!(reserved.len(), 1);
+    assert_eq!(reserved[0].as_accepted().hash(), candidate_hash);
+    assert!(
+        !queue.removed_hashes.contains_key(&committed_hash),
+        "the exact physical tombstone was atomically drained"
+    );
+    assert!(
+        queue.removed_hashes.contains_key(&unrelated_non_fifo_fence),
+        "FIFO reconstruction must preserve unrelated non-FIFO removal fences"
+    );
+    assert!(queue.tx_hashes.is_empty());
+    assert!(!queue.accepted_work_validation_faulted());
+    assert!(!queue.lane_reservation_durability_faulted());
+}
+
+#[test]
+fn lane_reservation_rejects_tracked_fifo_hash_without_order_identity() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+    assert!(queue.fifo_order_by_hash.remove(&hash).is_some());
+    assert!(!queue.removed_hashes.contains_key(&hash));
+    assert!(queue.txs.contains_key(&hash));
+
+    let error = match queue.reserve_transactions_for_lane(
+            &state,
+            lane_reservation_scope(
+                &state,
+                b"missing-fifo-order-owner",
+                b"missing-fifo-order-proposal",
+            ),
+            nonzero!(1_usize),
+        ) {
+        Err(error) => error,
+        Ok(_) => panic!("a tracked physical hash without FIFO identity must fail closed"),
+    };
+    assert!(matches!(
+        error,
+        LaneQueueReservationError::InvalidIdentity(reason)
+            if reason.contains("inconsistent FIFO ownership")
+                && reason.contains("removed=false")
+                && reason.contains("tracked=true")
+                && reason.contains("fifo_order=false")
+    ));
+    {
+        let _queue_guard = queue.push_remove_lock.lock();
+        assert_eq!(queue.fifo_snapshot_locked(), vec![hash]);
+    }
+    assert!(queue.txs.contains_key(&hash));
+    assert!(!queue.removed_hashes.contains_key(&hash));
 }
 
 #[test]

@@ -279,7 +279,7 @@ AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider ==
 AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty(
     specification) ==
   specification
-    => []AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider
+    => [][AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider]_AsyncAllVars
 
 AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider ==
   \A target \in ValidatorIds:
@@ -290,7 +290,7 @@ AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider ==
 AdequateLeaderAuthorityDeadlineDecisionRetentionStepProviderProperty(
     specification) ==
   specification
-    => []AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider
+    => [][AdequateLeaderAuthorityDeadlineDecisionRetentionStepProvider]_AsyncAllVars
 
 AdequateLeaderAuthorityDeadlineNoPrematureExitSafetyProperty(
     specification) ==
@@ -660,11 +660,17 @@ BY Isa, PTL
 \* unrelated `AsyncSpecAt(initialContext)` behavior; it adds no fairness arm.
 AdequateLeaderFixedSelectedOwnerFairnessProperty(specification) ==
   specification
-    => \A initialContext \in ContextRecords,
-          owner \in
-            AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
-         WF_AsyncAllVars(
-           AdequateLeaderFixedSelectedServiceOwnerAction(owner))
+    => \A initialContext \in ContextRecords:
+         \A owner \in
+              AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
+           WF_AsyncAllVars(
+             AdequateLeaderFixedSelectedServiceOwnerAction(owner))
+
+\* Arbitrary-specification service combinators must carry the concrete
+\* transition relation whose bracket steps frame their selected owner.  This
+\* is behavior, not an additional fairness assumption.
+AdequateLeaderAsyncNextBehaviorProperty(specification) ==
+  specification => [][AsyncNext]_AsyncAllVars
 
 THEOREM AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness ==
   \A initialContext:
@@ -674,6 +680,13 @@ BY AsyncLiveSpecProjectsAsyncSpec,
    AdequateLeaderFixedSelectedOwnerUsesExactAsyncFairness,
    PTL
    DEF AdequateLeaderFixedSelectedOwnerFairnessProperty
+
+THEOREM AsyncLiveProvidesAdequateLeaderAsyncNextBehavior ==
+  \A initialContext:
+    AdequateLeaderAsyncNextBehaviorProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec, PTL
+   DEF AdequateLeaderAsyncNextBehaviorProperty, AsyncSpecAt
 
 (***************************************************************************
 End-to-end peer/phase tokens.
@@ -992,16 +1005,6 @@ AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes(
 AdequateLeaderFixedPreAdmissionSubjectReplacementRouteCapacity ==
   N * AsyncRetainedControlBudget
 
-AdequateLeaderFixedUnacceptedPreAdmissionSubjectReplacementRoutes(
-    target, leaderContext, leader, leaderView) ==
-  LET admitted ==
-        AdequateLeaderFixedAdmittedSubjectReplacementOwners(
-          target, leaderContext, leader, leaderView)
-  IN {route
-        \in AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes(
-             target, leaderContext, leader, leaderView):
-        ~\E owner \in admitted: owner.origin = route.origin}
-
 AdequateLeaderFixedActiveWireSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
   {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
@@ -1035,21 +1038,22 @@ AdequateLeaderFixedWireSubjectReplacementOwners(
 
 AdequateLeaderFixedProducerSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
-  {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
-     target, leaderContext, leader, leaderView,
-     record.node, record.causalOrigin, record.ordinal,
-     lifecycle.physicalAdmissionOrdinal):
-     record
-       \in {producerRecord \in AsyncCandidateProducerContinuations:
-              producerRecord.status \in {"Reserved", "Materialized"}},
-     lifecycle
-       \in {wireLifecycle \in asyncLeaderWireLifecycles:
-              /\ wireLifecycle.recipient = record.node
-              /\ wireLifecycle.causalOrigin = record.causalOrigin
-              /\ wireLifecycle.schedulerOrdinal = record.ordinal
-              /\ AdequateLeaderFixedSubjectReplacementOrigin(
-                   record.causalOrigin,
-                   target, leaderContext, leader, leaderView)}}
+  UNION
+    {{AdequateLeaderFixedSubjectReplacementOwnerIdentity(
+        target, leaderContext, leader, leaderView,
+        record.node, record.causalOrigin, record.ordinal,
+        lifecycle.physicalAdmissionOrdinal):
+        lifecycle
+          \in {wireLifecycle \in asyncLeaderWireLifecycles:
+                 /\ wireLifecycle.recipient = record.node
+                 /\ wireLifecycle.causalOrigin = record.causalOrigin
+                 /\ wireLifecycle.schedulerOrdinal = record.ordinal
+                 /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                      record.causalOrigin,
+                      target, leaderContext, leader, leaderView)}}:
+       record
+         \in {producerRecord \in AsyncCandidateProducerContinuations:
+                producerRecord.status \in {"Reserved", "Materialized"}}}
 
 AdequateLeaderFixedLiveSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
@@ -1088,22 +1092,32 @@ AdequateLeaderFixedAdmittedSubjectReplacementOwners(
   AdequateLeaderFixedDormantWireSubjectReplacementOwners(
     target, leaderContext, leader, leaderView)
 
+AdequateLeaderFixedUnacceptedPreAdmissionSubjectReplacementRoutes(
+    target, leaderContext, leader, leaderView) ==
+  LET admitted ==
+        AdequateLeaderFixedAdmittedSubjectReplacementOwners(
+          target, leaderContext, leader, leaderView)
+  IN {route
+        \in AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes(
+             target, leaderContext, leader, leaderView):
+        ~\E owner \in admitted: owner.origin = route.origin}
+
 THEOREM AdequateLeaderFixedDormantSubjectReplacementOwnsNoIngressAuthority ==
   \A target \in ValidatorIds,
      leaderContext \in ContextRecords,
      leader \in ValidatorIds,
-     leaderView \in Views,
-     owner
-       \in AdequateLeaderFixedDormantWireSubjectReplacementOwners(
-            target, leaderContext, leader, leaderView):
-    \E record \in asyncLeaderWireLifecycles:
-      /\ record.recipient = owner.node
-      /\ record.causalOrigin = owner.origin
-      /\ record.schedulerOrdinal = owner.ordinal
-      /\ record.physicalAdmissionOrdinal = owner.carrierOrdinal
-      /\ AsyncLeaderWireLifecycleDormant(record)
-      /\ ~AsyncLeaderWireLifecycleActive(record)
-      /\ ~AsyncLeaderWireLifecycleIngressProtected(record)
+     leaderView \in Views:
+    \A owner
+         \in AdequateLeaderFixedDormantWireSubjectReplacementOwners(
+              target, leaderContext, leader, leaderView):
+      \E record \in asyncLeaderWireLifecycles:
+        /\ record.recipient = owner.node
+        /\ record.causalOrigin = owner.origin
+        /\ record.schedulerOrdinal = owner.ordinal
+        /\ record.physicalAdmissionOrdinal = owner.carrierOrdinal
+        /\ AsyncLeaderWireLifecycleDormant(record)
+        /\ ~AsyncLeaderWireLifecycleActive(record)
+        /\ ~AsyncLeaderWireLifecycleIngressProtected(record)
 BY DormantLeaderWireOwnsNoIngressSchedulerBarrier, Isa
    DEF AdequateLeaderFixedDormantWireSubjectReplacementOwners
 
@@ -1443,29 +1457,31 @@ BY AdequateLeaderFixedSubjectReplacementBudgetIsExactAndFinite,
 
 AdequateLeaderFixedDiscoveredPipelineOriginPairs(
     leaderContext, leader, leaderView, subject) ==
-  {<<node, origin>>:
-     node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
-     origin
-       \in
-         {pipelineOrigin \in
-            AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
-              asyncControlServiceState, node):
-            AdequateLeaderFixedOriginIsExactPipelineEpisode(
-              pipelineOrigin, leaderContext,
-              leader, leaderView, subject)}}
+  UNION
+    {{<<node, origin>>:
+        origin
+          \in
+            {pipelineOrigin \in
+               AsyncCandidateLifecycleOrdinaryOriginsForNodeIn(
+                 asyncControlServiceState, node):
+               AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                 pipelineOrigin, leaderContext,
+                 leader, leaderView, subject)}}:
+       node \in AdequateLeaderFrozenResponsiveRoster(leaderContext)}
 
 AdequateLeaderFixedLivePipelineOriginPairs(
     leaderContext, leader, leaderView, subject) ==
-  {<<node, origin>>:
-     node \in AdequateLeaderFrozenResponsiveRoster(leaderContext),
-     origin
-       \in
-         {pipelineOrigin \in
-            AsyncCandidateLifecycleActiveOriginsForNodeIn(
-              asyncControlServiceState, node):
-            AdequateLeaderFixedOriginIsExactPipelineEpisode(
-              pipelineOrigin, leaderContext,
-              leader, leaderView, subject)}}
+  UNION
+    {{<<node, origin>>:
+        origin
+          \in
+            {pipelineOrigin \in
+               AsyncCandidateLifecycleActiveOriginsForNodeIn(
+                 asyncControlServiceState, node):
+               AdequateLeaderFixedOriginIsExactPipelineEpisode(
+                 pipelineOrigin, leaderContext,
+                 leader, leaderView, subject)}}:
+       node \in AdequateLeaderFrozenResponsiveRoster(leaderContext)}
 
 AdequateLeaderFixedLivePipelineOriginsForToken(
     token, leaderContext, leader, leaderView, subject) ==
@@ -1548,46 +1564,46 @@ AdequateLeaderFixedPipelineTokenOwnershipAndTailCarry ==
   \A leaderContext \in ContextRecords,
      leader \in ValidatorIds,
      leaderView \in Views,
-     subject \in Subjects,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
-    LET charged ==
-          AdequateLeaderFixedLivePipelineOriginsForToken(
-            token, leaderContext, leader, leaderView, subject)
-        chargedSlots ==
-          AdequateLeaderFixedLivePipelineOriginSlotsForToken(
-            token, leaderContext, leader, leaderView, subject)
-        discovered ==
-          AdequateLeaderFixedDiscoveredPipelineOriginsForToken(
-            token, leaderContext, leader, leaderView, subject)
-        discoveredSlots ==
-          AdequateLeaderFixedDiscoveredPipelineOriginSlotsForToken(
-            token, leaderContext, leader, leaderView, subject)
-    IN /\ IsFiniteSet(charged)
-       /\ IsFiniteSet(discovered)
-       /\ charged \subseteq discovered
-       /\ chargedSlots
-            \subseteq
-              AdequateLeaderFixedPipelineOriginSlotCarrier(token[2])
-       /\ discoveredSlots
-            \subseteq
-              AdequateLeaderFixedPipelineOriginSlotCarrier(token[2])
-       /\ Cardinality(charged) = Cardinality(chargedSlots)
-       /\ Cardinality(chargedSlots) <= AsyncChunkCount + 8
-       /\ Cardinality(discoveredSlots) <= AsyncChunkCount + 8
-       /\ (charged # {}
-             => token
-                  \in AdequateLeaderFixedAuthorityPipelineRemainingTokens(
-                       leaderContext, leader, leaderView, subject))
-       /\ \A node
-            \in AdequateLeaderFrozenResponsiveRoster(leaderContext):
-            LET nodeOrigins ==
-                  AdequateLeaderFixedLivePipelineOriginsForTokenAtNode(
-                    token, leaderContext, leader, leaderView, subject, node)
-            IN nodeOrigins = {}
-                 \/ \E cutoffOrdinal \in Nat \ {0}:
-                      AdequateLeaderFixedPipelineTokenNodeCutoff(
-                        token, leaderContext, leader, leaderView, subject,
-                        node, cutoffOrdinal)
+     subject \in Subjects:
+    \A token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+      LET charged ==
+            AdequateLeaderFixedLivePipelineOriginsForToken(
+              token, leaderContext, leader, leaderView, subject)
+          chargedSlots ==
+            AdequateLeaderFixedLivePipelineOriginSlotsForToken(
+              token, leaderContext, leader, leaderView, subject)
+          discovered ==
+            AdequateLeaderFixedDiscoveredPipelineOriginsForToken(
+              token, leaderContext, leader, leaderView, subject)
+          discoveredSlots ==
+            AdequateLeaderFixedDiscoveredPipelineOriginSlotsForToken(
+              token, leaderContext, leader, leaderView, subject)
+      IN /\ IsFiniteSet(charged)
+         /\ IsFiniteSet(discovered)
+         /\ charged \subseteq discovered
+         /\ chargedSlots
+              \subseteq
+                AdequateLeaderFixedPipelineOriginSlotCarrier(token[2])
+         /\ discoveredSlots
+              \subseteq
+                AdequateLeaderFixedPipelineOriginSlotCarrier(token[2])
+         /\ Cardinality(charged) = Cardinality(chargedSlots)
+         /\ Cardinality(chargedSlots) <= AsyncChunkCount + 8
+         /\ Cardinality(discoveredSlots) <= AsyncChunkCount + 8
+         /\ (charged # {}
+               => token
+                    \in AdequateLeaderFixedAuthorityPipelineRemainingTokens(
+                         leaderContext, leader, leaderView, subject))
+         /\ \A node
+              \in AdequateLeaderFrozenResponsiveRoster(leaderContext):
+              LET nodeOrigins ==
+                    AdequateLeaderFixedLivePipelineOriginsForTokenAtNode(
+                      token, leaderContext, leader, leaderView, subject, node)
+              IN nodeOrigins = {}
+                   \/ \E cutoffOrdinal \in Nat \ {0}:
+                        AdequateLeaderFixedPipelineTokenNodeCutoff(
+                          token, leaderContext, leader, leaderView, subject,
+                          node, cutoffOrdinal)
 
 AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty(
     specification) ==
@@ -1636,9 +1652,9 @@ AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProvider ==
      leaderContext \in ContextRecords,
      leader \in ValidatorIds,
      leaderView \in Views,
-     subject \in Subjects,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
-    LET discovered ==
+     subject \in Subjects:
+    \A token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+      LET discovered ==
           AdequateLeaderFixedDiscoveredPipelineOriginsForToken(
             token, leaderContext, leader, leaderView, subject)
         active ==
@@ -1686,7 +1702,7 @@ AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProvider ==
 AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty(
     specification) ==
   specification
-    => []AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProvider
+    => [][AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProvider]_AsyncAllVars
 
 AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
     candidate, leaderContext, leader, leaderView, subject, semanticRank,
@@ -1780,6 +1796,28 @@ BY NatLessThanWellFounded, WFLexPairOrdering
        AdequateLeaderFixedPerOriginSlotRankOrdering,
        AdequateLeaderFixedPerOriginSlotRankCarrier
 
+AdequateLeaderFixedCandidateSelectedServiceDeadline(
+    owner, packet, candidate) ==
+  CASE owner.ownerKind = "Tick" ->
+         IF CandidateInIoQueue(candidate)
+         THEN asyncIoServiceDeadlines[candidate.node]
+         ELSE asyncNodeServiceDeadlines[candidate.node]
+    [] owner.ownerKind = "ServiceIo" ->
+         asyncIoServiceDeadlines[owner.node]
+    [] owner.ownerKind = "Retire" -> asyncNow
+    [] owner.ownerKind = "Admit" ->
+         packet.deadline
+    [] OTHER -> asyncNodeServiceDeadlines[owner.node]
+
+AdequateLeaderFixedCandidateSelectedServiceSlack(
+    owner, packet, candidate) ==
+  LET serviceDeadline ==
+        AdequateLeaderFixedCandidateSelectedServiceDeadline(
+          owner, packet, candidate)
+  IN IF asyncNow < serviceDeadline
+     THEN serviceDeadline - asyncNow
+     ELSE 0
+
 AdequateLeaderFixedPipelineRank(
     leaderContext, leader, leaderView, subject,
     token, candidate, cutoffOrdinal,
@@ -1851,28 +1889,6 @@ AdequateLeaderFixedPipelineAbsoluteCeiling(
           token, leaderContext, leader, leaderView, subject)
   IN AdequateLeaderFixedPipelineAbsoluteCeilingAtUnknownBudget(
        receipt, unknownBudget, rank)
-
-AdequateLeaderFixedCandidateSelectedServiceDeadline(
-    owner, packet, candidate) ==
-  CASE owner.ownerKind = "Tick" ->
-         IF CandidateInIoQueue(candidate)
-         THEN asyncIoServiceDeadlines[candidate.node]
-         ELSE asyncNodeServiceDeadlines[candidate.node]
-    [] owner.ownerKind = "ServiceIo" ->
-         asyncIoServiceDeadlines[owner.node]
-    [] owner.ownerKind = "Retire" -> asyncNow
-    [] owner.ownerKind = "Admit" ->
-         packet.deadline
-    [] OTHER -> asyncNodeServiceDeadlines[owner.node]
-
-AdequateLeaderFixedCandidateSelectedServiceSlack(
-    owner, packet, candidate) ==
-  LET serviceDeadline ==
-        AdequateLeaderFixedCandidateSelectedServiceDeadline(
-          owner, packet, candidate)
-  IN IF asyncNow < serviceDeadline
-     THEN serviceDeadline - asyncNow
-     ELSE 0
 
 \* Admit is never a speculative candidate owner: it is selected
 \* only through the pre-candidate transport arm below and only for the exact
@@ -2190,16 +2206,17 @@ AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget(
 
 AdequateLeaderFixedAnyPipelineTokenCarrier ==
   UNION
-    {AdequateLeaderFixedPipelineTokenCarrier(context):
-       context \in ContextRecords}
+    {AdequateLeaderFixedPipelineTokenCarrier(tokenContext):
+       tokenContext \in ContextRecords}
 
 AdequateLeaderFixedPreCandidateRouteIdentityCarrier ==
-  {<<"Local", context, node, view, subject, token>>:
-     context \in ContextRecords,
-     node \in ValidatorIds,
-     view \in Views,
-     subject \in Subjects,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(context)}
+  UNION
+    {{<<"Local", routeContext, node, view, subject, token>>:
+        node \in ValidatorIds,
+        view \in Views,
+        subject \in Subjects,
+        token \in AdequateLeaderFixedPipelineTokenCarrier(routeContext)}:
+       routeContext \in ContextRecords}
     \cup
   {AsyncLeaderWireServiceIdentity(item):
      item \in AsyncNetworkItems}
@@ -2218,577 +2235,6 @@ AdequateLeaderFixedPreCandidateRouteTyped(route, leaderContext) ==
   /\ route.node \in ValidatorIds
   /\ route.ordinal \in Nat \ {0}
   /\ route.predecessors \in SUBSET AsyncCandidateCausalOriginSet
-
-\* A serviced parent may leave an immutable producer continuation before its
-\* child candidate is scheduled.  That gap is part of the same occurrence
-\* episode, not a terminal and not a new physical window.  The exact
-\* pre-candidate cell below retains the protocol token, continuation/wire
-\* owner, lifecycle cut, ordinal debt, and absolute receipt ceiling at the
-\* unchanged source rank.  A genuinely lower pre-candidate rank is already a
-\* strict rank goal; a higher one is forbidden as physical replenishment.
-AdequateLeaderFixedPipelineProducerHandoffFrontier(
-    initialContext, target, leaderContext, leader, leaderView, receipt,
-    route, token, episodeTarget, sourceOccurrenceRank, sourceOccurrenceOwner,
-    sourceCutoffOrdinal, sourceDormantPotential, knownDormantPotential,
-    known, sourceRank, budget) ==
-  /\ AdequateLeaderFixedPreCandidateRouteTyped(route, leaderContext)
-  /\ token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext)
-  /\ route.token = token
-  /\ token[1] = episodeTarget
-  /\ known
-       \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-            episodeTarget, leaderContext, leader, leaderView,
-            receipt.subject)
-  /\ AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget(
-       episodeTarget, leaderContext, leader, leaderView, receipt.subject,
-       sourceOccurrenceRank, sourceCutoffOrdinal,
-       sourceDormantPotential, knownDormantPotential,
-       known, budget)
-  /\ AdequateLeaderTargetOccurrenceOwnerCarried(
-       episodeTarget, leaderContext, leader, leaderView,
-       receipt.subject,
-       sourceOccurrenceRank, known, sourceOccurrenceOwner)
-  /\ AdequateLeaderFixedSelectedOccurrenceProducerResidual(
-       episodeTarget, leaderContext, leader, leaderView,
-       receipt.subject, sourceOccurrenceRank)
-  /\ ~AdequateLeaderFixedPipelineStrictRankGoal(
-       initialContext, target, leaderContext,
-       leader, leaderView, receipt, sourceRank)
-  /\ \E entryDebt
-          \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge,
-        owner
-          \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-        packet \in AsyncPacketSet:
-       /\ AdequateLeaderFixedPreCandidateEntryRankCell(
-            initialContext, target, leaderContext,
-            leader, leaderView, receipt,
-            route, token, entryDebt, owner, packet)
-       /\ AdequateLeaderFixedPreCandidateEntryRank(
-            token, leaderContext, leader, leaderView, receipt.subject,
-            entryDebt, owner, packet)
-            = sourceRank
-
-AdequateLeaderFixedCutPerActionProvider ==
-  \A initialContext \in ContextRecords,
-     target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leader \in ValidatorIds,
-     leaderView \in Views,
-     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-     candidate \in AsyncCandidateSet,
-     cutoffOrdinal \in Nat,
-     semanticRank \in (1..4) \X (0..9),
-     owner
-       \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-     packet \in AsyncPacketSet,
-     sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
-       /\ AsyncStrongTypeInvariant
-       /\ AsyncProgressOwnershipInvariant
-       /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
-       /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
-            initialContext, target, leaderContext,
-            leader, leaderView, receipt,
-            token, candidate, cutoffOrdinal, semanticRank,
-            owner, packet, sourceRank)
-       /\ [AsyncNext]_AsyncAllVars
-       => \/ AdequateLeaderFixedPipelineStrictRankGoal(
-               initialContext, target, leaderContext,
-               leader, leaderView,
-               receipt, sourceRank)'
-          \/ /\ (AdequateLeaderFixedSelectedPipelineRankFrontier(
-                    initialContext, target, leaderContext,
-                    leader, leaderView, receipt,
-                    token, candidate, cutoffOrdinal, semanticRank,
-                    owner, packet, sourceRank))'
-               /\ AdequateLeaderFixedPipelineOriginSlotsPreservedAction(
-                    token, leaderContext, leader, leaderView,
-                    receipt.subject)
-               /\ ~<<AdequateLeaderFixedSelectedServiceOwnerAction(
-                         owner)>>_AsyncAllVars
-          \/ AdequateLeaderFixedPipelineOriginEqualCountReplacementAction(
-               candidate.node, token, leaderContext, leader, leaderView,
-               receipt.subject, semanticRank)
-          \/ AdequateLeaderFixedPipelineOriginCountIncreasingReplenishmentAction(
-               candidate.node, token, leaderContext, leader, leaderView,
-               receipt.subject, semanticRank)
-          \/ (\E route:
-                \E occurrenceRank
-                    \in AdequateLeaderTargetOccurrenceRankCarrier,
-                  occurrenceOwner
-                    \in AdequateLeaderFrozenCandidateOwnerUniverse(
-                         candidate.node, leaderContext, leader, leaderView,
-                         receipt.subject),
-                  budget
-                    \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
-                  \E sourceDormantPotential, knownDormantPotential:
-                    /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
-                         candidate, leaderContext, leader, leaderView,
-                         receipt.subject, semanticRank,
-                         occurrenceRank, occurrenceOwner)
-                    /\ sourceDormantPotential = {}
-                    /\ knownDormantPotential = {}
-                    /\ AdequateLeaderFixedPipelineProducerHandoffFrontier(
-                         initialContext, target, leaderContext,
-                         leader, leaderView, receipt,
-                         route, token, candidate.node,
-                         occurrenceRank, occurrenceOwner,
-                         cutoffOrdinal,
-                         sourceDormantPotential, knownDormantPotential,
-                         AdequateLeaderTargetLiveOwnerIdentitySet(
-                           candidate.node, leaderContext,
-                           leader, leaderView, receipt.subject),
-                         sourceRank, budget))'
-
-AdequateLeaderFixedCutPerActionProviderProperty(specification) ==
-  specification => []AdequateLeaderFixedCutPerActionProvider
-
-(***************************************************************************
-Pinned finite/coalesced selected-lifecycle episode.
-
-The natural budget is exactly the frozen semantic owner-identity universe
-minus `known`.  Equal-count A -> B replacement and count-increasing
-replenishment lower that complement.  Neither arm is called occurrence-rank
-progress.  Dormant logical identities need no separate physical coordinate:
-they own no carrier while parked, remain members of the finite semantic
-universe, and can become live only after replay reserves a fresh physical
-ordinal after the source cutoff.
-
-A lower frontier must carry the immutable protocol token, episode target,
-source occurrence rank, source owner identity, source lifecycle cutoff,
-semantic known set, physical source rank, and receipt ceiling; none may be
-re-chosen by a temporal existential.  The legacy Dormant-set parameters are
-constrained to `{}` so any source consumer attempting to reintroduce
-scheduler-ordinal priority is rejected.
-
-The selected current candidate may change from A to B, but it must remain at
-the same episode target and protocol token.  At the frozen occurrence rank its
-physical rank must equal `sourceRank`.  A count-increasing discovery may expose
-a bounded higher current occurrence/physical rank, but the immutable source
-occurrence, source owner, source rank, and receipt ceiling remain parameters of
-the episode.  The step property remains the explicit deadline-carry provider.
-Replenishment is not its goal; only strict source-rank descent or a smaller
-identity complement is.
-
-An already-live lower semantic occurrence outside this selected token/cut is
-deliberately ignored.  It is not a physical descent witness and it does not
-prevent initialization of this episode.  The selected candidate remains on
-the same-or-higher carrier until its exact action either produces a real
-lower physical rank or transfers the same token/cut to the pre-candidate
-route.  The outer occurrence-rank composition in
-`SumeragiV2AdequateLeaderServiceClosureProofs` remains unchanged.
-***************************************************************************)
-
-AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
-    sourceOccurrenceRank, currentOccurrenceRank, sourceRank, currentRank) ==
-  /\ sourceOccurrenceRank[1] = currentOccurrenceRank[1]
-  /\ sourceOccurrenceRank[2] <= currentOccurrenceRank[2]
-  /\ IF sourceOccurrenceRank = currentOccurrenceRank
-     THEN currentRank = sourceRank
-     ELSE /\ sourceOccurrenceRank[2] < currentOccurrenceRank[2]
-          /\ currentRank[1] = sourceRank[1]
-
-AdequateLeaderFixedPipelineOriginEpisodeFrontier(
-    initialContext, target, leaderContext, leader, leaderView, receipt,
-    token, episodeTarget, sourceOccurrenceRank, sourceOccurrenceOwner,
-    sourceCutoffOrdinal, sourceDormantPotential, knownDormantPotential,
-    known, sourceRank, budget) ==
-  /\ token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext)
-  /\ episodeTarget \in ValidatorIds
-  /\ sourceOccurrenceRank
-       \in AdequateLeaderTargetOccurrenceRankCarrier
-  /\ sourceOccurrenceOwner
-       \in AdequateLeaderFrozenCandidateOwnerUniverse(
-            episodeTarget, leaderContext, leader, leaderView,
-            receipt.subject)
-  /\ known
-       \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-            episodeTarget, leaderContext, leader, leaderView,
-            receipt.subject)
-  /\ AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget(
-       episodeTarget, leaderContext, leader, leaderView, receipt.subject,
-       sourceOccurrenceRank, sourceCutoffOrdinal,
-       sourceDormantPotential, knownDormantPotential,
-       known, budget)
-  /\ AdequateLeaderTargetOccurrenceOwnerCarried(
-       episodeTarget, leaderContext, leader, leaderView,
-       receipt.subject,
-       sourceOccurrenceRank, known, sourceOccurrenceOwner)
-  /\ ~AdequateLeaderFixedPipelineStrictRankGoal(
-       initialContext, target, leaderContext,
-       leader, leaderView, receipt, sourceRank)
-  /\ \/ \E candidate \in AsyncCandidateSet,
-             cutoffOrdinal \in Nat,
-             currentSemanticRank \in (1..4) \X (0..9),
-             currentOccurrenceRank
-               \in AdequateLeaderTargetOccurrenceRankCarrier,
-             currentOccurrenceOwner
-               \in AdequateLeaderFrozenCandidateOwnerUniverse(
-                    episodeTarget, leaderContext, leader, leaderView,
-                    receipt.subject),
-             currentRank \in AdequateLeaderFixedPipelineRankCarrier,
-             owner
-               \in AdequateLeaderFixedSelectedServiceOwnerSet(
-                    initialContext),
-             packet \in AsyncPacketSet:
-            /\ candidate.node = episodeTarget
-            /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
-                 candidate, leaderContext, leader, leaderView,
-                 receipt.subject,
-                 currentSemanticRank,
-                 currentOccurrenceRank, currentOccurrenceOwner)
-            /\ AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
-                 sourceOccurrenceRank, currentOccurrenceRank,
-                 sourceRank, currentRank)
-            /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
-                 initialContext, target, leaderContext,
-                 leader, leaderView, receipt,
-                 token, candidate, cutoffOrdinal, currentSemanticRank,
-                 owner, packet, currentRank)
-     \/ \E route:
-          AdequateLeaderFixedPipelineProducerHandoffFrontier(
-            initialContext, target, leaderContext,
-            leader, leaderView, receipt,
-            route, token, episodeTarget,
-            sourceOccurrenceRank, sourceOccurrenceOwner,
-            sourceCutoffOrdinal,
-            sourceDormantPotential, knownDormantPotential,
-            known, sourceRank, budget)
-
-AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
-    initialContext, target, leaderContext, leader, leaderView, receipt,
-    token, episodeTarget, sourceOccurrenceRank, sourceOccurrenceOwner,
-    sourceCutoffOrdinal, sourceDormantPotential, knownDormantPotential,
-    known, sourceRank, sourceBudget) ==
-  \/ AdequateLeaderFixedPipelineStrictRankGoal(
-       initialContext, target, leaderContext,
-       leader, leaderView, receipt, sourceRank)
-  \/ \E discovered,
-         known2
-           \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-                episodeTarget, leaderContext, leader, leaderView,
-                receipt.subject):
-       \E lowerBudget
-            \in SetLessThan(
-                 sourceBudget,
-                 AdequateLeaderFixedPipelineOriginEpisodeBudgetOrdering,
-                 AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier):
-         /\ discovered =
-              AdequateLeaderTargetNonDescentDiscoveredOwnerIdentitySet(
-                episodeTarget, leaderContext, leader, leaderView,
-                receipt.subject, known)
-         /\ discovered # {}
-         /\ known2 = known \cup discovered
-         /\ AdequateLeaderFixedPipelineOriginEpisodeFrontier(
-              initialContext, target, leaderContext,
-              leader, leaderView, receipt,
-              token, episodeTarget,
-              sourceOccurrenceRank, sourceOccurrenceOwner,
-              sourceCutoffOrdinal,
-              sourceDormantPotential, knownDormantPotential,
-              known2, sourceRank, lowerBudget)
-
-\* Exact one-step carrier for the selected candidate arm of a pinned
-\* occurrence episode.  An unrelated action must retain every immutable
-\* coordinate and the same selected owner.  Equal-count replacement and
-\* count-increasing replenishment are handled only through the fresh
-\* finite-universe identity exposed by the semantic non-descent action;
-\* their post-state is a smaller complement budget, never a progress goal in
-\* its own right.  The producer-handoff arm is discharged separately below,
-\* after global exact-cell selection has exposed its concrete route owner.
-AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider ==
-  \A sourceDormantPotential, knownDormantPotential:
-    \A initialContext \in ContextRecords,
-       target \in ValidatorIds,
-       leaderContext \in ContextRecords,
-       leader \in ValidatorIds,
-       leaderView \in Views,
-       receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-       token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-       episodeTarget \in ValidatorIds,
-       sourceOccurrenceRank
-         \in AdequateLeaderTargetOccurrenceRankCarrier,
-       sourceOccurrenceOwner
-         \in AdequateLeaderFrozenCandidateOwnerUniverse(
-              episodeTarget, leaderContext, leader, leaderView,
-              receipt.subject),
-       sourceCutoffOrdinal \in Nat \ {0},
-       known
-         \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-              episodeTarget, leaderContext, leader, leaderView,
-              receipt.subject),
-       sourceRank \in AdequateLeaderFixedPipelineRankCarrier,
-       budget
-         \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier,
-       candidate \in AsyncCandidateSet,
-       cutoffOrdinal \in Nat,
-       currentSemanticRank \in (1..4) \X (0..9),
-       currentOccurrenceRank
-         \in AdequateLeaderTargetOccurrenceRankCarrier,
-       currentOccurrenceOwner
-         \in AdequateLeaderFrozenCandidateOwnerUniverse(
-              episodeTarget, leaderContext, leader, leaderView,
-              receipt.subject),
-       currentRank \in AdequateLeaderFixedPipelineRankCarrier,
-       owner
-         \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-       packet \in AsyncPacketSet:
-      /\ candidate.node = episodeTarget
-      /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
-           candidate, leaderContext, leader, leaderView, receipt.subject,
-           currentSemanticRank,
-           currentOccurrenceRank, currentOccurrenceOwner)
-      /\ AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
-           sourceOccurrenceRank, currentOccurrenceRank,
-           sourceRank, currentRank)
-      /\ AdequateLeaderFixedPipelineOriginEpisodeFrontier(
-           initialContext, target, leaderContext,
-           leader, leaderView, receipt,
-           token, episodeTarget,
-           sourceOccurrenceRank, sourceOccurrenceOwner,
-           sourceCutoffOrdinal,
-           sourceDormantPotential, knownDormantPotential,
-           known, sourceRank, budget)
-      /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
-           initialContext, target, leaderContext,
-           leader, leaderView, receipt,
-           token, candidate, cutoffOrdinal, currentSemanticRank,
-           owner, packet, currentRank)
-      /\ [AsyncNext]_AsyncAllVars
-      => \/ AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
-              initialContext, target, leaderContext,
-              leader, leaderView, receipt,
-              token, episodeTarget,
-              sourceOccurrenceRank, sourceOccurrenceOwner,
-              sourceCutoffOrdinal,
-              sourceDormantPotential, knownDormantPotential,
-              known, sourceRank, budget)'
-         \/ /\ (AdequateLeaderFixedPipelineOriginEpisodeFrontier(
-                   initialContext, target, leaderContext,
-                   leader, leaderView, receipt,
-                   token, episodeTarget,
-                   sourceOccurrenceRank, sourceOccurrenceOwner,
-                   sourceCutoffOrdinal,
-                   sourceDormantPotential, knownDormantPotential,
-                   known, sourceRank, budget))'
-            /\ (AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
-                  candidate, leaderContext, leader, leaderView,
-                  receipt.subject, currentSemanticRank,
-                  currentOccurrenceRank, currentOccurrenceOwner))'
-            /\ (AdequateLeaderFixedSelectedPipelineRankFrontier(
-                  initialContext, target, leaderContext,
-                  leader, leaderView, receipt,
-                  token, candidate, cutoffOrdinal, currentSemanticRank,
-                  owner, packet, currentRank))'
-            /\ ~<<AdequateLeaderFixedSelectedServiceOwnerAction(
-                     owner)>>_AsyncAllVars
-
-AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty(
-    specification) ==
-  specification
-    => []AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider
-
-AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty(
-    specification) ==
-  specification
-    => \A sourceDormantPotential, knownDormantPotential:
-         \A initialContext \in ContextRecords,
-            target \in ValidatorIds,
-            leaderContext \in ContextRecords,
-            leader \in ValidatorIds,
-            leaderView \in Views,
-            receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-            token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-            episodeTarget \in ValidatorIds,
-            sourceOccurrenceRank
-              \in AdequateLeaderTargetOccurrenceRankCarrier,
-            sourceOccurrenceOwner
-              \in AdequateLeaderFrozenCandidateOwnerUniverse(
-                   episodeTarget, leaderContext, leader, leaderView,
-                   receipt.subject),
-            sourceCutoffOrdinal \in Nat \ {0},
-            known
-              \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-                   episodeTarget, leaderContext, leader, leaderView,
-                   receipt.subject),
-            sourceRank \in AdequateLeaderFixedPipelineRankCarrier,
-            budget
-              \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
-           AdequateLeaderFixedPipelineOriginEpisodeFrontier(
-             initialContext, target, leaderContext,
-             leader, leaderView, receipt,
-             token, episodeTarget,
-             sourceOccurrenceRank, sourceOccurrenceOwner,
-             sourceCutoffOrdinal,
-             sourceDormantPotential, knownDormantPotential,
-             known, sourceRank, budget)
-             ~> AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
-                  initialContext, target, leaderContext,
-                  leader, leaderView, receipt,
-                  token, episodeTarget,
-                  sourceOccurrenceRank, sourceOccurrenceOwner,
-                  sourceCutoffOrdinal,
-                  sourceDormantPotential, knownDormantPotential,
-                  known, sourceRank, budget)
-
-AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty(
-    specification) ==
-  specification
-    => \A sourceDormantPotential, knownDormantPotential:
-         \A initialContext \in ContextRecords,
-            target \in ValidatorIds,
-            leaderContext \in ContextRecords,
-            leader \in ValidatorIds,
-            leaderView \in Views,
-            receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-            token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-            episodeTarget \in ValidatorIds,
-            sourceOccurrenceRank
-              \in AdequateLeaderTargetOccurrenceRankCarrier,
-            sourceOccurrenceOwner
-              \in AdequateLeaderFrozenCandidateOwnerUniverse(
-                   episodeTarget, leaderContext, leader, leaderView,
-                   receipt.subject),
-            sourceCutoffOrdinal \in Nat \ {0},
-            known
-              \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-                   episodeTarget, leaderContext, leader, leaderView,
-                   receipt.subject),
-            sourceRank \in AdequateLeaderFixedPipelineRankCarrier,
-            budget
-              \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
-           AdequateLeaderFixedPipelineOriginEpisodeFrontier(
-             initialContext, target, leaderContext,
-             leader, leaderView, receipt,
-             token, episodeTarget,
-             sourceOccurrenceRank, sourceOccurrenceOwner,
-             sourceCutoffOrdinal,
-             sourceDormantPotential, knownDormantPotential,
-             known, sourceRank, budget)
-             ~> AdequateLeaderFixedPipelineStrictRankGoal(
-                  initialContext, target, leaderContext,
-                  leader, leaderView, receipt, sourceRank)
-
-THEOREM AdequateLeaderFixedPipelineOriginEpisodeStepClosesNonDescentEpisode ==
-  \A specification:
-    AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty(
-      specification)
-      => AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty(
-           specification)
-BY AdequateLeaderFixedPipelineOriginEpisodeBudgetOrderingIsWellFounded,
-   WellFoundedLeadsTo
-   DEF AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty,
-       AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty,
-       AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal,
-       AdequateLeaderFixedPipelineOriginEpisodeBudgetOrdering,
-       AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier
-
-\* No state-level semantic shortcut is permitted here.  A lower occurrence
-\* which merely coexists with the selected candidate need not have a lower
-\* physical pipeline rank.  The episode therefore starts for the selected
-\* lifecycle unconditionally; only the carried `CutPerAction` transition may
-\* establish `AdequateLeaderFixedPipelineStrictRankGoal`.
-THEOREM AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank ==
-  \A initialContext \in ContextRecords,
-     target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leader \in ValidatorIds,
-     leaderView \in Views,
-     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-     candidate \in AsyncCandidateSet,
-     cutoffOrdinal \in Nat,
-     semanticRank \in (1..4) \X (0..9),
-     owner
-       \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-    packet \in AsyncPacketSet,
-    sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
-    /\ AsyncStrongTypeInvariant
-    /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
-         initialContext, target, leaderContext,
-         leader, leaderView, receipt,
-         token, candidate, cutoffOrdinal, semanticRank,
-         owner, packet, sourceRank)
-      => \/ AdequateLeaderFixedPipelineStrictRankGoal(
-              initialContext, target, leaderContext,
-              leader, leaderView, receipt, sourceRank)
-         \/ \E occurrenceRank
-                  \in AdequateLeaderTargetOccurrenceRankCarrier,
-               occurrenceOwner
-                 \in AdequateLeaderFrozenCandidateOwnerUniverse(
-                      candidate.node, leaderContext, leader, leaderView,
-                      receipt.subject),
-               known
-                 \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-                      candidate.node, leaderContext, leader, leaderView,
-                      receipt.subject),
-               budget
-                 \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
-              \E sourceDormantPotential, knownDormantPotential:
-                /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
-                     candidate, leaderContext, leader, leaderView,
-                     receipt.subject, semanticRank,
-                     occurrenceRank, occurrenceOwner)
-                /\ sourceDormantPotential = {}
-                /\ knownDormantPotential = {}
-                /\ known =
-                     AdequateLeaderTargetLiveOwnerIdentitySet(
-                       candidate.node, leaderContext, leader, leaderView,
-                       receipt.subject)
-                /\ AdequateLeaderFixedPipelineOriginEpisodeFrontier(
-                     initialContext, target, leaderContext,
-                     leader, leaderView, receipt,
-                     token, candidate.node,
-                     occurrenceRank, occurrenceOwner,
-                     cutoffOrdinal,
-                     sourceDormantPotential, knownDormantPotential,
-                     known, sourceRank, budget)
-BY AdequateLeaderTargetCurrentOwnersInitializeKnownEpisode,
-   AdequateLeaderTargetNonDescentEpisodeBudgetIsFiniteAndCoalesced,
-   FS_Subset, FS_CardinalityType, IsaT(600)
-   DEF AdequateLeaderFixedPipelineOriginEpisodeFrontier,
-       AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget,
-       AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier,
-       AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible,
-       AdequateLeaderFixedSelectedOccurrenceLifecycleActive,
-       AdequateLeaderFixedSelectedOccurrenceProducerResidual
-
-AdequateLeaderFixedSelectedOwnerServiceProperty(specification) ==
-  specification
-    => \A initialContext \in ContextRecords,
-          target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-          token,
-          candidate \in AsyncCandidateSet,
-          cutoffOrdinal \in Nat,
-          semanticRank \in (1..4) \X (0..9),
-          owner
-            \in AdequateLeaderFixedSelectedServiceOwnerSet(
-                 initialContext),
-          packet \in AsyncPacketSet,
-          sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
-         AdequateLeaderFixedSelectedPipelineRankFrontier(
-           initialContext, target, leaderContext,
-           leader, leaderView, receipt,
-           token, candidate, cutoffOrdinal, semanticRank,
-           owner, packet, sourceRank)
-           ~> AdequateLeaderFixedPipelineStrictRankGoal(
-                initialContext, target, leaderContext,
-                leader, leaderView,
-                receipt, sourceRank)
-
-THEOREM AdequateLeaderFixedOriginEpisodeClosureSuppliesSelectedOwnerService ==
-  \A specification:
-    /\ (specification => []AsyncStrongTypeInvariant)
-    /\ AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty(
-         specification)
-      => AdequateLeaderFixedSelectedOwnerServiceProperty(specification)
-BY AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank, PTL
-   DEF AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty,
-       AdequateLeaderFixedSelectedOwnerServiceProperty
 
 (***************************************************************************
 Charged pre-candidate entry.
@@ -3096,13 +2542,14 @@ AdequateLeaderFixedPreCandidateRouteUnscheduledLatentCandidates(
 
 AdequateLeaderFixedPreCandidateRouteLatentActionTokens(
     route, leaderContext, leaderView, subject) ==
-  {<<candidate, actionToken>>:
-     candidate
-       \in AdequateLeaderFixedPreCandidateRouteUnscheduledLatentCandidates(
-            route, leaderContext, leaderView, subject),
-     actionToken
-       \in 1..AdequateLeaderFixedExactCandidateActionCredit(
-                candidate.class, candidate.kind)}
+  UNION
+    {{<<candidate, actionToken>>:
+        actionToken
+          \in 1..AdequateLeaderFixedExactCandidateActionCredit(
+                   candidate.class, candidate.kind)}:
+       candidate
+         \in AdequateLeaderFixedPreCandidateRouteUnscheduledLatentCandidates(
+              route, leaderContext, leaderView, subject)}
 
 AdequateLeaderFixedPreCandidateRouteLatentActionDebt(
     route, leaderContext, leaderView, subject) ==
@@ -3484,6 +2931,581 @@ AdequateLeaderFixedPreCandidateEntryRankCell(
      /\ AdequateLeaderFixedPipelineAbsoluteCeilingAtUnknownBudget(
           receipt, unreservedUnknownBudget, rank)
 
+\* A serviced parent may leave an immutable producer continuation before its
+\* child candidate is scheduled.  That gap is part of the same occurrence
+\* episode, not a terminal and not a new physical window.  The exact
+\* pre-candidate cell below retains the protocol token, continuation/wire
+\* owner, lifecycle cut, ordinal debt, and absolute receipt ceiling at the
+\* unchanged source rank.  A genuinely lower pre-candidate rank is already a
+\* strict rank goal; a higher one is forbidden as physical replenishment.
+AdequateLeaderFixedPipelineProducerHandoffFrontier(
+    initialContext, target, leaderContext, leader, leaderView, receipt,
+    route, token, episodeTarget, sourceOccurrenceRank, sourceOccurrenceOwner,
+    sourceCutoffOrdinal, sourceDormantPotential, knownDormantPotential,
+    known, sourceRank, budget) ==
+  /\ AdequateLeaderFixedPreCandidateRouteTyped(route, leaderContext)
+  /\ token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext)
+  /\ route.token = token
+  /\ token[1] = episodeTarget
+  /\ known
+       \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+            episodeTarget, leaderContext, leader, leaderView,
+            receipt.subject)
+  /\ AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget(
+       episodeTarget, leaderContext, leader, leaderView, receipt.subject,
+       sourceOccurrenceRank, sourceCutoffOrdinal,
+       sourceDormantPotential, knownDormantPotential,
+       known, budget)
+  /\ AdequateLeaderTargetOccurrenceOwnerCarried(
+       episodeTarget, leaderContext, leader, leaderView,
+       receipt.subject,
+       sourceOccurrenceRank, known, sourceOccurrenceOwner)
+  /\ AdequateLeaderFixedSelectedOccurrenceProducerResidual(
+       episodeTarget, leaderContext, leader, leaderView,
+       receipt.subject, sourceOccurrenceRank)
+  /\ ~AdequateLeaderFixedPipelineStrictRankGoal(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt, sourceRank)
+  /\ \E entryDebt
+          \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge,
+        owner
+          \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
+        packet \in AsyncPacketSet:
+       /\ AdequateLeaderFixedPreCandidateEntryRankCell(
+            initialContext, target, leaderContext,
+            leader, leaderView, receipt,
+            route, token, entryDebt, owner, packet)
+       /\ AdequateLeaderFixedPreCandidateEntryRank(
+            token, leaderContext, leader, leaderView, receipt.subject,
+            entryDebt, owner, packet)
+            = sourceRank
+
+AdequateLeaderFixedCutPerActionProvider ==
+  \A initialContext \in ContextRecords:
+   \A target \in ValidatorIds:
+    \A leaderContext \in ContextRecords:
+     \A leader \in ValidatorIds:
+      \A leaderView \in Views:
+       \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+        \A token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+         \A candidate \in AsyncCandidateSet:
+          \A cutoffOrdinal \in Nat:
+           \A semanticRank \in (1..4) \X (0..9):
+            \A owner
+                 \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
+             \A packet \in AsyncPacketSet:
+              \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+       /\ AsyncStrongTypeInvariant
+       /\ AsyncProgressOwnershipInvariant
+       /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
+       /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
+            initialContext, target, leaderContext,
+            leader, leaderView, receipt,
+            token, candidate, cutoffOrdinal, semanticRank,
+            owner, packet, sourceRank)
+       /\ [AsyncNext]_AsyncAllVars
+       => \/ AdequateLeaderFixedPipelineStrictRankGoal(
+               initialContext, target, leaderContext,
+               leader, leaderView,
+               receipt, sourceRank)'
+          \/ /\ (AdequateLeaderFixedSelectedPipelineRankFrontier(
+                    initialContext, target, leaderContext,
+                    leader, leaderView, receipt,
+                    token, candidate, cutoffOrdinal, semanticRank,
+                    owner, packet, sourceRank))'
+               /\ AdequateLeaderFixedPipelineOriginSlotsPreservedAction(
+                    token, leaderContext, leader, leaderView,
+                    receipt.subject)
+               /\ ~<<AdequateLeaderFixedSelectedServiceOwnerAction(
+                         owner)>>_AsyncAllVars
+          \/ AdequateLeaderFixedPipelineOriginEqualCountReplacementAction(
+               candidate.node, token, leaderContext, leader, leaderView,
+               receipt.subject, semanticRank)
+          \/ AdequateLeaderFixedPipelineOriginCountIncreasingReplenishmentAction(
+               candidate.node, token, leaderContext, leader, leaderView,
+               receipt.subject, semanticRank)
+          \/ (\E route:
+                \E occurrenceRank
+                    \in AdequateLeaderTargetOccurrenceRankCarrier,
+                  occurrenceOwner
+                    \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                         candidate.node, leaderContext, leader, leaderView,
+                         receipt.subject),
+                  budget
+                    \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
+                  \E sourceDormantPotential, knownDormantPotential:
+                    /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+                         candidate, leaderContext, leader, leaderView,
+                         receipt.subject, semanticRank,
+                         occurrenceRank, occurrenceOwner)
+                    /\ sourceDormantPotential = {}
+                    /\ knownDormantPotential = {}
+                    /\ AdequateLeaderFixedPipelineProducerHandoffFrontier(
+                         initialContext, target, leaderContext,
+                         leader, leaderView, receipt,
+                         route, token, candidate.node,
+                         occurrenceRank, occurrenceOwner,
+                         cutoffOrdinal,
+                         sourceDormantPotential, knownDormantPotential,
+                         AdequateLeaderTargetLiveOwnerIdentitySet(
+                           candidate.node, leaderContext,
+                           leader, leaderView, receipt.subject),
+                         sourceRank, budget))'
+
+AdequateLeaderFixedCutPerActionProviderProperty(specification) ==
+  specification => [][AdequateLeaderFixedCutPerActionProvider]_AsyncAllVars
+
+(***************************************************************************
+Pinned finite/coalesced selected-lifecycle episode.
+
+The natural budget is exactly the frozen semantic owner-identity universe
+minus `known`.  Equal-count A -> B replacement and count-increasing
+replenishment lower that complement.  Neither arm is called occurrence-rank
+progress.  Dormant logical identities need no separate physical coordinate:
+they own no carrier while parked, remain members of the finite semantic
+universe, and can become live only after replay reserves a fresh physical
+ordinal after the source cutoff.
+
+A lower frontier must carry the immutable protocol token, episode target,
+source occurrence rank, source owner identity, source lifecycle cutoff,
+semantic known set, physical source rank, and receipt ceiling; none may be
+re-chosen by a temporal existential.  The legacy Dormant-set parameters are
+constrained to `{}` so any source consumer attempting to reintroduce
+scheduler-ordinal priority is rejected.
+
+The selected current candidate may change from A to B, but it must remain at
+the same episode target and protocol token.  At the frozen occurrence rank its
+physical rank must equal `sourceRank`.  A count-increasing discovery may expose
+a bounded higher current occurrence/physical rank, but the immutable source
+occurrence, source owner, source rank, and receipt ceiling remain parameters of
+the episode.  The step property remains the explicit deadline-carry provider.
+Replenishment is not its goal; only strict source-rank descent or a smaller
+identity complement is.
+
+An already-live lower semantic occurrence outside this selected token/cut is
+deliberately ignored.  It is not a physical descent witness and it does not
+prevent initialization of this episode.  The selected candidate remains on
+the same-or-higher carrier until its exact action either produces a real
+lower physical rank or transfers the same token/cut to the pre-candidate
+route.  The outer occurrence-rank composition in
+`SumeragiV2AdequateLeaderServiceClosureProofs` remains unchanged.
+***************************************************************************)
+
+AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
+    sourceOccurrenceRank, currentOccurrenceRank, sourceRank, currentRank) ==
+  /\ sourceOccurrenceRank[1] = currentOccurrenceRank[1]
+  /\ sourceOccurrenceRank[2] <= currentOccurrenceRank[2]
+  /\ IF sourceOccurrenceRank = currentOccurrenceRank
+     THEN currentRank = sourceRank
+     ELSE /\ sourceOccurrenceRank[2] < currentOccurrenceRank[2]
+          /\ currentRank[1] = sourceRank[1]
+
+AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+    initialContext, target, leaderContext, leader, leaderView, receipt,
+    token, episodeTarget, sourceOccurrenceRank, sourceOccurrenceOwner,
+    sourceCutoffOrdinal, sourceDormantPotential, knownDormantPotential,
+    known, sourceRank, budget) ==
+  /\ token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext)
+  /\ episodeTarget \in ValidatorIds
+  /\ sourceOccurrenceRank
+       \in AdequateLeaderTargetOccurrenceRankCarrier
+  /\ sourceOccurrenceOwner
+       \in AdequateLeaderFrozenCandidateOwnerUniverse(
+            episodeTarget, leaderContext, leader, leaderView,
+            receipt.subject)
+  /\ known
+       \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+            episodeTarget, leaderContext, leader, leaderView,
+            receipt.subject)
+  /\ AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget(
+       episodeTarget, leaderContext, leader, leaderView, receipt.subject,
+       sourceOccurrenceRank, sourceCutoffOrdinal,
+       sourceDormantPotential, knownDormantPotential,
+       known, budget)
+  /\ AdequateLeaderTargetOccurrenceOwnerCarried(
+       episodeTarget, leaderContext, leader, leaderView,
+       receipt.subject,
+       sourceOccurrenceRank, known, sourceOccurrenceOwner)
+  /\ ~AdequateLeaderFixedPipelineStrictRankGoal(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt, sourceRank)
+  /\ \/ \E candidate \in AsyncCandidateSet,
+             cutoffOrdinal \in Nat,
+             currentSemanticRank \in (1..4) \X (0..9),
+             currentOccurrenceRank
+               \in AdequateLeaderTargetOccurrenceRankCarrier,
+             currentOccurrenceOwner
+               \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                    episodeTarget, leaderContext, leader, leaderView,
+                    receipt.subject),
+             currentRank \in AdequateLeaderFixedPipelineRankCarrier,
+             owner
+               \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                    initialContext),
+             packet \in AsyncPacketSet:
+            /\ candidate.node = episodeTarget
+            /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+                 candidate, leaderContext, leader, leaderView,
+                 receipt.subject,
+                 currentSemanticRank,
+                 currentOccurrenceRank, currentOccurrenceOwner)
+            /\ AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
+                 sourceOccurrenceRank, currentOccurrenceRank,
+                 sourceRank, currentRank)
+            /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
+                 initialContext, target, leaderContext,
+                 leader, leaderView, receipt,
+                 token, candidate, cutoffOrdinal, currentSemanticRank,
+                 owner, packet, currentRank)
+     \/ \E route:
+          AdequateLeaderFixedPipelineProducerHandoffFrontier(
+            initialContext, target, leaderContext,
+            leader, leaderView, receipt,
+            route, token, episodeTarget,
+            sourceOccurrenceRank, sourceOccurrenceOwner,
+            sourceCutoffOrdinal,
+            sourceDormantPotential, knownDormantPotential,
+            known, sourceRank, budget)
+
+AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+    initialContext, target, leaderContext, leader, leaderView, receipt,
+    token, episodeTarget, sourceOccurrenceRank, sourceOccurrenceOwner,
+    sourceCutoffOrdinal, sourceDormantPotential, knownDormantPotential,
+    known, sourceRank, sourceBudget) ==
+  \/ AdequateLeaderFixedPipelineStrictRankGoal(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt, sourceRank)
+  \/ \E discovered,
+         known2
+           \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                episodeTarget, leaderContext, leader, leaderView,
+                receipt.subject):
+       \E lowerBudget
+            \in SetLessThan(
+                 sourceBudget,
+                 AdequateLeaderFixedPipelineOriginEpisodeBudgetOrdering,
+                 AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier):
+         /\ discovered =
+              AdequateLeaderTargetNonDescentDiscoveredOwnerIdentitySet(
+                episodeTarget, leaderContext, leader, leaderView,
+                receipt.subject, known)
+         /\ discovered # {}
+         /\ known2 = known \cup discovered
+         /\ AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+              initialContext, target, leaderContext,
+              leader, leaderView, receipt,
+              token, episodeTarget,
+              sourceOccurrenceRank, sourceOccurrenceOwner,
+              sourceCutoffOrdinal,
+              sourceDormantPotential, knownDormantPotential,
+              known2, sourceRank, lowerBudget)
+
+\* Exact one-step carrier for the selected candidate arm of a pinned
+\* occurrence episode.  An unrelated action must retain every immutable
+\* coordinate and the same selected owner.  Equal-count replacement and
+\* count-increasing replenishment are handled only through the fresh
+\* finite-universe identity exposed by the semantic non-descent action;
+\* their post-state is a smaller complement budget, never a progress goal in
+\* its own right.  The producer-handoff arm is discharged separately below,
+\* after global exact-cell selection has exposed its concrete route owner.
+AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider ==
+  \A sourceDormantPotential, knownDormantPotential:
+    \A initialContext \in ContextRecords:
+     \A target \in ValidatorIds:
+      \A leaderContext \in ContextRecords:
+       \A leader \in ValidatorIds:
+        \A leaderView \in Views:
+         \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+          \A token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+           \A episodeTarget \in ValidatorIds:
+            \A sourceOccurrenceRank
+                 \in AdequateLeaderTargetOccurrenceRankCarrier:
+             \A sourceOccurrenceOwner
+                  \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                       episodeTarget, leaderContext, leader, leaderView,
+                       receipt.subject):
+              \A sourceCutoffOrdinal \in Nat \ {0}:
+               \A known
+                    \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                         episodeTarget, leaderContext, leader, leaderView,
+                         receipt.subject):
+                \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+                 \A budget
+                      \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
+                  \A candidate \in AsyncCandidateSet:
+                   \A cutoffOrdinal \in Nat:
+                    \A currentSemanticRank \in (1..4) \X (0..9):
+                     \A currentOccurrenceRank
+                          \in AdequateLeaderTargetOccurrenceRankCarrier:
+                      \A currentOccurrenceOwner
+                           \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                                episodeTarget, leaderContext, leader, leaderView,
+                                receipt.subject):
+                       \A currentRank \in AdequateLeaderFixedPipelineRankCarrier:
+                        \A owner
+                             \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                                  initialContext):
+                         \A packet \in AsyncPacketSet:
+      /\ candidate.node = episodeTarget
+      /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+           candidate, leaderContext, leader, leaderView, receipt.subject,
+           currentSemanticRank,
+           currentOccurrenceRank, currentOccurrenceOwner)
+      /\ AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
+           sourceOccurrenceRank, currentOccurrenceRank,
+           sourceRank, currentRank)
+      /\ AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+           initialContext, target, leaderContext,
+           leader, leaderView, receipt,
+           token, episodeTarget,
+           sourceOccurrenceRank, sourceOccurrenceOwner,
+           sourceCutoffOrdinal,
+           sourceDormantPotential, knownDormantPotential,
+           known, sourceRank, budget)
+      /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
+           initialContext, target, leaderContext,
+           leader, leaderView, receipt,
+           token, candidate, cutoffOrdinal, currentSemanticRank,
+           owner, packet, currentRank)
+      /\ [AsyncNext]_AsyncAllVars
+      => \/ AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+              initialContext, target, leaderContext,
+              leader, leaderView, receipt,
+              token, episodeTarget,
+              sourceOccurrenceRank, sourceOccurrenceOwner,
+              sourceCutoffOrdinal,
+              sourceDormantPotential, knownDormantPotential,
+              known, sourceRank, budget)'
+         \/ /\ (AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, receipt,
+                   token, episodeTarget,
+                   sourceOccurrenceRank, sourceOccurrenceOwner,
+                   sourceCutoffOrdinal,
+                   sourceDormantPotential, knownDormantPotential,
+                   known, sourceRank, budget))'
+            /\ (AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+                  candidate, leaderContext, leader, leaderView,
+                  receipt.subject, currentSemanticRank,
+                  currentOccurrenceRank, currentOccurrenceOwner))'
+            /\ (AdequateLeaderFixedSelectedPipelineRankFrontier(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt,
+                  token, candidate, cutoffOrdinal, currentSemanticRank,
+                  owner, packet, currentRank))'
+            /\ ~<<AdequateLeaderFixedSelectedServiceOwnerAction(
+                     owner)>>_AsyncAllVars
+
+AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty(
+    specification) ==
+  specification
+    => [][AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider]_AsyncAllVars
+
+AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty(
+    specification) ==
+  specification
+    => \A sourceDormantPotential, knownDormantPotential:
+         \A initialContext \in ContextRecords:
+          \A target \in ValidatorIds:
+           \A leaderContext \in ContextRecords:
+            \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+              \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+               \A token
+                    \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+                \A episodeTarget \in ValidatorIds:
+                 \A sourceOccurrenceRank
+                      \in AdequateLeaderTargetOccurrenceRankCarrier:
+                  \A sourceOccurrenceOwner
+                       \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                            episodeTarget, leaderContext, leader, leaderView,
+                            receipt.subject):
+                   \A sourceCutoffOrdinal \in Nat \ {0}:
+                    \A known
+                         \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                              episodeTarget, leaderContext, leader, leaderView,
+                              receipt.subject):
+                     \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+                      \A budget
+                           \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
+           AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+             initialContext, target, leaderContext,
+             leader, leaderView, receipt,
+             token, episodeTarget,
+             sourceOccurrenceRank, sourceOccurrenceOwner,
+             sourceCutoffOrdinal,
+             sourceDormantPotential, knownDormantPotential,
+             known, sourceRank, budget)
+             ~> AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt,
+                  token, episodeTarget,
+                  sourceOccurrenceRank, sourceOccurrenceOwner,
+                  sourceCutoffOrdinal,
+                  sourceDormantPotential, knownDormantPotential,
+                  known, sourceRank, budget)
+
+AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty(
+    specification) ==
+  specification
+    => \A sourceDormantPotential, knownDormantPotential:
+         \A initialContext \in ContextRecords:
+          \A target \in ValidatorIds:
+           \A leaderContext \in ContextRecords:
+            \A leader \in ValidatorIds:
+             \A leaderView \in Views:
+              \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+               \A token
+                    \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+                \A episodeTarget \in ValidatorIds:
+                 \A sourceOccurrenceRank
+                      \in AdequateLeaderTargetOccurrenceRankCarrier:
+                  \A sourceOccurrenceOwner
+                       \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                            episodeTarget, leaderContext, leader, leaderView,
+                            receipt.subject):
+                   \A sourceCutoffOrdinal \in Nat \ {0}:
+                    \A known
+                         \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                              episodeTarget, leaderContext, leader, leaderView,
+                              receipt.subject):
+                     \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+                      \A budget
+                           \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
+           AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+             initialContext, target, leaderContext,
+             leader, leaderView, receipt,
+             token, episodeTarget,
+             sourceOccurrenceRank, sourceOccurrenceOwner,
+             sourceCutoffOrdinal,
+             sourceDormantPotential, knownDormantPotential,
+             known, sourceRank, budget)
+             ~> AdequateLeaderFixedPipelineStrictRankGoal(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt, sourceRank)
+
+THEOREM AdequateLeaderFixedPipelineOriginEpisodeStepClosesNonDescentEpisode ==
+  \A specification:
+    AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty(
+      specification)
+      => AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty(
+           specification)
+BY AdequateLeaderFixedPipelineOriginEpisodeBudgetOrderingIsWellFounded,
+   WellFoundedLeadsTo
+   DEF AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty,
+       AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty,
+       AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal,
+       AdequateLeaderFixedPipelineOriginEpisodeBudgetOrdering,
+       AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier
+
+\* No state-level semantic shortcut is permitted here.  A lower occurrence
+\* which merely coexists with the selected candidate need not have a lower
+\* physical pipeline rank.  The episode therefore starts for the selected
+\* lifecycle unconditionally; only the carried `CutPerAction` transition may
+\* establish `AdequateLeaderFixedPipelineStrictRankGoal`.
+THEOREM AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank ==
+  \A initialContext \in ContextRecords:
+   \A target \in ValidatorIds:
+    \A leaderContext \in ContextRecords:
+     \A leader \in ValidatorIds:
+      \A leaderView \in Views:
+       \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+        \A token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+         \A candidate \in AsyncCandidateSet:
+          \A cutoffOrdinal \in Nat:
+           \A semanticRank \in (1..4) \X (0..9):
+            \A owner
+                 \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
+             \A packet \in AsyncPacketSet:
+              \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+    /\ AsyncStrongTypeInvariant
+    /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
+         initialContext, target, leaderContext,
+         leader, leaderView, receipt,
+         token, candidate, cutoffOrdinal, semanticRank,
+         owner, packet, sourceRank)
+      => \/ AdequateLeaderFixedPipelineStrictRankGoal(
+              initialContext, target, leaderContext,
+              leader, leaderView, receipt, sourceRank)
+         \/ \E occurrenceRank
+                  \in AdequateLeaderTargetOccurrenceRankCarrier,
+               occurrenceOwner
+                 \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                      candidate.node, leaderContext, leader, leaderView,
+                      receipt.subject),
+               known
+                 \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                      candidate.node, leaderContext, leader, leaderView,
+                      receipt.subject),
+               budget
+                 \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
+              \E sourceDormantPotential, knownDormantPotential:
+                /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+                     candidate, leaderContext, leader, leaderView,
+                     receipt.subject, semanticRank,
+                     occurrenceRank, occurrenceOwner)
+                /\ sourceDormantPotential = {}
+                /\ knownDormantPotential = {}
+                /\ known =
+                     AdequateLeaderTargetLiveOwnerIdentitySet(
+                       candidate.node, leaderContext, leader, leaderView,
+                       receipt.subject)
+                /\ AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+                     initialContext, target, leaderContext,
+                     leader, leaderView, receipt,
+                     token, candidate.node,
+                     occurrenceRank, occurrenceOwner,
+                     cutoffOrdinal,
+                     sourceDormantPotential, knownDormantPotential,
+                     known, sourceRank, budget)
+BY AdequateLeaderTargetCurrentOwnersInitializeKnownEpisode,
+   AdequateLeaderTargetNonDescentEpisodeBudgetIsFiniteAndCoalesced,
+   FS_Subset, FS_CardinalityType, IsaT(600)
+   DEF AdequateLeaderFixedPipelineOriginEpisodeFrontier,
+       AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget,
+       AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier,
+       AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible,
+       AdequateLeaderFixedSelectedOccurrenceLifecycleActive,
+       AdequateLeaderFixedSelectedOccurrenceProducerResidual
+
+AdequateLeaderFixedSelectedOwnerServiceProperty(specification) ==
+  specification
+    => \A initialContext \in ContextRecords:
+         \A target \in ValidatorIds:
+          \A leaderContext \in ContextRecords:
+           \A leader \in ValidatorIds:
+            \A leaderView \in Views:
+             \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+              \A token:
+               \A candidate \in AsyncCandidateSet:
+                \A cutoffOrdinal \in Nat:
+                 \A semanticRank \in (1..4) \X (0..9):
+                  \A owner
+                       \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                            initialContext):
+                   \A packet \in AsyncPacketSet:
+                    \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+         AdequateLeaderFixedSelectedPipelineRankFrontier(
+           initialContext, target, leaderContext,
+           leader, leaderView, receipt,
+           token, candidate, cutoffOrdinal, semanticRank,
+           owner, packet, sourceRank)
+           ~> AdequateLeaderFixedPipelineStrictRankGoal(
+                initialContext, target, leaderContext,
+                leader, leaderView,
+                receipt, sourceRank)
+
+THEOREM AdequateLeaderFixedOriginEpisodeClosureSuppliesSelectedOwnerService ==
+  \A specification:
+    /\ (specification => []AsyncStrongTypeInvariant)
+    /\ AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty(
+         specification)
+      => AdequateLeaderFixedSelectedOwnerServiceProperty(specification)
+BY AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank, PTL
+   DEF AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty,
+       AdequateLeaderFixedSelectedOwnerServiceProperty
+
+
 AdequateLeaderFixedFreshPreCandidateEntryRankCell(
     initialContext, target, leaderContext, leader, leaderView, receipt,
     route, token, entryDebt, owner, packet) ==
@@ -3505,43 +3527,43 @@ AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
          sourceRank,
          AdequateLeaderFixedPipelineRankOrdering,
          AdequateLeaderFixedPipelineRankCarrier):
-       \/ \E token
+       \/ \E scheduledToken
               \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
             candidate \in AsyncCandidateSet,
             cutoffOrdinal \in Nat,
             semanticRank \in (1..4) \X (0..9),
-            owner
+            scheduledOwner
               \in AdequateLeaderFixedSelectedServiceOwnerSet(
                    initialContext),
-            packet \in AsyncPacketSet:
+            scheduledPacket \in AsyncPacketSet:
            /\ AdequateLeaderFixedCandidateContinuesPreCandidateRoute(
                 candidate, route, leaderContext,
                 leader, leaderView, receipt.subject)
            /\ AdequateLeaderFixedPipelineRankCell(
                 initialContext, target, leaderContext,
                 leader, leaderView, receipt,
-                token, candidate, cutoffOrdinal, semanticRank,
-                owner, packet)
+                scheduledToken, candidate, cutoffOrdinal, semanticRank,
+                scheduledOwner, scheduledPacket)
            /\ AdequateLeaderFixedPipelineRank(
                 leaderContext, leader, leaderView, receipt.subject,
-                token, candidate, cutoffOrdinal,
-                semanticRank, owner, packet)
+                scheduledToken, candidate, cutoffOrdinal,
+                semanticRank, scheduledOwner, scheduledPacket)
                 = lowerRank
-          \/ \E token
+          \/ \E entryToken
                \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
              entryDebt
                \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge,
-             owner
+             entryOwner
                \in AdequateLeaderFixedSelectedServiceOwnerSet(
                     initialContext),
-             packet \in AsyncPacketSet:
+             entryPacket \in AsyncPacketSet:
             /\ AdequateLeaderFixedPreCandidateEntryRankCell(
                  initialContext, target, leaderContext,
                  leader, leaderView, receipt,
-                 route, token, entryDebt, owner, packet)
+                 route, entryToken, entryDebt, entryOwner, entryPacket)
             /\ AdequateLeaderFixedPreCandidateEntryRank(
-                 token, leaderContext, leader, leaderView, receipt.subject,
-                 entryDebt, owner, packet)
+                 entryToken, leaderContext, leader, leaderView, receipt.subject,
+                 entryDebt, entryOwner, entryPacket)
                  = lowerRank
 
 AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
@@ -3565,90 +3587,24 @@ AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
      THEN owner.ownerKind \in {"Tick", "TickPacket"}
      ELSE owner.ownerKind \notin {"Tick", "TickPacket"}
 
-\* A fresh source can begin at any surviving protocol phase; Proposal may
-\* already be complete and drained.  Entry therefore names the current raw
-\* scheduled/pre-candidate cell for an exact remaining token (or the Decision
-\* terminal) and never recreates `<<leader, "Proposal">>` at maximal debt.
-\* Concrete owner selection is delayed until the separately ranked global
-\* fixed-clock blocker episode has drained.
-AdequateLeaderAuthorityDeadlineImmediateSourceEntryProvider ==
-  \A initialContext \in ContextRecords,
-     target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leader \in ValidatorIds,
-     leaderView \in Views,
-     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
-    AdequateLeaderAuthorityDeadlineFreshSource(
-      target, leaderContext, leader, leaderView, receipt)
-      /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
-      => \/ AdequateLeaderAuthorityDeadlineTargetDecision(target, receipt)
-         \/ \E sourceRank
-                \in AdequateLeaderFixedPipelineRankCarrier,
-               targetOrdinal \in Nat \ {0}:
-              LET schedulerCeiling ==
-                    AsyncNextCandidateLifecycleOrdinal(leader)
-                  preAdmissionRoutes ==
-                    AdequateLeaderFixedUnacceptedPreAdmissionSubjectReplacementRoutes(
-                      target, leaderContext, leader, leaderView)
-                  replacementOwners ==
-                    AdequateLeaderFixedSubjectReplacementOwnersBeforeOrdinal(
-                      target, leaderContext, leader, leaderView,
-                      targetOrdinal)
-              IN /\ AdequateLeaderFixedFreshPipelineServiceRankFrontierAtOrdinal(
-                       initialContext, target, leaderContext,
-                       leader, leaderView, receipt,
-                       sourceRank, targetOrdinal)
-                 /\ targetOrdinal < schedulerCeiling
-                 /\ IsFiniteSet(preAdmissionRoutes)
-                 /\ Cardinality(preAdmissionRoutes)
-                      <=
-                        AdequateLeaderFixedPreAdmissionSubjectReplacementRouteCapacity
-                 /\ \E transportBudget \in Nat:
-                      AdequateLeaderFixedPreAdmissionSubjectReplacementEpisode(
-                        target, leaderContext, leader, leaderView,
-                        targetOrdinal, schedulerCeiling,
-                        preAdmissionRoutes, transportBudget)
-                 /\ IF replacementOwners = {}
-                    THEN TRUE
-                    ELSE \E cut
-                           \in AdequateLeaderFixedSubjectReplacementCutSet,
-                             replacementRank
-                               \in
-                                 AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
-                           /\ AdequateLeaderFixedSubjectReplacementCutSource(
-                                target, leaderContext, leader, leaderView,
-                                receipt.subject, targetOrdinal, cut)
-                           /\ replacementRank =
-                                AdequateLeaderFixedSubjectReplacementInitialEpisodeRank(
-                                  cut)
-                           /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
-                                initialContext, target, leaderContext,
-                                leader, leaderView, receipt,
-                                cut, {}, replacementRank)
-
-AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty(
-    specification) ==
-  specification
-    => []AdequateLeaderAuthorityDeadlineImmediateSourceEntryProvider
-
 AdequateLeaderFixedPreCandidateEntryServiceProperty(specification) ==
   specification
     => \A route:
-       \A initialContext \in ContextRecords,
-          target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-          token
-            \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-          entryDebt
-            \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge,
-          owner
-            \in AdequateLeaderFixedSelectedServiceOwnerSet(
-                 initialContext),
-          packet \in AsyncPacketSet,
-          sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+       \A initialContext \in ContextRecords:
+        \A target \in ValidatorIds:
+         \A leaderContext \in ContextRecords:
+          \A leader \in ValidatorIds:
+           \A leaderView \in Views:
+            \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+             \A token
+                  \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+              \A entryDebt
+                   \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge:
+               \A owner
+                    \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                         initialContext):
+                \A packet \in AsyncPacketSet:
+                 \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
          AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
            initialContext, target, leaderContext,
            leader, leaderView, receipt,
@@ -3663,18 +3619,18 @@ AdequateLeaderFixedPreCandidateEntryServiceProperty(specification) ==
 \* fairness; selecting a different queued token is not a permitted successor.
 AdequateLeaderFixedPreCandidateSelectedOwnerStepProvider ==
   \A route:
-  \A initialContext \in ContextRecords,
-     target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leader \in ValidatorIds,
-     leaderView \in Views,
-     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-     entryDebt \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge,
-     owner
-       \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-     packet \in AsyncPacketSet,
-     sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+  \A initialContext \in ContextRecords:
+   \A target \in ValidatorIds:
+    \A leaderContext \in ContextRecords:
+     \A leader \in ValidatorIds:
+      \A leaderView \in Views:
+       \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+        \A token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+         \A entryDebt \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge:
+          \A owner
+               \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
+           \A packet \in AsyncPacketSet:
+            \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
     /\ AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
          initialContext, target, leaderContext,
          leader, leaderView, receipt,
@@ -3693,7 +3649,7 @@ AdequateLeaderFixedPreCandidateSelectedOwnerStepProvider ==
 AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty(
     specification) ==
   specification
-    => []AdequateLeaderFixedPreCandidateSelectedOwnerStepProvider
+    => [][AdequateLeaderFixedPreCandidateSelectedOwnerStepProvider]_AsyncAllVars
 
 \* These are the explicit clock-carry seams.  For Tick, `asyncNow'` rises
 \* while the selected slack falls by the same amount.  For a due owner, the
@@ -3703,40 +3659,41 @@ AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty(
 \* reset cannot refresh `receipt.deadlineReceipt.armedAt` or borrow another clock window.
 AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling ==
   \A sourceDormantPotential, knownDormantPotential:
-    \A initialContext \in ContextRecords,
-       target \in ValidatorIds,
-       leaderContext \in ContextRecords,
-       leader \in ValidatorIds,
-       leaderView \in Views,
-       receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-       token,
-       candidate \in AsyncCandidateSet,
-       cutoffOrdinal \in Nat,
-       semanticRank \in (1..4) \X (0..9),
-       owner
-         \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-       packet \in AsyncPacketSet,
-       sourceRank \in AdequateLeaderFixedPipelineRankCarrier,
-       sourceOccurrenceRank
-         \in AdequateLeaderTargetOccurrenceRankCarrier,
-       sourceOccurrenceOwner
-         \in AdequateLeaderFrozenCandidateOwnerUniverse(
-              candidate.node, leaderContext, leader, leaderView,
-              receipt.subject),
-       sourceCutoffOrdinal \in Nat \ {0},
-       sourceKnown
-         \in SUBSET AdequateLeaderFrozenOwnerUniverse(
-              candidate.node, leaderContext, leader, leaderView,
-              receipt.subject),
-       currentOccurrenceRank
-         \in AdequateLeaderTargetOccurrenceRankCarrier,
-       currentOccurrenceOwner
-         \in AdequateLeaderFrozenCandidateOwnerUniverse(
-              candidate.node, leaderContext, leader, leaderView,
-              receipt.subject),
-       currentRank \in AdequateLeaderFixedPipelineRankCarrier,
-       sourceBudget
-         \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
+    \A initialContext \in ContextRecords:
+     \A target \in ValidatorIds:
+      \A leaderContext \in ContextRecords:
+       \A leader \in ValidatorIds:
+        \A leaderView \in Views:
+         \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+          \A token:
+           \A candidate \in AsyncCandidateSet:
+            \A cutoffOrdinal \in Nat:
+             \A semanticRank \in (1..4) \X (0..9):
+              \A owner
+                   \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                        initialContext):
+               \A packet \in AsyncPacketSet:
+                \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+                 \A sourceOccurrenceRank
+                      \in AdequateLeaderTargetOccurrenceRankCarrier:
+                  \A sourceOccurrenceOwner
+                       \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                            candidate.node, leaderContext, leader, leaderView,
+                            receipt.subject):
+                   \A sourceCutoffOrdinal \in Nat \ {0}:
+                    \A sourceKnown
+                         \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                              candidate.node, leaderContext, leader, leaderView,
+                              receipt.subject):
+                     \A currentOccurrenceRank
+                          \in AdequateLeaderTargetOccurrenceRankCarrier:
+                      \A currentOccurrenceOwner
+                           \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                                candidate.node, leaderContext, leader, leaderView,
+                                receipt.subject):
+                       \A currentRank \in AdequateLeaderFixedPipelineRankCarrier:
+                        \A sourceBudget
+                             \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
       /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
            candidate, leaderContext, leader, leaderView,
            receipt.subject, semanticRank,
@@ -3768,18 +3725,18 @@ AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling ==
 
 AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling ==
   \A route:
-  \A initialContext \in ContextRecords,
-     target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leader \in ValidatorIds,
-     leaderView \in Views,
-     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-     entryDebt \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge,
-     owner
-       \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-     packet \in AsyncPacketSet,
-     sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+  \A initialContext \in ContextRecords:
+   \A target \in ValidatorIds:
+    \A leaderContext \in ContextRecords:
+     \A leader \in ValidatorIds:
+      \A leaderView \in Views:
+       \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+        \A token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext):
+         \A entryDebt \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge:
+          \A owner
+               \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext):
+           \A packet \in AsyncPacketSet:
+            \A sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
     /\ AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
          initialContext, target, leaderContext,
          leader, leaderView, receipt,
@@ -3793,8 +3750,8 @@ AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling ==
 AdequateLeaderFixedSelectedActionClockCarryProviderProperty(
     specification) ==
   specification
-    => [](/\ AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling
-          /\ AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling)
+    => /\ [][AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling]_AsyncAllVars
+       /\ [][AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling]_AsyncAllVars
 
 THEOREM
     AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepFollowsProviders ==
@@ -3805,6 +3762,7 @@ THEOREM
   /\ AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling
     => AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider
 BY AdequateLeaderTargetNonDescentActionExposesFreshEpisodeIdentity,
+   AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode,
    AdequateLeaderCarriedNonDescentResidualAdvancesKnownBudget,
    AdequateLeaderTargetNonDescentDiscoveryStrictlyConsumesBudget,
    AdequateLeaderFrozenOwnerUniverseIsPrimeInvariant,
@@ -3837,18 +3795,131 @@ BY AdequateLeaderTargetNonDescentActionExposesFreshEpisodeIdentity,
 
 THEOREM AdequateLeaderFixedPreCandidateSelectionAndFairnessSupplyEntryService ==
   \A specification:
+    /\ AdequateLeaderAsyncNextBehaviorProperty(specification)
     /\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification)
     /\ AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty(
          specification)
     /\ AdequateLeaderFixedSelectedActionClockCarryProviderProperty(
          specification)
       => AdequateLeaderFixedPreCandidateEntryServiceProperty(specification)
-BY WF1, PTL
-   DEF AdequateLeaderFixedSelectedOwnerFairnessProperty,
-       AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty,
-       AdequateLeaderFixedSelectedActionClockCarryProviderProperty,
-       AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling,
-       AdequateLeaderFixedPreCandidateEntryServiceProperty
+PROOF
+  <1>1. ASSUME NEW specification,
+                AdequateLeaderAsyncNextBehaviorProperty(specification),
+                AdequateLeaderFixedSelectedOwnerFairnessProperty(
+                  specification),
+                AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty(
+                  specification),
+                AdequateLeaderFixedSelectedActionClockCarryProviderProperty(
+                  specification),
+                specification
+         PROVE \A route:
+                 \A initialContext \in ContextRecords:
+                  \A target \in ValidatorIds:
+                   \A leaderContext \in ContextRecords:
+                    \A leader \in ValidatorIds:
+                     \A leaderView \in Views:
+                      \A receipt
+                           \in AdequateLeaderAuthorityDeadlineReceiptSet:
+                       \A token
+                            \in AdequateLeaderFixedPipelineTokenCarrier(
+                                 leaderContext):
+                        \A entryDebt
+                             \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge:
+                         \A owner
+                              \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                                   initialContext):
+                          \A packet \in AsyncPacketSet:
+                           \A sourceRank
+                                \in AdequateLeaderFixedPipelineRankCarrier:
+                   AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
+                     initialContext, target, leaderContext,
+                     leader, leaderView, receipt,
+                     route, token, entryDebt, owner, packet, sourceRank)
+                     ~> AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
+                          initialContext, target, leaderContext,
+                          leader, leaderView, receipt, route, sourceRank)
+    <2>1. ASSUME NEW route,
+                  NEW initialContext \in ContextRecords,
+                  NEW target \in ValidatorIds,
+                  NEW leaderContext \in ContextRecords,
+                  NEW leader \in ValidatorIds,
+                  NEW leaderView \in Views,
+                  NEW receipt
+                    \in AdequateLeaderAuthorityDeadlineReceiptSet,
+                  NEW token
+                    \in AdequateLeaderFixedPipelineTokenCarrier(
+                         leaderContext),
+                  NEW entryDebt
+                    \in 1..AdequateLeaderFixedPerOriginSlotEpisodeCharge,
+                  NEW owner
+                    \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                         initialContext),
+                  NEW packet \in AsyncPacketSet,
+                  NEW sourceRank
+                    \in AdequateLeaderFixedPipelineRankCarrier
+           PROVE AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, receipt,
+                   route, token, entryDebt, owner, packet, sourceRank)
+                   ~> AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt, route, sourceRank)
+      <3>1. [](AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt,
+                  route, token, entryDebt, owner, packet, sourceRank)
+                /\ ~AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
+                     initialContext, target, leaderContext,
+                     leader, leaderView, receipt, route, sourceRank)
+               => ENABLED
+                    <<AdequateLeaderFixedSelectedServiceOwnerAction(
+                        owner)>>_AsyncAllVars)
+        BY PTL, IsaT(900)
+           DEF AdequateLeaderFixedSelectedPreCandidateEntryFrontier,
+               AsyncAllVars
+      <3>2. /\ AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, receipt,
+                   route, token, entryDebt, owner, packet, sourceRank)
+             /\ ~AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt, route, sourceRank)
+             /\ <<AdequateLeaderFixedSelectedServiceOwnerAction(
+                      owner)>>_AsyncAllVars
+            => AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
+                 initialContext, target, leaderContext,
+                 leader, leaderView, receipt, route, sourceRank)'
+        BY <1>1, PTL
+           DEF AdequateLeaderFixedSelectedActionClockCarryProviderProperty,
+               AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling
+      <3>3. /\ AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, receipt,
+                   route, token, entryDebt, owner, packet, sourceRank)
+             /\ ~AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt, route, sourceRank)
+             /\ [AsyncNext]_AsyncAllVars
+            => \/ AdequateLeaderFixedPreCandidateEntryStrictRankGoal(
+                     initialContext, target, leaderContext,
+                     leader, leaderView, receipt, route, sourceRank)'
+               \/ AdequateLeaderFixedSelectedPreCandidateEntryFrontier(
+                    initialContext, target, leaderContext,
+                    leader, leaderView, receipt,
+                    route, token, entryDebt, owner, packet, sourceRank)'
+        BY <1>1, PTL
+           DEF AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty
+      <3>4. WF_AsyncAllVars(
+               AdequateLeaderFixedSelectedServiceOwnerAction(owner))
+        BY <1>1, <2>1, PTL
+           DEF AdequateLeaderFixedSelectedOwnerFairnessProperty
+      <3>5. [][AsyncNext]_AsyncAllVars
+        BY <1>1
+           DEF AdequateLeaderAsyncNextBehaviorProperty
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+     DEF AdequateLeaderFixedPreCandidateEntryServiceProperty
 
 AdequateLeaderFixedSelectedPipelineServiceRankFrontier(
     initialContext, target, leaderContext, leader, leaderView, receipt,
@@ -4703,12 +4774,12 @@ AdequateLeaderFixedGlobalBlockerBottomForcesGoalProvider ==
 
 AdequateLeaderFixedGlobalBlockerProviderProperty(specification) ==
   /\ (specification
-        => [](/\ AdequateLeaderFixedGlobalBlockerEntryProvider
-              /\ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider
-              /\ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider
-              /\ AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider
-              /\ AdequateLeaderFixedGlobalBlockerRetainedEpisodeCarryProvider
-              /\ AdequateLeaderFixedGlobalBlockerBottomForcesGoalProvider))
+        => [][(/\ AdequateLeaderFixedGlobalBlockerEntryProvider
+               /\ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider
+               /\ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider
+               /\ AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider
+               /\ AdequateLeaderFixedGlobalBlockerRetainedEpisodeCarryProvider
+               /\ AdequateLeaderFixedGlobalBlockerBottomForcesGoalProvider)]_AsyncAllVars)
   /\ AdequateLeaderRetainedProducerNonDescentEpisodeClosureProperty(
        specification)
 
@@ -4735,17 +4806,197 @@ AdequateLeaderFixedGlobalProducerEpisodeStepProperty(specification) ==
                 leader, leaderView, receipt, sourceRank,
                 snapshot, clockValue, blockerRank, episodeRank)
 
+\* Freeze the selected blocker owner while weak fairness is applied.  The
+\* selected-owner step provider preserves this equality on every non-owner
+\* frame, so the temporal action below never depends on a state-varying
+\* CHOOSE expression.
+AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+    initialContext, target, leaderContext, leader, leaderView, receipt,
+    sourceRank, snapshot, clockValue, blockerRank, episodeRank, owner) ==
+  /\ AdequateLeaderFixedGlobalProducerEpisodeAtRank(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt, sourceRank,
+       snapshot, clockValue, blockerRank, episodeRank)
+  /\ AdequateLeaderFixedSelectedGlobalBlockerOwner(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt, sourceRank,
+       snapshot, clockValue, blockerRank, episodeRank)
+       = owner
+
 THEOREM AdequateLeaderFixedGlobalBlockerProvidersSupplyProducerEpisodeStep ==
   \A specification:
+    /\ AdequateLeaderAsyncNextBehaviorProperty(specification)
     /\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification)
     /\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification)
       => AdequateLeaderFixedGlobalProducerEpisodeStepProperty(specification)
-BY WF1, PTL
-   DEF AdequateLeaderFixedSelectedOwnerFairnessProperty,
-       AdequateLeaderFixedGlobalBlockerProviderProperty,
-       AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider,
-       AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider,
-       AdequateLeaderFixedGlobalProducerEpisodeStepProperty
+PROOF
+  <1>1. ASSUME NEW specification,
+                AdequateLeaderAsyncNextBehaviorProperty(specification),
+                AdequateLeaderFixedSelectedOwnerFairnessProperty(
+                  specification),
+                AdequateLeaderFixedGlobalBlockerProviderProperty(
+                  specification),
+                specification
+         PROVE \A initialContext \in ContextRecords,
+                   target \in ValidatorIds,
+                   leaderContext \in ContextRecords,
+                   leader \in ValidatorIds,
+                   leaderView \in Views,
+                   receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
+                   sourceRank \in AdequateLeaderFixedPipelineRankCarrier,
+                   snapshot
+                     \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier,
+                   clockValue \in Nat,
+                   blockerRank
+                     \in AdequateLeaderFixedGlobalBlockerRankCarrier,
+                   episodeRank
+                     \in AdequateLeaderFixedGlobalProducerEpisodeRankCarrier:
+                 AdequateLeaderFixedGlobalProducerEpisodeAtRank(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, receipt, sourceRank,
+                   snapshot, clockValue, blockerRank, episodeRank)
+                   ~> AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt, sourceRank,
+                        snapshot, clockValue, blockerRank, episodeRank)
+    <2>1. ASSUME NEW initialContext \in ContextRecords,
+                  NEW target \in ValidatorIds,
+                  NEW leaderContext \in ContextRecords,
+                  NEW leader \in ValidatorIds,
+                  NEW leaderView \in Views,
+                  NEW receipt
+                    \in AdequateLeaderAuthorityDeadlineReceiptSet,
+                  NEW sourceRank
+                    \in AdequateLeaderFixedPipelineRankCarrier,
+                  NEW snapshot
+                    \in AdequateLeaderFixedGlobalBlockerSnapshotCarrier,
+                  NEW clockValue \in Nat,
+                  NEW blockerRank
+                    \in AdequateLeaderFixedGlobalBlockerRankCarrier,
+                  NEW episodeRank
+                    \in AdequateLeaderFixedGlobalProducerEpisodeRankCarrier
+           PROVE AdequateLeaderFixedGlobalProducerEpisodeAtRank(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, receipt, sourceRank,
+                   snapshot, clockValue, blockerRank, episodeRank)
+                   ~> AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt, sourceRank,
+                        snapshot, clockValue, blockerRank, episodeRank)
+      <3>1. \A owner
+                  \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                       initialContext):
+               AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+                 initialContext, target, leaderContext,
+                 leader, leaderView, receipt, sourceRank,
+                 snapshot, clockValue, blockerRank, episodeRank, owner)
+                 ~> AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                      initialContext, target, leaderContext,
+                      leader, leaderView, receipt, sourceRank,
+                      snapshot, clockValue, blockerRank, episodeRank)
+        PROOF
+          <4>1. ASSUME NEW owner
+                        \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                             initialContext)
+                 PROVE AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+                         initialContext, target, leaderContext,
+                         leader, leaderView, receipt, sourceRank,
+                         snapshot, clockValue, blockerRank, episodeRank,
+                         owner)
+                         ~> AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                              initialContext, target, leaderContext,
+                              leader, leaderView, receipt, sourceRank,
+                              snapshot, clockValue, blockerRank, episodeRank)
+            <5>1. [][AsyncNext]_AsyncAllVars
+              BY <1>1
+                 DEF AdequateLeaderAsyncNextBehaviorProperty
+            <5>2. [](AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt, sourceRank,
+                        snapshot, clockValue, blockerRank, episodeRank,
+                        owner)
+                      /\ ~AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                           initialContext, target, leaderContext,
+                           leader, leaderView, receipt, sourceRank,
+                           snapshot, clockValue, blockerRank, episodeRank)
+                     => ENABLED
+                          <<AdequateLeaderFixedSelectedServiceOwnerAction(
+                              owner)>>_AsyncAllVars)
+              BY <1>1, PTL, IsaT(900)
+                 DEF AdequateLeaderFixedGlobalBlockerProviderProperty,
+                     AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider,
+                     AdequateLeaderFixedGlobalBlockerOwnerReady,
+                     AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner,
+                     AsyncAllVars
+            <5>3. AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt, sourceRank,
+                        snapshot, clockValue, blockerRank, episodeRank,
+                        owner)
+                      /\ ~AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                           initialContext, target, leaderContext,
+                           leader, leaderView, receipt, sourceRank,
+                           snapshot, clockValue, blockerRank, episodeRank)
+                      /\ <<AdequateLeaderFixedSelectedServiceOwnerAction(
+                               owner)>>_AsyncAllVars
+                     => AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                          initialContext, target, leaderContext,
+                          leader, leaderView, receipt, sourceRank,
+                          snapshot, clockValue, blockerRank, episodeRank)'
+              BY <1>1, <5>1, PTL, IsaT(900)
+                 DEF AdequateLeaderFixedGlobalBlockerProviderProperty,
+                     AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider,
+                     AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner
+            <5>4. AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt, sourceRank,
+                        snapshot, clockValue, blockerRank, episodeRank,
+                        owner)
+                      /\ ~AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                           initialContext, target, leaderContext,
+                           leader, leaderView, receipt, sourceRank,
+                           snapshot, clockValue, blockerRank, episodeRank)
+                      /\ [AsyncNext]_AsyncAllVars
+                     => \/ AdequateLeaderFixedGlobalProducerEpisodeOutcome(
+                              initialContext, target, leaderContext,
+                              leader, leaderView, receipt, sourceRank,
+                              snapshot, clockValue, blockerRank, episodeRank)'
+                        \/ AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+                             initialContext, target, leaderContext,
+                             leader, leaderView, receipt, sourceRank,
+                             snapshot, clockValue, blockerRank, episodeRank,
+                             owner)'
+              BY <1>1, PTL, IsaT(900)
+                 DEF AdequateLeaderFixedGlobalBlockerProviderProperty,
+                     AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider,
+                     AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner
+            <5>5. WF_AsyncAllVars(
+                     AdequateLeaderFixedSelectedServiceOwnerAction(owner))
+              BY <1>1, <4>1, PTL
+                 DEF AdequateLeaderFixedSelectedOwnerFairnessProperty
+            <5> QED BY <5>1, <5>2, <5>3, <5>4, <5>5, PTL
+          <4> QED BY <4>1
+      <3>2. [](AdequateLeaderFixedGlobalProducerEpisodeAtRank(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt, sourceRank,
+                  snapshot, clockValue, blockerRank, episodeRank)
+               => \E owner
+                       \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                            initialContext):
+                    AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner(
+                      initialContext, target, leaderContext,
+                      leader, leaderView, receipt, sourceRank,
+                      snapshot, clockValue, blockerRank, episodeRank,
+                      owner))
+        BY <1>1, PTL, IsaT(900)
+           DEF AdequateLeaderFixedGlobalBlockerProviderProperty,
+               AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider,
+               AdequateLeaderFixedGlobalBlockerOwnerReady,
+               AdequateLeaderFixedGlobalProducerEpisodeAtRankForOwner
+      <3> QED BY <3>1, <3>2, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+     DEF AdequateLeaderFixedGlobalProducerEpisodeStepProperty
 
 AdequateLeaderFixedGlobalBlockerRankStepProperty(specification) ==
   specification
@@ -4784,6 +5035,7 @@ BY ExactDecisionTargetNeutralProducerEpisodeOrderingIsWellFounded,
 
 THEOREM AdequateLeaderFixedGlobalBlockerProvidersSupplyRankStep ==
   \A specification:
+    /\ AdequateLeaderAsyncNextBehaviorProperty(specification)
     /\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification)
     /\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification)
       => AdequateLeaderFixedGlobalBlockerRankStepProperty(specification)
@@ -4980,9 +5232,42 @@ BY Isa
        AdequateLeaderFixedPreCandidateRouteCarrier,
        AdequateLeaderFixedAnyPipelineTokenCarrier
 
+\* A candidate arm of the producer episode must retain every selected-cell
+\* witness while the selected owner is waiting for its fair turn.  Freezing
+\* these witnesses makes the fairness action constant; the producer-handoff
+\* arm is closed independently by the raw-route rank below.
+AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+    initialContext, target, leaderContext, leader, leaderView, receipt,
+    token, episodeTarget, sourceOccurrenceRank, sourceOccurrenceOwner,
+    sourceCutoffOrdinal, sourceDormantPotential, knownDormantPotential,
+    known, sourceRank, budget,
+    candidate, cutoffOrdinal, currentSemanticRank,
+    currentOccurrenceRank, currentOccurrenceOwner,
+    currentRank, owner, packet) ==
+  /\ candidate.node = episodeTarget
+  /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+       candidate, leaderContext, leader, leaderView, receipt.subject,
+       currentSemanticRank, currentOccurrenceRank, currentOccurrenceOwner)
+  /\ AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
+       sourceOccurrenceRank, currentOccurrenceRank, sourceRank, currentRank)
+  /\ AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt,
+       token, episodeTarget,
+       sourceOccurrenceRank, sourceOccurrenceOwner,
+       sourceCutoffOrdinal,
+       sourceDormantPotential, knownDormantPotential,
+       known, sourceRank, budget)
+  /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt,
+       token, candidate, cutoffOrdinal, currentSemanticRank,
+       owner, packet, currentRank)
+
 THEOREM
     AdequateLeaderFixedCandidateFairnessAndRawRouteClosureSupplyEpisodeStep ==
   \A specification:
+    /\ AdequateLeaderAsyncNextBehaviorProperty(specification)
     /\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification)
     /\ AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty(
          specification)
@@ -4990,15 +5275,356 @@ THEOREM
          specification)
       => AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty(
            specification)
-BY AdequateLeaderFixedPipelineProducerHandoffStartsRawRouteRank, WF1, PTL
-   DEF
-     AdequateLeaderFixedSelectedOwnerFairnessProperty,
-     AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty,
-     AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider,
-     AdequateLeaderFixedPreCandidateRawRouteRankClosureProperty,
-     AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty,
-     AdequateLeaderFixedPipelineOriginEpisodeFrontier,
-     AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal
+PROOF
+  <1>1. ASSUME NEW specification,
+                AdequateLeaderAsyncNextBehaviorProperty(specification),
+                AdequateLeaderFixedSelectedOwnerFairnessProperty(
+                  specification),
+                AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty(
+                  specification),
+                AdequateLeaderFixedPreCandidateRawRouteRankClosureProperty(
+                  specification),
+                specification
+         PROVE \A sourceDormantPotential, knownDormantPotential:
+                 \A initialContext \in ContextRecords:
+                  \A target \in ValidatorIds:
+                   \A leaderContext \in ContextRecords:
+                    \A leader \in ValidatorIds:
+                     \A leaderView \in Views:
+                      \A receipt
+                           \in AdequateLeaderAuthorityDeadlineReceiptSet:
+                       \A token
+                            \in AdequateLeaderFixedPipelineTokenCarrier(
+                                 leaderContext):
+                        \A episodeTarget \in ValidatorIds:
+                         \A sourceOccurrenceRank
+                              \in AdequateLeaderTargetOccurrenceRankCarrier:
+                          \A sourceOccurrenceOwner
+                               \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                                    episodeTarget, leaderContext,
+                                    leader, leaderView, receipt.subject):
+                           \A sourceCutoffOrdinal \in Nat \ {0}:
+                            \A known
+                                 \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                                      episodeTarget, leaderContext,
+                                      leader, leaderView, receipt.subject):
+                             \A sourceRank
+                                  \in AdequateLeaderFixedPipelineRankCarrier:
+                              \A budget
+                                   \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier:
+                   AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+                     initialContext, target, leaderContext,
+                     leader, leaderView, receipt,
+                     token, episodeTarget,
+                     sourceOccurrenceRank, sourceOccurrenceOwner,
+                     sourceCutoffOrdinal,
+                     sourceDormantPotential, knownDormantPotential,
+                     known, sourceRank, budget)
+                     ~> AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                          initialContext, target, leaderContext,
+                          leader, leaderView, receipt,
+                          token, episodeTarget,
+                          sourceOccurrenceRank, sourceOccurrenceOwner,
+                          sourceCutoffOrdinal,
+                          sourceDormantPotential, knownDormantPotential,
+                          known, sourceRank, budget)
+    <2>1. ASSUME NEW sourceDormantPotential,
+                  NEW knownDormantPotential,
+                  NEW initialContext \in ContextRecords,
+                  NEW target \in ValidatorIds,
+                  NEW leaderContext \in ContextRecords,
+                  NEW leader \in ValidatorIds,
+                  NEW leaderView \in Views,
+                  NEW receipt
+                    \in AdequateLeaderAuthorityDeadlineReceiptSet,
+                  NEW token
+                    \in AdequateLeaderFixedPipelineTokenCarrier(
+                         leaderContext),
+                  NEW episodeTarget \in ValidatorIds,
+                  NEW sourceOccurrenceRank
+                    \in AdequateLeaderTargetOccurrenceRankCarrier,
+                  NEW sourceOccurrenceOwner
+                    \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                         episodeTarget, leaderContext, leader, leaderView,
+                         receipt.subject),
+                  NEW sourceCutoffOrdinal \in Nat \ {0},
+                  NEW known
+                    \in SUBSET AdequateLeaderFrozenOwnerUniverse(
+                         episodeTarget, leaderContext, leader, leaderView,
+                         receipt.subject),
+                  NEW sourceRank
+                    \in AdequateLeaderFixedPipelineRankCarrier,
+                  NEW budget
+                    \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier
+           PROVE AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, receipt,
+                   token, episodeTarget,
+                   sourceOccurrenceRank, sourceOccurrenceOwner,
+                   sourceCutoffOrdinal,
+                   sourceDormantPotential, knownDormantPotential,
+                   known, sourceRank, budget)
+                   ~> AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt,
+                        token, episodeTarget,
+                        sourceOccurrenceRank, sourceOccurrenceOwner,
+                        sourceCutoffOrdinal,
+                        sourceDormantPotential, knownDormantPotential,
+                        known, sourceRank, budget)
+      <3>1. \A candidate \in AsyncCandidateSet,
+                    cutoffOrdinal \in Nat,
+                    currentSemanticRank \in (1..4) \X (0..9),
+                    currentOccurrenceRank
+                      \in AdequateLeaderTargetOccurrenceRankCarrier,
+                    currentOccurrenceOwner
+                      \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                           episodeTarget, leaderContext, leader, leaderView,
+                           receipt.subject),
+                    currentRank
+                      \in AdequateLeaderFixedPipelineRankCarrier,
+                    owner
+                      \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                           initialContext),
+                    packet \in AsyncPacketSet:
+               AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+                 initialContext, target, leaderContext,
+                 leader, leaderView, receipt,
+                 token, episodeTarget,
+                 sourceOccurrenceRank, sourceOccurrenceOwner,
+                 sourceCutoffOrdinal,
+                 sourceDormantPotential, knownDormantPotential,
+                 known, sourceRank, budget,
+                 candidate, cutoffOrdinal, currentSemanticRank,
+                 currentOccurrenceRank, currentOccurrenceOwner,
+                 currentRank, owner, packet)
+                 ~> AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                      initialContext, target, leaderContext,
+                      leader, leaderView, receipt,
+                      token, episodeTarget,
+                      sourceOccurrenceRank, sourceOccurrenceOwner,
+                      sourceCutoffOrdinal,
+                      sourceDormantPotential, knownDormantPotential,
+                      known, sourceRank, budget)
+        PROOF
+          <4>1. ASSUME NEW candidate \in AsyncCandidateSet,
+                        NEW cutoffOrdinal \in Nat,
+                        NEW currentSemanticRank \in (1..4) \X (0..9),
+                        NEW currentOccurrenceRank
+                          \in AdequateLeaderTargetOccurrenceRankCarrier,
+                        NEW currentOccurrenceOwner
+                          \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                               episodeTarget, leaderContext, leader,
+                               leaderView, receipt.subject),
+                        NEW currentRank
+                          \in AdequateLeaderFixedPipelineRankCarrier,
+                        NEW owner
+                          \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                               initialContext),
+                        NEW packet \in AsyncPacketSet
+                 PROVE AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+                         initialContext, target, leaderContext,
+                         leader, leaderView, receipt,
+                         token, episodeTarget,
+                         sourceOccurrenceRank, sourceOccurrenceOwner,
+                         sourceCutoffOrdinal,
+                         sourceDormantPotential, knownDormantPotential,
+                         known, sourceRank, budget,
+                         candidate, cutoffOrdinal, currentSemanticRank,
+                         currentOccurrenceRank, currentOccurrenceOwner,
+                         currentRank, owner, packet)
+                         ~> AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                              initialContext, target, leaderContext,
+                              leader, leaderView, receipt,
+                              token, episodeTarget,
+                              sourceOccurrenceRank, sourceOccurrenceOwner,
+                              sourceCutoffOrdinal,
+                              sourceDormantPotential, knownDormantPotential,
+                              known, sourceRank, budget)
+            <5>1. [][AsyncNext]_AsyncAllVars
+              BY <1>1
+                 DEF AdequateLeaderAsyncNextBehaviorProperty
+            <5>2. [](AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt,
+                        token, episodeTarget,
+                        sourceOccurrenceRank, sourceOccurrenceOwner,
+                        sourceCutoffOrdinal,
+                        sourceDormantPotential, knownDormantPotential,
+                        known, sourceRank, budget,
+                        candidate, cutoffOrdinal, currentSemanticRank,
+                        currentOccurrenceRank, currentOccurrenceOwner,
+                        currentRank, owner, packet)
+                      /\ ~AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                           initialContext, target, leaderContext,
+                           leader, leaderView, receipt,
+                           token, episodeTarget,
+                           sourceOccurrenceRank, sourceOccurrenceOwner,
+                           sourceCutoffOrdinal,
+                           sourceDormantPotential, knownDormantPotential,
+                           known, sourceRank, budget)
+                     => ENABLED
+                          <<AdequateLeaderFixedSelectedServiceOwnerAction(
+                              owner)>>_AsyncAllVars)
+              BY PTL, IsaT(1200)
+                 DEF AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell,
+                     AdequateLeaderFixedSelectedPipelineRankFrontier,
+                     AdequateLeaderFixedScheduledOwnerReadyForRankCell,
+                     AsyncAllVars
+            <5>3. AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt,
+                        token, episodeTarget,
+                        sourceOccurrenceRank, sourceOccurrenceOwner,
+                        sourceCutoffOrdinal,
+                        sourceDormantPotential, knownDormantPotential,
+                        known, sourceRank, budget,
+                        candidate, cutoffOrdinal, currentSemanticRank,
+                        currentOccurrenceRank, currentOccurrenceOwner,
+                        currentRank, owner, packet)
+                      /\ ~AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                           initialContext, target, leaderContext,
+                           leader, leaderView, receipt,
+                           token, episodeTarget,
+                           sourceOccurrenceRank, sourceOccurrenceOwner,
+                           sourceCutoffOrdinal,
+                           sourceDormantPotential, knownDormantPotential,
+                           known, sourceRank, budget)
+                      /\ <<AdequateLeaderFixedSelectedServiceOwnerAction(
+                               owner)>>_AsyncAllVars
+                     => AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                          initialContext, target, leaderContext,
+                          leader, leaderView, receipt,
+                          token, episodeTarget,
+                          sourceOccurrenceRank, sourceOccurrenceOwner,
+                          sourceCutoffOrdinal,
+                          sourceDormantPotential, knownDormantPotential,
+                          known, sourceRank, budget)'
+              BY <1>1, <5>1, PTL, IsaT(1200)
+                 DEF AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty,
+                     AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider,
+                     AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell
+            <5>4. AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+                        initialContext, target, leaderContext,
+                        leader, leaderView, receipt,
+                        token, episodeTarget,
+                        sourceOccurrenceRank, sourceOccurrenceOwner,
+                        sourceCutoffOrdinal,
+                        sourceDormantPotential, knownDormantPotential,
+                        known, sourceRank, budget,
+                        candidate, cutoffOrdinal, currentSemanticRank,
+                        currentOccurrenceRank, currentOccurrenceOwner,
+                        currentRank, owner, packet)
+                      /\ ~AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                           initialContext, target, leaderContext,
+                           leader, leaderView, receipt,
+                           token, episodeTarget,
+                           sourceOccurrenceRank, sourceOccurrenceOwner,
+                           sourceCutoffOrdinal,
+                           sourceDormantPotential, knownDormantPotential,
+                           known, sourceRank, budget)
+                      /\ [AsyncNext]_AsyncAllVars
+                     => \/ AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                              initialContext, target, leaderContext,
+                              leader, leaderView, receipt,
+                              token, episodeTarget,
+                              sourceOccurrenceRank, sourceOccurrenceOwner,
+                              sourceCutoffOrdinal,
+                              sourceDormantPotential, knownDormantPotential,
+                              known, sourceRank, budget)'
+                        \/ AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+                             initialContext, target, leaderContext,
+                             leader, leaderView, receipt,
+                             token, episodeTarget,
+                             sourceOccurrenceRank, sourceOccurrenceOwner,
+                             sourceCutoffOrdinal,
+                             sourceDormantPotential, knownDormantPotential,
+                             known, sourceRank, budget,
+                             candidate, cutoffOrdinal, currentSemanticRank,
+                             currentOccurrenceRank, currentOccurrenceOwner,
+                             currentRank, owner, packet)'
+              BY <1>1, PTL, IsaT(1200)
+                 DEF AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProviderProperty,
+                     AdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStepProvider,
+                     AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell
+            <5>5. WF_AsyncAllVars(
+                     AdequateLeaderFixedSelectedServiceOwnerAction(owner))
+              BY <1>1, <4>1, PTL
+                 DEF AdequateLeaderFixedSelectedOwnerFairnessProperty
+            <5> QED BY <5>1, <5>2, <5>3, <5>4, <5>5, PTL
+          <4> QED BY <4>1
+      <3>2. \A route:
+               AdequateLeaderFixedPipelineProducerHandoffFrontier(
+                 initialContext, target, leaderContext,
+                 leader, leaderView, receipt,
+                 route, token, episodeTarget,
+                 sourceOccurrenceRank, sourceOccurrenceOwner,
+                 sourceCutoffOrdinal,
+                 sourceDormantPotential, knownDormantPotential,
+                 known, sourceRank, budget)
+                 ~> AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal(
+                      initialContext, target, leaderContext,
+                      leader, leaderView, receipt,
+                      token, episodeTarget,
+                      sourceOccurrenceRank, sourceOccurrenceOwner,
+                      sourceCutoffOrdinal,
+                      sourceDormantPotential, knownDormantPotential,
+                      known, sourceRank, budget)
+        BY <1>1,
+           AdequateLeaderFixedPipelineProducerHandoffStartsRawRouteRank,
+           PTL
+           DEF AdequateLeaderFixedPreCandidateRawRouteRankClosureProperty,
+               AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal
+      <3>3. [](AdequateLeaderFixedPipelineOriginEpisodeFrontier(
+                  initialContext, target, leaderContext,
+                  leader, leaderView, receipt,
+                  token, episodeTarget,
+                  sourceOccurrenceRank, sourceOccurrenceOwner,
+                  sourceCutoffOrdinal,
+                  sourceDormantPotential, knownDormantPotential,
+                  known, sourceRank, budget)
+               => \/ \E candidate \in AsyncCandidateSet,
+                         cutoffOrdinal \in Nat,
+                         currentSemanticRank \in (1..4) \X (0..9),
+                         currentOccurrenceRank
+                           \in AdequateLeaderTargetOccurrenceRankCarrier,
+                         currentOccurrenceOwner
+                           \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                                episodeTarget, leaderContext, leader,
+                                leaderView, receipt.subject),
+                         currentRank
+                           \in AdequateLeaderFixedPipelineRankCarrier,
+                         owner
+                           \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                                initialContext),
+                         packet \in AsyncPacketSet:
+                       AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell(
+                         initialContext, target, leaderContext,
+                         leader, leaderView, receipt,
+                         token, episodeTarget,
+                         sourceOccurrenceRank, sourceOccurrenceOwner,
+                         sourceCutoffOrdinal,
+                         sourceDormantPotential, knownDormantPotential,
+                         known, sourceRank, budget,
+                         candidate, cutoffOrdinal, currentSemanticRank,
+                         currentOccurrenceRank, currentOccurrenceOwner,
+                         currentRank, owner, packet)
+                  \/ \E route:
+                       AdequateLeaderFixedPipelineProducerHandoffFrontier(
+                         initialContext, target, leaderContext,
+                         leader, leaderView, receipt,
+                         route, token, episodeTarget,
+                         sourceOccurrenceRank, sourceOccurrenceOwner,
+                         sourceCutoffOrdinal,
+                         sourceDormantPotential, knownDormantPotential,
+                         known, sourceRank, budget))
+        BY PTL, IsaT(900)
+           DEF AdequateLeaderFixedPipelineOriginEpisodeFrontier,
+               AdequateLeaderFixedPipelineOriginEpisodeAtSelectedCell
+      <3> QED BY <3>1, <3>2, <3>3, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+     DEF AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty
 
 AdequateLeaderFixedPipelineServiceRankDescentProperty(specification) ==
   specification
@@ -5409,6 +6035,72 @@ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
           <= sourceReceipt.deadlineReceipt.armedAt
                + AdequateLeaderFixedLeaderPipelineClockBudget
 
+\* A fresh source can begin at any surviving protocol phase; Proposal may
+\* already be complete and drained.  Entry therefore names the current raw
+\* scheduled/pre-candidate cell for an exact remaining token (or the Decision
+\* terminal) and never recreates `<<leader, "Proposal">>` at maximal debt.
+\* Concrete owner selection is delayed until the separately ranked global
+\* fixed-clock blocker episode has drained.
+AdequateLeaderAuthorityDeadlineImmediateSourceEntryProvider ==
+  \A initialContext \in ContextRecords,
+     target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+    AdequateLeaderAuthorityDeadlineFreshSource(
+      target, leaderContext, leader, leaderView, receipt)
+      /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+      => \/ AdequateLeaderAuthorityDeadlineTargetDecision(target, receipt)
+         \/ \E sourceRank
+                \in AdequateLeaderFixedPipelineRankCarrier,
+               targetOrdinal \in Nat \ {0}:
+              LET schedulerCeiling ==
+                    AsyncNextCandidateLifecycleOrdinal(leader)
+                  preAdmissionRoutes ==
+                    AdequateLeaderFixedUnacceptedPreAdmissionSubjectReplacementRoutes(
+                      target, leaderContext, leader, leaderView)
+                  replacementOwners ==
+                    AdequateLeaderFixedSubjectReplacementOwnersBeforeOrdinal(
+                      target, leaderContext, leader, leaderView,
+                      targetOrdinal)
+              IN /\ AdequateLeaderFixedFreshPipelineServiceRankFrontierAtOrdinal(
+                       initialContext, target, leaderContext,
+                       leader, leaderView, receipt,
+                       sourceRank, targetOrdinal)
+                 /\ targetOrdinal < schedulerCeiling
+                 /\ IsFiniteSet(preAdmissionRoutes)
+                 /\ Cardinality(preAdmissionRoutes)
+                      <=
+                        AdequateLeaderFixedPreAdmissionSubjectReplacementRouteCapacity
+                 /\ \E transportBudget \in Nat:
+                      AdequateLeaderFixedPreAdmissionSubjectReplacementEpisode(
+                        target, leaderContext, leader, leaderView,
+                        targetOrdinal, schedulerCeiling,
+                        preAdmissionRoutes, transportBudget)
+                 /\ IF replacementOwners = {}
+                    THEN TRUE
+                    ELSE \E cut
+                           \in AdequateLeaderFixedSubjectReplacementCutSet,
+                             replacementRank
+                               \in
+                                 AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
+                           /\ AdequateLeaderFixedSubjectReplacementCutSource(
+                                target, leaderContext, leader, leaderView,
+                                receipt.subject, targetOrdinal, cut)
+                           /\ replacementRank =
+                                AdequateLeaderFixedSubjectReplacementInitialEpisodeRank(
+                                  cut)
+                           /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
+                                initialContext, target, leaderContext,
+                                leader, leaderView, receipt,
+                                cut, {}, replacementRank)
+
+AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty(
+    specification) ==
+  specification
+    => []AdequateLeaderAuthorityDeadlineImmediateSourceEntryProvider
+
 AdequateLeaderFixedSubjectReplacementTerminalGoal(
     initialContext, target, leaderContext, leader, leaderView,
     sourceReceipt, cut) ==
@@ -5511,7 +6203,7 @@ AdequateLeaderFixedSubjectReplacementCutCarryProvider ==
 AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty(
     specification) ==
   specification
-    => []AdequateLeaderFixedSubjectReplacementCutCarryProvider
+    => [][AdequateLeaderFixedSubjectReplacementCutCarryProvider]_AsyncAllVars
 
 \* Exhaustive AsyncNext projection for the immutable subject cut.  Dormant
 \* admission retains the logical token but reserves a fresh physical carrier
@@ -5589,34 +6281,35 @@ BY AsyncLiveSpecProjectsAsyncSpec,
 AdequateLeaderFixedSubjectReplacementSelectedOwnerServiceProperty(
     specification) ==
   specification
-    => \A initialContext \in ContextRecords,
-          target \in ValidatorIds,
-          leaderContext \in ContextRecords,
-          leader \in ValidatorIds,
-          leaderView \in Views,
-          sourceReceipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-          cut \in AdequateLeaderFixedSubjectReplacementCutSet,
-          knownPotential
-            \in SUBSET
-                 AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
-          sourceRank
-            \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
-         LET selected ==
-               AdequateLeaderFixedSubjectReplacementSelectedPredecessor(
-                 cut, knownPotential)
-         IN /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
-                  initialContext, target, leaderContext,
-                  leader, leaderView, sourceReceipt, cut,
-                  knownPotential, sourceRank)
-            /\ sourceRank > 0
-            /\ selected
-                 \in
-                   AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
-                     cut, knownPotential)
-              ~> AdequateLeaderFixedSubjectReplacementBudgetDescentGoal(
-                   initialContext, target, leaderContext,
-                   leader, leaderView, sourceReceipt, cut,
-                   knownPotential, sourceRank)
+    => \A initialContext \in ContextRecords:
+         \A target \in ValidatorIds:
+           \A leaderContext \in ContextRecords:
+             \A leader \in ValidatorIds:
+               \A leaderView \in Views:
+                 \A sourceReceipt
+                       \in AdequateLeaderAuthorityDeadlineReceiptSet:
+                   \A cut \in AdequateLeaderFixedSubjectReplacementCutSet:
+                     \A knownPotential
+                           \in SUBSET
+                                AdequateLeaderFixedSubjectReplacementOwnerIdentitySet:
+                       \A sourceRank
+                             \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
+                         LET selected ==
+                               AdequateLeaderFixedSubjectReplacementSelectedPredecessor(
+                                 cut, knownPotential)
+                         IN /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
+                                  initialContext, target, leaderContext,
+                                  leader, leaderView, sourceReceipt, cut,
+                                  knownPotential, sourceRank)
+                            /\ sourceRank > 0
+                            /\ selected
+                                 \in
+                                   AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
+                                     cut, knownPotential)
+                              ~> AdequateLeaderFixedSubjectReplacementBudgetDescentGoal(
+                                   initialContext, target, leaderContext,
+                                   leader, leaderView, sourceReceipt, cut,
+                                   knownPotential, sourceRank)
 
 \* Membership in the live replacement set always exposes an existing physical
 \* carrier with the same immutable causal origin and scheduler ordinal.  This
@@ -5625,33 +6318,33 @@ THEOREM AdequateLeaderFixedLiveSubjectReplacementOwnerHasExactCarrier ==
   \A target \in ValidatorIds,
      leaderContext \in ContextRecords,
      leader \in ValidatorIds,
-     leaderView \in Views,
-     owner
-       \in AdequateLeaderFixedLiveSubjectReplacementOwners(
-            target, leaderContext, leader, leaderView):
-    \/ \E record \in asyncLeaderWireLifecycles:
-         /\ AsyncLeaderWireLifecycleActive(record)
-         /\ record.recipient = owner.node
-         /\ record.causalOrigin = owner.origin
-         /\ record.schedulerOrdinal = owner.ordinal
-         /\ record.physicalAdmissionOrdinal = owner.carrierOrdinal
-         /\ AdequateLeaderFixedSubjectReplacementOrigin(
-              record.causalOrigin,
-              target, leaderContext, leader, leaderView)
-     \/ \E record \in AsyncCandidateProducerContinuations:
-         /\ record.status \in {"Reserved", "Materialized"}
-         /\ record.node = owner.node
-         /\ record.causalOrigin = owner.origin
-         /\ record.ordinal = owner.ordinal
-         /\ \E lifecycle \in asyncLeaderWireLifecycles:
-              /\ lifecycle.recipient = owner.node
-              /\ lifecycle.causalOrigin = owner.origin
-              /\ lifecycle.schedulerOrdinal = owner.ordinal
-              /\ lifecycle.physicalAdmissionOrdinal =
-                   owner.carrierOrdinal
-         /\ AdequateLeaderFixedSubjectReplacementOrigin(
-              record.causalOrigin,
-              target, leaderContext, leader, leaderView)
+     leaderView \in Views:
+    \A owner
+          \in AdequateLeaderFixedLiveSubjectReplacementOwners(
+               target, leaderContext, leader, leaderView):
+      \/ \E wireRecord \in asyncLeaderWireLifecycles:
+           /\ AsyncLeaderWireLifecycleActive(wireRecord)
+           /\ wireRecord.recipient = owner.node
+           /\ wireRecord.causalOrigin = owner.origin
+           /\ wireRecord.schedulerOrdinal = owner.ordinal
+           /\ wireRecord.physicalAdmissionOrdinal = owner.carrierOrdinal
+           /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                wireRecord.causalOrigin,
+                target, leaderContext, leader, leaderView)
+       \/ \E producerRecord \in AsyncCandidateProducerContinuations:
+           /\ producerRecord.status \in {"Reserved", "Materialized"}
+           /\ producerRecord.node = owner.node
+           /\ producerRecord.causalOrigin = owner.origin
+           /\ producerRecord.ordinal = owner.ordinal
+           /\ \E lifecycle \in asyncLeaderWireLifecycles:
+                /\ lifecycle.recipient = owner.node
+                /\ lifecycle.causalOrigin = owner.origin
+                /\ lifecycle.schedulerOrdinal = owner.ordinal
+                /\ lifecycle.physicalAdmissionOrdinal =
+                     owner.carrierOrdinal
+           /\ AdequateLeaderFixedSubjectReplacementOrigin(
+                producerRecord.causalOrigin,
+                target, leaderContext, leader, leaderView)
 BY Isa
    DEF AdequateLeaderFixedLiveSubjectReplacementOwners,
        AdequateLeaderFixedWireSubjectReplacementOwners,
@@ -6326,57 +7019,68 @@ BY AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,
 \* replacement, or count-increasing replenishment.  The last two alternatives
 \* are merely the entry actions for their finite discovery episode.
 THEOREM AdequateLeaderFixedSelectedServiceHasExhaustiveOutcome ==
-  \A initialContext \in ContextRecords,
-     target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leader \in ValidatorIds,
-     leaderView \in Views,
-     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-     candidate \in AsyncCandidateSet,
-     cutoffOrdinal \in Nat,
-     semanticRank \in (1..4) \X (0..9),
-     serviceOwner
-       \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-     packet \in AsyncPacketSet,
-     sourceRank \in AdequateLeaderFixedPipelineRankCarrier,
-     occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier,
-     occurrenceOwner
-       \in AdequateLeaderFrozenCandidateOwnerUniverse(
-            candidate.node, leaderContext, leader, leaderView,
-            receipt.subject):
-    /\ AsyncStrongTypeInvariant
-    /\ AsyncStrongTypeInvariant'
-    /\ AsyncProgressOwnershipInvariant
-    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
-    /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
-    /\ AsyncCandidateLifecycleSchedulerCoverageInvariant'
-    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
-    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
-    /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
-         candidate, leaderContext, leader, leaderView, receipt.subject,
-         semanticRank, occurrenceRank, occurrenceOwner)
-    /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
-         initialContext, target, leaderContext,
-         leader, leaderView, receipt,
-         token, candidate, cutoffOrdinal, semanticRank,
-         serviceOwner, packet, sourceRank)
-    /\ AdequateLeaderTargetProtocolSubjectSource(
-         candidate.node, leaderContext,
-         leader, leaderView, receipt.subject)
-    /\ serviceOwner.ownerKind # "Tick"
-    /\ <<AdequateLeaderFixedSelectedServiceOwnerAction(
-            serviceOwner)>>_AsyncAllVars
-    /\ [AsyncNext]_AsyncAllVars
-    /\ (AdequateLeaderTargetProtocolSubjectSource(
-          candidate.node, leaderContext,
-          leader, leaderView, receipt.subject))'
-    /\ (AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
-          candidate.node, leaderContext, leader, leaderView,
-          receipt.subject, occurrenceRank, occurrenceOwner))'
-      => AdequateLeaderTargetServiceOutcomeAction(
-           candidate.node, leaderContext, leader, leaderView,
-           receipt.subject, occurrenceRank)
+  \A initialContext \in ContextRecords:
+    \A target \in ValidatorIds:
+      \A leaderContext \in ContextRecords:
+        \A leader \in ValidatorIds:
+          \A leaderView \in Views:
+            \A receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+              \A token
+                    \in AdequateLeaderFixedPipelineTokenCarrier(
+                         leaderContext):
+                \A candidate \in AsyncCandidateSet:
+                  \A cutoffOrdinal \in Nat:
+                    \A semanticRank \in (1..4) \X (0..9):
+                      \A serviceOwner
+                            \in AdequateLeaderFixedSelectedServiceOwnerSet(
+                                 initialContext):
+                        \A packet \in AsyncPacketSet:
+                          \A sourceRank
+                                \in AdequateLeaderFixedPipelineRankCarrier:
+                            \A occurrenceRank
+                                  \in AdequateLeaderTargetOccurrenceRankCarrier:
+                              \A occurrenceOwner
+                                    \in AdequateLeaderFrozenCandidateOwnerUniverse(
+                                         candidate.node, leaderContext,
+                                         leader, leaderView,
+                                         receipt.subject):
+                                /\ AsyncStrongTypeInvariant
+                                /\ AsyncStrongTypeInvariant'
+                                /\ AsyncProgressOwnershipInvariant
+                                /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+                                /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
+                                /\ AsyncCandidateLifecycleSchedulerCoverageInvariant'
+                                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                                /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
+                                     candidate, leaderContext, leader,
+                                     leaderView, receipt.subject,
+                                     semanticRank, occurrenceRank,
+                                     occurrenceOwner)
+                                /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
+                                     initialContext, target, leaderContext,
+                                     leader, leaderView, receipt,
+                                     token, candidate, cutoffOrdinal,
+                                     semanticRank, serviceOwner, packet,
+                                     sourceRank)
+                                /\ AdequateLeaderTargetProtocolSubjectSource(
+                                     candidate.node, leaderContext,
+                                     leader, leaderView, receipt.subject)
+                                /\ serviceOwner.ownerKind # "Tick"
+                                /\ <<AdequateLeaderFixedSelectedServiceOwnerAction(
+                                        serviceOwner)>>_AsyncAllVars
+                                /\ [AsyncNext]_AsyncAllVars
+                                /\ (AdequateLeaderTargetProtocolSubjectSource(
+                                      candidate.node, leaderContext,
+                                      leader, leaderView, receipt.subject))'
+                                /\ (AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
+                                      candidate.node, leaderContext, leader,
+                                      leaderView, receipt.subject,
+                                      occurrenceRank, occurrenceOwner))'
+                                  => AdequateLeaderTargetServiceOutcomeAction(
+                                       candidate.node, leaderContext, leader,
+                                       leaderView, receipt.subject,
+                                       occurrenceRank)
 BY AdequateLeaderFixedSelectedActionsCarryPipelineRank,
    AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut,
    AdequateLeaderFixedOwnedFinalRouteParentConsumesCumulativeDebt,
@@ -6783,31 +7487,31 @@ AdequateLeaderRetainedProducerPacketPrefixEntryProvider(initialContext) ==
      leaderContext \in ContextRecords,
      leader \in ValidatorIds,
      leaderView \in Views,
-     subject \in Subjects,
-     known \in
-       SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
-         target, leaderContext, leader, leaderView, subject),
-     budget \in Nat:
-    /\ AdequateLeaderRetainedProducerEpisodeAtRank(
-         request, node, cutoffOrdinal, sourceRank,
-         target, leaderContext, leader, leaderView,
-         subject, known, budget)
-    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
-      => \/ AdequateLeaderRetainedProducerExactRankGoal(
-               request, node, cutoffOrdinal, sourceRank, target)
-         \/ \E packet \in AsyncPacketSet,
-              snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
-              clockValue \in Nat,
-              prefixRank
-                \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
-              /\ snapshot =
-                   ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)
-              /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
-                   initialContext,
-                   request, node, cutoffOrdinal, sourceRank,
-                   target, leaderContext, leader, leaderView,
-                   subject, known, budget,
-                   packet, snapshot, clockValue, prefixRank)
+     subject \in Subjects:
+    \A known \in
+         SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+           target, leaderContext, leader, leaderView, subject):
+      \A budget \in Nat:
+        /\ AdequateLeaderRetainedProducerEpisodeAtRank(
+             request, node, cutoffOrdinal, sourceRank,
+             target, leaderContext, leader, leaderView,
+             subject, known, budget)
+        /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+          => \/ AdequateLeaderRetainedProducerExactRankGoal(
+                   request, node, cutoffOrdinal, sourceRank, target)
+             \/ \E packet \in AsyncPacketSet,
+                  snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+                  clockValue \in Nat,
+                  prefixRank
+                    \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+                  /\ snapshot =
+                       ExactDecisionTargetNeutralFixedClockSnapshot(clockValue)
+                  /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                       initialContext,
+                       request, node, cutoffOrdinal, sourceRank,
+                       target, leaderContext, leader, leaderView,
+                       subject, known, budget,
+                       packet, snapshot, clockValue, prefixRank)
 
 AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(initialContext) ==
   \A request \in AsyncProducerIngressRequests,
@@ -6818,33 +7522,33 @@ AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(initialContext) ==
      leaderContext \in ContextRecords,
      leader \in ValidatorIds,
      leaderView \in Views,
-     subject \in Subjects,
-     known \in
-       SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
-         target, leaderContext, leader, leaderView, subject),
-     budget \in Nat,
-     packet \in AsyncPacketSet,
-     snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
-     clockValue \in Nat,
-     prefixRank \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
-    AdequateLeaderRetainedProducerPacketPrefixAtRank(
-      initialContext,
-      request, node, cutoffOrdinal, sourceRank,
-      target, leaderContext, leader, leaderView,
-      subject, known, budget,
-      packet, snapshot, clockValue, prefixRank)
-      => AdequateLeaderRetainedProducerPacketOwnerReady(
-           initialContext,
-           request, node, cutoffOrdinal, sourceRank,
-           target, leaderContext, leader, leaderView,
-           subject, known, budget,
-           packet, snapshot, clockValue, prefixRank,
-           AdequateLeaderRetainedProducerSelectedPacketOwner(
-             initialContext,
-             request, node, cutoffOrdinal, sourceRank,
-             target, leaderContext, leader, leaderView,
-             subject, known, budget,
-             packet, snapshot, clockValue, prefixRank))
+     subject \in Subjects:
+    \A known \in
+         SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+           target, leaderContext, leader, leaderView, subject):
+      \A budget \in Nat,
+         packet \in AsyncPacketSet,
+         snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+         clockValue \in Nat,
+         prefixRank \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+        AdequateLeaderRetainedProducerPacketPrefixAtRank(
+          initialContext,
+          request, node, cutoffOrdinal, sourceRank,
+          target, leaderContext, leader, leaderView,
+          subject, known, budget,
+          packet, snapshot, clockValue, prefixRank)
+          => AdequateLeaderRetainedProducerPacketOwnerReady(
+               initialContext,
+               request, node, cutoffOrdinal, sourceRank,
+               target, leaderContext, leader, leaderView,
+               subject, known, budget,
+               packet, snapshot, clockValue, prefixRank,
+               AdequateLeaderRetainedProducerSelectedPacketOwner(
+                 initialContext,
+                 request, node, cutoffOrdinal, sourceRank,
+                 target, leaderContext, leader, leaderView,
+                 subject, known, budget,
+                 packet, snapshot, clockValue, prefixRank))
 
 AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
     initialContext) ==
@@ -6856,60 +7560,60 @@ AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
      leaderContext \in ContextRecords,
      leader \in ValidatorIds,
      leaderView \in Views,
-     subject \in Subjects,
-     known \in
-       SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
-         target, leaderContext, leader, leaderView, subject),
-     budget \in Nat,
-     packet \in AsyncPacketSet,
-     snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
-     clockValue \in Nat,
-     prefixRank \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
-    LET owner ==
-          AdequateLeaderRetainedProducerSelectedPacketOwner(
-            initialContext,
-            request, node, cutoffOrdinal, sourceRank,
-            target, leaderContext, leader, leaderView,
-            subject, known, budget,
-            packet, snapshot, clockValue, prefixRank)
-    IN /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
-             initialContext,
-             request, node, cutoffOrdinal, sourceRank,
-             target, leaderContext, leader, leaderView,
-             subject, known, budget,
-             packet, snapshot, clockValue, prefixRank)
-       /\ [AsyncNext]_AsyncAllVars
-       => \/ (AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+     subject \in Subjects:
+    \A known \in
+         SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+           target, leaderContext, leader, leaderView, subject):
+      \A budget \in Nat,
+         packet \in AsyncPacketSet,
+         snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+         clockValue \in Nat,
+         prefixRank \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+        LET owner ==
+              AdequateLeaderRetainedProducerSelectedPacketOwner(
                 initialContext,
                 request, node, cutoffOrdinal, sourceRank,
                 target, leaderContext, leader, leaderView,
                 subject, known, budget,
-                packet, snapshot, clockValue, prefixRank))'
-          \/ /\ (AdequateLeaderRetainedProducerPacketPrefixAtRank(
-                   initialContext,
-                   request, node, cutoffOrdinal, sourceRank,
-                   target, leaderContext, leader, leaderView,
-                   subject, known, budget,
-                   packet, snapshot, clockValue, prefixRank))'
-             /\ (AdequateLeaderRetainedProducerSelectedPacketOwner(
-                   initialContext,
-                   request, node, cutoffOrdinal, sourceRank,
-                   target, leaderContext, leader, leaderView,
-                   subject, known, budget,
-                   packet, snapshot, clockValue, prefixRank))'
-                  = owner
-             /\ ~<<ExactDecisionTargetNeutralFairAction(owner)>>_AsyncAllVars
+                packet, snapshot, clockValue, prefixRank)
+        IN /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                 initialContext,
+                 request, node, cutoffOrdinal, sourceRank,
+                 target, leaderContext, leader, leaderView,
+                 subject, known, budget,
+                 packet, snapshot, clockValue, prefixRank)
+           /\ [AsyncNext]_AsyncAllVars
+           => \/ (AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                    initialContext,
+                    request, node, cutoffOrdinal, sourceRank,
+                    target, leaderContext, leader, leaderView,
+                    subject, known, budget,
+                    packet, snapshot, clockValue, prefixRank))'
+              \/ /\ (AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                       initialContext,
+                       request, node, cutoffOrdinal, sourceRank,
+                       target, leaderContext, leader, leaderView,
+                       subject, known, budget,
+                       packet, snapshot, clockValue, prefixRank))'
+                 /\ (AdequateLeaderRetainedProducerSelectedPacketOwner(
+                       initialContext,
+                       request, node, cutoffOrdinal, sourceRank,
+                       target, leaderContext, leader, leaderView,
+                       subject, known, budget,
+                       packet, snapshot, clockValue, prefixRank))'
+                      = owner
+                 /\ ~<<ExactDecisionTargetNeutralFairAction(owner)>>_AsyncAllVars
 
 AdequateLeaderRetainedProducerPacketActionProviderProperty(
     specification, initialContext) ==
   /\ initialContext \in ContextRecords
   /\ (specification
-        => [](/\ AdequateLeaderRetainedProducerPacketPrefixEntryProvider(
-                     initialContext)
-              /\ AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(
-                   initialContext)
-              /\ AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
-                   initialContext)))
+        => [][(/\ AdequateLeaderRetainedProducerPacketPrefixEntryProvider(
+                      initialContext)
+               /\ AdequateLeaderRetainedProducerPacketConcreteOwnerProvider(
+                    initialContext)
+               /\ AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider(
+                    initialContext))]_AsyncAllVars)
 
 THEOREM AdequateLeaderRetainedProducerPacketFactsSupplyActionProviders ==
   \A initialContext \in ContextRecords:
@@ -7059,43 +7763,279 @@ AdequateLeaderRetainedProducerPacketPrefixRankStepProperty(
           leaderContext \in ContextRecords,
           leader \in ValidatorIds,
           leaderView \in Views,
-          subject \in Subjects,
-          known \in
-            SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          budget \in Nat,
-          packet \in AsyncPacketSet,
-          snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
-          clockValue \in Nat,
-          prefixRank
-            \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
-         AdequateLeaderRetainedProducerPacketPrefixAtRank(
-           initialContext,
-           request, node, cutoffOrdinal, sourceRank,
-           target, leaderContext, leader, leaderView,
-           subject, known, budget,
-           packet, snapshot, clockValue, prefixRank)
-           ~> AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
-                initialContext,
-                request, node, cutoffOrdinal, sourceRank,
-                target, leaderContext, leader, leaderView,
-                subject, known, budget,
-                packet, snapshot, clockValue, prefixRank))
+          subject \in Subjects:
+         \A known \in
+              SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+                target, leaderContext, leader, leaderView, subject):
+           \A budget \in Nat,
+              packet \in AsyncPacketSet,
+              snapshot \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+              clockValue \in Nat,
+              prefixRank
+                \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+             AdequateLeaderRetainedProducerPacketPrefixAtRank(
+               initialContext,
+               request, node, cutoffOrdinal, sourceRank,
+               target, leaderContext, leader, leaderView,
+               subject, known, budget,
+               packet, snapshot, clockValue, prefixRank)
+               ~> AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                    initialContext,
+                    request, node, cutoffOrdinal, sourceRank,
+                    target, leaderContext, leader, leaderView,
+                    subject, known, budget,
+                    packet, snapshot, clockValue, prefixRank))
+
+\* Freeze the exact packet owner selected in the current prefix cell.  The
+\* packet step provider carries this equality across every non-owner frame,
+\* so weak fairness is applied only to a constant owner value.
+AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+    initialContext,
+    request, node, cutoffOrdinal, sourceRank,
+    target, leaderContext, leader, leaderView,
+    subject, known, budget,
+    packet, snapshot, clockValue, prefixRank, owner) ==
+  /\ AdequateLeaderRetainedProducerPacketPrefixAtRank(
+       initialContext,
+       request, node, cutoffOrdinal, sourceRank,
+       target, leaderContext, leader, leaderView,
+       subject, known, budget,
+       packet, snapshot, clockValue, prefixRank)
+  /\ AdequateLeaderRetainedProducerSelectedPacketOwner(
+       initialContext,
+       request, node, cutoffOrdinal, sourceRank,
+       target, leaderContext, leader, leaderView,
+       subject, known, budget,
+       packet, snapshot, clockValue, prefixRank)
+       = owner
 
 THEOREM AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep ==
   \A specification, initialContext:
+    /\ AdequateLeaderAsyncNextBehaviorProperty(specification)
     /\ AdequateLeaderRetainedProducerPacketActionProviderProperty(
          specification, initialContext)
     /\ AdequateLeaderRetainedProducerExactOwnerFairnessProperty(
          specification, initialContext)
       => AdequateLeaderRetainedProducerPacketPrefixRankStepProperty(
            specification, initialContext)
-BY WF1, PTL
-   DEF AdequateLeaderRetainedProducerPacketActionProviderProperty,
-       AdequateLeaderRetainedProducerExactOwnerFairnessProperty,
-       AdequateLeaderRetainedProducerPacketConcreteOwnerProvider,
-       AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider,
-       AdequateLeaderRetainedProducerPacketPrefixRankStepProperty
+PROOF
+  <1>1. ASSUME NEW specification,
+                NEW initialContext,
+                AdequateLeaderAsyncNextBehaviorProperty(specification),
+                AdequateLeaderRetainedProducerPacketActionProviderProperty(
+                  specification, initialContext),
+                AdequateLeaderRetainedProducerExactOwnerFairnessProperty(
+                  specification, initialContext)
+         PROVE AdequateLeaderRetainedProducerPacketPrefixRankStepProperty(
+                 specification, initialContext)
+    <2>1. initialContext \in ContextRecords
+      BY <1>1
+         DEF AdequateLeaderRetainedProducerPacketActionProviderProperty
+    <2>2. ASSUME specification
+           PROVE \A request \in AsyncProducerIngressRequests,
+                     node \in ValidatorIds,
+                     cutoffOrdinal \in Nat,
+                     sourceRank \in Nat,
+                     target \in ValidatorIds,
+                     leaderContext \in ContextRecords,
+                     leader \in ValidatorIds,
+                     leaderView \in Views,
+                     subject \in Subjects:
+                   \A known
+                         \in SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+                              target, leaderContext, leader, leaderView,
+                              subject):
+                     \A budget \in Nat,
+                        packet \in AsyncPacketSet,
+                        snapshot
+                          \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+                        clockValue \in Nat,
+                        prefixRank
+                          \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier:
+                       AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                         initialContext,
+                         request, node, cutoffOrdinal, sourceRank,
+                         target, leaderContext, leader, leaderView,
+                         subject, known, budget,
+                         packet, snapshot, clockValue, prefixRank)
+                         ~> AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                              initialContext,
+                              request, node, cutoffOrdinal, sourceRank,
+                              target, leaderContext, leader, leaderView,
+                              subject, known, budget,
+                              packet, snapshot, clockValue, prefixRank)
+      <3>1. ASSUME NEW request \in AsyncProducerIngressRequests,
+                    NEW node \in ValidatorIds,
+                    NEW cutoffOrdinal \in Nat,
+                    NEW sourceRank \in Nat,
+                    NEW target \in ValidatorIds,
+                    NEW leaderContext \in ContextRecords,
+                    NEW leader \in ValidatorIds,
+                    NEW leaderView \in Views,
+                    NEW subject \in Subjects,
+                    NEW known
+                      \in SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+                           target, leaderContext, leader, leaderView,
+                           subject),
+                    NEW budget \in Nat,
+                    NEW packet \in AsyncPacketSet,
+                    NEW snapshot
+                      \in AdequateLeaderFixedGlobalLifecycleSnapshotCarrier,
+                    NEW clockValue \in Nat,
+                    NEW prefixRank
+                      \in AdequateLeaderRetainedProducerPacketPrefixRankCarrier
+             PROVE AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                     initialContext,
+                     request, node, cutoffOrdinal, sourceRank,
+                     target, leaderContext, leader, leaderView,
+                     subject, known, budget,
+                     packet, snapshot, clockValue, prefixRank)
+                     ~> AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                          initialContext,
+                          request, node, cutoffOrdinal, sourceRank,
+                          target, leaderContext, leader, leaderView,
+                          subject, known, budget,
+                          packet, snapshot, clockValue, prefixRank)
+        <4>1. \A owner
+                    \in ExactDecisionTargetNeutralFairOwnerSet(
+                         initialContext):
+                 AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+                   initialContext,
+                   request, node, cutoffOrdinal, sourceRank,
+                   target, leaderContext, leader, leaderView,
+                   subject, known, budget,
+                   packet, snapshot, clockValue, prefixRank, owner)
+                   ~> AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                        initialContext,
+                        request, node, cutoffOrdinal, sourceRank,
+                        target, leaderContext, leader, leaderView,
+                        subject, known, budget,
+                        packet, snapshot, clockValue, prefixRank)
+          PROOF
+            <5>1. ASSUME NEW owner
+                          \in ExactDecisionTargetNeutralFairOwnerSet(
+                               initialContext)
+                   PROVE AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+                           initialContext,
+                           request, node, cutoffOrdinal, sourceRank,
+                           target, leaderContext, leader, leaderView,
+                           subject, known, budget,
+                           packet, snapshot, clockValue, prefixRank, owner)
+                           ~> AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                                initialContext,
+                                request, node, cutoffOrdinal, sourceRank,
+                                target, leaderContext, leader, leaderView,
+                                subject, known, budget,
+                                packet, snapshot, clockValue, prefixRank)
+              <6>1. [][AsyncNext]_AsyncAllVars
+                BY <1>1
+                   DEF AdequateLeaderAsyncNextBehaviorProperty
+              <6>2. [](AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+                          initialContext,
+                          request, node, cutoffOrdinal, sourceRank,
+                          target, leaderContext, leader, leaderView,
+                          subject, known, budget,
+                          packet, snapshot, clockValue, prefixRank, owner)
+                        /\ ~AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                             initialContext,
+                             request, node, cutoffOrdinal, sourceRank,
+                             target, leaderContext, leader, leaderView,
+                             subject, known, budget,
+                             packet, snapshot, clockValue, prefixRank)
+                       => ENABLED
+                            <<ExactDecisionTargetNeutralFairAction(
+                                owner)>>_AsyncAllVars)
+                BY <1>1, PTL, IsaT(900)
+                   DEF AdequateLeaderRetainedProducerPacketActionProviderProperty,
+                       AdequateLeaderRetainedProducerPacketConcreteOwnerProvider,
+                       AdequateLeaderRetainedProducerPacketOwnerReady,
+                       AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner,
+                       AsyncAllVars
+              <6>3. AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+                          initialContext,
+                          request, node, cutoffOrdinal, sourceRank,
+                          target, leaderContext, leader, leaderView,
+                          subject, known, budget,
+                          packet, snapshot, clockValue, prefixRank, owner)
+                        /\ ~AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                             initialContext,
+                             request, node, cutoffOrdinal, sourceRank,
+                             target, leaderContext, leader, leaderView,
+                             subject, known, budget,
+                             packet, snapshot, clockValue, prefixRank)
+                        /\ <<ExactDecisionTargetNeutralFairAction(
+                                 owner)>>_AsyncAllVars
+                       => AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                            initialContext,
+                            request, node, cutoffOrdinal, sourceRank,
+                            target, leaderContext, leader, leaderView,
+                            subject, known, budget,
+                            packet, snapshot, clockValue, prefixRank)'
+                BY <1>1, <6>1, PTL, IsaT(900)
+                   DEF AdequateLeaderRetainedProducerPacketActionProviderProperty,
+                       AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider,
+                       AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner
+              <6>4. AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+                          initialContext,
+                          request, node, cutoffOrdinal, sourceRank,
+                          target, leaderContext, leader, leaderView,
+                          subject, known, budget,
+                          packet, snapshot, clockValue, prefixRank, owner)
+                        /\ ~AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                             initialContext,
+                             request, node, cutoffOrdinal, sourceRank,
+                             target, leaderContext, leader, leaderView,
+                             subject, known, budget,
+                             packet, snapshot, clockValue, prefixRank)
+                        /\ [AsyncNext]_AsyncAllVars
+                       => \/ AdequateLeaderRetainedProducerPacketPrefixStrictRankGoal(
+                                initialContext,
+                                request, node, cutoffOrdinal, sourceRank,
+                                target, leaderContext, leader, leaderView,
+                                subject, known, budget,
+                                packet, snapshot, clockValue, prefixRank)'
+                          \/ AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+                               initialContext,
+                               request, node, cutoffOrdinal, sourceRank,
+                               target, leaderContext, leader, leaderView,
+                               subject, known, budget,
+                               packet, snapshot, clockValue, prefixRank,
+                               owner)'
+                BY <1>1, PTL, IsaT(900)
+                   DEF AdequateLeaderRetainedProducerPacketActionProviderProperty,
+                       AdequateLeaderRetainedProducerPacketSelectedOwnerStepProvider,
+                       AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner
+              <6>5. WF_AsyncAllVars(
+                       ExactDecisionTargetNeutralFairAction(owner))
+                BY <1>1, <5>1, PTL
+                   DEF AdequateLeaderRetainedProducerExactOwnerFairnessProperty
+              <6> QED BY <6>1, <6>2, <6>3, <6>4, <6>5, PTL
+            <5> QED BY <5>1
+        <4>2. [](AdequateLeaderRetainedProducerPacketPrefixAtRank(
+                    initialContext,
+                    request, node, cutoffOrdinal, sourceRank,
+                    target, leaderContext, leader, leaderView,
+                    subject, known, budget,
+                    packet, snapshot, clockValue, prefixRank)
+                 => \E owner
+                         \in ExactDecisionTargetNeutralFairOwnerSet(
+                              initialContext):
+                      AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner(
+                        initialContext,
+                        request, node, cutoffOrdinal, sourceRank,
+                        target, leaderContext, leader, leaderView,
+                        subject, known, budget,
+                        packet, snapshot, clockValue, prefixRank, owner))
+          BY <1>1, PTL, IsaT(900)
+             DEF AdequateLeaderRetainedProducerPacketActionProviderProperty,
+                 AdequateLeaderRetainedProducerPacketConcreteOwnerProvider,
+                 AdequateLeaderRetainedProducerPacketOwnerReady,
+                 AdequateLeaderRetainedProducerPacketPrefixAtRankForOwner
+        <4> QED BY <4>1, <4>2, PTL
+      <3> QED BY <3>1
+    <2> QED BY <2>1, <2>2
+       DEF AdequateLeaderRetainedProducerPacketPrefixRankStepProperty
+  <1> QED BY <1>1
 
 AdequateLeaderRetainedProducerActualPacketStepProperty(specification) ==
   specification
@@ -7107,19 +8047,19 @@ AdequateLeaderRetainedProducerActualPacketStepProperty(specification) ==
           leaderContext \in ContextRecords,
           leader \in ValidatorIds,
           leaderView \in Views,
-          subject \in Subjects,
-          known \in
-            SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          budget \in Nat:
-         AdequateLeaderRetainedProducerEpisodeAtRank(
-           request, node, cutoffOrdinal, sourceRank,
-           target, leaderContext, leader, leaderView,
-           subject, known, budget)
-           ~> AdequateLeaderRetainedProducerRankOrKnownAdvanceGoal(
-                request, node, cutoffOrdinal, sourceRank,
-                target, leaderContext, leader, leaderView,
-                subject, known, budget)
+          subject \in Subjects:
+         \A known \in
+              SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+                target, leaderContext, leader, leaderView, subject):
+           \A budget \in Nat:
+             AdequateLeaderRetainedProducerEpisodeAtRank(
+               request, node, cutoffOrdinal, sourceRank,
+               target, leaderContext, leader, leaderView,
+               subject, known, budget)
+               ~> AdequateLeaderRetainedProducerRankOrKnownAdvanceGoal(
+                    request, node, cutoffOrdinal, sourceRank,
+                    target, leaderContext, leader, leaderView,
+                    subject, known, budget)
 
 THEOREM AdequateLeaderRetainedProducerPacketRankClosesNonDescentStep ==
   \A specification, initialContext:
@@ -7147,6 +8087,7 @@ THEOREM AsyncLiveProvidesAdequateLeaderRetainedProducerNonDescentEpisodeStep ==
       AsyncLiveSpecAt(initialContext))
 BY AsyncLiveProvidesAdequateLeaderRetainedProducerPacketActionProviders,
    AsyncLiveProvidesAdequateLeaderRetainedProducerExactOwnerFairness,
+   AsyncLiveProvidesAdequateLeaderAsyncNextBehavior,
    AsyncLiveSpecProjectsAsyncSpec,
    AsyncSpecAlwaysUsesFixedResponsiveVoters,
    AdequateLeaderRetainedProducerPacketProvidersSupplyRankStep,
@@ -7294,6 +8235,7 @@ THEOREM
       AsyncLiveSpecAt(initialContext))
 BY AsyncLiveProvidesAdequateLeaderFixedPipelineOriginEpisodeSelectedOwnerStep,
    AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness,
+   AsyncLiveProvidesAdequateLeaderAsyncNextBehavior,
    AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders,
    AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep,
    AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry,
@@ -7393,6 +8335,7 @@ AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle(
   /\ AdequateLeaderFixedConfiguredPipelineBudgetCompatibility
   /\ AdequateLeaderFixedConfiguredDeadlineCompatibility
   /\ (specification => []AsyncStrongTypeInvariant)
+  /\ AdequateLeaderAsyncNextBehaviorProperty(specification)
   /\ AdequateLeaderFixedSelectedOwnerFairnessProperty(specification)
   /\ AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty(
        specification)
@@ -7454,6 +8397,7 @@ THEOREM
 BY AsyncLiveSpecSuppliesAdequateLeaderConfiguredBudget,
    AsyncLiveSpecProjectsAsyncSpec,
    AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncLiveProvidesAdequateLeaderAsyncNextBehavior,
    AsyncLiveProvidesAdequateLeaderFixedSelectedOwnerFairness,
    AsyncLiveProvidesAdequateLeaderAuthorityDeadlineImmediateSourceEntry,
    AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementProviders,

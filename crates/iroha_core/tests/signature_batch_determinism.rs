@@ -24,7 +24,7 @@ use iroha_data_model::{
 };
 use nonzero_ext::nonzero;
 
-fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyPair) {
+fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
     let kura = Kura::blank_kura_for_testing();
@@ -39,6 +39,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let chain = ChainId::from("chain");
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let network_id = *state.network_id_ref();
     let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     if !crypto_cfg.allowed_signing.contains(&algo) {
         crypto_cfg.allowed_signing.push(algo);
@@ -46,7 +47,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
         crypto_cfg.allowed_signing.dedup();
     }
     state.set_crypto(crypto_cfg);
-    (state, account_id, chain, kp)
+    (state, account_id, chain, network_id, kp)
 }
 
 fn checked_signature_of<T: norito::codec::Encode>(
@@ -236,7 +237,8 @@ fn run_validate(
 
 #[test]
 fn ed25519_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::Ed25519);
+    let (mut state, authority, chain, network_id, good) =
+        setup_world_with_account(Algorithm::Ed25519);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Ed25519);
     let leader = checked_bls_keypair();
@@ -248,7 +250,7 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -297,7 +299,8 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
 
 #[test]
 fn secp256k1_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::Secp256k1);
+    let (mut state, authority, chain, network_id, good) =
+        setup_world_with_account(Algorithm::Secp256k1);
     enable_batch_caps(&mut state);
     let bad = checked_keypair_with_algorithm(Algorithm::Secp256k1);
     let leader = checked_bls_keypair();
@@ -308,7 +311,7 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
 
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -357,7 +360,8 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_passes() {
-    let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, chain, network_id, signer) =
+        setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let leader = checked_bls_keypair();
     let genesis_hash = seed_genesis_block(&state);
@@ -367,7 +371,7 @@ fn bls_multimessage_batch_passes() {
 
     let mk = |msg: &str| {
         TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -391,7 +395,8 @@ fn bls_multimessage_batch_passes() {
 #[test]
 #[cfg(feature = "bls")]
 fn bls_multimessage_batch_finds_same_bad_sig() {
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, chain, network_id, good) =
+        setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
     let leader = checked_bls_keypair();
@@ -402,7 +407,7 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
 
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -451,7 +456,8 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
 #[cfg(feature = "bls")]
 #[test]
 fn bls_batch_permutation_finds_same_bad_sig() {
-    let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
+    let (mut state, authority, chain, network_id, good) =
+        setup_world_with_account(Algorithm::BlsNormal);
     enable_batch_caps(&mut state);
     let bad = checked_bls_keypair();
     let leader = checked_bls_keypair();
@@ -463,7 +469,7 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     // Use distinct messages to exercise multi-message aggregation path
     let mk = |msg: &str, mismatched_sig: bool| {
         let mut tx = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

@@ -1676,6 +1676,9 @@ def _validate_terminal_release_evidence(
     transcripts = _require_exact_json_fields(
         prebuilt["version_transcripts"], {"cargo", "rustc"}, "terminal prebuilt transcripts"
     )
+    runner_tools = runner_record.get("tools")
+    if not isinstance(runner_tools, dict):
+        raise BootstrapError("terminal runner tool inventory is malformed")
     for tool in ("cargo", "rustc"):
         transcript = _require_exact_json_fields(
             transcripts[tool], {"argv", "sha256", "size_bytes"}, f"terminal {tool} transcript"
@@ -1693,13 +1696,36 @@ def _validate_terminal_release_evidence(
         executable = _absolute_resolved_existing(
             Path(transcript["argv"][0]), f"terminal {tool} transcript executable"
         )
-        executable_metadata = executable.lstat()
+        authenticated_tool = runner_tools.get(tool)
+        if not isinstance(authenticated_tool, dict):
+            raise BootstrapError(f"terminal runner omits authenticated {tool}")
+        authenticated_source = authenticated_tool.get("source_path")
+        authenticated_sha256 = authenticated_tool.get("sha256")
+        if not isinstance(authenticated_source, str) or not isinstance(
+            authenticated_sha256, str
+        ):
+            raise BootstrapError(f"terminal runner authenticated {tool} is malformed")
+        authenticated_executable = _absolute_resolved_existing(
+            Path(authenticated_source), f"terminal runner authenticated {tool} executable"
+        )
+        authenticated_digest = _require_digest(
+            authenticated_sha256, f"terminal runner authenticated {tool} digest"
+        )
+        if executable != authenticated_executable:
+            raise BootstrapError(
+                f"terminal {tool} transcript executable is not the authenticated runner tool"
+            )
+        executable_snapshot = _capture_large_file(
+            executable, f"terminal {tool} transcript executable"
+        )
+        if executable_snapshot.sha256 != authenticated_digest:
+            raise BootstrapError(
+                f"terminal {tool} transcript executable digest is not authenticated"
+            )
         if (
-            not stat.S_ISREG(executable_metadata.st_mode)
-            or stat.S_ISLNK(executable_metadata.st_mode)
-            or executable_metadata.st_uid != os.getuid()
-            or executable_metadata.st_nlink != 1
-            or executable_metadata.st_mode & 0o111 == 0
+            executable_snapshot.owner != os.getuid()
+            or executable_snapshot.nlink != 1
+            or executable_snapshot.mode & 0o111 == 0
         ):
             raise BootstrapError(
                 f"terminal {tool} transcript executable is not exact and owner-controlled"

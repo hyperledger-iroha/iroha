@@ -67,17 +67,24 @@ COMMON_FILES = (
     "scripts/seal_taira_release_controllers.py",
 )
 LINUX_FILES = COMMON_FILES + (
+    "scripts/build_privacy_v1_boi_handoff.py",
+    "scripts/check_native_sdk_abi22_artifact.py",
     "scripts/finalize_taira_rollout_authority.py",
     "scripts/generate_release_manifest.py",
     "scripts/release_artifact_contract.py",
     "scripts/release_manifest_signing.py",
     "scripts/snapshot_taira_public_privacy_inputs.py",
+    "scripts/taira_privacy_protocol_receipt.py",
     "scripts/taira_release_authority.py",
+    "scripts/taira_rollout_admission.py",
 )
 MACOS_FILES = COMMON_FILES + (
     "configs/soranexus/taira/check_mcp_rollout.sh",
+    "scripts/build_privacy_v1_boi_handoff.py",
     "scripts/build_taira_rollout_candidate.py",
     "scripts/capture_taira_macos_four_peer_receipt.py",
+    "scripts/capture_taira_privacy_protocol_four_peer_receipt.py",
+    "scripts/check_native_sdk_abi22_artifact.py",
     "scripts/close_taira_publication_handoff.py",
     "scripts/close_taira_qualification_handoff.py",
     "scripts/deploy_taira_v21_reset.py",
@@ -90,9 +97,14 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/render_taira_validator_bundle.py",
     "scripts/taira_constants.py",
     "scripts/taira_peer_supervisor.py",
+    "scripts/taira_privacy_action_driver_ipc.py",
+    "scripts/taira_privacy_protocol_receipt.py",
+    "scripts/taira_privacy_sealed_controller.py",
+    "scripts/taira_privacy_rollout_contract.py",
     "scripts/taira_release_authority.py",
     "scripts/taira_rollout_admission.py",
     "scripts/write_release_sha256sums.py",
+    "configs/soranexus/taira/privacy_rollout_plan_v1.json",
 )
 PLATFORM_FILES = {"linux": LINUX_FILES, "macos": MACOS_FILES}
 
@@ -114,9 +126,19 @@ ROLE_OPERATIONS: dict[str, tuple[str, set[str]]] = {
         "macos",
         {"assemble-candidate"},
     ),
+    "linux-boi-qualification": (
+        "linux",
+        {"admit", "assemble-boi"},
+    ),
     "macos-deploy": (
         "macos",
-        {"extract-privacy", "prepare-reset", "deploy-reset", "check-public"},
+        {
+            "extract-privacy",
+            "prepare-reset",
+            "deploy-reset",
+            "check-public",
+            "verify-privacy-rollout",
+        },
     ),
     "macos-publish": (
         "macos",
@@ -143,11 +165,14 @@ PYTHON_OPERATIONS = {
     "prepare-reset": "scripts/prepare_taira_empty_reset_bundle.py",
     "capture-four-peer": "scripts/capture_taira_macos_four_peer_receipt.py",
     "assemble-candidate": "scripts/build_taira_rollout_candidate.py",
+    "assemble-boi": "scripts/build_privacy_v1_boi_handoff.py",
     "deploy-reset": "scripts/deploy_taira_v21_reset.py",
     "publish-rollout": "scripts/publish_taira_rollout.py",
+    "verify-privacy-rollout": "scripts/taira_privacy_rollout_contract.py",
     "admit": "scripts/taira_rollout_admission.py",
 }
 QUALIFICATION_CLOSE_HELPER = "scripts/close_taira_qualification_handoff.py"
+PRIVACY_CAPTURE_HELPER = "scripts/capture_taira_privacy_protocol_four_peer_receipt.py"
 PUBLICATION_CLOSE_HELPER = "scripts/close_taira_publication_handoff.py"
 BASH_OPERATIONS = {
     "check-public": "configs/soranexus/taira/check_mcp_rollout.sh",
@@ -180,7 +205,8 @@ OPERATION_FLAGS: dict[str, set[str]] = {
     },
     "capture-four-peer": {
         "--reset-bundle", "--validator-binary", "--supervisor",
-        "--privacy-protocol-receipt",
+        "--privacy-action-driver", "--privacy-network-driver", "--privacy-jindo-driver",
+        "--linux-archive", "--exact12-matrix",
         "--artifact-handoff-sha256", "--source-commit", "--cargo-lock-sha256",
         "--dpn-validator-release-commit",
         "--workspace-source-manifest-sha256", "--restart-generation",
@@ -190,12 +216,22 @@ OPERATION_FLAGS: dict[str, set[str]] = {
         "--source-commit", "--cargo-lock-sha256",
         "--dpn-validator-release-commit",
         "--workspace-source-manifest-sha256", "--source-date-epoch",
-        "--linux-archive", "--linux-authority-dir", "--macos-receipt",
-        "--privacy-protocol-receipt",
+        "--linux-archive", "--linux-authority-dir", "--boi-artifact-handoff-dir",
+        "--macos-receipt",
+        "--privacy-protocol-evidence-dir",
         "--expected-receipt-id", "--controller-manifest", "--controller-digest",
         "--trusted-signing-fingerprint", "--release-manifest-verifier",
         "--trusted-release-manifest-verifier-sha256", "--external-signer",
         "--signing-public-key", "--output-directory",
+    },
+    "assemble-boi": {
+        "--artifact-handoff-root", "--candidate-archive",
+        "--candidate-authority-dir", "--candidate-replay-ledger",
+        "--expected-source-commit", "--expected-dpn-validator-release-commit",
+        "--expected-cargo-lock-sha256",
+        "--expected-workspace-source-manifest-sha256", "--expected-receipt-id",
+        "--trusted-signing-fingerprint", "--release-manifest-verifier",
+        "--trusted-release-manifest-verifier-sha256", "--output",
     },
     "deploy-reset": {
         "--bundle", "--binary", "--supervisor", "--admission-archive",
@@ -227,10 +263,11 @@ OPERATION_FLAGS: dict[str, set[str]] = {
     "check-public": {
         "--public-root", "--validator-root", "--require-all-validators",
         "--expected-git-sha", "--expected-dpn-validator-release-commit",
-        "--skip-write-canary",
+        "--write-config",
     },
+    "verify-privacy-rollout": {"--result"},
 }
-BOOLEAN_FLAGS = {"--apply", "--require-all-validators", "--skip-write-canary"}
+BOOLEAN_FLAGS = {"--apply", "--require-all-validators"}
 REPEATED_FLAGS = {"--validator-root"}
 OUTPUT_PATH_FLAGS = {
     "--output", "--output-dir", "--output-bundle", "--runtime-root",
@@ -248,9 +285,16 @@ INPUT_PATH_FLAGS = {
     "--privacy-release-dir", "--genesis-external-signer",
     "--onboarding-token-hash-tool", "--reset-bundle", "--validator-binary",
     "--supervisor", "--linux-archive", "--linux-authority-dir",
-    "--macos-receipt", "--privacy-protocol-receipt", "--bundle", "--binary", "--admission-archive",
+    "--boi-artifact-handoff-dir", "--macos-receipt",
+    "--privacy-protocol-evidence-dir",
+    "--privacy-action-driver", "--privacy-network-driver", "--privacy-jindo-driver",
+    "--exact12-matrix",
+    "--bundle", "--binary", "--admission-archive",
     "--admission-authority-dir", "--replay-ledger", "--source-identity",
+    "--artifact-handoff-root", "--candidate-archive",
+    "--candidate-authority-dir", "--candidate-replay-ledger",
     "--candidate-root",
+    "--result", "--write-config",
 }
 POSITIONAL_COMMANDS = {
     "assemble-candidate": {"assemble"},
@@ -263,6 +307,7 @@ REQUIRED_FLAGS: dict[tuple[str, str | None], set[str]] = {
     ("prepare-reset", None): OPERATION_FLAGS["prepare-reset"],
     ("capture-four-peer", None): OPERATION_FLAGS["capture-four-peer"],
     ("assemble-candidate", "assemble"): OPERATION_FLAGS["assemble-candidate"],
+    ("assemble-boi", None): OPERATION_FLAGS["assemble-boi"],
     ("deploy-reset", None): OPERATION_FLAGS["deploy-reset"] - {"--apply"},
     ("publish-rollout", None): OPERATION_FLAGS["publish-rollout"],
     ("admit", "init-replay-ledger"): {"--output"},
@@ -270,8 +315,9 @@ REQUIRED_FLAGS: dict[tuple[str, str | None], set[str]] = {
     ("check-public", None): {
         "--public-root", "--validator-root", "--require-all-validators",
         "--expected-git-sha", "--expected-dpn-validator-release-commit",
-        "--skip-write-canary",
+        "--write-config",
     },
+    ("verify-privacy-rollout", None): {"--result"},
 }
 
 # Caller-selected executable paths are never authorized merely because they
@@ -321,10 +367,13 @@ ROLE_OPERATION_IDENTITY: dict[tuple[str, str], str] = {
     ("macos-qualification", "prepare-reset"): "runtime",
     ("macos-qualification", "capture-four-peer"): "runtime",
     ("macos-candidate-authority", "assemble-candidate"): "authority",
+    ("linux-boi-qualification", "admit"): "authority",
+    ("linux-boi-qualification", "assemble-boi"): "authority",
     ("macos-deploy", "extract-privacy"): "runtime",
     ("macos-deploy", "prepare-reset"): "runtime",
     ("macos-deploy", "deploy-reset"): "root",
     ("macos-deploy", "check-public"): "staging",
+    ("macos-deploy", "verify-privacy-rollout"): "authority",
     ("macos-publish", "publish-rollout"): "authority",
 }
 
@@ -338,7 +387,14 @@ EXECUTABLE_RUN_AS_OVERRIDES = {
     ("deploy-reset", "--release-manifest-verifier"): "authority",
 }
 SENSITIVE_TRUSTED_INPUT_FLAGS = frozenset(
-    {"--registry-config", "--signing-public-key", "--source", "--source-bundle"}
+    {
+        "--registry-config",
+        "--result",
+        "--signing-public-key",
+        "--source",
+        "--source-bundle",
+        "--write-config",
+    }
 )
 
 
@@ -870,6 +926,39 @@ def _validate_trusted_input_path(
             ):
                 _fail("trusted input ancestry is not root-owned and nonwritable")
     _revalidate_ancestry(rows)
+
+
+def _validate_privacy_rollout_input(
+    path: Path,
+    *,
+    identity_root: Path,
+    identity_uid: int,
+    identity_gid: int,
+    label: str,
+    maximum: int,
+) -> None:
+    """Require one immutable owner-private canary/observation input."""
+
+    canonical = _require_identity_path(
+        path,
+        identity_root,
+        identity_uid,
+        identity_gid,
+        label=label,
+    )
+    info = canonical.lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_nlink != 1
+        or info.st_uid != identity_uid
+        or info.st_gid != identity_gid
+        or stat.S_IMODE(info.st_mode) != 0o400
+        or info.st_size <= 0
+        or info.st_size > maximum
+    ):
+        _fail(f"{label} must be one owner-private exact-mode-0400 regular file")
+    _read_stable(canonical, maximum)
 
 
 def _validate_publisher_trusted_input(
@@ -1459,6 +1548,24 @@ def _attest(
             _fail("trusted input operation or flag is not valid for this role")
         path = _require_canonical(Path(raw_path), "trusted input")
         _validate_trusted_input_path(path, identity_roots, identity_ids)
+        if operation == "check-public" and flag == "--write-config":
+            _validate_privacy_rollout_input(
+                path,
+                identity_root=identity_roots["staging"],
+                identity_uid=identity_ids["staging"][0],
+                identity_gid=identity_ids["staging"][1],
+                label="dedicated post-cutover canary client config",
+                maximum=MAX_RUNNER_TRUST_BYTES,
+            )
+        elif operation == "verify-privacy-rollout" and flag == "--result":
+            _validate_privacy_rollout_input(
+                path,
+                identity_root=identity_roots["authority"],
+                identity_uid=identity_ids["authority"][0],
+                identity_gid=identity_ids["authority"][1],
+                label="controller-owned privacy rollout observation",
+                maximum=MAX_CONTROLLER_BYTES,
+            )
         if operation == "publish-rollout":
             fingerprint = next(
                 (
@@ -1895,6 +2002,26 @@ def _validate_operation_args(
         if flag in SENSITIVE_TRUSTED_INPUT_FLAGS:
             if not _trusted_input_for(attestation, operation, flag, canonical):
                 _fail("operation input lacks its exact trusted input record")
+            if operation == "check-public" and flag == "--write-config":
+                uid, gid, root = identity_contracts["staging"]
+                _validate_privacy_rollout_input(
+                    canonical,
+                    identity_root=root,
+                    identity_uid=uid,
+                    identity_gid=gid,
+                    label="dedicated post-cutover canary client config",
+                    maximum=MAX_RUNNER_TRUST_BYTES,
+                )
+            elif operation == "verify-privacy-rollout" and flag == "--result":
+                uid, gid, root = identity_contracts["authority"]
+                _validate_privacy_rollout_input(
+                    canonical,
+                    identity_root=root,
+                    identity_uid=uid,
+                    identity_gid=gid,
+                    label="controller-owned privacy rollout observation",
+                    maximum=MAX_CONTROLLER_BYTES,
+                )
             continue
         if flag == "--forbidden-root":
             # This path is only a negative assertion supplied to the installed
@@ -2330,6 +2457,21 @@ def _dispatch(
     run_as: tuple[int, int] | None = None,
     external_tool_identity: tuple[int, int] | None = None,
 ) -> int:
+    if operation == "verify-privacy-rollout":
+        return _dispatch_installed_python(
+            PYTHON_OPERATIONS[operation],
+            [
+                "verify-result",
+                "--plan",
+                str(
+                    CONTROLLER_ROOT
+                    / "configs/soranexus/taira/privacy_rollout_plan_v1.json"
+                ),
+                *operation_args,
+            ],
+            run_as,
+            external_tool_identity,
+        )
     if operation in PYTHON_OPERATIONS:
         return _dispatch_installed_python(
             PYTHON_OPERATIONS[operation],
@@ -2386,22 +2528,31 @@ def _remove_controller_owned_tree(path: Path, parent: Path) -> None:
 
 
 def _capture_helper_args(
-    operation_args: Sequence[str], receipt: Path, runtime_root: Path
-) -> tuple[list[str], Path, Path, Path]:
+    operation_args: Sequence[str],
+    receipt: Path,
+    runtime_root: Path,
+    privacy_output: Path,
+    privacy_work: Path,
+) -> tuple[list[str], list[str], Path, Path]:
     _subcommand, option_values = _operation_option_values(
         "capture-four-peer", operation_args
     )
-    final_values = option_values.get("--output", [])
-    source_values = option_values.get("--source-identity", [])
-    privacy_values = option_values.get("--privacy-protocol-receipt", [])
-    if (
-        len(final_values) != 1
-        or len(source_values) != 1
-        or len(privacy_values) != 1
-    ):
-        _fail(
-            "capture composite lacks one final output, source identity, or privacy receipt"
+    required = {
+        flag: option_values.get(flag, [])
+        for flag in (
+            "--artifact-handoff-sha256",
+            "--exact12-matrix",
+            "--linux-archive",
+            "--output",
+            "--privacy-action-driver",
+            "--privacy-jindo-driver",
+            "--privacy-network-driver",
+            "--source-identity",
+            "--validator-binary",
         )
+    }
+    if any(len(values) != 1 for values in required.values()):
+        _fail("capture composite lacks one exact privacy qualification input")
     transformed: list[str] = []
     values = list(operation_args)
     index = 0
@@ -2413,15 +2564,44 @@ def _capture_helper_args(
             continue
         value = values[index]
         index += 1
-        if flag in {"--source-identity", "--privacy-protocol-receipt"}:
+        if flag in {
+            "--exact12-matrix",
+            "--linux-archive",
+            "--privacy-action-driver",
+            "--privacy-jindo-driver",
+            "--privacy-network-driver",
+            "--source-identity",
+        }:
             continue
         transformed.extend((flag, str(receipt) if flag == "--output" else value))
     transformed.extend(("--runtime-root", str(runtime_root)))
+    privacy_args = [
+        "--validator-binary",
+        required["--validator-binary"][0],
+        "--action-driver",
+        required["--privacy-action-driver"][0],
+        "--network-driver",
+        required["--privacy-network-driver"][0],
+        "--jindo-driver",
+        required["--privacy-jindo-driver"][0],
+        "--linux-archive",
+        required["--linux-archive"][0],
+        "--exact12-matrix",
+        required["--exact12-matrix"][0],
+        "--source-identity",
+        required["--source-identity"][0],
+        "--artifact-handoff-sha256",
+        required["--artifact-handoff-sha256"][0],
+        "--output-directory",
+        str(privacy_output),
+        "--work-directory",
+        str(privacy_work),
+    ]
     return (
         transformed,
-        Path(final_values[0]),
-        Path(source_values[0]),
-        Path(privacy_values[0]),
+        privacy_args,
+        Path(required["--output"][0]),
+        Path(required["--source-identity"][0]),
     )
 
 
@@ -2445,19 +2625,33 @@ def _dispatch_capture_composite(
     os.chown(runtime_work, runtime_uid, runtime_gid)
     receipt = runtime_work / "four-peer-receipt-v2.json"
     harness_root = runtime_work / "harness"
+    privacy_output = runtime_work / "privacy-protocol-four-peer-v2"
+    privacy_work = runtime_work / "privacy-work"
     final_output: Path | None = None
     completed = False
     try:
         (
             helper_args,
+            privacy_args,
             final_output,
             source_identity,
-            privacy_protocol_receipt,
         ) = _capture_helper_args(
-            operation_args, receipt, harness_root
+            operation_args,
+            receipt,
+            harness_root,
+            privacy_output,
+            privacy_work,
         )
         if final_output is None:  # defense in depth for static path narrowing
             _fail("capture composite final output is absent")
+        result = _dispatch_installed_python(
+            PRIVACY_CAPTURE_HELPER,
+            privacy_args,
+            (runtime_uid, runtime_gid),
+        )
+        if result != 0:
+            return result
+        _validate_operation_outputs({privacy_output}, runtime_uid, runtime_gid)
         result = _dispatch(
             "capture-four-peer",
             helper_args,
@@ -2465,14 +2659,16 @@ def _dispatch_capture_composite(
         )
         if result != 0:
             return result
-        _validate_operation_outputs({receipt}, runtime_uid, runtime_gid)
+        _validate_operation_outputs(
+            {privacy_output, receipt}, runtime_uid, runtime_gid
+        )
         result = _dispatch_installed_python(
             QUALIFICATION_CLOSE_HELPER,
             [
                 "--receipt",
                 str(receipt),
-                "--privacy-protocol-receipt",
-                str(privacy_protocol_receipt),
+                "--privacy-protocol-evidence-dir",
+                str(privacy_output),
                 "--source-identity",
                 str(source_identity),
                 "--output",

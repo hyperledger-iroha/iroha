@@ -20,6 +20,10 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TEST_NETWORK_ID = (
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+)
+
 
 def _field(value: bytes) -> bytes:
     return MODULE.compact_length(len(value)) + value
@@ -29,17 +33,23 @@ def _signed_transaction(payload: bytes, signature: bytes) -> bytes:
     return _field(signature) + _field(payload) + _field(b"\x00")
 
 
+def _transaction_payload(suffix: bytes = b"") -> bytes:
+    identity = bytes.fromhex(TEST_NETWORK_ID[5:69])
+    domain = (0).to_bytes(4, "little") + _field(identity)
+    return _field(domain) + suffix
+
+
 def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
     resources = base / "resources"
     resources.mkdir(parents=True, exist_ok=True)
 
-    payload_bytes = b"alpha-fixture"
+    payload_bytes = _transaction_payload(b"alpha-fixture")
     signed_bytes = _signed_transaction(payload_bytes, b"alpha-signed")
     (resources / "alpha.norito").write_bytes(payload_bytes)
 
     payloads_path = base / "transaction_payloads.json"
     creation_time_ms = 1_735_000_000_111
-    chain = "00000002"
+    network_id = TEST_NETWORK_ID
     authority = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
     time_to_live_ms = 5000
     nonce = 42
@@ -55,13 +65,13 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                         signed_bytes
                     ),
                     "creation_time_ms": creation_time_ms,
-                    "chain": chain,
+                    "network_id": network_id,
                     "authority": authority,
                     "time_to_live_ms": time_to_live_ms,
                     "nonce": nonce,
                     "payload": {
                         "authority": authority,
-                        "chain": chain,
+                        "network_id": network_id,
                         "creation_time_ms": creation_time_ms,
                         "executable": {"Instructions": []},
                         "fee_payment": {
@@ -94,7 +104,7 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
                         "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed_bytes),  # type: ignore[attr-defined]
                         "signed_len": len(signed_bytes),
                         "creation_time_ms": creation_time_ms,
-                        "chain": chain,
+                        "network_id": network_id,
                         "authority": authority,
                         "time_to_live_ms": time_to_live_ms,
                         "nonce": nonce,

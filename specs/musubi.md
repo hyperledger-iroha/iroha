@@ -1088,35 +1088,248 @@ and opens all three verifier readers itself. The raw verifier-evidence
 constructor is crate-private, so evidence retained before completion cannot be
 combined with a later claim by daemon or downstream code. The resulting
 `ProviderIngestMusubiAttestationApprovalRequestV1` binds the unsigned
-attestation payload, completed-claim digest, covering finalized cursor, and
-governed signer policy. It remains nonserializable and externally inert:
-constructing it performs no signing, registration, or runtime handoff.
+attestation payload, a stable completed-row evidence digest, the separately
+retained observation cursor, and governed signer policy. The digest covers the
+exact chain, genesis, provider, order, archive commitment, and finalized
+completion row but deliberately excludes only the observation cursor. A fresh
+request for the same row at a later finalized head therefore reuses the same
+approval identity and may satisfy the retained intent; the stored cursor is a
+floor, an equal height must reproduce its hash, and a lower height or
+equal-height fork fails. The request remains nonserializable and externally
+inert: constructing it performs no signing, registration, or runtime handoff.
+
+`ProviderIngestCompletedMusubiCaptureScannerV1` is the effect-free bridge from
+finalized completion rows to those opaque claims. The capture-only
+`ProviderIngestCompletedMusubiCaptureLedgerV1` receives no claim factory and
+cannot return a claim. It returns an opaque, non-codec raw projection containing
+the chain/provider identity, finalized cursor/time, pin record, canonical order
+record, archive binding/commitment, and completion authority fields. The
+scanner validates the complete bounded page and every raw row before privately
+creating a fresh factory, sealing the rows, and revalidating the resulting
+assignments and claims. Scanner progress is committed only after that succeeds.
+Its builder remains crate-private on `NodeHandle`: those fields can be checked
+for internal consistency but do not by themselves authenticate that an
+arbitrary trait implementation read the daemon-owned archive. Construction and
+sealing must therefore move beside that concrete archive, or authenticated
+archive verification must move under `sorafs_node`, before activation.
+
+A crate-private one-page reconciliation primitive snapshots scanner progress,
+reconstructs the exact admitted CAR plan by manifest digest, reruns all bundle
+verification under the callback-scoped lifecycle lease, and idempotently
+enqueues the resulting approval intent. A plan, verification, or journal
+failure restores scanner progress so replay cannot skip a partially enqueued
+suffix. It has no signing, inventory, transaction, or registry effect and is
+not wired to a daemon child while the archive-provenance boundary remains open.
+
+`irohad` prepares a third finalized-archive reader specifically for capture,
+separate from the public and provider-ingest runtime readers. Its replay-safe
+mode is stateless: a fresh read selects the visible finalized archive key, while
+a continuation resolves the exact height/hash and reconstructs its core cursor
+through a bounded first-page provider-state-root lookup. It never advances the
+adapter's stateful `active` cursor, and the stateful and replay-safe APIs reject
+cross-use. It emits only raw capture pages and never receives the private claim
+factory, so cancellation or a post-read validation failure can retry the same
+request. The scanner separately retains the in-progress page cursor, a
+monotonic finalized high-water, and the last completely scanned cursor. After
+a terminal page, the same finalized head receives one bounded fully validated
+probe whose candidates are suppressed into an empty terminal page; a later
+head resumes ordinary paging.
+
+The provider-attestation foundation is also implemented as an inert library
+boundary. `MusubiProviderAttestationSignerV1` can approve only an opaque request
+and exposes no transaction, queue, or registry API. Its signing helper
+requires a production runtime handle, exact provider-owner authority, a
+non-zero deployment-adapter revision and independently governed adapter-policy
+digest, a domain-separated controller-policy digest over that exact `AccountId`
+controller, and the governed signer policy and current eligibility both before
+and after a bounded signing call. It rejects substituted payloads or approval
+quorums. The adapter-policy digest is a separate binding, but semantic
+independence does not require its bytes to differ from another policy digest.
+An unchanged qualified signer must return the same canonical,
+controller-key-sorted approval set for an exact retry, so timeout recovery
+cannot choose another otherwise-valid multisig subset. This is a contract for
+a deployment signer, not a stock software HSM/KMS implementation. A private
+daemon wrapper now pins the exact configured handle/revision/adapter-policy
+digest, chain ID, genesis block hash, and local provider ID. It also reads the
+finalized `State::provider_owners()` authority before and after the external
+approval and rejects owner or adapter drift and substituted output. The sealed-
+clock journal signing driver remains crate-private, and the wrapper is not
+instantiated while activation is gated.
+
+The public `MusubiProviderAttestationJournalRuntimeV1` type supplies the bounded
+restart state machine, but its constructor, raw checkpoint snapshot, CAS
+outcome/error types, store trait, and transition engine are crate-private. The
+store must make a replacement durable before reporting success. An exact
+successor already installed before cancellation or response loss is accepted
+as `Stored` on retry even when the caller still presents its old predecessor;
+a different successor at that predecessor conflicts. A private canonical
+checkpoint records `AwaitingApproval`, claimed, approved, handoff, delivered,
+and dead-letter states. Stable approval identities bind the attestation key,
+payload signing hash, completed-row evidence digest, and signer policy; the
+opaque request and credentials are never persisted, so approval after restart
+requires a fresh completed claim and lifecycle-leased verification. Checkpoint
+admission enforces byte, entry, decoder, and CAS-retry bounds, reserves a fixed
+worst-case future-state footprint for each active entry plus the checkpoint
+header, and proves writer output can be bounded-decoded back to the same
+canonical value. Capacity pruning removes only the oldest delivered entries;
+active work and dead letters are retained. The raw transition engine and every
+API which accepts a caller-supplied UNIX timestamp are crate-private; the
+daemon-facing runtime owns one qualified sealed clock and exposes no timestamp
+parameter.
+
+The nested
+`[sorafs.storage.provider_ingest_runtime.provider_attestation_journal]`
+configuration is a bounded activation request, not an active worker. It is off
+by default. `max_entries` is an independent count cap of 1--4,096 (default
+1,024), while `checkpoint_max_bytes` is an independent viable byte cap of
+4--128 MiB (default 64 MiB); the journal still rejects a write that exceeds
+either cap. Enabling requires three complete public qualification triplets:
+`clock_seal_{handle,revision,policy_digest_hex}`,
+`approval_signer_{handle,revision,policy_digest_hex}`, and
+`inventory_{handle,revision,policy_digest_hex}`. Handles must use the canonical
+non-test production grammar, revisions and digests must be non-zero, and the
+digests must be canonical lowercase hexadecimal. The triplets have no defaults
+and every binding field is forbidden while the table is disabled. Paths,
+deployment nonces, endpoints, credentials, tokens, and keys remain absent.
+The three bindings project to runtime-provider slots 55--57 in durability,
+signer, inventory order. Slot 55 is one combined durability provider with
+separate authenticated small-record namespaces for the monotonic UNIX-time
+floor and journal checkpoint head, plus immutable content-addressed checkpoint
+blob storage. Its single qualification covers all three surfaces; it does not
+make the time and checkpoint-head records one atomic object. Their catalog and
+resolved objects are all-or-none. Registry resolution compares each production
+handle and public qualification with the configured binding both before and
+after a second metadata snapshot. It does not invoke readiness or any storage,
+signing, or inventory effect. The stock broker has no implementation for these
+slots. Enabling the table requires provider ingest, but stock `irohad` then
+rejects the activation request before supervisor startup. No capture child or
+external effect is created from this configuration today.
+
+`MusubiProviderAttestationJournalFileStoreV1` is the inert public local-store
+adapter for that CAS contract. On Linux and macOS it binds one root-fenced
+two-slot layout with a fixed 128 MiB checkpoint/payload ceiling to the exact
+chain ID, genesis block hash, and provider ID. Descriptor-relative identity
+checks, canonical checkpoint and generation validation, durable two-slot
+commits, process-local single flight, and nonblocking normal-operation OS locks
+reject online path/link substitution, torn writes, divergent lineage, and
+concurrent successor installation. Its cross-process initialization lock uses
+a fixed five-second deadline and ten-millisecond retry cadence, so daemon
+startup cannot wait indefinitely. Composite sealed loads and mutations also
+take a process-owned permit and a nonblocking cross-process lease on that exact
+initialization-lock identity, which is committed in the immutable two-slot
+headers and reopened existing-only below the retained journal directory. The
+lease spans the external operation and local reconciliation, returns
+`Unavailable` on contention, and is released on cancellation; an exact retry
+after cancellation can finish the bounded local repair. Unlink/recreate cannot
+split cooperating writers onto two accepted lock identities.
+
+Slot 55's time namespace binds a small canonical generation/predecessor/floor
+record to the exact chain, genesis, and provider scope. Its separate
+checkpoint namespace binds chain, genesis, provider, and the exact
+`MusubiProviderAttestationJournalPolicyV1::digest()` into a canonical scope,
+then links canonical checkpoint-head records by their domain-separated Norito
+digests. Hashing uses canonical encoding rather than ambient codec flags. The
+explicit initialization path first proves the local cache empty and installs
+the unique generation-one empty `H0` (`head = None`) after the time seal exists.
+An identical `H0` is an idempotent retry. Ordinary open requires an existing
+external `H0` or later head, never creates one, and never promotes local bytes.
+
+Each journal mutation stores and exactly reads back the immutable checkpoint
+blob under its existing checkpoint revision, advances and exactly reads back
+the predecessor-linked external head, and only then advances the local two-slot
+cache. The provider must retain the current head, its direct predecessor, and
+every blob either can reference. The external head and named blob are
+authoritative: an exact local match is accepted, while only an authenticated
+exact direct predecessor can be repaired forward from the retained predecessor
+record and blob. A deeper rollback, local state ahead of or forked from the
+head, a missing/substituted blob, policy or scope drift, or unresolved mutation
+ambiguity fails closed. A head's observed time must not exceed the separately
+sealed time floor. Consequently, restoring or arbitrarily replacing only the
+local file-store cache cannot make an older checkpoint authoritative.
+
+The raw checkpoint snapshot/CAS contract, checkpoint-head orchestration, sealed
+store wrapper, transition engine, and runtime constructor remain crate-private.
+The public file-store initialization/open paths consume the store, enforce the
+exact scope and retained policy, and return only the bounded journal runtime.
+The implementation remains inert and is not wired into stock `irohad`; targets
+other than Linux and macOS fail closed.
+
+Restart discovery uses exclusive `(insertion sequence, approval ID)` pages for
+due approvals, due handoffs, and dead letters. Claims are fenced by the exact
+owner, entry generation, and absolute UNIX-millisecond lease. Every timed
+mutation advances a persisted non-regressing UNIX-time floor; zero, rollback,
+expired, wrong-owner, wrong-generation, or otherwise stale claims fail before
+transition. Retry exhaustion and permanent failures retain their bounded
+reason, attempt count, terminal time, and, for handoff failures, the complete
+approved attestation. Operators can generation-fence either requeue or explicit
+acknowledgement; handoff recovery reuses the retained attestation without
+signing again.
+
+Canonical inventory items bind chain/genesis, archive/order, provider key,
+complete attestation digest, and a stable handoff ID. The public sink contract
+is idempotent: an exact replay returns the same non-zero inventory revision and
+a different digest at the same immutable scope/key conflicts. Only the journal
+turns that revision into an opaque local acknowledgement. The receipt has no
+public constructor or Norito codec and is persisted through a private DTO.
+Raw approval storage and final delivery transitions are crate-private, and the
+inventory delivery driver accepts only the public runtime supertrait over the
+sink and reader. That runtime adds a production handle, non-zero adapter
+revision and policy digest, and a bounded payload-free readiness probe. The
+driver fences those values and readiness around `put` plus exact readback. A
+private daemon inventory wrapper now compares the exact configured
+handle/revision/policy digest before and after every fallible call, including
+readiness. It restricts put/get items and keys to the local provider and
+validates every scope and returned value against the exact configured
+chain/genesis and requested archive/order. It intentionally performs no
+`State::provider_owners()` lookup; ownership fencing belongs to the approval
+signer. The wrapper and driver remain uninstantiated. The public contracts are
+not an active network handoff or remote-authentication implementation, and
+expose no transaction, queue, or registry mutation surface. Public readback
+construction performs structural validation only; the deployment adapter
+remains responsible for authenticating its source.
 
 The remaining deployment dependencies are:
 
-1. consume the lifecycle-lease-minted inert approval request from the finalized
-   completion coordinator and request only approvals from an injected HSM/KMS
-   or threshold provider. Storage completion, the
-   pre-completion claim or receipt, and publisher-supplied registration evidence
-   alone never authorize an attestation;
-2. persist approval, retry, and finality state in a separate bounded
-   provider-attestation journal, then durably hand the approved attestation to the
-   archive-manager/publication runtime; providers must not mutate the
-   attestation registry directly;
-3. implement the authenticated provider-attestation inventory/coordinator
-   handoff. The coordinator independently retrieves
+1. give one non-generic, daemon-owned coordinator exclusive construction of the
+   crate-private scanner and effect drivers and ownership of authenticated
+   daemon-archive provenance by sealing it to the concrete qualified reader,
+   then wire its finalized-completion
+   capture/reconciliation child to enqueue and rediscover journal work. The
+   child must rederive each
+   request through the lifecycle lease, operate claims and dead-letter recovery,
+   provision the local two-slot adapter, and bind it to a qualified combined
+   slot-55 provider for the separate sealed time/head namespaces and immutable
+   checkpoint blobs;
+2. provide and qualify the real approval-only HSM/KMS or threshold signer
+   adapter, including replay stability, timeout, revocation, and controller
+   policy changes. Storage completion, the pre-completion claim or receipt,
+   and publisher-supplied registration evidence alone never authorize an
+   attestation;
+3. qualify the adapter's bounded initialization and header-bound composite
+   lease plus its Linux/macOS durability, corruption, capacity,
+   concurrent-resume, cancellation, and crash-at-every-transition behavior.
+   Run exactly one rooted runtime session for each external provider scope
+   across machines, or require the provider to enforce an equivalent
+   authenticated session fence; the local OS lease coordinates only processes
+   sharing the same state root;
+4. provide the authenticated and qualified provider-inventory/coordinator
+   transport and activate the crate-private delivery driver. The coordinator
+   independently retrieves
    and verifies the exact finalized archive-registration transaction, submits
    or reconciles canonical pin and replication operations, waits for each
    distinct provider completion, and returns the complete bounded provider
    attestations plus authoritative current archive/location state; the publisher
    durably registers those proofs one transaction at a time before the compact
-   location CAS;
-4. implement authenticated provider readback with redirect denial, DNS/IP
+   location CAS. Providers must not mutate the attestation registry directly;
+5. implement authenticated provider readback with redirect denial, DNS/IP
    pinning, bounded streaming, and invocation of the same shared verifier; and
-5. resolve public policy and identity bindings through `iroha_config`, resolve
-   credentials and signing keys only from deployment runtime providers, then
-   use the late-bound deployment factory to construct a private TLS runner from
-   the daemon-owned finalized-state, queue, and SoraFS handles.
+6. supply the concrete combined time/head/blob durability provider, signer, and
+   inventory providers, broker support, bounded readiness, supervised
+   restart/shutdown behavior, and crash, cancellation, revocation, corruption,
+   concurrent-resume, and platform chaos qualification. Resolve public policy
+   and identity bindings through `iroha_config`, resolve credentials and
+   signing keys only from deployment runtime providers, and remove the stock
+   pre-supervisor rejection only after the coordinator owns these boundaries.
 
 `run_with_musubi_publication` is only the late-bound factory and supervisor
 injection boundary; it is

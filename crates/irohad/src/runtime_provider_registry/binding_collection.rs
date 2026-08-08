@@ -20,7 +20,51 @@ pub(super) fn collect_configured_bindings(
     collect_reputation_billing_bindings(config, bindings)?;
     collect_provider_ingest_bindings(config, bindings)?;
     collect_soracloud_runtime_signer_binding(config, bindings)?;
-    collect_soracloud_hf_credential_provider_binding(config, bindings)
+    collect_soracloud_hf_credential_provider_binding(config, bindings)?;
+    collect_musubi_provider_attestation_bindings(config, bindings)
+}
+
+fn collect_musubi_provider_attestation_bindings(
+    config: &Config,
+    bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
+) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
+    use IrohaRuntimeProviderSlotV1 as Slot;
+
+    let Some(journal) = config
+        .torii
+        .sorafs_storage
+        .provider_ingest_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.provider_attestation_journal.as_ref())
+    else {
+        return Ok(());
+    };
+    let projected = [
+        (
+            Slot::MusubiProviderAttestationClockSeal,
+            &journal.clock_seal,
+        ),
+        (
+            Slot::MusubiProviderAttestationApprovalSigner,
+            &journal.approval_signer,
+        ),
+        (
+            Slot::MusubiProviderAttestationAuthenticatedInventory,
+            &journal.inventory,
+        ),
+    ]
+    .into_iter()
+    .map(|(slot, binding)| {
+        IrohaRuntimeProviderBindingV1::try_new(
+            slot,
+            binding.handle.clone(),
+            Some(binding.revision),
+            Some(binding.policy_digest),
+        )
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    bindings.extend(projected);
+    Ok(())
 }
 
 fn collect_bootle_lantern_issuance_binding(

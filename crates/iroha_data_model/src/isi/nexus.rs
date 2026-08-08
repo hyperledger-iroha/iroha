@@ -234,6 +234,11 @@ iroha_data_model_derive::model_single! {
     #[derive(getset::Getters)]
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
     #[getset(get = "pub")]
     /// Withdraw assets from a paused or closing program vault allocation.
     pub struct WithdrawFeeSponsorProgram {
@@ -243,8 +248,6 @@ iroha_data_model_derive::model_single! {
         pub asset_definition_id: AssetDefinitionId,
         /// Positive amount released from protocol custody.
         pub amount: Quantity,
-        /// Canonical account receiving the withdrawn asset.
-        pub destination: AccountId,
     }
 }
 
@@ -476,7 +479,6 @@ impl_decode_fields!(WithdrawFeeSponsorProgram {
     program_id: FeeSponsorProgramId,
     asset_definition_id: AssetDefinitionId,
     amount: Quantity,
-    destination: AccountId,
 });
 
 #[cfg(test)]
@@ -615,7 +617,7 @@ mod tests {
             sponsor_account_id(),
             "default".parse().expect("program name"),
         );
-        FeeSponsorProgram::new(program_id)
+        FeeSponsorProgram::new(program_id, sponsor_account_id())
     }
 
     fn sample_fee_sponsor_revision(program_id: FeeSponsorProgramId) -> FeeSponsorProgramRevision {
@@ -746,8 +748,28 @@ mod tests {
             program_id: id,
             asset_definition_id: sample_fee_asset_id(),
             amount: Quantity::from(1_u32),
-            destination: beneficiary,
         });
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn withdrawal_json_rejects_caller_selected_destination() {
+        let program = sample_fee_sponsor_program();
+        let mut value = norito::json::to_value(&WithdrawFeeSponsorProgram {
+            program_id: program.id,
+            asset_definition_id: sample_fee_asset_id(),
+            amount: Quantity::from(1_u32),
+        })
+        .expect("serialize withdrawal");
+        value.as_object_mut().expect("withdrawal object").insert(
+            "destination".to_owned(),
+            norito::json::to_value(&sponsor_account_id()).expect("serialize forged account"),
+        );
+
+        assert!(
+            norito::json::from_value::<WithdrawFeeSponsorProgram>(value).is_err(),
+            "caller-selected withdrawal destinations are not part of the first-release wire"
+        );
     }
 
     #[test]
@@ -903,7 +925,6 @@ mod tests {
                 program_id: id,
                 asset_definition_id: sample_fee_asset_id(),
                 amount: Quantity::from(1_u32),
-                destination: beneficiary,
             },
         );
     }

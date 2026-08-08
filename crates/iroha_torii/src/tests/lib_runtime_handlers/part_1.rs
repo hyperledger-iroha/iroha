@@ -37,9 +37,9 @@ use iroha_core::{
     },
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, Registrable, ValidationFail,
+    ChainId, NetworkId, Registrable, ValidationFail,
     account::{Account, AccountAlias, AccountId, OpaqueAccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -660,9 +660,12 @@ fn install_lane_manifest_registry_with_torii_urls_for_test(
     state: &IrohaState,
     lanes: &[(LaneId, Vec<(AccountId, PeerId, Option<&str>)>)],
 ) {
+    static MANIFEST_ROOT_SEQ: AtomicUsize = AtomicUsize::new(0);
+
     let nexus = state.nexus_snapshot();
+    let manifest_root_seq = MANIFEST_ROOT_SEQ.fetch_add(1, Ordering::Relaxed);
     let manifest_root = std::env::temp_dir().join(format!(
-        "iroha-torii-manifests-{}-{}",
+        "iroha-torii-manifests-{}-{}-{manifest_root_seq}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -990,6 +993,26 @@ fn build_find_transactions_query_for_test() -> iroha_data_model::query::QueryWit
         &executor,
         iroha_data_model::query::transaction::prelude::FindTransactions::new(),
     )
+    .execute();
+    executor.into_query()
+}
+
+fn build_exact_transaction_details_query_for_test(
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> iroha_data_model::query::QueryWithParams {
+    use iroha_data_model::query::{
+        CommittedTxFilters, builder::QueryBuilderExt, dsl::CompoundPredicate,
+    };
+
+    let executor = CapturingIterableQueryExecutor::default();
+    let _ = iroha_data_model::query::builder::QueryBuilder::new(
+        &executor,
+        iroha_data_model::query::transaction::prelude::FindTransactions::new(),
+    )
+    .filter(CompoundPredicate::from_filters(CommittedTxFilters {
+        entry_eq: Some(entrypoint_hash),
+        ..CommittedTxFilters::default()
+    }))
     .execute();
     executor.into_query()
 }
@@ -1949,6 +1972,12 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         zk_ivm_prove_inflight_total,
         zk_ivm_prove_job_ttl_ms: defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS * 1_000,
         zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
+        zk_ivm_prove_job_max_entries_per_owner:
+            defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
+        zk_ivm_prove_job_max_retained_bytes_per_owner: usize::try_from(
+            defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER.get(),
+        )
+        .expect("default per-owner prove-job bytes fit usize"),
         ivm_tooling_timeout: Duration::from_millis(defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS),
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         peer_telemetry,
@@ -2446,16 +2475,16 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         "derive post-transaction rate-limit fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "rate-limit-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2529,16 +2558,16 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         "derive queue-before-rate-limit fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
     .sign(keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2602,16 +2631,16 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
         Algorithm::Ed25519,
         "derive second post-transaction API-token fixture key",
     );
-    let chain = (*app.chain_id).clone();
+    let network_id = *app.state.network_id_ref();
     let tx1 = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         AccountId::new(first_keypair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, "token-rate-limit-1".to_string())])
     .sign(first_keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain,
+        network_id,
         AccountId::new(second_keypair.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2657,7 +2686,7 @@ async fn handler_post_transaction_reuses_resolved_route_for_enqueue() {
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2697,7 +2726,7 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2742,7 +2771,7 @@ async fn handler_post_transaction_entrypoint_reuses_resolved_route_for_enqueue()
     );
     let authority = AccountId::new(keypair.public_key().clone());
     let transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

@@ -285,9 +285,14 @@ signed.
 The catalog is the canonical route superset, but consumers receive explicit
 projections rather than identical sets. Each descriptor identifies its public,
 operator, diagnostic, or protocol surface; listener; feature gate; OpenAPI and
-SDK exposure; and explicit MCP allowlisting. Metrics, diagnostics, streams, and
-privileged commands therefore do not become SDK operations or MCP tools merely
-because they are mounted. The mounted projection is evaluated for the active
+SDK exposure; explicit MCP allowlisting; closed `RouteEffect` classification;
+and closed `AdmissionPolicy` principal requirement. Effect and admission have
+no unspecified/default form. Catalog validation rejects public mutation,
+public expensive compute, public long-lived streams, operator surfaces without
+operator admission, and principal admission without the corresponding sealed
+authentication boundary. Metrics, diagnostics, streams, and privileged
+commands therefore do not become SDK operations or MCP tools merely because
+they are mounted. The mounted projection is evaluated for the active
 build, while the SDK projection is the canonical supported-build superset.
 OpenAPI-derived MCP generation is fail-closed: an operation is emitted only
 when its exact HTTP method/path pair is enabled in the catalog's MCP projection
@@ -300,10 +305,30 @@ not hidden aliases. Listener metadata records the intended exposure boundary,
 while the current single-listener implementation continues to enforce operator
 and diagnostic restrictions through authentication and ingress policy.
 
+## Transaction status privacy
+
+`GET /v1/pipeline/transactions/status` is intentionally a public, status-only
+projection. Its closed response contains the transaction hash, status kind,
+optional block height, requested scope, and resolution source. It never returns
+rejection reasons or diagnostics, trigger completions, batch-transfer receipts,
+account identities, amounts, or instruction payloads, and the handler does not
+perform a second Kura lookup to hydrate those details.
+
+Exact committed details use `POST /v1/pipeline/transactions/details`. The body
+is a canonical `SignedQuery` containing `FindTransactions` with exactly one
+`entrypoint_hash` equality predicate and default query parameters and selector.
+Torii validates the exact genesis-derived `NetworkId`, lifetime, signature, and
+one-shot nonce before any state or Kura access. It then admits only the
+transaction authority, a source or destination account named by a committed
+batch receipt, or an account holding the exact `CanReadAllLedgerData` operator
+capability. Unsigned, wrong-network, replayed, broadened, and projected requests
+fail closed; there is no legacy detail field on the public status DTO.
+
 ## HTTP observability
 
 Every matched request carries the catalog's stable route ID, Axum route
-template, API surface, listener, and tooling projections in request extensions.
+template, API surface, listener, route effect, admission policy, and tooling
+projections in request extensions.
 The same metadata is copied to the response for outer middleware. Neither logs
 nor metric labels fall back to the raw request URI; concrete identifiers,
 cursor values, and query strings therefore cannot create label cardinality or

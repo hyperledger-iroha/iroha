@@ -87,7 +87,6 @@ def _release_config(provider_digest: str) -> bytes:
 
 @functools.lru_cache(maxsize=1)
 def _release_payloads() -> dict[str, bytes]:
-    activations = [f"activation-{index}".encode("ascii") for index in range(12)]
     policy_instruction = b"issuer-policy-public-instruction"
     provider_digest = _sha256(b"provider-policy")
     parameter_id = _sha256(b"issuer-parameter-id")
@@ -133,9 +132,6 @@ def _release_payloads() -> dict[str, bytes]:
     broker_payload = _compact_json(broker)
 
     plan = json.loads(TAIRA_PLAN.read_bytes())
-    plan["genesis_registration"]["instruction_norito_sha256"] = [
-        hashlib.sha256(value).hexdigest() for value in activations
-    ]
     bootle = plan["bootle_lantern_issuer"]
     bootle["public_export_sha256"] = hashlib.sha256(broker_payload).hexdigest()
     bootle["runtime_provider"]["qualification_policy_digest_hex"] = provider_digest
@@ -149,10 +145,6 @@ def _release_payloads() -> dict[str, bytes]:
     )
 
     genesis = json.loads(TAIRA_GENESIS.read_bytes())
-    tail = activations + [policy_instruction]
-    genesis["transactions"][-1]["instructions"].extend(
-        base64.b64encode(value).decode("ascii") for value in tail
-    )
     return {
         "bootle_lantern_broker_public.json": broker_payload,
         "config.toml": _release_config(provider_digest),
@@ -270,18 +262,21 @@ def test_embedded_projection_fingerprints_match_canonical_templates() -> None:
 @pytest.mark.parametrize(
     ("placeholder", "secret"),
     (
-        ("REPLACE_WITH_VALIDATOR_PRIVATE_KEY", "ed0120materialized-validator-key"),
+        (
+            'private_key_file = "/run/secrets/iroha/taira-validator-private-key"',
+            'private_key = "ed0120materialized-validator-key"',
+        ),
         (
             "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY",
             "ed0120materialized-soranet-transport-public-key",
         ),
         (
-            "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY",
-            "802620materialized-soranet-transport-private-key",
+            'soranet_transport_private_key_file = "/run/secrets/iroha/taira-soranet-transport-private-key"',
+            'soranet_transport_private_key = "802620materialized-soranet-transport-private-key"',
         ),
         (
-            "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY",
-            "ed0120materialized-kagemusha-key",
+            'private_key_file = "/run/secrets/iroha/taira-kagemusha-commands-private-key"',
+            'private_key = "ed0120materialized-kagemusha-key"',
         ),
         (
             "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE",
@@ -296,8 +291,8 @@ def test_embedded_projection_fingerprints_match_canonical_templates() -> None:
             "/run/secrets/faucet.key",
         ),
         (
-            "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY",
-            "ed0120materialized-streaming-key",
+            'identity_private_key_file = "/run/secrets/iroha/taira-streaming-identity-private-key"',
+            'identity_private_key = "ed0120materialized-streaming-key"',
         ),
     ),
 )
@@ -352,7 +347,7 @@ def test_snapshot_rejects_noncanonical_or_unbound_config_before_output(
         "missing-protocol",
         "retired-active-label",
         "wrong-secret-flag-type",
-        "duplicate-activation",
+        "rollout-plan-binding",
         "unknown-policy-field",
         "wrong-chain",
     ),
@@ -371,9 +366,8 @@ def test_snapshot_rejects_plan_inventory_and_type_drift_before_output(
         plan["privacy_catalog"]["protocols"][6]["label"] = "sis-with-hints"
     elif mutation == "wrong-secret-flag-type":
         plan["bootle_lantern_issuer"]["secret_material_permitted"] = 0
-    elif mutation == "duplicate-activation":
-        hashes = plan["genesis_registration"]["instruction_norito_sha256"]
-        hashes[1] = hashes[0]
+    elif mutation == "rollout-plan-binding":
+        plan["governance_rollout"]["rollout_plan_sha256"] = "11" * 32
     elif mutation == "unknown-policy-field":
         plan["bootle_lantern_issuer"]["governed_issuer_policy"][
             "trapdoor_seed"
@@ -448,11 +442,10 @@ def test_snapshot_rejects_broker_shape_and_binding_drift_before_output(
     "mutation",
     (
         "unknown-base-field",
-        "encoded-string-before-tail",
-        "invalid-base64",
-        "noncanonical-base64",
-        "wrong-activation",
-        "wrong-broker-tail",
+        "encoded-activation",
+        "encoded-policy",
+        "decoded-activation",
+        "decoded-policy",
         "wrong-chain",
         "wrong-discriminant-type",
     ),
@@ -466,20 +459,14 @@ def test_snapshot_rejects_genesis_shape_and_binding_drift_before_output(
     instructions = genesis["transactions"][-1]["instructions"]
     if mutation == "unknown-base-field":
         genesis["validator_private_key"] = "secret"
-    elif mutation == "encoded-string-before-tail":
-        instructions.insert(0, base64.b64encode(b"unexpected").decode("ascii"))
-    elif mutation == "invalid-base64":
-        instructions[-13] = "not base64!"
-    elif mutation == "noncanonical-base64":
-        padded = next(
-            index for index in range(len(instructions) - 13, len(instructions))
-            if instructions[index].endswith("=")
-        )
-        instructions[padded] = instructions[padded].rstrip("=")
-    elif mutation == "wrong-activation":
-        instructions[-13] = base64.b64encode(b"other activation").decode("ascii")
-    elif mutation == "wrong-broker-tail":
-        instructions[-1] = base64.b64encode(b"other broker policy").decode("ascii")
+    elif mutation == "encoded-activation":
+        instructions.append(base64.b64encode(b"activation").decode("ascii"))
+    elif mutation == "encoded-policy":
+        instructions.append(base64.b64encode(b"issuer-policy").decode("ascii"))
+    elif mutation == "decoded-activation":
+        instructions.append({"RegisterPrivacyProtocolActivationV1": {}})
+    elif mutation == "decoded-policy":
+        instructions.append({"RegisterPrivacyBootleLanternIssuerPolicyV1": {}})
     elif mutation == "wrong-chain":
         genesis["chain"] = "wrong-chain"
     else:

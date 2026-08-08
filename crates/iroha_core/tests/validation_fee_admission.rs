@@ -384,7 +384,7 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
     let crypto = state.crypto.read().clone();
     AcceptedTransaction::accept(
         tx,
-        &state.chain_id,
+        state.network_id_ref(),
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
@@ -1228,7 +1228,7 @@ fn signed_transfer_with_principal_and_fee_instruction(
         );
     }
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1252,7 +1252,7 @@ fn signed_ivm_proved_overlay(
     program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1_000)),
     )
@@ -1278,7 +1278,7 @@ fn signed_transfer_with_explicit_fee_asset_instruction(
     metadata: Metadata,
 ) -> SignedTransaction {
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1310,7 +1310,7 @@ fn signed_transfer_with_explicit_fee_source_instruction(
     metadata: Metadata,
 ) -> SignedTransaction {
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1377,7 +1377,7 @@ fn signed_batch_transfer_with_entries(
 ) -> SignedTransaction {
     let batch = TransferAssetBatch::new(entries);
     TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1408,7 +1408,7 @@ fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
     let crypto = state.crypto.read().clone();
     match AcceptedTransaction::accept(
         tx,
-        &state.chain_id,
+        state.network_id_ref(),
         max_clock_drift,
         tx_params,
         crypto.as_ref(),
@@ -1729,7 +1729,7 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     drop(view);
 
     let fee_then_overdrawn_principal_tx = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         user.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

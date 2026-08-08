@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 import hashlib
 import json
 import os
@@ -35,7 +33,8 @@ DEFAULT_GENESIS = HERE / "genesis.json"
 DEFAULT_MATRIX = REPO_ROOT / "fixtures/privacy/exact12_v1.tsv"
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-EXPECTED_MATRIX_FILE_SHA256 = "571624275503c91179ddea166025d80ecdf81e96fb5fd3c8500b8d1aad04a9e6"
+EXPECTED_MATRIX_FILE_SHA256 = "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0"
+EXPECTED_ROLLOUT_PLAN_SHA256 = "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2"
 EXPECTED_GENESIS_AUTHORITY = (
     "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 )
@@ -47,19 +46,19 @@ EXPECTED_PLAN_KEYS = {
     "chain_discriminant",
     "genesis_authority",
     "governance_permission",
-    "genesis_registration",
+    "governance_rollout",
     "privacy_catalog",
     "bootle_lantern_issuer",
 }
-EXPECTED_REGISTRATION_KEYS = {
-    "lifecycle",
-    "proposed_at_height",
-    "activate_at_height",
-    "minimum_activation_delay_blocks",
-    "assurance",
-    "pending_protocol_limits_tightening",
-    "instruction_encoding",
-    "instruction_norito_sha256",
+EXPECTED_ROLLOUT_KEYS = {
+    "activation_state",
+    "controller_observation_required",
+    "genesis_activation_forbidden",
+    "mode",
+    "notice_interval_blocks",
+    "observation_interval_blocks",
+    "rollout_plan_path",
+    "rollout_plan_sha256",
 }
 EXPECTED_CATALOG_KEYS = {
     "matrix_version",
@@ -399,30 +398,24 @@ def _validate_plan(plan: dict[str, Any], matrix: MatrixContract, *, release: boo
     if plan["governance_permission"] != "CanEnactGovernance":
         _fail("privacy bootstrap authority must use CanEnactGovernance")
 
-    registration = _exact_keys(
-        plan["genesis_registration"], EXPECTED_REGISTRATION_KEYS, "genesis registration"
+    rollout = _exact_keys(
+        plan["governance_rollout"], EXPECTED_ROLLOUT_KEYS, "governance rollout"
     )
     if (
-        registration["lifecycle"] != "Proposed"
-        or not _exact_integer(registration["proposed_at_height"], 1)
-        or not _exact_integer(registration["activate_at_height"], 301)
-        or not _exact_integer(registration["minimum_activation_delay_blocks"], 300)
-        or registration["assurance"] != "experimental"
-        or registration["pending_protocol_limits_tightening"] is not False
-        or registration["instruction_encoding"] != "norito-instruction-box-base64"
+        rollout["activation_state"] != "not-executed"
+        or rollout["controller_observation_required"] is not True
+        or rollout["genesis_activation_forbidden"] is not True
+        or rollout["mode"] != "governance-four-wave"
+        or not _exact_integer(rollout["notice_interval_blocks"], 300)
+        or not _exact_integer(rollout["observation_interval_blocks"], 300)
+        or rollout["rollout_plan_path"]
+        != "configs/soranexus/taira/privacy_rollout_plan_v1.json"
+        or rollout["rollout_plan_sha256"] != EXPECTED_ROLLOUT_PLAN_SHA256
     ):
-        _fail("genesis registrations must be Proposed at height 1 for activation at height 301")
-    hashes = registration["instruction_norito_sha256"]
-    if not isinstance(hashes, list):
-        _fail("activation instruction digest inventory must be an array")
-    if release and len(hashes) != 12:
-        _fail("release mode requires exactly 12 activation instruction digests")
-    if not release and hashes:
-        _fail("staging plan must not contain a partial activation instruction inventory")
-    for index, digest in enumerate(hashes):
-        _fixed_sha256(digest, f"activation instruction digest {index}", required=True)
-    if len(set(hashes)) != len(hashes):
-        _fail("activation instruction digests must be unique")
+        _fail(
+            "privacy activation must remain an unexecuted four-wave governance rollout "
+            "with exact notice and observation intervals"
+        )
 
     catalog = _exact_keys(plan["privacy_catalog"], EXPECTED_CATALOG_KEYS, "privacy catalog")
     if not _exact_integer(catalog["matrix_version"], matrix.version):
@@ -639,8 +632,12 @@ def _validate_config(config: dict[str, Any], plan: dict[str, Any], *, release: b
         config.get("chain_discriminant"), 369
     ):
         _fail("Taira config chain identity differs from the privacy plan")
-    if config.get("private_key") != "REPLACE_WITH_VALIDATOR_PRIVATE_KEY":
-        _fail("public Taira config must not materialize a validator private key")
+    if (
+        "private_key" in config
+        or config.get("private_key_file")
+        != "/run/secrets/iroha/taira-validator-private-key"
+    ):
+        _fail("public Taira config must use the validator runtime key file")
     torii = config.get("torii")
     if not isinstance(torii, dict):
         _fail("Taira config is missing [torii]")
@@ -652,11 +649,13 @@ def _validate_config(config: dict[str, Any], plan: dict[str, Any], *, release: b
     if (
         config.get("soranet_transport_public_key")
         != "REPLACE_WITH_SORANET_TRANSPORT_PUBLIC_KEY"
-        or config.get("soranet_transport_private_key")
-        != "REPLACE_WITH_SORANET_TRANSPORT_PRIVATE_KEY"
+        or "soranet_transport_private_key" in config
+        or config.get("soranet_transport_private_key_file")
+        != "/run/secrets/iroha/taira-soranet-transport-private-key"
         or not isinstance(kagemusha, dict)
-        or kagemusha.get("private_key")
-        != "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
+        or "private_key" in kagemusha
+        or kagemusha.get("private_key_file")
+        != "/run/secrets/iroha/taira-kagemusha-commands-private-key"
         or not isinstance(onboarding, dict)
         or onboarding.get("private_key_file")
         != "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
@@ -669,10 +668,11 @@ def _validate_config(config: dict[str, Any], plan: dict[str, Any], *, release: b
         or faucet.get("private_key_file")
         != "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"
         or not isinstance(streaming, dict)
-        or streaming.get("identity_private_key")
-        != "REPLACE_WITH_STREAMING_IDENTITY_PRIVATE_KEY"
+        or "identity_private_key" in streaming
+        or streaming.get("identity_private_key_file")
+        != "/run/secrets/iroha/taira-streaming-identity-private-key"
     ):
-        _fail("public Taira config must retain every runtime-identity placeholder")
+        _fail("public Taira config must retain public identities and runtime key-file handles")
 
     canonical = _load_toml(DEFAULT_CONFIG)
     canonical_torii = canonical.get("torii")
@@ -743,29 +743,9 @@ def _instruction_list(genesis: dict[str, Any]) -> list[Any]:
     return result
 
 
-def _canonical_instruction_bytes(encoded: str, label: str) -> bytes:
-    try:
-        payload = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise PrivacyBootstrapValidationError(f"{label} is not canonical base64") from exc
-    if not payload or base64.b64encode(payload).decode("ascii") != encoded:
-        _fail(f"{label} is empty or non-canonical base64")
-    return payload
-
-
-def _validate_canonical_genesis_base(
-    genesis: dict[str, Any], *, release: bool
-) -> None:
-    candidate: dict[str, Any] = genesis
-    if release:
-        transactions = list(genesis["transactions"])
-        final_transaction = dict(transactions[-1])
-        final_transaction["instructions"] = final_transaction["instructions"][:-13]
-        transactions[-1] = final_transaction
-        candidate = dict(genesis)
-        candidate["transactions"] = transactions
+def _validate_canonical_genesis_base(genesis: dict[str, Any]) -> None:
     canonical = _load_json(DEFAULT_GENESIS, "canonical Taira genesis template")
-    if candidate != canonical:
+    if genesis != canonical:
         _fail("genesis differs from the canonical first-release base template")
 
 
@@ -789,7 +769,7 @@ def _validate_genesis(genesis: dict[str, Any], plan: dict[str, Any], *, release:
             "RegisterPrivacyProtocolActivationV1" in instruction
             or "RegisterPrivacyBootleLanternIssuerPolicyV1" in instruction
         ):
-            _fail("genesis staging instructions must not contain decoded privacy bootstrap rows")
+            _fail("genesis must not contain decoded privacy bootstrap rows")
         register = instruction.get("Register")
         if isinstance(register, dict):
             account = register.get("Account")
@@ -813,37 +793,12 @@ def _validate_genesis(genesis: dict[str, Any], plan: dict[str, Any], *, release:
     if authority_registration_indices[0] >= governance_grant_indices[0]:
         _fail("privacy governance authority must be registered before its permission grant")
 
-    activation_hashes = plan["genesis_registration"]["instruction_norito_sha256"]
-    policy_hash = plan["bootle_lantern_issuer"]["governed_issuer_policy"][
-        "instruction_norito_sha256"
-    ]
-    if not release:
-        if encoded:
-            _fail("staging genesis must not contain an unverified partial encoded bootstrap")
-        _validate_canonical_genesis_base(genesis, release=False)
-        return
-    if len(encoded) != 13:
-        _fail("release genesis must contain exactly 12 activations and one issuer-policy instruction")
-    final_instructions = genesis["transactions"][-1]["instructions"]
-    if (
-        len(final_instructions) < 13
-        or final_instructions[-13:] != [value for _, value in encoded]
-        or any(
-            isinstance(instruction, str)
-            for transaction in genesis["transactions"][:-1]
-            for instruction in transaction["instructions"]
+    if encoded:
+        _fail(
+            "privacy activation and issuer-policy instructions are forbidden in genesis; "
+            "the sealed controller must execute the bound four-wave governance rollout"
         )
-    ):
-        _fail("release privacy bootstrap must be the exact final-transaction instruction tail")
-    if governance_grant_indices[0] >= encoded[0][0]:
-        _fail("CanEnactGovernance must be granted before encoded privacy bootstrap instructions")
-    actual_hashes = [
-        hashlib.sha256(_canonical_instruction_bytes(value, f"encoded instruction {index}")).hexdigest()
-        for index, value in encoded
-    ]
-    if actual_hashes[:12] != activation_hashes or actual_hashes[12] != policy_hash:
-        _fail("release genesis encoded instructions differ from the checked Norito digest inventory")
-    _validate_canonical_genesis_base(genesis, release=True)
+    _validate_canonical_genesis_base(genesis)
 
 
 def validate(paths: ValidationPaths = ValidationPaths(), *, release: bool = False) -> None:

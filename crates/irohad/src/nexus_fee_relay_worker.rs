@@ -30,7 +30,6 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
-    ChainId,
     account::{AccountId, ParsedAccountId},
     asset::id::AssetDefinitionId,
     isi::{
@@ -134,7 +133,6 @@ enum DurableWorkStatus {
 pub struct NexusFeeRelayWorker {
     config: NexusRelayWorkerConfig,
     state_path: PathBuf,
-    chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<State>,
     sumeragi: SumeragiHandle,
@@ -149,8 +147,6 @@ pub struct NexusFeeRelayWorker {
 pub struct NexusFeeRelayWorkerContext {
     /// Private durable worker-state directory.
     pub storage_root: PathBuf,
-    /// Chain identity used for internally submitted transactions.
-    pub chain_id: Arc<ChainId>,
     /// Transaction queue used for ordinary admission.
     pub queue: Arc<Queue>,
     /// Committed state used for finalized reads.
@@ -178,7 +174,6 @@ impl NexusFeeRelayWorker {
     ) -> Result<Self> {
         let NexusFeeRelayWorkerContext {
             storage_root,
-            chain_id,
             queue,
             state,
             sumeragi,
@@ -196,7 +191,6 @@ impl NexusFeeRelayWorker {
                 );
             }
         }
-
         let state_path = storage_root.join(WORKER_STATE_FILE);
         let mut durable = load_durable_state(&state_path).unwrap_or_else(|error| {
             iroha_logger::warn!(
@@ -214,7 +208,6 @@ impl NexusFeeRelayWorker {
         Ok(Self {
             config,
             state_path,
-            chain_id,
             queue,
             state,
             sumeragi,
@@ -397,12 +390,12 @@ impl NexusFeeRelayWorker {
             current_height,
             &self.fastpq,
         ) {
-                Ok(proven) => proven,
-                Err(error) => {
-                    self.reject_or_retry_relay(key, envelope, &error)?;
-                    return Ok(());
-                }
-            };
+            Ok(proven) => proven,
+            Err(error) => {
+                self.reject_or_retry_relay(key, envelope, &error)?;
+                return Ok(());
+            }
+        };
         self.update_relay_status(
             key,
             DurableWorkStatus::Submitted,
@@ -945,7 +938,7 @@ impl NexusFeeRelayWorker {
         endpoint: &'static str,
     ) -> Result<()> {
         let tx = sign_nexus_fee_relay_submission_transaction(
-            (*self.chain_id).clone(),
+            *self.state.network_id_ref(),
             self.authority.clone(),
             instruction,
             worker_submission_metadata(endpoint),
@@ -956,7 +949,7 @@ impl NexusFeeRelayWorker {
         let params = view.world().parameters();
         let accepted = AcceptedTransaction::accept(
             tx,
-            &self.chain_id,
+            self.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             self.state.crypto().as_ref(),
@@ -993,7 +986,7 @@ fn prepare_relay_attempt(
 }
 
 fn sign_nexus_fee_relay_submission_transaction(
-    chain_id: ChainId,
+    network_id: iroha_data_model::NetworkId,
     authority: AccountId,
     instruction: InstructionBox,
     metadata: Metadata,
@@ -1001,7 +994,7 @@ fn sign_nexus_fee_relay_submission_transaction(
     endpoint: &'static str,
 ) -> Result<SignedTransaction> {
     TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1909,7 +1902,11 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let endpoint = "/internal/nexus/fee-relay/test";
         let tx = sign_nexus_fee_relay_submission_transaction(
-            ChainId::from("nexus-fee-relay-sign-test"),
+            iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x15; Hash::LENGTH],
+                )),
+            ),
             authority.clone(),
             InstructionBox::from(Log::new(Level::INFO, "checked fee relay signing".into())),
             worker_submission_metadata(endpoint),

@@ -809,6 +809,7 @@ def _assert_portable_signed_taira_authority_contract(
     linux_authenticate = workflow.index("Finalize and sign Linux bytes using only installed authority code")
     qualification = workflow.index("macos-secret-free-qualification:")
     sign = workflow.index("macos-candidate-authority:")
+    boi = workflow.index("linux-boi-qualification:")
     direct = workflow.index("macos-deploy:")
     public = workflow.index("Require exact-four public advancement without signer or OCI credentials")
     publish = workflow.index("Publish through the sealed installed authority controller")
@@ -818,6 +819,7 @@ def _assert_portable_signed_taira_authority_contract(
         < linux_authenticate
         < qualification
         < sign
+        < boi
         < direct
         < public
         < publish
@@ -963,7 +965,7 @@ def test_workflow_dispatch_inputs_never_enter_shell_source() -> None:
         "${{ inputs.validator_release_ref }}" in workflow
     )
     assert "checkout_ref" not in workflow
-    assert "permissions:\n  contents: read" in workflow
+    assert "permissions:\n  actions: read\n  contents: read" in workflow
     assert workflow.count("ref: ${{ github.sha }}") == 2
     assert workflow.count("persist-credentials: false") == 2
     assert (

@@ -468,6 +468,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
     dispatch_instruction::<iroha_data_model::isi::bridge::ApplySccpRouteGovernance>,
+    dispatch_instruction::<iroha_data_model::isi::bridge::FundSccpRouteEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::bridge::RefundSccpRouteEscrow>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,
@@ -482,6 +484,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
+    dispatch_instruction::<iroha_data_model::isi::governance::EnactSccpRouteGovernance>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>,
     dispatch_instruction::<
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle
@@ -1095,15 +1099,8 @@ mod tests {
         };
         let mut dsid_bytes = [0_u8; 16];
         dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
-        let (old_root, new_root) = envelope.qc.as_ref().map_or_else(
-            || {
-                (
-                    axt_test_digest(b"axt-isi-test:lane-relay-old-root", &[proof_seed]).into(),
-                    axt_test_digest(b"axt-isi-test:lane-relay-new-root", &[proof_seed]).into(),
-                )
-            },
-            |qc| (qc.parent_state_root.into(), qc.post_state_root.into()),
-        );
+        let old_root = axt_test_digest(b"axt-isi-test:lane-relay-old-root", &[proof_seed]).into();
+        let new_root = axt_test_digest(b"axt-isi-test:lane-relay-new-root", &[proof_seed]).into();
         let mut batch = fastpq_prover::TransitionBatch::new(
             fastpq_prover::AXT_DEFAULT_PARAMETER,
             fastpq_prover::PublicInputs {
@@ -3780,7 +3777,6 @@ mod tests {
 
     #[test]
     async fn transaction_signed_by_genesis_account_is_statelessly_accepted() -> Result<()> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let (max_clock_drift, tx_limits) = {
@@ -3790,7 +3786,7 @@ mod tests {
         };
 
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            state.network_id,
             SAMPLE_GENESIS_ACCOUNT_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3803,7 +3799,7 @@ mod tests {
         assert!(
             AcceptedTransaction::accept(
                 tx,
-                &chain_id,
+                &state.network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref()

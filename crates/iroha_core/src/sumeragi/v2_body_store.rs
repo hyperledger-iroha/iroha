@@ -1404,6 +1404,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
+        NetworkId,
         block::{
             BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
             consensus_v2 as wire, decode_framed_signed_block,
@@ -1423,6 +1424,12 @@ mod tests {
         v2::RecoveredValidationAuthority, v2_apply::VerifiedRecoveredFinalitySubject,
         v2_chunks::encode_payload, v2_effects::BodyValidationTask,
     };
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x94; Hash::LENGTH]),
+        ))
+    }
 
     #[derive(Debug)]
     enum FixtureValidationError {
@@ -1466,7 +1473,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "sumeragi-v2-body-store-test".into(),
+            network_id: test_network_id(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1685,7 +1692,7 @@ mod tests {
         let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
         let receipt = store.store(manifest, body).expect("store exact body");
         let expected = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-        store
+        let _validated = store
             .persist_validated_receipt(&receipt, expected)
             .expect("persist legitimate validation marker");
 
@@ -1739,7 +1746,7 @@ mod tests {
             .expect("store exact body");
         let execution_commitment =
             ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-        store
+        let _validated = store
             .persist_validated_receipt(&receipt, execution_commitment)
             .expect("persist validation marker");
         drop(store);
@@ -1826,7 +1833,7 @@ mod tests {
             );
             let receipt = store.store(manifest, body).expect("store view candidate");
             let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-            store
+            let _validated = store
                 .persist_validated_receipt(&receipt, commitment)
                 .expect("persist view validation marker");
             receipts.push((receipt, commitment));
@@ -1879,7 +1886,7 @@ mod tests {
         let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
         let receipt = store.store(manifest, body).expect("store exact body");
         let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-        store
+        let _validated = store
             .persist_validated_receipt(&receipt, commitment)
             .expect("persist validation marker");
         drop(store);
@@ -1926,7 +1933,7 @@ mod tests {
             );
             let receipt = store.store(manifest, body).expect("store candidate body");
             let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-            store
+            let _validated = store
                 .persist_validated_receipt(&receipt, commitment)
                 .expect("persist candidate validation marker");
             receipts.push((receipt, commitment));
@@ -1963,7 +1970,7 @@ mod tests {
         let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
         let receipt = store.store(manifest, body).expect("store candidate body");
         let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-        store
+        let _validated = store
             .persist_validated_receipt(&receipt, commitment)
             .expect("persist candidate validation marker");
         drop(store);
@@ -2008,7 +2015,7 @@ mod tests {
             );
             let receipt = store.store(manifest, body).expect("store candidate body");
             let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-            store
+            let _validated = store
                 .persist_validated_receipt(&receipt, commitment)
                 .expect("persist candidate validation marker");
             receipts.push((receipt, commitment));
@@ -2018,7 +2025,7 @@ mod tests {
 
         let mut reopened =
             V2BodyStore::open(directory.path(), context.clone()).expect("reopen store");
-        reopened
+        let _validated = reopened
             .validate(&receipts[1].0, |_| {
                 Ok::<wire::ExecutionCommitment, &str>(receipts[1].1)
             })

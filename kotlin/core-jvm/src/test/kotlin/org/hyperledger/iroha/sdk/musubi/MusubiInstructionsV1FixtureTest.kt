@@ -24,6 +24,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -403,7 +404,7 @@ class MusubiInstructionsV1FixtureTest {
         val fixtureCases = cases(fixture())
         val mutations = fixtureCases.map(::mutation)
         val transaction = TransactionPayload(
-            chainId = "musubi-fixture",
+            networkId = TestNetworkIds.canonical(),
             authority = AccountAddress
                 .fromAccount(TestEd25519Keys.publicKey(0x5a), "ed25519")
                 .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1),
@@ -416,7 +417,7 @@ class MusubiInstructionsV1FixtureTest {
         val encoded = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
             .encodeTransaction(transaction)
         val transactionDecoder = canonicalDecoder(encoded)
-        readField(transactionDecoder, "chain_id")
+        readField(transactionDecoder, "domain")
         readField(transactionDecoder, "authority")
         readField(transactionDecoder, "creation_time_ms")
         val executablePayload = readField(transactionDecoder, "executable")

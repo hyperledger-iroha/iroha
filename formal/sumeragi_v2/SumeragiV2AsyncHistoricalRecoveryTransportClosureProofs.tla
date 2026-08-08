@@ -1,6 +1,7 @@
 ---- MODULE SumeragiV2AsyncHistoricalRecoveryTransportClosureProofs ----
 EXTENDS SumeragiV2AsyncHistoricalRecoveryLivenessProofs,
-        SumeragiV2ExactDecisionStageServiceClosureProofs
+        SumeragiV2ExactDecisionStageServiceClosureProofs,
+        SumeragiV2AsyncDecisionApplicationProofs
 
 (***************************************************************************
 Exact historical-recovery transport closure.
@@ -2581,20 +2582,32 @@ PROOF
          PROVE /\ HistoricalCommitDeliveryProgressLeaf(specification)
                /\ HistoricalBeginDecisionProgressLeaf(specification)
                /\ HistoricalPersistDecisionProgressLeaf(specification)
-    <2>1. CASE ~HistoricalProtectedCandidateStarvationProperty(
-                   specification)
+    <2>1. ASSUME ~HistoricalProtectedCandidateStarvationProperty(
+                     specification)
+           PROVE /\ HistoricalCommitDeliveryProgressLeaf(specification)
+                 /\ HistoricalBeginDecisionProgressLeaf(specification)
+                 /\ HistoricalPersistDecisionProgressLeaf(specification)
       BY <2>1
          DEF HistoricalCommitDeliveryProgressLeaf,
              HistoricalBeginDecisionProgressLeaf,
              HistoricalPersistDecisionProgressLeaf
-    <2>2. CASE HistoricalProtectedCandidateStarvationProperty(
-                  specification)
-      <3>1. CASE ~specification
+    <2>2. ASSUME HistoricalProtectedCandidateStarvationProperty(
+                    specification)
+           PROVE /\ HistoricalCommitDeliveryProgressLeaf(specification)
+                 /\ HistoricalBeginDecisionProgressLeaf(specification)
+                 /\ HistoricalPersistDecisionProgressLeaf(specification)
+      <3>1. ASSUME ~specification
+             PROVE /\ HistoricalCommitDeliveryProgressLeaf(specification)
+                   /\ HistoricalBeginDecisionProgressLeaf(specification)
+                   /\ HistoricalPersistDecisionProgressLeaf(specification)
         BY <3>1
            DEF HistoricalCommitDeliveryProgressLeaf,
                HistoricalBeginDecisionProgressLeaf,
                HistoricalPersistDecisionProgressLeaf
-      <3>2. CASE specification
+      <3>2. ASSUME specification
+             PROVE /\ HistoricalCommitDeliveryProgressLeaf(specification)
+                   /\ HistoricalBeginDecisionProgressLeaf(specification)
+                   /\ HistoricalPersistDecisionProgressLeaf(specification)
         <4>1. []AsyncStrongTypeInvariant
           BY <1>1, <3>2
              DEF HistoricalCommitDecisionTailTemporalSupportProperty
@@ -2631,7 +2644,7 @@ PROOF
               BY <2>2, <3>2, <5>1
                  DEF HistoricalProtectedCandidateStarvationProperty,
                      HistoricalProtectedServiceOwnershipExit
-            <6>2. [](gst
+            <6>2. [][(gst
                        /\ HistoricalCommitDecisionExactCarrierOwned(
                             candidate, qc, "DeliverQC")
                        /\ ~(NodeHasDecision(candidate.node)
@@ -2642,7 +2655,7 @@ PROOF
                                 candidate, qc, "DeliverQC"))'
                            \/ (NodeHasDecision(candidate.node)
                                 \/ HistoricalCommitDecisionExactLineageOwned(
-                                     candidate, qc, "BeginDecision"))')
+                                     candidate, qc, "BeginDecision"))')]_AsyncAllVars
               BY <4>1, <4>2, <4>3, <4>4, <4>5,
                  HistoricalCommitDeliveryOwnerPersistsOrBeginsDecision,
                  PTL
@@ -2670,7 +2683,7 @@ PROOF
               BY <2>2, <3>2, <5>1
                  DEF HistoricalProtectedCandidateStarvationProperty,
                      HistoricalProtectedServiceOwnershipExit
-            <6>2. [](gst
+            <6>2. [][(gst
                        /\ HistoricalCommitDecisionExactCarrierOwned(
                             candidate, qc, "BeginDecision")
                        /\ ~(NodeHasDecision(candidate.node)
@@ -2681,7 +2694,7 @@ PROOF
                                 candidate, qc, "BeginDecision"))'
                            \/ (NodeHasDecision(candidate.node)
                                 \/ HistoricalCommitDecisionExactLineageOwned(
-                                     candidate, qc, "PersistDecision"))')
+                                     candidate, qc, "PersistDecision"))')]_AsyncAllVars
               BY <4>1, <4>2, <4>3, <4>4, <4>5,
                  HistoricalBeginDecisionOwnerPersistsOrPersistsDecision,
                  PTL
@@ -2705,14 +2718,14 @@ PROOF
               BY <2>2, <3>2, <5>1
                  DEF HistoricalProtectedCandidateStarvationProperty,
                      HistoricalProtectedServiceOwnershipExit
-            <6>2. [](gst
+            <6>2. [][(gst
                        /\ HistoricalCommitDecisionExactCarrierOwned(
                             candidate, qc, "PersistDecision")
                        /\ ~NodeHasDecision(candidate.node)
                       => (gst
                            /\ HistoricalCommitDecisionExactCarrierOwned(
                                 candidate, qc, "PersistDecision"))'
-                           \/ NodeHasDecision(candidate.node)')
+                           \/ NodeHasDecision(candidate.node)')]_AsyncAllVars
               BY <4>1, <4>2, <4>3, <4>4, <4>5,
                  HistoricalPersistDecisionOwnerPersistsOrWritesDecision,
                  PTL
@@ -2749,8 +2762,8 @@ PROOF
              DEF HistoricalCommitDeliveryProgressLeaf,
                  HistoricalBeginDecisionProgressLeaf,
                  HistoricalPersistDecisionProgressLeaf
-      <3> QED BY <3>1, <3>2
-    <2> QED BY <2>1, <2>2
+      <3> QED BY <3>1, <3>2, PTL
+    <2> QED BY <2>1, <2>2, PTL
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -3146,7 +3159,7 @@ PROOF
             BY <1>1, <2>2, <4>1
                DEF HistoricalProtectedCandidateStarvationProperty,
                    HistoricalProtectedServiceOwnershipExit
-          <5>2. [](gst
+          <5>2. [][(gst
                      /\ HistoricalDecisionPipelineExactCarrierOwned(
                           node, qc, evidence, origin, kind, candidate)
                      /\ ~HistoricalDecisionPipelineExactStageOutcome(
@@ -3156,7 +3169,7 @@ PROOF
                               node, qc, evidence, origin,
                               kind, candidate))'
                          \/ HistoricalDecisionPipelineExactStageOutcome(
-                              node, qc, evidence, origin, kind)')
+                              node, qc, evidence, origin, kind)')]_AsyncAllVars
             BY <3>1, <3>2, <3>3, <3>4, <3>5, <3>6, <3>7, <3>8,
                HistoricalDecisionPipelinePerActionSafetyCoversEveryKind,
                PTL
@@ -3188,8 +3201,15 @@ PROOF
                /\ HistoricalDecisionStoreProgressLeaf(specification)
                /\ HistoricalDecisionValidateProgressLeaf(specification)
                /\ HistoricalDecisionApplyProgressLeaf(specification)
-    <2>1. CASE ~HistoricalProtectedCandidateStarvationProperty(
-                   specification)
+    <2>1. ASSUME ~HistoricalProtectedCandidateStarvationProperty(
+                     specification)
+           PROVE /\ HistoricalDecisionFetchProgressLeaf(specification)
+                 /\ HistoricalDecisionRequestBodyProgressLeaf(specification)
+                 /\ HistoricalDecisionFetchCertifiedProgressLeaf(
+                      specification)
+                 /\ HistoricalDecisionStoreProgressLeaf(specification)
+                 /\ HistoricalDecisionValidateProgressLeaf(specification)
+                 /\ HistoricalDecisionApplyProgressLeaf(specification)
       BY <2>1
          DEF HistoricalDecisionFetchProgressLeaf,
              HistoricalDecisionRequestBodyProgressLeaf,
@@ -3197,13 +3217,27 @@ PROOF
              HistoricalDecisionStoreProgressLeaf,
              HistoricalDecisionValidateProgressLeaf,
              HistoricalDecisionApplyProgressLeaf
-    <2>2. CASE HistoricalProtectedCandidateStarvationProperty(
-                  specification)
+    <2>2. ASSUME HistoricalProtectedCandidateStarvationProperty(
+                    specification)
+           PROVE /\ HistoricalDecisionFetchProgressLeaf(specification)
+                 /\ HistoricalDecisionRequestBodyProgressLeaf(specification)
+                 /\ HistoricalDecisionFetchCertifiedProgressLeaf(
+                      specification)
+                 /\ HistoricalDecisionStoreProgressLeaf(specification)
+                 /\ HistoricalDecisionValidateProgressLeaf(specification)
+                 /\ HistoricalDecisionApplyProgressLeaf(specification)
       <3>1. HistoricalDecisionPipelineExactCarrierHandoffProperty(
                specification)
         BY <1>1, <2>2,
            HistoricalDecisionPipelineExactCarrierReachesExactHandoff
-      <3>2. CASE ~specification
+      <3>2. ASSUME ~specification
+             PROVE /\ HistoricalDecisionFetchProgressLeaf(specification)
+                   /\ HistoricalDecisionRequestBodyProgressLeaf(specification)
+                   /\ HistoricalDecisionFetchCertifiedProgressLeaf(
+                        specification)
+                   /\ HistoricalDecisionStoreProgressLeaf(specification)
+                   /\ HistoricalDecisionValidateProgressLeaf(specification)
+                   /\ HistoricalDecisionApplyProgressLeaf(specification)
         BY <3>2
            DEF HistoricalDecisionFetchProgressLeaf,
                HistoricalDecisionRequestBodyProgressLeaf,
@@ -3211,7 +3245,14 @@ PROOF
                HistoricalDecisionStoreProgressLeaf,
                HistoricalDecisionValidateProgressLeaf,
                HistoricalDecisionApplyProgressLeaf
-      <3>3. CASE specification
+      <3>3. ASSUME specification
+             PROVE /\ HistoricalDecisionFetchProgressLeaf(specification)
+                   /\ HistoricalDecisionRequestBodyProgressLeaf(specification)
+                   /\ HistoricalDecisionFetchCertifiedProgressLeaf(
+                        specification)
+                   /\ HistoricalDecisionStoreProgressLeaf(specification)
+                   /\ HistoricalDecisionValidateProgressLeaf(specification)
+                   /\ HistoricalDecisionApplyProgressLeaf(specification)
         <4>1. \A node \in Responsive:
                  (gst
                    /\ HistoricalDecisionPipelineKindOwned(
@@ -3308,8 +3349,8 @@ PROOF
                  HistoricalDecisionStoreProgressLeaf,
                  HistoricalDecisionValidateProgressLeaf,
                  HistoricalDecisionApplyProgressLeaf
-      <3> QED BY <3>2, <3>3
-    <2> QED BY <2>1, <2>2
+      <3> QED BY <3>2, <3>3, PTL
+    <2> QED BY <2>1, <2>2, PTL
   <1> QED BY <1>1
 
 (***************************************************************************

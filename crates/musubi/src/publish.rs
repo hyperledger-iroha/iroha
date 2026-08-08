@@ -39,8 +39,9 @@ use iroha::musubi_runtime::{
     MusubiSeedIngressCarPlanV1,
 };
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
+    block::BlockHeader,
     isi::{
         InstructionBox,
         musubi::{AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1},
@@ -263,6 +264,16 @@ pub struct PublicationRequestV1 {
 }
 
 impl PublicationRequestV1 {
+    /// Return the exact network identity derived from this request's genesis commitment.
+    #[must_use]
+    pub fn network_id(&self) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha::crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+                iroha::crypto::Hash::prehashed(self.genesis_block_hash),
+            ),
+        )
+    }
+
     /// Validate all immutable publication, archive, deployment, and revision bindings.
     ///
     /// # Errors
@@ -503,7 +514,7 @@ impl PublicationArchiveRegistrationIntentV1 {
             || self.instruction_digest != archive_registration_instruction_digest(&instruction)
             || self.transaction_hash != *self.signed_transaction.hash().as_ref()
             || self.transaction_hash.iter().all(|byte| *byte == 0)
-            || self.signed_transaction.chain() != &request.chain_id
+            || self.signed_transaction.network_id().copied() != Some(request.network_id())
             || self.signed_transaction.authority() != &request.publisher
             || archive_registration_intent_valid_until_ms(self).is_none()
             || !exact_instruction
@@ -1013,7 +1024,7 @@ impl PublicationArchiveLocationIntentV1 {
             || self.renew_after_epoch >= self.expires_at_epoch
             || self.transaction_hash != *self.signed_transaction.hash().as_ref()
             || self.transaction_hash.iter().all(|byte| *byte == 0)
-            || self.signed_transaction.chain() != &request.chain_id
+            || self.signed_transaction.network_id().copied() != Some(request.network_id())
             || self.signed_transaction.authority() != &request.publisher
             || self.signed_transaction.verify_signature().is_err()
             || !exact_instruction
@@ -1744,7 +1755,7 @@ impl PublicationReleaseSignedEnvelopeV1 {
         request: &PublicationRequestV1,
     ) -> Result<SignedTransaction, PublicationError> {
         let payload = TransactionPayload {
-            chain: request.chain_id.clone(),
+            domain: iroha_data_model::transaction::TransactionDomain::Network(request.network_id()),
             authority: request.publisher.clone(),
             creation_time_ms: self.creation_time_ms,
             instructions: vec![InstructionBox::from(request.publish_instruction())].into(),
@@ -2269,7 +2280,7 @@ fn validate_release_signed_transaction_shape(
     let multisig_is_canonical = signed_transaction
         .multisig_signatures()
         .is_none_or(|signatures| signatures.validate_canonical().is_ok());
-    if signed_transaction.chain() != &request.chain_id
+    if signed_transaction.network_id().copied() != Some(request.network_id())
         || signed_transaction.authority() != &request.publisher
         || !exact_instruction
         || !lifetime_is_valid
@@ -6832,7 +6843,7 @@ mod tests {
             .expect("one-of-two multisig policy"),
         );
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6935,15 +6946,21 @@ mod tests {
             .is_err()
         );
 
-        let mut wrong_chain_payload = signed.payload().clone();
-        wrong_chain_payload.chain = ChainId::from("other-chain");
-        let wrong_chain_transaction = TransactionBuilder::from_payload(wrong_chain_payload)
-            .expect("wrong-chain fixture payload")
+        let mut wrong_network_payload = signed.payload().clone();
+        wrong_network_payload.domain = iroha_data_model::transaction::TransactionDomain::Network(
+            NetworkId::from_genesis_hash(
+                iroha::crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+                    iroha::crypto::Hash::prehashed([0xFF; 32]),
+                ),
+            ),
+        );
+        let wrong_network_transaction = TransactionBuilder::from_payload(wrong_network_payload)
+            .expect("wrong-network fixture payload")
             .sign(publisher_keypair.private_key());
         assert!(
             PublicationReleaseSignedEnvelopeV1::try_from_signed_transaction(
                 &request,
-                &wrong_chain_transaction
+                &wrong_network_transaction
             )
             .is_err()
         );
@@ -8963,7 +8980,7 @@ mod tests {
         let (publisher, publisher_keypair) = account(20);
         assert_eq!(publisher, request.publisher);
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9001,7 +9018,7 @@ mod tests {
             .expect("multisig fixture policy"),
         );
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9250,7 +9267,7 @@ mod tests {
         let (publisher, publisher_keypair) = account(20);
         assert_eq!(publisher, request.publisher);
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9337,7 +9354,7 @@ mod tests {
         };
         let (_, publisher_keypair) = account(20);
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -9439,7 +9456,7 @@ mod tests {
         };
         let (_, publisher_keypair) = account(20);
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )

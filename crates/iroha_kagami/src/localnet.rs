@@ -403,8 +403,8 @@ const SORANET_TRANSPORT_SEED_DOMAIN: &[u8] = b"iroha:kagami:localnet:soranet-tra
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync outer-ingress capacity for generated localnets.
 ///
-/// This inherits the production 4N+2H+2 geometry at the protocol's maximum
-/// validator roster: four owners per validator, two per authenticated
+/// This inherits the production 5N+3H+2 geometry at the protocol's maximum
+/// validator roster: five owners per validator, three per authenticated
 /// non-validator source, and two for anonymous delivery.
 const LOCALNET_SUMERAGI_QUEUE_BODIES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
@@ -3863,7 +3863,7 @@ fn append_localnet_npos_bootstrap_for_services(
         AssetId::new(fee_asset_id.clone(), genesis_account_id.clone()),
     ));
     builder = builder.append_instruction(CreateFeeSponsorProgram {
-        program: FeeSponsorProgram::new(fee_sponsor_program_id.clone()),
+        program: FeeSponsorProgram::new(fee_sponsor_program_id.clone(), genesis_account_id.clone()),
     });
     builder = builder.append_instruction(StageFeeSponsorProgramRevision {
         revision: fee_sponsor_revision,

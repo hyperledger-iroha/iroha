@@ -15,7 +15,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
-    ChainId, Metadata, PeerId, Registrable,
+    ChainId, Metadata, NetworkId, PeerId, Registrable,
     block::{
         BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder,
         consensus::SumeragiLanePayloadOwnership,
@@ -40,7 +40,7 @@ fn bls_batch_fixture_uses_checked_bls_randomness() {
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
 }
 
-fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
+fn mk_state_with_bls_batch() -> (State, ChainId, NetworkId, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     // Seed world with an account
@@ -52,6 +52,7 @@ fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let chain = ChainId::from("chain");
     let mut state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -66,7 +67,7 @@ fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
         crypto_cfg.allowed_signing.dedup();
     }
     state.set_crypto(crypto_cfg);
-    (state, chain, account_id, kp)
+    (state, chain, network_id, account_id, kp)
 }
 
 fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
@@ -90,13 +91,13 @@ fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
 }
 
 fn make_tx(
-    chain: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     kp: &KeyPair,
     with_pop: bool,
 ) -> SignedTransaction {
     let mut builder = TransactionBuilder::new(
-        chain.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -167,9 +168,9 @@ fn push_single_tx_with_context(
 
 #[test]
 fn bls_batch_block_validates_with_pop() {
-    let (state, chain, account, kp) = mk_state_with_bls_batch();
+    let (state, chain, network_id, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
-    let tx = make_tx(&chain, &account, &kp, true);
+    let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
     let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
@@ -194,9 +195,9 @@ fn bls_batch_block_validates_with_pop() {
 
 #[test]
 fn bls_batch_block_validates_without_pop_fallback() {
-    let (state, chain, account, kp) = mk_state_with_bls_batch();
+    let (state, chain, network_id, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
-    let tx = make_tx(&chain, &account, &kp, false);
+    let tx = make_tx(&network_id, &account, &kp, false);
     let height = nonzero!(2_u64);
     let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
@@ -222,9 +223,9 @@ fn bls_batch_block_validates_without_pop_fallback() {
 
 #[test]
 fn bls_batch_block_rejects_missing_proof_policy_hash() {
-    let (state, chain, account, kp) = mk_state_with_bls_batch();
+    let (state, chain, network_id, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
-    let tx = make_tx(&chain, &account, &kp, true);
+    let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
     let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);

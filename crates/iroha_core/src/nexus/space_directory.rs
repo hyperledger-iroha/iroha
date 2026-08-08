@@ -48,6 +48,15 @@ pub enum AxtIssuerResolutionError {
     MultisigIssuer,
 }
 
+/// Exact committed issuer identity and verification key for one AXT policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxtIssuerBinding {
+    /// UAID selected by the committed manifest root.
+    pub issuer: UniversalAccountId,
+    /// Sole single-signature controller resolved through the committed UAID indexes.
+    pub public_key: PublicKey,
+}
+
 /// Resolve the exact AXT issuer key from committed Space Directory state.
 ///
 /// Resolution is keyed by both dataspace and active manifest root. The
@@ -59,11 +68,11 @@ pub enum AxtIssuerResolutionError {
 ///
 /// Fails closed for zero/missing/ambiguous manifests, stale indexes, absent
 /// dataspace bindings, and multisignature controllers.
-pub fn resolve_axt_issuer_public_key(
+pub fn resolve_axt_issuer_binding(
     world: &(impl WorldReadOnly + ?Sized),
     dataspace: DataSpaceId,
     manifest_root: [u8; 32],
-) -> Result<PublicKey, AxtIssuerResolutionError> {
+) -> Result<AxtIssuerBinding, AxtIssuerResolutionError> {
     if manifest_root.iter().all(|byte| *byte == 0) {
         return Err(AxtIssuerResolutionError::ZeroManifestRoot);
     }
@@ -110,10 +119,14 @@ pub fn resolve_axt_issuer_public_key(
     if !is_bound {
         return Err(AxtIssuerResolutionError::MissingDataspaceBinding);
     }
-    account
+    let public_key = account
         .try_signatory()
         .cloned()
-        .ok_or(AxtIssuerResolutionError::MultisigIssuer)
+        .ok_or(AxtIssuerResolutionError::MultisigIssuer)?;
+    Ok(AxtIssuerBinding {
+        issuer: uaid,
+        public_key,
+    })
 }
 
 /// Lane identity extraction failure.
@@ -763,39 +776,42 @@ mod tests {
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
     ) -> [u8; 32] {
-        world
+        *world
             .space_directory_manifests
+            .view()
             .get(&uaid)
             .and_then(|set| set.get(&dataspace))
             .expect("active manifest fixture")
             .manifest_hash
             .as_ref()
-            .try_into()
-            .expect("manifest hashes are 32 bytes")
     }
 
     #[test]
     fn axt_issuer_resolution_uses_only_consistent_committed_identity() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::axt-issuer"));
         let dataspace = DataSpaceId::new(31);
-        let (mut world, authority) = world_with_uaid(uaid, dataspace, true, true);
+        let (world, authority) = world_with_uaid(uaid, dataspace, true, true);
         let root = active_manifest_root(&world, uaid, dataspace);
 
         assert_eq!(
-            resolve_axt_issuer_public_key(&world.view(), dataspace, root),
-            Ok(authority
-                .try_signatory()
-                .expect("single-key fixture account")
-                .clone())
+            resolve_axt_issuer_binding(&world.view(), dataspace, root),
+            Ok(AxtIssuerBinding {
+                issuer: uaid,
+                public_key: authority
+                    .try_signatory()
+                    .expect("single-key fixture account")
+                    .clone(),
+            })
         );
 
-        world
-            .accounts
+        let mut accounts = world.accounts.block();
+        accounts
             .get_mut(&authority)
             .expect("fixture account details")
             .set_uaid(None);
+        accounts.commit();
         assert_eq!(
-            resolve_axt_issuer_public_key(&world.view(), dataspace, root),
+            resolve_axt_issuer_binding(&world.view(), dataspace, root),
             Err(AxtIssuerResolutionError::IdentityIndexMismatch)
         );
     }
@@ -804,12 +820,14 @@ mod tests {
     fn axt_issuer_resolution_rejects_missing_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::axt-unbound"));
         let dataspace = DataSpaceId::new(32);
-        let (mut world, _) = world_with_uaid(uaid, dataspace, true, true);
+        let (world, _) = world_with_uaid(uaid, dataspace, true, true);
         let root = active_manifest_root(&world, uaid, dataspace);
-        world.uaid_dataspaces.remove(uaid);
+        let mut bindings = world.uaid_dataspaces.block();
+        bindings.remove(uaid);
+        bindings.commit();
 
         assert_eq!(
-            resolve_axt_issuer_public_key(&world.view(), dataspace, root),
+            resolve_axt_issuer_binding(&world.view(), dataspace, root),
             Err(AxtIssuerResolutionError::MissingDataspaceBinding)
         );
     }

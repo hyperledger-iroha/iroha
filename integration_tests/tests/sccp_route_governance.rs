@@ -24,10 +24,7 @@ use iroha::data_model::{
     domain::Domain,
     isi::{
         Grant, Mint, Register,
-        bridge::{
-            ApplySccpRouteGovernance, SccpRegisterRouteV1, SccpRouteGovernanceActionV1,
-            SccpSetRouteActivationV1, SccpSwitchRouteRevisionV1,
-        },
+        bridge::{ApplySccpRouteGovernance, SccpRegisterRouteV1, SccpRouteGovernanceActionV1},
     },
     permission::Permission,
 };
@@ -187,50 +184,13 @@ fn integration_route() -> SccpGovernedRouteV1 {
         sora_outbound_execution_policy: integration_sora_outbound_execution_policy(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
-            custody_account_id: AccountId::new(custody),
+            custody_owner: AccountId::new(custody),
             payload_amount_scale: SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
         },
     };
     route
         .validate_registration()
         .expect("integration route must satisfy registration invariants");
-    route
-}
-
-fn successor_route(mut route: SccpGovernedRouteV1) -> SccpGovernedRouteV1 {
-    route.revision = 2;
-    let (route_address, route_code_hash) = match &mut route.destination {
-        SccpDestinationDeploymentV1::Evm(destination) => {
-            destination.route_address[0] ^= 1;
-            destination.route_code_hash[0] ^= 1;
-            (destination.route_address, destination.route_code_hash)
-        }
-        SccpDestinationDeploymentV1::Tron(_) => {
-            unreachable!("Ethereum integration route uses an EVM destination")
-        }
-        SccpDestinationDeploymentV1::Solana(_) => {
-            unreachable!("Ethereum integration route uses an EVM destination")
-        }
-    };
-    let route_configuration_hash = route
-        .destination
-        .route_configuration_hash(
-            route.lane_id,
-            &route.route_id,
-            &route.asset_key,
-            route.revision,
-            route.settlement.payload_amount_scale,
-        )
-        .expect("successor route configuration must be canonical");
-    let SccpSourceEmitterV1::Evm(source) = &mut route.source_identity.emitter else {
-        unreachable!("Ethereum integration route uses an EVM source emitter");
-    };
-    source.address = route_address;
-    source.runtime_code_hash = route_code_hash;
-    source.route_config_hash = route_configuration_hash;
-    route
-        .validate_registration()
-        .expect("successor integration route must satisfy registration invariants");
     route
 }
 
@@ -301,63 +261,6 @@ async fn wait_for_route_states(
     }
 }
 
-async fn wait_for_atomic_revision_switch(
-    network: &Network,
-    previous_key: &SccpRouteKeyV1,
-    successor_key: &SccpRouteKeyV1,
-) -> Result<SccpRegistryV1> {
-    let before = (
-        Some(SccpRouteActivationV1::Bidirectional),
-        Some(SccpRouteActivationV1::Staged),
-    );
-    let after = (
-        Some(SccpRouteActivationV1::InboundOnly),
-        Some(SccpRouteActivationV1::Bidirectional),
-    );
-    let deadline = Instant::now() + REGISTRY_CONVERGENCE_TIMEOUT;
-    loop {
-        let mut observed = Vec::with_capacity(network.peers().len());
-        let mut converged = true;
-        let mut reference = None;
-        for (peer_index, peer) in network.peers().iter().enumerate() {
-            match peer.client().get_sccp_registry() {
-                Ok(registry) => {
-                    let state = (
-                        route_in_registry(&registry, previous_key).map(|route| route.activation),
-                        route_in_registry(&registry, successor_key).map(|route| route.activation),
-                    );
-                    observed.push(format!("peer {peer_index}: {state:?}"));
-                    if state != before && state != after {
-                        return Err(eyre!(
-                            "peer {peer_index} exposed a non-atomic SCCP revision switch: \
-                             {state:?}; expected an old {before:?} or new {after:?} snapshot"
-                        ));
-                    }
-                    converged &= state == after;
-                    if let Some(reference) = &reference {
-                        converged &= reference == &registry;
-                    } else {
-                        reference = Some(registry);
-                    }
-                }
-                Err(error) => {
-                    observed.push(format!("peer {peer_index}: query-error:{error}"));
-                    converged = false;
-                }
-            }
-        }
-        if converged && let Some(registry) = reference {
-            return Ok(registry);
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "atomic SCCP revision switch did not converge; peer observations: {observed:?}"
-            ));
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-}
-
 fn register_action(route: SccpGovernedRouteV1) -> ApplySccpRouteGovernance {
     ApplySccpRouteGovernance::new(SccpRouteGovernanceActionV1::Register(SccpRegisterRouteV1 {
         route,
@@ -366,16 +269,14 @@ fn register_action(route: SccpGovernedRouteV1) -> ApplySccpRouteGovernance {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates() -> Result<()> {
+async fn direct_sccp_route_governance_is_rejected_on_four_peers() -> Result<()> {
     init_instruction_registry();
 
     let route = integration_route();
     let key = route.key();
-    let successor = successor_route(route.clone());
-    let successor_key = successor.key();
     let custody_asset = AssetId::new(
         route.settlement.asset_definition_id.clone(),
-        route.settlement.custody_account_id.clone(),
+        route.settlement.custody_owner.clone(),
     );
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -384,7 +285,7 @@ async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates()
             layer.write("chain", TAIRA_CHAIN_ID);
         })
         .with_genesis_instruction(Register::account(Account::new(
-            route.settlement.custody_account_id.clone(),
+            route.settlement.custody_owner.clone(),
         )))
         .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
             route.settlement.asset_definition_id.clone(),
@@ -400,7 +301,7 @@ async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates()
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(exact_sccp_route_governance_converges_and_rejects_adversarial_updates),
+        stringify!(direct_sccp_route_governance_is_rejected_on_four_peers),
     )
     .await?
     else {
@@ -412,8 +313,7 @@ async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates()
         .peer()
         .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
 
-    let initial_registry =
-        wait_for_route_states(&network, &[(&key, None), (&successor_key, None)]).await?;
+    let initial_registry = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert!(initial_registry.lanes.is_empty());
 
     let unauthorized = bob
@@ -424,135 +324,27 @@ async fn exact_sccp_route_governance_converges_and_rejects_adversarial_updates()
         .expect_err("an account without CanManageSccpGovernance must be rejected");
     let unauthorized_text = error_chain_text(&unauthorized);
     assert!(
-        unauthorized_text.contains("CanManageSccpGovernance")
-            || unauthorized_text.contains("permission"),
-        "unexpected unauthorized error: {unauthorized_text}"
+        unauthorized_text.contains("finalized threshold referendum")
+            || unauthorized_text.contains("direct SCCP route mutation is retired"),
+        "unexpected direct-mutation rejection: {unauthorized_text}"
     );
-    let after_unauthorized =
-        wait_for_route_states(&network, &[(&key, None), (&successor_key, None)]).await?;
+    let after_unauthorized = wait_for_route_states(&network, &[(&key, None)]).await?;
     assert_eq!(after_unauthorized, initial_registry);
 
-    alice.submit_blocking(
-        register_action(route.clone()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    let registered_registry = wait_for_route_states(
-        &network,
-        &[
-            (&key, Some(SccpRouteActivationV1::Staged)),
-            (&successor_key, None),
-        ],
-    )
-    .await?;
-
-    let stale = ApplySccpRouteGovernance::new(SccpRouteGovernanceActionV1::SetActivation(
-        SccpSetRouteActivationV1 {
-            key: key.clone(),
-            expected_current: SccpRouteActivationV1::Paused,
-            next: SccpRouteActivationV1::Bidirectional,
-            inbound_finality_cutoff: None,
-        },
-    ));
-    let stale_error = alice
+    let legacy_manager = alice
         .submit_blocking(
-            stale,
+            register_action(route.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("a stale activation compare-and-swap must be rejected");
-    let stale_error_text = error_chain_text(&stale_error);
+        .expect_err("legacy SCCP managers must not bypass threshold referendum enactment");
+    let legacy_manager_text = error_chain_text(&legacy_manager);
     assert!(
-        stale_error_text.contains("compare-and-swap") || stale_error_text.contains("activation"),
-        "unexpected stale-CAS error: {stale_error_text}"
+        legacy_manager_text.contains("finalized threshold referendum")
+            || legacy_manager_text.contains("direct SCCP route mutation is retired"),
+        "unexpected legacy-manager rejection: {legacy_manager_text}"
     );
-    let after_stale_activation = wait_for_route_states(
-        &network,
-        &[
-            (&key, Some(SccpRouteActivationV1::Staged)),
-            (&successor_key, None),
-        ],
-    )
-    .await?;
-    assert_eq!(after_stale_activation, registered_registry);
-
-    alice.submit_blocking(
-        ApplySccpRouteGovernance::new(SccpRouteGovernanceActionV1::SetActivation(
-            SccpSetRouteActivationV1 {
-                key: key.clone(),
-                expected_current: SccpRouteActivationV1::Staged,
-                next: SccpRouteActivationV1::Bidirectional,
-                inbound_finality_cutoff: None,
-            },
-        )),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    wait_for_route_states(
-        &network,
-        &[
-            (&key, Some(SccpRouteActivationV1::Bidirectional)),
-            (&successor_key, None),
-        ],
-    )
-    .await?;
-
-    alice.submit_blocking(
-        register_action(successor),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    let before_switch = wait_for_route_states(
-        &network,
-        &[
-            (&key, Some(SccpRouteActivationV1::Bidirectional)),
-            (&successor_key, Some(SccpRouteActivationV1::Staged)),
-        ],
-    )
-    .await?;
-
-    let stale_switch = ApplySccpRouteGovernance::new(SccpRouteGovernanceActionV1::SwitchRevision(
-        SccpSwitchRouteRevisionV1 {
-            previous_key: key.clone(),
-            expected_previous: SccpRouteActivationV1::Paused,
-            previous_next: SccpRouteActivationV1::InboundOnly,
-            previous_inbound_finality_cutoff: None,
-            successor_key: successor_key.clone(),
-            successor_next: SccpRouteActivationV1::Bidirectional,
-        },
-    ));
-    let stale_switch_error = alice
-        .submit_blocking(
-            stale_switch,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .expect_err("a stale revision switch must reject without changing either route");
-    let stale_switch_error_text = error_chain_text(&stale_switch_error);
-    assert!(
-        stale_switch_error_text.contains("compare-and-swap")
-            || stale_switch_error_text.contains("revision-switch"),
-        "unexpected stale-switch error: {stale_switch_error_text}"
-    );
-    let after_stale_switch = wait_for_route_states(
-        &network,
-        &[
-            (&key, Some(SccpRouteActivationV1::Bidirectional)),
-            (&successor_key, Some(SccpRouteActivationV1::Staged)),
-        ],
-    )
-    .await?;
-    assert_eq!(after_stale_switch, before_switch);
-
-    alice.submit_blocking(
-        ApplySccpRouteGovernance::new(SccpRouteGovernanceActionV1::SwitchRevision(
-            SccpSwitchRouteRevisionV1 {
-                previous_key: key.clone(),
-                expected_previous: SccpRouteActivationV1::Bidirectional,
-                previous_next: SccpRouteActivationV1::InboundOnly,
-                previous_inbound_finality_cutoff: None,
-                successor_key: successor_key.clone(),
-                successor_next: SccpRouteActivationV1::Bidirectional,
-            },
-        )),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    wait_for_atomic_revision_switch(&network, &key, &successor_key).await?;
+    let after_legacy_manager = wait_for_route_states(&network, &[(&key, None)]).await?;
+    assert_eq!(after_legacy_manager, initial_registry);
 
     Ok(())
 }

@@ -14,6 +14,7 @@ import {
   finalizeBrowserSignedTransaction,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
+import { networkIdBytes } from "./networkId.js";
 import {
   KotodamaQuantity,
   NumericV1,
@@ -391,6 +392,7 @@ const SIGNABLE_FIELDS = new Set([
 ]);
 const CONFIG_FIELDS = new Set([
   "chainId",
+  "networkId",
   "baseUrl",
   "toriiBaseUrl",
   "connectBaseUrl",
@@ -410,7 +412,7 @@ const CONFIG_FIELDS = new Set([
   "toriiClient",
 ]);
 const TRANSFER_DRAFT_FIELDS = new Set([
-  "chainId",
+  "networkId",
   "authority",
   "accountId",
   "sourceAccountId",
@@ -1356,6 +1358,72 @@ function parseJsonResponse(text, context) {
   return payload;
 }
 
+function normalizePublicPipelineStatus(payload, context) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  const rootFields = new Set(["hash", "status", "scope", "resolved_from"]);
+  const unexpectedRootFields = Object.keys(payload).filter(
+    (field) => !rootFields.has(field),
+  );
+  if (unexpectedRootFields.length > 0) {
+    throw new TypeError(
+      `${context} contains retired or unsupported fields: ${unexpectedRootFields.join(", ")}`,
+    );
+  }
+  const hash = exactHashHex(
+    payload.hash,
+    `${context}.hash`,
+    "invalid_transaction_hash",
+  );
+  if (
+    payload.status === null ||
+    typeof payload.status !== "object" ||
+    Array.isArray(payload.status)
+  ) {
+    throw new TypeError(`${context}.status must be an object`);
+  }
+  const statusFields = new Set(["kind", "block_height"]);
+  const unexpectedStatusFields = Object.keys(payload.status).filter(
+    (field) => !statusFields.has(field),
+  );
+  if (unexpectedStatusFields.length > 0) {
+    throw new TypeError(
+      `${context}.status contains retired or unsupported fields: ${unexpectedStatusFields.join(", ")}`,
+    );
+  }
+  if (
+    typeof payload.status.kind !== "string" ||
+    !PIPELINE_STATUS_KINDS.has(payload.status.kind)
+  ) {
+    throw new TypeError(`${context}.status.kind is missing or unsupported`);
+  }
+  const status = { kind: payload.status.kind };
+  if (payload.status.block_height !== undefined) {
+    if (
+      !Number.isSafeInteger(payload.status.block_height) ||
+      payload.status.block_height <= 0
+    ) {
+      throw new TypeError(
+        `${context}.status.block_height must be a positive safe integer`,
+      );
+    }
+    status.block_height = payload.status.block_height;
+  }
+  if (!["local", "auto", "global"].includes(payload.scope)) {
+    throw new TypeError(`${context}.scope is unsupported`);
+  }
+  if (!PIPELINE_STATUS_SOURCES.has(payload.resolved_from)) {
+    throw new TypeError(`${context}.resolved_from is unsupported`);
+  }
+  return Object.freeze({
+    hash,
+    status: Object.freeze(status),
+    scope: payload.scope,
+    resolved_from: payload.resolved_from,
+  });
+}
+
 function classifyPipelineStatus(payload, expectedHash, context) {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     throw new TypeError(`${context} must be an object`);
@@ -1365,9 +1433,6 @@ function classifyPipelineStatus(payload, expectedHash, context) {
   }
   if (payload.scope !== "global") {
     throw new TypeError(`${context}.scope must be global`);
-  }
-  if (typeof payload.summary !== "string") {
-    throw new TypeError(`${context}.summary must be a string`);
   }
   if (
     payload.status === null ||
@@ -1733,7 +1798,10 @@ class BrowserToriiPipelineClient {
         "Torii transaction status",
         signal,
       );
-      return parseJsonResponse(text, "Torii transaction status");
+      return normalizePublicPipelineStatus(
+        parseJsonResponse(text, "Torii transaction status"),
+        "Torii transaction status",
+      );
     } finally {
       request.close();
     }
@@ -2207,10 +2275,16 @@ export class NexusAppClient {
       "transfer input",
       "invalid_transfer_input",
     );
-    const chainId = requireNonEmptyString(
-      input.chainId ?? this.config.chainId,
-      "chainId",
-    );
+    const networkId = input.networkId ?? this.config.networkId;
+    try {
+      networkIdBytes(networkId, "networkId");
+    } catch (error) {
+      throw new NexusAppError(
+        "invalid_transfer_input",
+        error instanceof Error ? error.message : "networkId must be a NetworkId",
+        error,
+      );
+    }
     const quantity = normalizeTransferQuantity(input.quantity);
     if (input.feePayment === undefined) {
       throw new NexusAppError(
@@ -2219,7 +2293,7 @@ export class NexusAppClient {
       );
     }
     const payloadInput = {
-      chainId,
+      networkId,
       authority,
       sourceAssetHoldingId,
       quantity,

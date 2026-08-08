@@ -164,7 +164,7 @@ struct EpochSchedule {
 
 #[derive(Clone, Copy)]
 struct VrfRecordValidationContext<'a> {
-    chain_id: &'a iroha_data_model::ChainId,
+    network_id: &'a iroha_data_model::NetworkId,
     height: u64,
     epoch: u64,
     epoch_end_height: u64,
@@ -175,7 +175,7 @@ struct VrfRecordValidationContext<'a> {
 impl<'a> From<&'a wire::HeightContext> for VrfRecordValidationContext<'a> {
     fn from(context: &'a wire::HeightContext) -> Self {
         Self {
-            chain_id: &context.chain_id,
+            network_id: &context.network_id,
             height: context.height,
             epoch: context.epoch,
             epoch_end_height: context.epoch_end_height,
@@ -542,7 +542,7 @@ pub(crate) fn validate_finalized_epoch_record(
 /// makes the record part of finalized pre-state before the boundary context is
 /// frozen; late or boundary-height observations cannot influence the seed.
 pub(crate) fn authenticated_successor_seed(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     epoch: u64,
     epoch_end_height: u64,
     leader_seed: [u8; 32],
@@ -554,7 +554,7 @@ pub(crate) fn authenticated_successor_seed(
         .checked_sub(1)
         .ok_or(V2NposError::InvalidSchedule)?;
     let context = VrfRecordValidationContext {
-        chain_id,
+        network_id,
         height: cutoff_height,
         epoch,
         epoch_end_height,
@@ -764,7 +764,7 @@ impl ActiveVrfLifecycle {
         signature
             .verify(
                 peer.public_key(),
-                &v2_vrf_commit_preimage(&self.context.chain_id, NPOS_TAG, commit),
+                &v2_vrf_commit_preimage(&self.context.network_id, NPOS_TAG, commit),
             )
             .map_err(|_| V2VrfRejection::InvalidSignature)?;
         Ok(commit.signer)
@@ -789,7 +789,7 @@ impl ActiveVrfLifecycle {
         signature
             .verify(
                 peer.public_key(),
-                &v2_vrf_reveal_preimage(&self.context.chain_id, NPOS_TAG, reveal),
+                &v2_vrf_reveal_preimage(&self.context.network_id, NPOS_TAG, reveal),
             )
             .map_err(|_| V2VrfRejection::InvalidSignature)?;
         Ok(reveal.signer)
@@ -833,7 +833,7 @@ impl ActiveVrfLifecycle {
         if local_peer.public_key() != key_pair.public_key() {
             return Err(V2NposError::LocalIdentityMismatch);
         }
-        let chain_hash = Hash::new(self.context.chain_id.clone().into_inner().as_bytes());
+        let chain_hash = Hash::prehashed(*self.context.network_id.as_bytes());
         let (reveal, commitment, vrf_proof) = derive_vrf_material_from_key(
             &chain_hash,
             key_pair.private_key(),
@@ -863,7 +863,7 @@ impl ActiveVrfLifecycle {
                 };
                 commit.bls_sig = Signature::try_new(
                     key_pair.private_key(),
-                    &v2_vrf_commit_preimage(&self.context.chain_id, NPOS_TAG, &commit),
+                    &v2_vrf_commit_preimage(&self.context.network_id, NPOS_TAG, &commit),
                 )
                 .map_err(|error| V2NposError::LocalSignature(error.to_string()))?
                 .payload()
@@ -899,7 +899,7 @@ impl ActiveVrfLifecycle {
             };
             reveal_message.bls_sig = Signature::try_new(
                 key_pair.private_key(),
-                &v2_vrf_reveal_preimage(&self.context.chain_id, NPOS_TAG, &reveal_message),
+                &v2_vrf_reveal_preimage(&self.context.network_id, NPOS_TAG, &reveal_message),
             )
             .map_err(|error| V2NposError::LocalSignature(error.to_string()))?
             .payload()
@@ -977,7 +977,7 @@ const MAX_VRF_SIGNATURE_BYTES: usize = 512;
 const MAX_VRF_PROOF_BYTES: usize = 128;
 
 fn verify_vrf_reveal_for_chain(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     peer: &PeerId,
     reveal: &VrfReveal,
 ) -> bool {
@@ -997,7 +997,7 @@ fn verify_vrf_reveal_for_chain(
     if algorithm != iroha_crypto::Algorithm::BlsNormal {
         return false;
     }
-    let chain_hash = Hash::new(chain_id.clone().into_inner().as_bytes());
+    let chain_hash = Hash::prehashed(*network_id.as_bytes());
     let input = vrf_input(&chain_hash, reveal.epoch, reveal.signer);
     iroha_crypto::vrf::verify_normal_bytes_with_chain(
         public_key,
@@ -1009,7 +1009,7 @@ fn verify_vrf_reveal_for_chain(
 }
 
 fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfReveal) -> bool {
-    verify_vrf_reveal_for_chain(&context.chain_id, peer, reveal)
+    verify_vrf_reveal_for_chain(&context.network_id, peer, reveal)
 }
 
 fn validate_extension_at_candidate_height(
@@ -1375,7 +1375,7 @@ fn verify_commit_proof(
     signature
         .verify(
             peer.validator.public_key(),
-            &v2_vrf_commit_preimage(context.chain_id, NPOS_TAG, &message),
+            &v2_vrf_commit_preimage(context.network_id, NPOS_TAG, &message),
         )
         .map_err(|_| V2NposError::InvalidRecord("commit signature verification failed"))
 }
@@ -1409,10 +1409,10 @@ fn verify_reveal_proof(
     signature
         .verify(
             peer.validator.public_key(),
-            &v2_vrf_reveal_preimage(context.chain_id, NPOS_TAG, &message),
+            &v2_vrf_reveal_preimage(context.network_id, NPOS_TAG, &message),
         )
         .map_err(|_| V2NposError::InvalidRecord("reveal signature verification failed"))?;
-    if !verify_vrf_reveal_for_chain(context.chain_id, &peer.validator, &message) {
+    if !verify_vrf_reveal_for_chain(context.network_id, &peer.validator, &message) {
         return Err(V2NposError::InvalidRecord(
             "reveal VRF proof verification failed",
         ));
@@ -1507,13 +1507,19 @@ fn record_extends(base: &VrfEpochRecord, candidate: &VrfEpochRecord) -> bool {
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         consensus::{NposConsensusEffects, VrfEpochRecord},
         parameter::system::SumeragiNposParameters,
     };
 
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])))
+    }
 
     fn keys() -> Vec<KeyPair> {
         let mut keys = (1_u8..=4)
@@ -1535,7 +1541,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         wire::HeightContext {
-            chain_id: ChainId::from("v2-npos-vrf-test"),
+            network_id: test_network_id(0x51),
             protocol_version: wire::PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -1672,7 +1678,7 @@ mod tests {
     ) -> VrfCommit {
         commit.bls_sig = Signature::try_new(
             key.private_key(),
-            &v2_vrf_commit_preimage(&context.chain_id, NPOS_TAG, &commit),
+            &v2_vrf_commit_preimage(&context.network_id, NPOS_TAG, &commit),
         )
         .expect("commit signature")
         .payload()
@@ -1685,7 +1691,7 @@ mod tests {
         context: &wire::HeightContext,
         signer: wire::ValidatorIndex,
     ) -> ([u8; 32], [u8; 32], Vec<u8>) {
-        let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+        let chain_hash = Hash::prehashed(*context.network_id.as_bytes());
         derive_vrf_material_from_key(&chain_hash, key.private_key(), context.epoch, signer)
             .expect("derive fixture VRF material")
     }
@@ -1696,7 +1702,7 @@ mod tests {
         mut reveal: VrfReveal,
     ) -> VrfReveal {
         if reveal.vrf_proof.is_empty() {
-            let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+            let chain_hash = Hash::prehashed(*context.network_id.as_bytes());
             let (_, _, proof) = derive_vrf_material_from_key(
                 &chain_hash,
                 key.private_key(),
@@ -1708,7 +1714,7 @@ mod tests {
         }
         reveal.bls_sig = Signature::try_new(
             key.private_key(),
-            &v2_vrf_reveal_preimage(&context.chain_id, NPOS_TAG, &reveal),
+            &v2_vrf_reveal_preimage(&context.network_id, NPOS_TAG, &reveal),
         )
         .expect("reveal signature")
         .payload()
@@ -1871,7 +1877,7 @@ mod tests {
             .expect("two authenticated reveals");
 
         let seed_with_one = authenticated_successor_seed(
-            &reveal_context.chain_id,
+            &reveal_context.network_id,
             reveal_context.epoch,
             reveal_context.epoch_end_height,
             reveal_context.leader_seed,
@@ -1881,7 +1887,7 @@ mod tests {
         )
         .expect("one-reveal successor seed");
         let seed_with_two = authenticated_successor_seed(
-            &reveal_context.chain_id,
+            &reveal_context.network_id,
             reveal_context.epoch,
             reveal_context.epoch_end_height,
             reveal_context.leader_seed,
@@ -1896,7 +1902,7 @@ mod tests {
         mismatched_params.reveal_deadline_offset -= 1;
         assert!(
             authenticated_successor_seed(
-                &reveal_context.chain_id,
+                &reveal_context.network_id,
                 reveal_context.epoch,
                 reveal_context.epoch_end_height,
                 reveal_context.leader_seed,
@@ -1912,7 +1918,7 @@ mod tests {
         reordered.participants.reverse();
         assert!(
             authenticated_successor_seed(
-                &reveal_context.chain_id,
+                &reveal_context.network_id,
                 reveal_context.epoch,
                 reveal_context.epoch_end_height,
                 reveal_context.leader_seed,
@@ -1930,7 +1936,7 @@ mod tests {
             .expect("authenticated reveal")[0] ^= 1;
         assert!(
             authenticated_successor_seed(
-                &reveal_context.chain_id,
+                &reveal_context.network_id,
                 reveal_context.epoch,
                 reveal_context.epoch_end_height,
                 reveal_context.leader_seed,
@@ -1955,7 +1961,7 @@ mod tests {
             .pop()
             .expect("authenticated late reveal");
         let late_seed = authenticated_successor_seed(
-            &late_context.chain_id,
+            &late_context.network_id,
             late_context.epoch,
             late_context.epoch_end_height,
             late_context.leader_seed,
@@ -1965,7 +1971,7 @@ mod tests {
         )
         .expect("late reveal record remains authenticated");
         let no_reveal_seed = authenticated_successor_seed(
-            &late_context.chain_id,
+            &late_context.network_id,
             late_context.epoch,
             late_context.epoch_end_height,
             late_context.leader_seed,
@@ -2562,7 +2568,7 @@ mod tests {
         );
 
         let mut replay_context = commit_context.clone();
-        replay_context.chain_id = ChainId::from("v2-npos-vrf-other-chain");
+        replay_context.network_id = test_network_id(0x52);
         assert!(
             validate_candidate_records(
                 &replay_context,

@@ -1,7 +1,11 @@
 import type { Buffer } from "buffer";
+import type { NetworkId } from "./index.js";
 
 export interface NexusAppConfig {
+  /** Human-readable Connect protocol chain label. */
   chainId?: string;
+  /** Exact genesis-derived domain for ordinary transaction drafts. */
+  networkId?: NetworkId;
   baseUrl?: string;
   toriiBaseUrl?: string;
   connectBaseUrl?: string;
@@ -81,7 +85,10 @@ export type NexusFeePayment =
     };
 
 export interface NexusTransferInput {
-  chainId?: string;
+  networkId?: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority?: string;
   accountId?: string;
   sourceAccountId?: string;

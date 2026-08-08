@@ -1,8 +1,6 @@
 import Foundation
 
 public enum TransactionInputError: Error, LocalizedError, Equatable {
-    case emptyChainId
-    case invalidChainId(String)
     case emptyAccountId(field: String)
     case malformedAccountId(field: String, value: String)
     case emptyRwaId(field: String)
@@ -24,10 +22,6 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .emptyChainId:
-            return "Chain id must not be empty."
-        case let .invalidChainId(value):
-            return "Chain id must be 1...128 ASCII bytes, begin and end with an alphanumeric character, and contain only alphanumeric characters, '.', '_', ':' or '-' (received '\(value)')."
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
@@ -75,24 +69,23 @@ struct TransactionInputValidator {
     }
 
     struct ValidatedIds {
-        let chainId: String
+        let networkId: NetworkId
         let authorityId: String
         let assetDefinitionId: String?
         let accountIds: [String: String]
     }
 
-    static func validate(chainId: String,
+    static func validate(networkId: NetworkId,
                          authorityId: String,
                          assetDefinitionId: String? = nil,
                          accountIds: [NamedAccountId] = []) throws -> ValidatedIds {
-        let sanitizedChainId = try sanitizeChainId(chainId)
         let sanitizedAuthority = try sanitizeAccountId(authorityId, field: "authority")
         var sanitizedAccounts: [String: String] = [:]
         for account in accountIds {
             sanitizedAccounts[account.field] = try sanitizeAccountId(account.value, field: account.field)
         }
         let sanitizedAssetDefinitionId = try assetDefinitionId.map { try sanitizeAssetDefinitionId($0) }
-        return ValidatedIds(chainId: sanitizedChainId,
+        return ValidatedIds(networkId: networkId,
                             authorityId: sanitizedAuthority,
                             assetDefinitionId: sanitizedAssetDefinitionId,
                             accountIds: sanitizedAccounts)
@@ -117,34 +110,6 @@ struct TransactionInputValidator {
             )
         }
         return value
-    }
-
-    private static func sanitizeChainId(_ chainId: String) throws -> String {
-        let checked = try requireExactNonEmpty(
-            chainId,
-            empty: .emptyChainId,
-            invalid: { .invalidChainId($0) }
-        )
-        let bytes = Array(checked.utf8)
-        guard bytes.count <= 128,
-              let first = bytes.first,
-              let last = bytes.last,
-              isAsciiAlphanumeric(first),
-              isAsciiAlphanumeric(last),
-              bytes.allSatisfy(isChainIdByte) else {
-            throw TransactionInputError.invalidChainId(checked)
-        }
-        return checked
-    }
-
-    private static func isAsciiAlphanumeric(_ byte: UInt8) -> Bool {
-        (byte >= 48 && byte <= 57) ||
-            (byte >= 65 && byte <= 90) ||
-            (byte >= 97 && byte <= 122)
-    }
-
-    private static func isChainIdByte(_ byte: UInt8) -> Bool {
-        isAsciiAlphanumeric(byte) || byte == 46 || byte == 95 || byte == 58 || byte == 45
     }
 
     static func sanitizeAccountId(_ accountId: String, field: String) throws -> String {
@@ -507,7 +472,7 @@ private func encodeNativeClaimIdentifierReceiptJSON(
 
 enum SingleInstructionSwiftNoritoEncoder {
     static func encodeExecutableBatch(
-        chainId: String,
+        networkId: NetworkId,
         authority: String,
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
@@ -533,16 +498,16 @@ enum SingleInstructionSwiftNoritoEncoder {
             throw ExecutableBatchInputError.missingGasLimit
         }
         let ids = try TransactionInputValidator.validate(
-            chainId: chainId,
+            networkId: networkId,
             authorityId: authority
         )
         let executable = try encodeBatchExecutable(entries)
-        // `ChainId` is a tuple-newtype around its canonical string.
-        var chainIdPayload = CompactNoritoWriter()
-        chainIdPayload.writeField(CompactNorito.encodeString(ids.chainId))
+        var networkDomain = CompactNoritoWriter()
+        networkDomain.writeUInt32LE(0)
+        networkDomain.writeField(ids.networkId.bytes)
 
         var transactionPayload = CompactNoritoWriter()
-        transactionPayload.writeField(chainIdPayload.data)
+        transactionPayload.writeField(networkDomain.data)
         transactionPayload.writeField(try CanonicalNorito.encodeCompactAccountId(ids.authorityId))
         transactionPayload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
         transactionPayload.writeField(executable)
@@ -570,7 +535,7 @@ enum SingleInstructionSwiftNoritoEncoder {
     }
 
     static func encodeCommitContractDeployment(
-        chainId: String, authority: String, creationTimeMs: UInt64, ttlMs: UInt64?,
+        networkId: NetworkId, authority: String, creationTimeMs: UInt64, ttlMs: UInt64?,
         expectedDeployNonce: UInt64, contractAddress: String, codeHash: Data,
         contractAlias: String, leaseExpiryMs: UInt64?, expectedPreviousContractAddress: String?,
         feePayment: FeePaymentIntent,
@@ -585,15 +550,18 @@ enum SingleInstructionSwiftNoritoEncoder {
         payload.writeField(try CanonicalNorito.encodeOption(expectedPreviousContractAddress, encode: CanonicalNorito.encodeString))
         let typeName = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
         let framed = noritoEncode(typeName: typeName, payload: payload.data, flags: 0)
-        var wire = CanonicalNoritoWriter()
-        wire.writeField(CanonicalNorito.encodeString(typeName))
-        wire.writeField(CanonicalNorito.encodeBytesVec(framed))
-        let transactionPayload = try encodeTransactionPayload(
-            chainId: chainId, authority: authority, creationTimeMs: creationTimeMs,
+        var wire = CompactNoritoWriter()
+        wire.writeField(CompactNorito.encodeString(typeName))
+        wire.writeField(CompactNorito.encodeBytesVec(framed))
+        let transactionPayload = try encodeNetworkTransactionPayload(
+            networkId: networkId, authority: authority, creationTimeMs: creationTimeMs,
             ttlMs: ttlMs, feePayment: feePayment, instructionPayload: wire.data
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
-        let signed = encodeSignedTransaction(signature: signature, transactionPayload: transactionPayload)
+        let signed = encodeCompactSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
         return SignedTransactionEnvelope(
             norito: encodeVersionedSignedTransaction(signed), signedTransaction: signed,
             payload: nil,
@@ -603,6 +571,7 @@ enum SingleInstructionSwiftNoritoEncoder {
 
     static func encodeAliasSetupPlan(
         request: AliasSetupPlanRequestV1,
+        networkId: NetworkId,
         plan: AliasTransactionPlanV1,
         bodyEncoder: (AliasTransactionPlanBodyV1) throws -> Data,
         creationTimeMs: UInt64,
@@ -611,6 +580,9 @@ enum SingleInstructionSwiftNoritoEncoder {
         signingKey: SigningKey,
         decodeAndReencode: (String, Data) throws -> DecodedEnsureAliasFrame
     ) throws -> SignedTransactionEnvelope {
+        guard plan.body.networkId == networkId else {
+            throw AliasSetupModelError.planValidation(["alias.plan.network_mismatch"])
+        }
         let canonicalBodyNorito = try bodyEncoder(plan.body)
         guard !canonicalBodyNorito.isEmpty else {
             throw AliasSetupModelError.planValidation(["alias.plan.body_encoding_empty"])
@@ -625,13 +597,13 @@ enum SingleInstructionSwiftNoritoEncoder {
             throw AliasSetupModelError.planValidation(["alias.plan.expired"])
         }
         let instructionPayloads = plan.body.instructions.map { instruction -> Data in
-            var wire = CanonicalNoritoWriter()
-            wire.writeField(CanonicalNorito.encodeString(instruction.wireId))
-            wire.writeField(CanonicalNorito.encodeBytesVec(instruction.framedPayload))
+            var wire = CompactNoritoWriter()
+            wire.writeField(CompactNorito.encodeString(instruction.wireId))
+            wire.writeField(CompactNorito.encodeBytesVec(instruction.framedPayload))
             return wire.data
         }
-        let transactionPayload = try encodeTransactionPayload(
-            chainId: plan.body.chainId,
+        let transactionPayload = try encodeNetworkTransactionPayload(
+            networkId: networkId,
             authority: plan.body.authority,
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
@@ -639,7 +611,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             instructionPayloads: instructionPayloads
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
-        let signedTransaction = encodeSignedTransaction(
+        let signedTransaction = encodeCompactSignedTransaction(
             signature: signature,
             transactionPayload: transactionPayload
         )
@@ -653,6 +625,7 @@ enum SingleInstructionSwiftNoritoEncoder {
 
     static func encodeAliasLifecyclePlan(
         request: AliasLifecyclePlanRequestV1,
+        networkId: NetworkId,
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: (AliasLifecycleTransactionPlanBodyV1) throws -> Data,
         creationTimeMs: UInt64,
@@ -661,6 +634,9 @@ enum SingleInstructionSwiftNoritoEncoder {
         signingKey: SigningKey,
         decodeAndReencode: (String, Data) throws -> DecodedAliasLifecycleFrame
     ) throws -> SignedTransactionEnvelope? {
+        guard plan.body.networkId == networkId else {
+            throw AliasSetupModelError.planValidation(["alias.lifecycle.plan.network_mismatch"])
+        }
         let canonicalBodyNorito = try bodyEncoder(plan.body)
         guard !canonicalBodyNorito.isEmpty else {
             throw AliasSetupModelError.planValidation(["alias.lifecycle.plan.body_encoding_empty"])
@@ -675,11 +651,11 @@ enum SingleInstructionSwiftNoritoEncoder {
             throw AliasSetupModelError.planValidation(["alias.lifecycle.plan.expired"])
         }
         guard let instruction = plan.body.instruction else { return nil }
-        var wire = CanonicalNoritoWriter()
-        wire.writeField(CanonicalNorito.encodeString(instruction.wireId))
-        wire.writeField(CanonicalNorito.encodeBytesVec(instruction.framedPayload))
-        let transactionPayload = try encodeTransactionPayload(
-            chainId: plan.body.chainId,
+        var wire = CompactNoritoWriter()
+        wire.writeField(CompactNorito.encodeString(instruction.wireId))
+        wire.writeField(CompactNorito.encodeBytesVec(instruction.framedPayload))
+        let transactionPayload = try encodeNetworkTransactionPayload(
+            networkId: networkId,
             authority: plan.body.authority,
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
@@ -687,7 +663,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             instructionPayload: wire.data
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
-        let signedTransaction = encodeSignedTransaction(
+        let signedTransaction = encodeCompactSignedTransaction(
             signature: signature,
             transactionPayload: transactionPayload
         )
@@ -699,14 +675,16 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
     }
 
-    private static func encodeTransactionPayload(chainId: String,
-                                                 authority: String,
-                                                 creationTimeMs: UInt64,
-                                                 ttlMs: UInt64?,
-                                                 feePayment: FeePaymentIntent,
-                                                 instructionPayload: Data) throws -> Data {
-        try encodeTransactionPayload(
-            chainId: chainId,
+    private static func encodeNetworkTransactionPayload(
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        feePayment: FeePaymentIntent,
+        instructionPayload: Data
+    ) throws -> Data {
+        try encodeNetworkTransactionPayload(
+            networkId: networkId,
             authority: authority,
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
@@ -715,38 +693,57 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
     }
 
-    private static func encodeTransactionPayload(chainId: String,
-                                                 authority: String,
-                                                 creationTimeMs: UInt64,
-                                                 ttlMs: UInt64?,
-                                                 feePayment: FeePaymentIntent,
-                                                 instructionPayloads: [Data]) throws -> Data {
+    private static func encodeNetworkTransactionPayload(
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        feePayment: FeePaymentIntent,
+        instructionPayloads: [Data]
+    ) throws -> Data {
         let resolvedTtlMs = ttlMs ?? 100_000
         guard resolvedTtlMs != 0 else {
             throw ExecutableBatchInputError.zeroTimeToLive
         }
-        let executablePayload = encodeExecutable(instructionPayloads: instructionPayloads)
-        var transactionPayload = CanonicalNoritoWriter()
-        transactionPayload.writeField(CanonicalNorito.encodeString(chainId))
-        transactionPayload.writeField(CanonicalNorito.encodeString(authority))
-        transactionPayload.writeField(CanonicalNorito.encodeUInt64(creationTimeMs))
+        let ids = try TransactionInputValidator.validate(
+            networkId: networkId,
+            authorityId: authority
+        )
+        let executablePayload = encodeCompactNativeExecutable(
+            instructionPayloads: instructionPayloads
+        )
+        var networkDomain = CompactNoritoWriter()
+        networkDomain.writeUInt32LE(0)
+        networkDomain.writeField(ids.networkId.bytes)
+
+        var transactionPayload = CompactNoritoWriter()
+        transactionPayload.writeField(networkDomain.data)
+        transactionPayload.writeField(
+            try CanonicalNorito.encodeCompactAccountId(ids.authorityId)
+        )
+        transactionPayload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
         transactionPayload.writeField(executablePayload)
-        transactionPayload.writeField(try CanonicalNorito.encodeOption(resolvedTtlMs, encode: CanonicalNorito.encodeUInt64))
+        transactionPayload.writeField(
+            try CompactNorito.encodeOption(
+                resolvedTtlMs,
+                encode: CompactNorito.encodeUInt64
+            )
+        )
         transactionPayload.writeField(encodeNoneOption())
-        transactionPayload.writeField(try feePayment.canonicalNorito())
+        transactionPayload.writeField(try feePayment.compactNorito())
         transactionPayload.writeField(encodeEmptyMetadata())
         transactionPayload.writeField(encodeNoneOption())
         return transactionPayload.data
     }
 
-    private static func encodeExecutable(instructionPayloads: [Data]) -> Data {
-        var instructions = CanonicalNoritoWriter()
-        instructions.writeLength(UInt64(instructionPayloads.count))
+    private static func encodeCompactNativeExecutable(instructionPayloads: [Data]) -> Data {
+        var instructions = CompactNoritoWriter()
+        instructions.writeUInt64LE(UInt64(instructionPayloads.count))
         for instructionPayload in instructionPayloads {
             instructions.writeField(instructionPayload)
         }
 
-        var executable = CanonicalNoritoWriter()
+        var executable = CompactNoritoWriter()
         executable.writeUInt32LE(0)
         executable.writeField(instructions.data)
         return executable.data
@@ -760,7 +757,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             switch entry {
             case let .instruction(frame):
                 item.writeUInt32LE(0)
-                item.writeField(frame.compactInstructionBoxPayload())
+                item.writeField(try frame.compactInstructionBoxPayload())
             case let .contractCall(invocation):
                 item.writeUInt32LE(1)
                 var call = CompactNoritoWriter()
@@ -796,15 +793,6 @@ enum SingleInstructionSwiftNoritoEncoder {
 
         var signedTransaction = CompactNoritoWriter()
         signedTransaction.writeField(transactionSignature.data)
-        signedTransaction.writeField(transactionPayload)
-        signedTransaction.writeField(encodeNoneOption())
-        return signedTransaction.data
-    }
-
-    private static func encodeSignedTransaction(signature: Data,
-                                                transactionPayload: Data) -> Data {
-        var signedTransaction = CanonicalNoritoWriter()
-        signedTransaction.writeField(CanonicalNorito.encodeConstVec(signature))
         signedTransaction.writeField(transactionPayload)
         signedTransaction.writeField(encodeNoneOption())
         return signedTransaction.data
@@ -869,7 +857,7 @@ struct SwiftTransactionEncoder {
     static func encodeTransfer(transfer: TransferRequest,
                                signingKey: SigningKey,
                                creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: transfer.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: transfer.networkId,
                                                          authorityId: transfer.authority,
                                                          assetDefinitionId: transfer.assetDefinitionId,
                                                          accountIds: [.init(field: "destination", value: transfer.destination)])
@@ -881,7 +869,7 @@ struct SwiftTransactionEncoder {
         let feePaymentJSON = try transfer.feePayment.canonicalJSONData()
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeTransfer(chainId: ids.chainId,
+            try NoritoNativeBridge.shared.encodeTransfer(networkId: ids.networkId,
                                                          authority: ids.authorityId,
                                                          creationTimeMs: creationTimeMs,
                                                          ttlMs: transfer.ttlMs,
@@ -906,7 +894,7 @@ struct SwiftTransactionEncoder {
     static func encodeMint(request: MintRequest,
                             signingKey: SigningKey,
                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority,
                                                          assetDefinitionId: request.assetDefinitionId,
                                                          accountIds: [.init(field: "destination", value: request.destination)])
@@ -917,7 +905,7 @@ struct SwiftTransactionEncoder {
         let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(request.quantity).canonicalString
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeMint(chainId: ids.chainId,
+            try NoritoNativeBridge.shared.encodeMint(networkId: ids.networkId,
                                                      authority: ids.authorityId,
                                                      creationTimeMs: creationTimeMs,
                                                      ttlMs: request.ttlMs,
@@ -942,7 +930,7 @@ struct SwiftTransactionEncoder {
     static func encodeBurn(request: BurnRequest,
                             signingKey: SigningKey,
                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority,
                                                          assetDefinitionId: request.assetDefinitionId,
                                                          accountIds: [.init(field: "destination", value: request.destination)])
@@ -953,7 +941,7 @@ struct SwiftTransactionEncoder {
         let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(request.quantity).canonicalString
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeBurn(chainId: ids.chainId,
+            try NoritoNativeBridge.shared.encodeBurn(networkId: ids.networkId,
                                                      authority: ids.authorityId,
                                                      creationTimeMs: creationTimeMs,
                                                      ttlMs: request.ttlMs,
@@ -980,7 +968,7 @@ struct SwiftTransactionEncoder {
     static func encodeRegisterZkAsset(request: RegisterZkAssetRequest,
                                       signingKey: SigningKey,
                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority,
                                                          assetDefinitionId: request.assetDefinitionId)
         guard let assetDefinitionId = ids.assetDefinitionId else {
@@ -991,7 +979,7 @@ struct SwiftTransactionEncoder {
         let shieldVk = request.shieldVerifyingKey?.encodedValue
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeRegisterZkAsset(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1018,7 +1006,7 @@ struct SwiftTransactionEncoder {
     static func encodeMultisigRegister(request: MultisigRegisterRequest,
                                        signingKey: SigningKey,
                                        creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority,
                                                          accountIds: [
                                                             TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId)
@@ -1026,7 +1014,7 @@ struct SwiftTransactionEncoder {
         let privateKey = try privateKeyBytes(from: signingKey)
         let specJSON = try request.spec.encodeJSON()
         let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeMultisigRegister(chainId: ids.chainId,
+            try NoritoNativeBridge.shared.encodeMultisigRegister(networkId: ids.networkId,
                                                                  authority: ids.authorityId,
                                                                  creationTimeMs: creationTimeMs,
                                                                  ttlMs: request.ttlMs,
@@ -1052,7 +1040,7 @@ struct SwiftTransactionEncoder {
                                       signingKey: SigningKey,
                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let receiptAccountId = request.receipt.payload.accountId
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority,
                                                          accountIds: [
                                                             TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId),
@@ -1069,7 +1057,7 @@ struct SwiftTransactionEncoder {
         let receiptJSON = try encodeNativeClaimIdentifierReceiptJSON(request.receipt)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeClaimIdentifier(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1089,7 +1077,7 @@ struct SwiftTransactionEncoder {
         creationTimeMs: UInt64
     ) throws -> SignedTransactionEnvelope {
         let ids = try TransactionInputValidator.validate(
-            chainId: request.chainId, authorityId: request.authority
+            networkId: request.networkId, authorityId: request.authority
         )
         guard request.contractAddress == request.contractAddress.trimmingCharacters(in: .whitespacesAndNewlines),
               !request.contractAddress.isEmpty,
@@ -1102,7 +1090,7 @@ struct SwiftTransactionEncoder {
             throw SwiftTransactionEncoderError.invalidInput("codeHashHex must contain exactly 64 hexadecimal characters")
         }
         return try SingleInstructionSwiftNoritoEncoder.encodeCommitContractDeployment(
-            chainId: ids.chainId, authority: ids.authorityId, creationTimeMs: creationTimeMs,
+            networkId: ids.networkId, authority: ids.authorityId, creationTimeMs: creationTimeMs,
             ttlMs: request.ttlMs, expectedDeployNonce: request.expectedDeployNonce,
             contractAddress: request.contractAddress, codeHash: codeHash,
             contractAlias: request.contractAlias, leaseExpiryMs: request.leaseExpiryMs,
@@ -1122,13 +1110,13 @@ struct SwiftTransactionEncoder {
     static func encodeSetMetadata(request: SetMetadataRequest,
                                   signingKey: SigningKey,
                                   creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority)
         let target = try TransactionInputValidator.sanitizeMetadataTarget(request.target)
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeSetKeyValue(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1154,13 +1142,13 @@ struct SwiftTransactionEncoder {
     static func encodeRemoveMetadata(request: RemoveMetadataRequest,
                                      signingKey: SigningKey,
                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority)
         let target = try TransactionInputValidator.sanitizeMetadataTarget(request.target)
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeRemoveKeyValue(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1185,13 +1173,13 @@ struct SwiftTransactionEncoder {
     static func encodeProposeDeploy(request: ProposeDeployContractRequest,
                                     signingKey: SigningKey,
                                     creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority)
         let privateKey = try privateKeyBytes(from: signingKey)
         let windowTuple = request.window.map { ($0.lower, $0.upper) }
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceProposeDeploy(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1220,7 +1208,7 @@ struct SwiftTransactionEncoder {
                                       signingKey: SigningKey,
                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let ids = try TransactionInputValidator.validate(
-            chainId: request.chainId,
+            networkId: request.networkId,
             authorityId: request.authority,
             accountIds: [.init(field: "owner", value: request.owner)]
         )
@@ -1235,7 +1223,7 @@ struct SwiftTransactionEncoder {
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceCastPlainBallot(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1262,7 +1250,7 @@ struct SwiftTransactionEncoder {
     static func encodeCastZkBallot(request: CastZkBallotRequest,
                                    signingKey: SigningKey,
                                    creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority)
         let electionId = try TransactionInputValidator.sanitizeGovernanceSelector(
             request.electionId,
@@ -1272,7 +1260,7 @@ struct SwiftTransactionEncoder {
         let publicInputs = try normalizeZkBallotPublicInputs(request.publicInputs)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceCastZkBallot(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1363,12 +1351,12 @@ struct SwiftTransactionEncoder {
     static func encodeEnactReferendum(request: EnactReferendumRequest,
                                       signingKey: SigningKey,
                                       creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority)
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceEnactReferendum(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1394,7 +1382,7 @@ struct SwiftTransactionEncoder {
     static func encodeFinalizeReferendum(request: FinalizeReferendumRequest,
                                          signingKey: SigningKey,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority)
         let referendumId = try TransactionInputValidator.sanitizeGovernanceFinalizationId(
             request.referendumId,
@@ -1410,7 +1398,7 @@ struct SwiftTransactionEncoder {
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceFinalizeReferendum(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
@@ -1437,7 +1425,7 @@ struct SwiftTransactionEncoder {
         let memberAccounts = request.members.enumerated().map {
             TransactionInputValidator.NamedAccountId(field: "members[\($0.offset)]", value: $0.element)
         }
-        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority,
                                                          accountIds: memberAccounts)
         let sanitizedMembers = memberAccounts.map { ids.accountIds[$0.field] ?? $0.value }
@@ -1445,7 +1433,7 @@ struct SwiftTransactionEncoder {
         let membersJson = try NoritoJSON(sanitizedMembers).data
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernancePersistCouncil(
-                chainId: ids.chainId,
+                networkId: ids.networkId,
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,

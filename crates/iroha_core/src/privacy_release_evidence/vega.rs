@@ -70,6 +70,7 @@ pub(super) struct VegaReleaseFixtureV1 {
 pub(super) fn vega_release_transaction_context_v1()
 -> Result<VegaPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
     Ok(VegaPrivacyActionTransactionContextV1 {
+        network_id: release_network_id_from_genesis_hash(VEGA_RELEASE_GENESIS_HASH_V1),
         chain_id: ChainId::from(VEGA_RELEASE_CHAIN_ID_V1),
         authority: privacy_release_account_v1(0x56)?,
         creation_time: Duration::from_millis(VEGA_RELEASE_CREATION_TIME_MS_V1),

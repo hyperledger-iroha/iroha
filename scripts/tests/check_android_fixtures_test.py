@@ -18,6 +18,13 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TEST_NETWORK_ID = (
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+)
+TEST_OTHER_NETWORK_ID = (
+    "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+)
+
 
 def _field(value: bytes) -> bytes:
     return MODULE.compact_length(len(value)) + value
@@ -25,6 +32,14 @@ def _field(value: bytes) -> bytes:
 
 def _signed_transaction(payload: bytes, signature: bytes) -> bytes:
     return _field(signature) + _field(payload) + _field(b"\x00")
+
+
+def _transaction_payload(
+    suffix: bytes = b"", network_id: str = TEST_NETWORK_ID
+) -> bytes:
+    identity = bytes.fromhex(network_id[5:69])
+    domain = (0).to_bytes(4, "little") + _field(identity)
+    return _field(domain) + suffix
 
 
 def _write_payloads(path: Path, entries: list[dict]) -> Path:
@@ -48,7 +63,7 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
             "payload",
             {
                 "authority": entry.get("authority"),
-                "chain": entry.get("chain"),
+                "network_id": entry.get("network_id"),
                 "creation_time_ms": entry.get("creation_time_ms"),
                 "executable": {"Instructions": []},
                 "fee_payment": {
@@ -76,7 +91,7 @@ def _fixture_entry(
     payload: bytes,
     signed: bytes,
     creation_time_ms: int,
-    chain: str,
+    network_id: str,
     authority: str,
     time_to_live_ms: int,
     nonce: Optional[int],
@@ -94,7 +109,7 @@ def _fixture_entry(
         "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed),  # type: ignore[attr-defined]
         "signed_len": len(signed),
         "creation_time_ms": creation_time_ms,
-        "chain": chain,
+        "network_id": network_id,
         "authority": authority,
         "time_to_live_ms": time_to_live_ms,
         "nonce": nonce,
@@ -104,8 +119,10 @@ def _fixture_entry(
 def _payload_entry(name: str = "alpha") -> dict:
     return {
         "name": name,
-        "payload_base64": base64.b64encode(f"{name}-payload".encode()).decode(),
-        "chain": "00000002",
+        "payload_base64": base64.b64encode(
+            _transaction_payload(f"{name}-payload".encode())
+        ).decode(),
+        "network_id": TEST_NETWORK_ID,
         "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
@@ -146,6 +163,96 @@ def test_payload_loader_requires_exact_top_level_and_payload_fields(
     path.write_text(json.dumps(document), encoding="utf-8")
     with pytest.raises(ValueError, match=r"unexpected=\['unexpected'\]"):
         MODULE.load_payload_fixtures(path)
+
+
+@pytest.mark.parametrize("legacy_key", ("chain", "chainId", "chain_id"))
+def test_fixture_schemas_reject_all_legacy_chain_fields(
+    tmp_path: Path, legacy_key: str
+) -> None:
+    top_level = _payload_entry(f"legacy-top-level-{legacy_key}")
+    top_level.pop("network_id")
+    top_level[legacy_key] = "legacy"
+    path = _write_payloads(
+        tmp_path / f"legacy-top-level-{legacy_key}.json", [top_level]
+    )
+    with pytest.raises(
+        ValueError,
+        match=rf"missing=\['network_id'\], unexpected=\['{legacy_key}'\]",
+    ):
+        MODULE.load_payload_fixtures(path)
+
+    nested_path = _write_payloads(
+        tmp_path / f"legacy-payload-{legacy_key}.json",
+        [_payload_entry(f"legacy-payload-{legacy_key}")],
+    )
+    document = json.loads(nested_path.read_text(encoding="utf-8"))
+    document[0]["payload"][legacy_key] = document[0]["payload"].pop("network_id")
+    nested_path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(
+        ValueError,
+        match=rf"missing=\['network_id'\], unexpected=\['{legacy_key}'\]",
+    ):
+        MODULE.load_payload_fixtures(nested_path)
+
+    manifest_entry = _fixture_entry(
+        f"legacy-manifest-{legacy_key}",
+        f"legacy-manifest-{legacy_key}.norito",
+        _transaction_payload(b"payload"),
+        b"signed",
+        1,
+        TEST_NETWORK_ID,
+        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+        100_000,
+        None,
+    )
+    manifest_entry[legacy_key] = manifest_entry.pop("network_id")
+    assert MODULE.compare(tmp_path, {"fixtures": [manifest_entry]}, {}) == [
+        "manifest fixture has invalid fields: "
+        f"missing=['network_id'], unexpected=['{legacy_key}']"
+    ]
+
+
+def test_network_id_validator_requires_exact_canonical_hash_identity() -> None:
+    assert MODULE.validate_network_id(TEST_NETWORK_ID, "fixture") == TEST_NETWORK_ID
+
+    unmarked_body = "00" * 32
+    unmarked_checksum = MODULE._crc16_ccitt_false(  # type: ignore[attr-defined]
+        f"hash:{unmarked_body}".encode("ascii")
+    )
+    unmarked = f"hash:{unmarked_body}#{unmarked_checksum:04X}"
+    invalid = [
+        "00000002",
+        TEST_NETWORK_ID.lower(),
+        f"{TEST_NETWORK_ID[:-4]}0000",
+        unmarked,
+        None,
+    ]
+    for value in invalid:
+        with pytest.raises(ValueError, match="network_id"):
+            MODULE.validate_network_id(value, "fixture")
+
+
+def test_transaction_payload_network_id_requires_exact_network_domain() -> None:
+    canonical = _transaction_payload(b"tail")
+    assert MODULE.transaction_payload_network_id(canonical, "fixture") == bytes.fromhex(
+        TEST_NETWORK_ID[5:69]
+    )
+    MODULE.require_transaction_network_id(canonical, TEST_NETWORK_ID, "fixture")
+
+    with pytest.raises(ValueError, match="does not match"):
+        MODULE.require_transaction_network_id(
+            canonical,
+            TEST_OTHER_NETWORK_ID,
+            "fixture",
+        )
+
+    genesis = _field((1).to_bytes(4, "little"))
+    with pytest.raises(ValueError, match="genesis-only"):
+        MODULE.transaction_payload_network_id(genesis, "fixture")
+
+    malformed = _field((0).to_bytes(4, "little") + _field(b"short"))
+    with pytest.raises(ValueError, match="malformed transaction network_id"):
+        MODULE.transaction_payload_network_id(malformed, "fixture")
 
 
 def test_payload_loader_requires_one_executable_variant_and_accepts_direct_call(
@@ -270,10 +377,10 @@ def test_manifest_requires_exact_schema_and_canonical_encoded_file(
     entry = _fixture_entry(
         "alpha",
         "alpha.norito",
-        b"payload",
+        _transaction_payload(b"payload"),
         b"signed",
         1,
-        "00000002",
+        TEST_NETWORK_ID,
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
@@ -337,8 +444,8 @@ def test_payload_loader_rejects_nonce_outside_nonzero_u32_range(
 ) -> None:
     entry = {
         "name": "invalid-nonce",
-        "payload_base64": base64.b64encode(b"payload").decode(),
-        "chain": "00000002",
+        "payload_base64": base64.b64encode(_transaction_payload(b"payload")).decode(),
+        "network_id": TEST_NETWORK_ID,
         "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
@@ -360,8 +467,8 @@ def test_payload_loader_rejects_non_positive_integer_ttl(
 ) -> None:
     entry = {
         "name": "invalid-ttl",
-        "payload_base64": base64.b64encode(b"payload").decode(),
-        "chain": "00000002",
+        "payload_base64": base64.b64encode(_transaction_payload(b"payload")).decode(),
+        "network_id": TEST_NETWORK_ID,
         "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": ttl,
@@ -376,8 +483,8 @@ def test_payload_loader_rejects_non_positive_integer_ttl(
 def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
     entry = {
         "name": "missing-ttl",
-        "payload_base64": base64.b64encode(b"payload").decode(),
-        "chain": "00000002",
+        "payload_base64": base64.b64encode(_transaction_payload(b"payload")).decode(),
+        "network_id": TEST_NETWORK_ID,
         "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "nonce": None,
@@ -389,12 +496,12 @@ def test_payload_loader_rejects_missing_ttl(tmp_path: Path) -> None:
 
 
 def test_payload_loader_rejects_retired_encoded_alias(tmp_path: Path) -> None:
-    payload_base64 = base64.b64encode(b"payload").decode()
+    payload_base64 = base64.b64encode(_transaction_payload(b"payload")).decode()
     entry = {
         "name": "retired-alias",
         "payload_base64": payload_base64,
         "encoded": payload_base64,
-        "chain": "00000002",
+        "network_id": TEST_NETWORK_ID,
         "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
@@ -409,8 +516,8 @@ def test_payload_loader_rejects_retired_encoded_alias(tmp_path: Path) -> None:
 def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
     entry = {
         "name": "duplicate",
-        "payload_base64": base64.b64encode(b"payload").decode(),
-        "chain": "00000002",
+        "payload_base64": base64.b64encode(_transaction_payload(b"payload")).decode(),
+        "network_id": TEST_NETWORK_ID,
         "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
@@ -425,8 +532,8 @@ def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
 def test_payload_loader_rejects_renamed_cloned_payloads(tmp_path: Path) -> None:
     first = {
         "name": "first",
-        "payload_base64": base64.b64encode(b"payload").decode(),
-        "chain": "00000002",
+        "payload_base64": base64.b64encode(_transaction_payload(b"payload")).decode(),
+        "network_id": TEST_NETWORK_ID,
         "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         "creation_time_ms": 1,
         "time_to_live_ms": 100_000,
@@ -443,10 +550,10 @@ def test_manifest_checker_rejects_duplicate_names_and_files(tmp_path: Path) -> N
     entry = _fixture_entry(
         "duplicate",
         "duplicate.norito",
-        b"payload",
+        _transaction_payload(b"payload"),
         b"signed",
         1,
-        "00000002",
+        TEST_NETWORK_ID,
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
@@ -462,10 +569,10 @@ def test_manifest_checker_rejects_renamed_cloned_payloads(tmp_path: Path) -> Non
     first = _fixture_entry(
         "first",
         "first.norito",
-        b"payload",
+        _transaction_payload(b"payload"),
         b"signed",
         1,
-        "00000002",
+        TEST_NETWORK_ID,
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
@@ -488,10 +595,10 @@ def test_manifest_checker_rejects_nonce_outside_nonzero_u32_range(
     entry = _fixture_entry(
         "invalid-nonce",
         "invalid-nonce.norito",
-        b"payload",
+        _transaction_payload(b"payload"),
         b"signed",
         1,
-        "00000002",
+        TEST_NETWORK_ID,
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         nonce,  # type: ignore[arg-type]
@@ -513,10 +620,10 @@ def test_manifest_checker_rejects_non_positive_integer_ttl(
     entry = _fixture_entry(
         "invalid-ttl",
         "invalid-ttl.norito",
-        b"payload",
+        _transaction_payload(b"payload"),
         b"signed",
         1,
-        "00000002",
+        TEST_NETWORK_ID,
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
@@ -534,10 +641,10 @@ def test_manifest_checker_rejects_missing_ttl(tmp_path: Path) -> None:
     entry = _fixture_entry(
         "missing-ttl",
         "missing-ttl.norito",
-        b"payload",
+        _transaction_payload(b"payload"),
         b"signed",
         1,
-        "00000002",
+        TEST_NETWORK_ID,
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
         100_000,
         None,
@@ -553,12 +660,12 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"alpha-payload"
+    payload_bytes = _transaction_payload(b"alpha-payload")
     signed_bytes = b"alpha-signed"
     (resources / "alpha.norito").write_bytes(payload_bytes)
 
     creation_time_ms = 1_735_000_000_123
-    chain = "00000002"
+    network_id = TEST_NETWORK_ID
     authority = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
     time_to_live_ms = 5000
     nonce = 42
@@ -569,7 +676,7 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
                 "name": "alpha",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": creation_time_ms,
-                "chain": chain,
+                "network_id": network_id,
                 "authority": authority,
                 "time_to_live_ms": time_to_live_ms,
                 "nonce": nonce,
@@ -585,7 +692,7 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms,
-                chain=chain,
+                network_id=network_id,
                 authority=authority,
                 time_to_live_ms=time_to_live_ms,
                 nonce=nonce,
@@ -642,12 +749,12 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"bravo"
+    payload_bytes = _transaction_payload(b"bravo")
     signed_bytes = b"bravo-signed"
     (resources / "bravo.norito").write_bytes(payload_bytes)
 
     creation_time_ms = 1_735_000_000_222
-    chain = "00000003"
+    network_id = TEST_NETWORK_ID
     authority = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
     time_to_live_ms = 100_000
     nonce = None
@@ -658,7 +765,7 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
                 "name": "bravo",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": creation_time_ms,
-                "chain": chain,
+                "network_id": network_id,
                 "authority": authority,
                 "time_to_live_ms": time_to_live_ms,
                 "nonce": nonce,
@@ -671,7 +778,7 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
         payload_bytes,
         signed_bytes,
         creation_time_ms,
-        chain=chain,
+        network_id=network_id,
         authority=authority,
         time_to_live_ms=time_to_live_ms,
         nonce=nonce,
@@ -707,11 +814,11 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"charlie-payload"
+    payload_bytes = _transaction_payload(b"charlie-payload")
     signed_bytes = b"charlie-signed"
     (resources / "charlie.norito").write_bytes(payload_bytes)
 
-    chain = "00000004"
+    network_id = TEST_NETWORK_ID
     authority = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
@@ -720,7 +827,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
                 "name": "charlie",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_333,
-                "chain": chain,
+                "network_id": network_id,
                 "authority": authority,
                 "time_to_live_ms": 100_000,
                 "nonce": None,
@@ -736,7 +843,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms=1_735_000_000_999,
-                chain=chain,
+                network_id=network_id,
                 authority=authority,
                 time_to_live_ms=100_000,
                 nonce=None,
@@ -758,11 +865,11 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
     assert exit_code == 1
 
 
-def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
+def test_network_id_mismatch_triggers_error(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"delta-payload"
+    payload_bytes = _transaction_payload(b"delta-payload")
     signed_bytes = b"delta-signed"
     (resources / "delta.norito").write_bytes(payload_bytes)
 
@@ -773,7 +880,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
                 "name": "delta",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_444,
-                "chain": "00000004",
+                "network_id": TEST_NETWORK_ID,
                 "authority": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
                 "time_to_live_ms": 100_000,
                 "nonce": None,
@@ -789,7 +896,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms=1_735_000_000_444,
-                chain="00000005",
+                network_id=TEST_OTHER_NETWORK_ID,
                 authority="sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
                 time_to_live_ms=100_000,
                 nonce=None,
@@ -815,7 +922,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"golf-payload"
+    payload_bytes = _transaction_payload(b"golf-payload")
     signed_bytes = b"golf-signed"
     (resources / "golf.norito").write_bytes(payload_bytes)
 
@@ -826,7 +933,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
                 "name": "golf",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_777,
-                "chain": "00000008",
+                "network_id": TEST_NETWORK_ID,
                 "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
                 "time_to_live_ms": 100_000,
                 "nonce": None,
@@ -842,7 +949,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms=1_735_000_000_777,
-                chain="00000008",
+                network_id=TEST_NETWORK_ID,
                 authority="sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36",
                 time_to_live_ms=100_000,
                 nonce=None,
@@ -868,7 +975,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"hotel-payload"
+    payload_bytes = _transaction_payload(b"hotel-payload")
     signed_bytes = b"hotel-signed"
     (resources / "hotel.norito").write_bytes(payload_bytes)
 
@@ -879,7 +986,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
                 "name": "hotel",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_888,
-                "chain": "00000009",
+                "network_id": TEST_NETWORK_ID,
                 "authority": "sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36",
                 "time_to_live_ms": 5000,
                 "nonce": 7,
@@ -895,7 +1002,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms=1_735_000_000_888,
-                chain="00000009",
+                network_id=TEST_NETWORK_ID,
                 authority="sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36",
                 time_to_live_ms=6000,
                 nonce=7,
@@ -921,7 +1028,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"india-payload"
+    payload_bytes = _transaction_payload(b"india-payload")
     signed_bytes = b"india-signed"
     (resources / "india.norito").write_bytes(payload_bytes)
 
@@ -932,7 +1039,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
                 "name": "india",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_999,
-                "chain": "00000010",
+                "network_id": TEST_NETWORK_ID,
                 "authority": "sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE",
                 "time_to_live_ms": 100_000,
                 "nonce": 9,
@@ -948,7 +1055,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms=1_735_000_000_999,
-                chain="00000010",
+                network_id=TEST_NETWORK_ID,
                 authority="sorauﾛ1NfｺｷﾘcﾙｦEﾑgsKti4Zﾘ6HKｳZCﾅｸｼ16fvSｲymｶｻﾘﾎ29JNWE",
                 time_to_live_ms=100_000,
                 nonce=11,
@@ -974,7 +1081,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"echo-payload"
+    payload_bytes = _transaction_payload(b"echo-payload")
     signed_bytes = b"echo-signed"
     (resources / "echo.norito").write_bytes(payload_bytes)
 
@@ -985,7 +1092,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
                 "name": "echo",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_555,
-                "chain": "00000006",
+                "network_id": TEST_NETWORK_ID,
                 "authority": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 "time_to_live_ms": 100_000,
             }
@@ -1000,7 +1107,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms=1_735_000_000_555,
-                chain="00000006",
+                network_id=TEST_NETWORK_ID,
                 authority="sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 time_to_live_ms=100_000,
                 nonce=None,
@@ -1026,7 +1133,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
     resources = tmp_path / "resources"
     resources.mkdir()
 
-    payload_bytes = b"foxtrot-payload"
+    payload_bytes = _transaction_payload(b"foxtrot-payload")
     signed_bytes = b"foxtrot-signed"
     (resources / "foxtrot.norito").write_bytes(payload_bytes)
 
@@ -1037,7 +1144,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
                 "name": "foxtrot",
                 "payload_base64": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_666,
-                "chain": "00000007",
+                "network_id": TEST_NETWORK_ID,
                 "authority": "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
                 "nonce": None,
             }
@@ -1052,7 +1159,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
                 payload_bytes,
                 signed_bytes,
                 creation_time_ms=1_735_000_000_666,
-                chain="00000007",
+                network_id=TEST_NETWORK_ID,
                 authority="sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
                 time_to_live_ms=100_000,
                 nonce=None,

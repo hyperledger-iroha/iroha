@@ -1,5 +1,6 @@
 ---- MODULE SumeragiV2AsyncTemporalRankProofs ----
-EXTENDS SumeragiV2AsyncRecoveryProgressWitnessProofs
+EXTENDS SumeragiV2AsyncRecoveryProgressWitnessProofs,
+        SumeragiV2AsyncCausalWorkBudgetProofs
 
 (***************************************************************************
 GST cannot coexist with the responsive replay quarantine.  `AsyncSetGST`
@@ -1096,43 +1097,6 @@ BY CandidateIoIndexCharacterization, Isa
        ConsensusIoCandidates, QueuedCandidates, DeferredCandidates,
        CausalCandidates, TrackedWorkCandidates, CandidateScheduled,
        CandidateInReadyQueue, SequenceSet, AsyncIoQueueDepth
-
-THEOREM QueuedIoServiceIsNonstuttering ==
-  \A node \in AsyncArchiveIoServiceNodes:
-    /\ AsyncTypeInvariant
-    /\ AsyncIoQueueDepth(node) > 0
-    /\ PostGstServiceIoWorker(node)
-    => <<PostGstServiceIoWorker(node)>>_AsyncAllVars
-PROOF
-  <1>1. ASSUME NEW node \in AsyncArchiveIoServiceNodes,
-                AsyncTypeInvariant,
-                AsyncIoQueueDepth(node) > 0,
-                PostGstServiceIoWorker(node)
-         PROVE <<PostGstServiceIoWorker(node)>>_AsyncAllVars
-    <2>1. /\ node \in ValidatorIds
-           /\ AsyncIoSequenceTyped(asyncIoQueues[node])
-      BY <1>1, AsyncArchiveIoServiceNodesAreValidators
-         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
-             AsyncIoQueueContentTypeInvariant
-    <2>2. /\ asyncIoQueues[node] \in Seq(Range(asyncIoQueues[node]))
-           /\ Len(asyncIoQueues[node]) > 0
-      BY <1>1, <2>1
-         DEF AsyncIoSequenceTyped, AsyncIoQueueDepth
-    <2>3. /\ asyncIoQueues[node] # <<>>
-           /\ Len(Tail(asyncIoQueues[node]))
-                = Len(asyncIoQueues[node]) - 1
-      BY <2>2, PositiveSequenceIsNonempty, HeadTailProperties
-    <2>4. Tail(asyncIoQueues[node]) # asyncIoQueues[node]
-      BY <2>2, <2>3, LenProperties, Isa
-    <2>5. asyncIoQueues'[node] = Tail(asyncIoQueues[node])
-      BY <1>1, <2>1
-         DEF PostGstServiceIoWorker, ServiceIoWorker
-    <2>6. asyncIoQueues' # asyncIoQueues
-      BY <2>4, <2>5, Isa
-    <2> QED BY <1>1, <2>6, Isa
-         DEF AsyncAllVars, AsyncSchedulerVars
-  <1> QED BY <1>1
 
 THEOREM ProtectedStage5EnablesFairWorker ==
   \A candidate, position:
@@ -2356,15 +2320,15 @@ BY RuntimeStepDecreasesDrainableIngressTurnReach,
 Certified-response retry closure.
 
 A live response claim is process-local linear authority, not another command
-owner. While its dedicated Completion reservation is physically full, the
-capacity-first auxiliary rank accounts for every action which may precede a
-FIFO removal. Once that removal opens the final slot, the rank switches to
-the target-aware Ingress-turn distance instead of crossing the deliberate
-zero-to-Local reset in `RuntimeReachRank`. Ordinary completions stop one slot
-below physical capacity, so local producer turns cannot consume the response
-slot once it is available. The finite local-turn budget then reaches ingress,
-whose selector gives the drainable claimed response one-shot priority over
-every other source.
+owner. While its Completion admission is blocked, the capacity-first
+auxiliary rank accounts for every action which may precede a FIFO removal.
+Once exact class admission opens, the rank switches to the target-aware
+Ingress-turn distance instead of crossing the deliberate zero-to-Local reset
+in `RuntimeReachRank`. The finite local-turn budget accounts for ordinary
+Completion owners, and the Ingress selector gives a still-drainable claimed
+response one-shot priority over every other source. A certified root owns one
+separate retained physical credit; the response itself never earns that
+credit.
 ***************************************************************************)
 
 CertifiedResponseClaimRunnerOwned(node) ==
@@ -2389,21 +2353,59 @@ CertifiedResponseClaimRetryReady(node) ==
 The generic `ReadyRunAuxRank` reaches Runtime and therefore deliberately maps
 Runtime to zero.  A certified-response claim has two different obligations:
 
-  1. while the final runtime slot is full, reach one serialized FIFO removal;
-  2. after that reserved slot opens, reach the positive-budget Ingress turn
+  1. while exact Completion admission is blocked, consume the finite weighted
+     set of direct certified roots and their trusted causal descendants; one
+     Fresh potential pays for the only root which may still enter the retained
+     response episode;
+  2. after Completion admission opens, reach the positive-budget Ingress turn
      which consumes the already-claimed response.
 
 Those obligations cannot share `RuntimeReachRank`: a FIFO or idle Runtime turn
 resets the runner to Local and would increase that component.  The outer
-capacity bit below makes a slot-opening FIFO removal strictly decreasing
+capacity bit below makes an admission-opening FIFO removal strictly decreasing
 regardless of the reset.  In the open-capacity branch every generic blocker
-component is zeroed and only `DrainableIngressTurnReachRank` remains.  Ordinary
-local completions stop one slot below physical capacity, so that branch cannot
-return to the full-capacity branch before the claimed response is serviced.
+component is zeroed and only `DrainableIngressTurnReachRank` remains. The
+separate certified credit is derived from an already-retained authenticated
+root and is not attributed to this body response. Root identity uses the exact
+direct DeliverTC/DeliverQC classifier; inherited evidence and internal install
+successors appear only in the separately weighted causal tail.
 ***************************************************************************)
 
+CertifiedResponseClaimDirectPacemakerWorkTokens(node) ==
+  UNION {
+    {<<"Runtime", index, token>>:
+       token \in
+         1..AsyncCausalExactRemainingOccurrenceBudget(
+              asyncCommandQueues[node][index].kind)}:
+    index \in CertifiedPacemakerRootIndices(node)}
+
+CertifiedResponseClaimCausalPacemakerWorkTokens(node) ==
+  UNION {
+    {<<"Causal", index, token>>:
+       token \in
+         1..AsyncCausalExactRemainingOccurrenceBudget(
+              asyncCausalQueues[node][index].kind)}:
+    index \in CertifiedPacemakerCausalIndices(node)}
+
+CertifiedResponseClaimPacemakerWorkDebt(node) ==
+  Cardinality(
+    CertifiedResponseClaimDirectPacemakerWorkTokens(node)
+      \cup CertifiedResponseClaimCausalPacemakerWorkTokens(node))
+
+CertifiedResponseClaimFreshEscapePotential(node) ==
+  IF /\ CertifiedResponseClaimRecordsAt(node) # {}
+     /\ RetainedCertifiedFenceEscapePhase(node) = "Fresh"
+  THEN 19
+  ELSE 0
+
+CertifiedResponseClaimPacemakerDebtBound ==
+  19 * (AsyncQueueCapacity + AsyncCausalCandidateLifecycleCapacity + 1)
+
 CertifiedResponseClaimCapacityDebt(node) ==
-  IF CanEnqueueCertifiedResponse(node) THEN 0 ELSE 1
+  IF CanEnqueueCertifiedResponse(node)
+  THEN 0
+  ELSE 1 + CertifiedResponseClaimPacemakerWorkDebt(node)
+           + CertifiedResponseClaimFreshEscapePotential(node)
 
 CertifiedResponseClaimOpenInnerRank(node) ==
   <<0, DrainableIngressTurnReachRank(node)>>
@@ -2426,12 +2428,15 @@ CertifiedResponseClaimAuxRank(node) ==
   <<CertifiedResponseClaimCapacityDebt(node),
     CertifiedResponseClaimBlockerRank(node)>>
 
-CertifiedResponseClaimAuxCarrier == (0..1) \X ReadyRunAuxCarrier
+CertifiedResponseClaimAuxCarrier ==
+  (0..(CertifiedResponseClaimPacemakerDebtBound + 1))
+    \X ReadyRunAuxCarrier
 
 CertifiedResponseClaimAuxOrdering ==
   LexPairOrdering(
     OpToRel(<, Nat), ReadyRunAuxOrdering,
-    0..1, ReadyRunAuxCarrier)
+    0..(CertifiedResponseClaimPacemakerDebtBound + 1),
+    ReadyRunAuxCarrier)
 
 THEOREM CertifiedResponseClaimAuxOrderingIsWellFounded ==
   IsWellFoundedOn(
@@ -2448,8 +2453,9 @@ THEOREM CertifiedResponseClaimAuxRankInCarrier ==
       => CertifiedResponseClaimAuxRank(node)
            \in CertifiedResponseClaimAuxCarrier
 BY AsyncStrongTypeProjectsAsyncType,
+   AsyncCausalExactRemainingOccurrenceBudgetIsBounded,
    DrainableIngressTurnReachRankIsNatural,
-   ReadyRunAuxRankInCarrier, Isa
+   ReadyRunAuxRankInCarrier, FS_CardinalityType, IsaT(900)
    DEF CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
        CertifiedResponseClaimBlockerRank,
@@ -2457,6 +2463,13 @@ BY AsyncStrongTypeProjectsAsyncType,
        CertifiedResponseClaimOpenDeferredRank,
        CertifiedResponseClaimOpenTimeoutRank,
        CertifiedResponseClaimOpenInnerRank,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
+       CertifiedResponseClaimPacemakerDebtBound,
+       CertifiedPacemakerRootIndices, CertifiedPacemakerCausalIndices,
+       AsyncCausalExactRemainingOccurrenceBudget,
        CertifiedResponseClaimAuxCarrier,
        ReadyRunAuxCarrier, ReadyRunDeferredCarrier,
        ReadyRunTimeoutCarrier, ReadyRunInnerCarrier
@@ -2687,6 +2700,7 @@ THEOREM ClaimedResponseBlockedLocalDecreasesAux ==
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ LocalAdmissionStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
@@ -2697,6 +2711,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2717,13 +2735,17 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        LocalAdmissionStep, LocalAdmissionCanAdvance,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseBlockedLocalPredecessorDecreasesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ SerializedLocalPrecedesServeIngressStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
@@ -2734,6 +2756,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2756,24 +2782,34 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SelectedLocalAdmissionAdvance,
        LocalAdmissionCanAdvance,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse,
-       CanEnqueueClass, AsyncQueueDepth, AsyncAllVars
+       CanEnqueueClass, AsyncQueueDepth,
+       RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseBlockedIngressDecreasesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ IngressDrainStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncCausalExactRemainingOccurrenceBudgetIsBounded,
    IngressDrainStrictlyDecreasesRuntimeReach,
    ExhaustedIngressStepDecreasesDrainableIngressTurnReach,
    CertifiedResponseClaimAuxRankInCarrier, ClaimedResponseIngressRetryDrainsClaim,
-   IsaT(300)
+   FS_CardinalityType, IsaT(1800)
    DEF CertifiedResponseClaimAuxStrictResult,
        CertifiedResponseClaimAuxProgress,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2795,7 +2831,19 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        IngressDrainStep, DrainFairIngressSelected,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
        AsyncQueueDepth, PostGstRunNode, RunNode, RunNodeWork,
-       AsyncAllVars
+       EnqueueCandidate, AsyncCandidateIsDirectCertifiedFenceEscape,
+       AsyncQueuedCandidateIsCertifiedFenceEscape,
+       AsyncCertifiedFenceEscapeItem, AsyncCertifiedFenceEscapeKinds,
+       AsyncAuthenticatedCertifiedFenceEscapeAuthorities,
+       AsyncCandidateHasCertifiedFenceRoot,
+       CertifiedPacemakerRootIndices, CertifiedPacemakerCausalIndices,
+       AsyncCausalExactRemainingOccurrenceBudget,
+       RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission, AsyncAllVars
 
 THEOREM ClaimedResponseDeferredDrainDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2803,6 +2851,7 @@ THEOREM ClaimedResponseDeferredDrainDecreasesAux ==
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ SerializedRunnerRuntimeStep(node)
     /\ DeferredDrainStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
@@ -2812,6 +2861,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2835,7 +2888,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        RemoveNextDeferredCommand, DiscardCommand,
        AdvanceNextDeferredClass, DeferredQueueNonempty,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseDeferredTagDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2843,6 +2899,7 @@ THEOREM ClaimedResponseDeferredTagDecreasesAux ==
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ SerializedRunnerRuntimeStep(node)
     /\ DeferredTagStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
@@ -2852,6 +2909,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2874,7 +2935,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRuntimePrecedesServeIngressStep, DeferredTagStep,
        DeferredTimeoutStep, DeferredRetransmitStep,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseDirectTimeoutDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2882,6 +2946,7 @@ THEOREM ClaimedResponseDirectTimeoutDecreasesAux ==
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ SerializedRunnerRuntimeStep(node)
     /\ DirectTimeoutStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
@@ -2891,6 +2956,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2913,24 +2982,32 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRuntimePrecedesServeIngressStep,
        DirectTimeoutStep, TimeoutDue,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
-THEOREM ClaimedResponseFifoRuntimeOpensSlot ==
+THEOREM ClaimedResponseFifoRuntimeDecreasesCapacityDebt ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
    CertifiedResponseClaimAuxRankInCarrier, SequenceWithoutIndexFacts,
-   IsaT(300)
+   FS_CardinalityType, IsaT(7200)
    DEF CertifiedResponseClaimAuxStrictResult,
        CertifiedResponseClaimAuxProgress,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2953,7 +3030,24 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRuntimePrecedesServeIngressStep, FifoRuntimeStep,
        RemoveNextNodeCommand, DeferCommand, DiscardCommand,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, NodeQueueNonempty, AsyncAllVars
+       CanEnqueueWithCertifiedFenceCredit,
+       AsyncAdmissionCertifiedFenceCredit, AsyncCertifiedFenceCredit,
+       AsyncQueuedCertifiedFenceEscapeCount,
+       AsyncQueuedCandidateIsCertifiedFenceEscape,
+       AsyncCertifiedFenceEscapeItem, AsyncCertifiedFenceEscapeKinds,
+       AsyncAuthenticatedCertifiedFenceEscapeAuthorities,
+       AsyncCandidateIsDirectCertifiedFenceEscape,
+       AsyncCandidateHasCertifiedFenceRoot,
+       CertifiedPacemakerRootIndices, CertifiedPacemakerCausalIndices,
+       AsyncCausalExactRemainingOccurrenceBudget,
+       AsyncQueuedClassCount, AsyncQueuedNoncompletionCount,
+       AsyncQueueDepth, NodeQueueNonempty,
+       RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission, AsyncAllVars
 
 THEOREM ClaimedResponseRetransmitDecreasesAux ==
   \A node \in ValidatorIds:
@@ -2962,6 +3056,7 @@ THEOREM ClaimedResponseRetransmitDecreasesAux ==
     /\ SerializedRunnerRuntimeStep(node)
     /\ DirectRetransmitStep(node)
     /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
@@ -2971,6 +3066,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -2993,7 +3092,11 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRuntimePrecedesServeIngressStep,
        DirectRetransmitStep,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, NodeQueueNonempty, AsyncAllVars
+       AsyncQueueDepth, NodeQueueNonempty,
+       RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseIdleRuntimeOpensSlot ==
   \A node \in ValidatorIds:
@@ -3002,6 +3105,7 @@ THEOREM ClaimedResponseIdleRuntimeOpensSlot ==
     /\ SerializedRunnerRuntimeStep(node)
     /\ IdleRuntimeStep(node)
     /\ ~NodeQueueNonempty(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
@@ -3011,6 +3115,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3032,19 +3140,25 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep, IdleRuntimeStep,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, NodeQueueNonempty, AsyncAllVars
+       AsyncQueueDepth, NodeQueueNonempty,
+       RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseSerializedRunnerRuntimeDecreasesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ SerializedRunnerRuntimeStep(node)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStrictResult(node, rank)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW rank \in CertifiedResponseClaimAuxCarrier,
                 CertifiedResponseClaimBlockedAtAux(node, rank),
-                SerializedRunnerRuntimeStep(node)
+                SerializedRunnerRuntimeStep(node),
+                AsyncControlServiceSlotTransition
          PROVE CertifiedResponseClaimAuxStrictResult(node, rank)
     <2>1. RuntimeStep(node)
       BY <1>1
@@ -3058,7 +3172,8 @@ PROOF
     <2>4. CASE DirectTimeoutStep(node)
       BY <1>1, <2>4, ClaimedResponseDirectTimeoutDecreasesAux
     <2>5. CASE FifoRuntimeStep(node)
-      BY <1>1, <2>5, ClaimedResponseFifoRuntimeOpensSlot
+      BY <1>1, <2>5,
+         ClaimedResponseFifoRuntimeDecreasesCapacityDebt
     <2>6. CASE /\ DirectRetransmitStep(node)
                  /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
       BY <1>1, <2>6, ClaimedResponseRetransmitDecreasesAux
@@ -3069,12 +3184,85 @@ PROOF
          DEF RuntimeStep
   <1> QED BY <1>1
 
+(***************************************************************************
+The barrier-only pacemaker arm was previously absent from the RunNode case
+split.  Its direct TC/CommitQC root and every trusted descendant are charged
+by remaining-work tokens. Removing either selected occurrence consumes
+strictly more weight than its successor batch can recreate. The Fresh token
+pays for the sole concurrently admissible root and disappears atomically when
+that root charges the retained-response episode. A direct timeout instead
+strictly consumes the existing Ready timeout component.
+***************************************************************************)
+THEOREM ClaimedResponseSerializedCertifiedPacemakerDecreasesAux ==
+  \A node \in ValidatorIds:
+    \A rank \in CertifiedResponseClaimAuxCarrier:
+    /\ CertifiedResponseClaimBlockedAtAux(node, rank)
+    /\ SerializedCertifiedPacemakerStep(node)
+    /\ AsyncControlServiceSlotTransition
+    => CertifiedResponseClaimAuxStrictResult(node, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncCommandExactSuccessorBatchStrictlyConsumesOccurrenceBudget,
+   AsyncCausalExactRemainingOccurrenceBudgetIsBounded,
+   CertifiedResponseClaimAuxRankInCarrier,
+   SequenceWithoutIndexFacts, FS_CardinalityType, IsaT(7200)
+   DEF CertifiedResponseClaimAuxStrictResult,
+       CertifiedResponseClaimAuxProgress,
+       CertifiedResponseClaimBlockedAtAux,
+       CertifiedResponseClaimAuxRank,
+       CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
+       CertifiedResponseClaimPacemakerDebtBound,
+       CertifiedResponseClaimBlockerRank,
+       CertifiedResponseClaimOpenBlockerRank,
+       CertifiedResponseClaimOpenDeferredRank,
+       CertifiedResponseClaimOpenTimeoutRank,
+       CertifiedResponseClaimOpenInnerRank,
+       CertifiedResponseClaimAuxOrdering,
+       CertifiedResponseClaimAuxCarrier,
+       CertifiedResponseClaimRunnerOwned,
+       CertifiedResponseClaimRunnerGoal,
+       CertifiedResponseClaimRetryReady,
+       CertifiedResponseClaimIngressRetryReady,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyFifoDebt, ReadyDeferredCount,
+       ReadyTimeoutDebt, ReadyTagDrainDebt, ReadyTagCount,
+       RuntimeReachRank,
+       SerializedCertifiedPacemakerStep,
+       CertifiedPacemakerRootStep, CertifiedPacemakerCausalStep,
+       CertifiedPacemakerRootIndices, CertifiedPacemakerRootIndex,
+       CertifiedPacemakerCausalIndices, CertifiedPacemakerCausalIndex,
+       AsyncCandidateHasCertifiedFenceRoot,
+       AsyncCandidateIsDirectCertifiedFenceEscape,
+       AsyncQueuedCandidateIsCertifiedFenceEscape,
+       AsyncCertifiedFenceEscapeItem, AsyncCertifiedFenceEscapeKinds,
+       AsyncAuthenticatedCertifiedFenceEscapeAuthorities,
+       AsyncCausalExactRemainingOccurrenceBudget,
+       FreshCommandSuccessors, CommandSuccessors,
+       DirectTimeoutStep, TimeoutDue,
+       CertifiedResponseClaimsAt, CertifiedResponseClaimRecordsAt,
+       RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       CanEnqueueCertifiedResponse, CanEnqueueClass,
+       CanEnqueueWithCertifiedFenceCredit,
+       AsyncAdmissionCertifiedFenceCredit, AsyncCertifiedFenceCredit,
+       AsyncQueuedCertifiedFenceEscapeCount,
+       AsyncQueuedClassCount, AsyncQueuedNoncompletionCount,
+       AsyncQueueDepth, AsyncAllVars
+
 THEOREM ClaimedResponseTargetOnlyProducesAuxOutcome ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ PostGstRunNode(node)
     /\ AsyncServeIngressTargetOnlyTurn(node)
+    /\ AsyncControlServiceSlotTransition
     => \/ CertifiedResponseClaimAuxStrictResult(node, rank)
        \/ CertifiedResponseClaimServeEpisodeResidual(node, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
@@ -3086,6 +3274,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3107,13 +3299,18 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        PostGstRunNode, RunNode, RunNodeWork,
        AsyncServeIngressTargetOnlyTurn,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse,
-       CanEnqueueClass, AsyncQueueDepth, AsyncAllVars
+       CanEnqueueClass, AsyncQueueDepth,
+       RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseSameNodeRunProducesAuxOutcome ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ PostGstRunNode(node)
+    /\ AsyncControlServiceSlotTransition
     => \/ CertifiedResponseClaimAuxStrictResult(node, rank)
        \/ CertifiedResponseClaimServeEpisodeResidual(node, rank)'
        \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(node)
@@ -3123,7 +3320,8 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW rank \in CertifiedResponseClaimAuxCarrier,
                 CertifiedResponseClaimBlockedAtAux(node, rank),
-                PostGstRunNode(node)
+                PostGstRunNode(node),
+                AsyncControlServiceSlotTransition
          PROVE \/ CertifiedResponseClaimAuxStrictResult(node, rank)
                \/ CertifiedResponseClaimServeEpisodeResidual(node, rank)'
                \/ /\ AsyncCandidateProducerContinuationRunnerResolutionRequired(
@@ -3146,6 +3344,10 @@ PROOF
              CertifiedResponseClaimBlockedAtAux,
              CertifiedResponseClaimAuxRank,
              CertifiedResponseClaimCapacityDebt,
+             CertifiedResponseClaimPacemakerWorkDebt,
+             CertifiedResponseClaimDirectPacemakerWorkTokens,
+             CertifiedResponseClaimCausalPacemakerWorkTokens,
+             CertifiedResponseClaimFreshEscapePotential,
              CertifiedResponseClaimBlockerRank,
              CertifiedResponseClaimOpenBlockerRank,
              CertifiedResponseClaimOpenDeferredRank,
@@ -3166,7 +3368,10 @@ PROOF
              AsyncCandidateProducerContinuationExactRuntimeReplayStep,
              EnqueueCandidate, CertifiedResponseClaimsAt,
              CanEnqueueCertifiedResponse, CanEnqueueClass,
-             AsyncQueueDepth, AsyncAllVars
+             AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+             AsyncControlServiceSlotTransition,
+             AsyncCertifiedFenceEscapeStateAfterRuntime,
+             RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
     <2>2. CASE LocalAdmissionStep(node)
       BY <1>1, <2>2, ClaimedResponseBlockedLocalDecreasesAux
     <2>3. CASE IngressDrainStep(node)
@@ -3174,13 +3379,16 @@ PROOF
     <2>4. CASE SerializedRunnerRuntimeStep(node)
       BY <1>1, <2>4,
          ClaimedResponseSerializedRunnerRuntimeDecreasesAux
+    <2>4p. CASE SerializedCertifiedPacemakerStep(node)
+      BY <1>1, <2>4p,
+         ClaimedResponseSerializedCertifiedPacemakerDecreasesAux
     <2>5. CASE AsyncServeIngressTargetOnlyTurn(node)
       BY <1>1, <2>5,
          ClaimedResponseTargetOnlyProducesAuxOutcome
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>6,
          ClaimedResponseBlockedLocalPredecessorDecreasesAux
-    <2> QED BY <2>1, <2>1c, <2>2, <2>3, <2>4, <2>5, <2>6,
+    <2> QED BY <2>1, <2>1c, <2>2, <2>3, <2>4, <2>4p, <2>5, <2>6,
          RunNodeWorkConcreteActionCaseSplit
          DEF RunNode
   <1> QED BY <1>1
@@ -3189,14 +3397,15 @@ THEOREM ClaimedResponseOtherRunnerPreservesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
-    /\ \/ \E other \in AsyncCurrentResponsiveVoters:
-              /\ other # node
-              /\ RunNode(other)
-       \/ \E other \in AsyncResponsiveAppliedArchiveServers:
-              RunHistoricalServer(other)
-       \/ \E other \in asyncHistoricalRecoveryTargets:
-              /\ other # node
-              /\ RunHistoricalRecoveryNode(other)
+    /\ (\/ \E other \in AsyncCurrentResponsiveVoters:
+               /\ other # node
+               /\ RunNode(other)
+        \/ \E other \in AsyncResponsiveAppliedArchiveServers:
+               RunHistoricalServer(other)
+        \/ \E other \in asyncHistoricalRecoveryTargets:
+               /\ other # node
+               /\ RunHistoricalRecoveryNode(other))
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStepResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
    DEF CertifiedResponseClaimAuxStepResult,
@@ -3205,6 +3414,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3222,13 +3435,17 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        RuntimeReachRank, RunNode, RunNodeWork,
        RunHistoricalServer, RunHistoricalRecoveryNode,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseClockPreservesOrDecreasesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ AsyncTick
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStepResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
    DEF CertifiedResponseClaimAuxStepResult,
@@ -3237,6 +3454,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3257,20 +3478,24 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
        AsyncTick, AsyncNonClockVars, CertifiedResponseClaimsAt,
        CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseIoPreservesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
-    /\ \/ \E ioNode \in AsyncArchiveIoServiceNodes:
-              ServiceIoWorker(ioNode)
-       \/ \E ioNode \in asyncHistoricalRecoveryTargets:
-              ServiceHistoricalRecoveryIoWorker(ioNode)
-       \/ \E ioNode \in AsyncCurrentResponsiveVoters:
-              EnqueueIoLocalControl(ioNode)
-       \/ \E ioNode \in asyncHistoricalRecoveryTargets:
-              EnqueueHistoricalRecoveryIoLocalControl(ioNode)
+    /\ (\/ \E ioNode \in AsyncArchiveIoServiceNodes:
+               ServiceIoWorker(ioNode)
+        \/ \E ioNode \in asyncHistoricalRecoveryTargets:
+               ServiceHistoricalRecoveryIoWorker(ioNode)
+        \/ \E ioNode \in AsyncCurrentResponsiveVoters:
+               EnqueueIoLocalControl(ioNode)
+        \/ \E ioNode \in asyncHistoricalRecoveryTargets:
+               EnqueueHistoricalRecoveryIoLocalControl(ioNode))
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStepResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
    DEF CertifiedResponseClaimAuxStepResult,
@@ -3279,6 +3504,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3298,13 +3527,17 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
        EnqueueIoLocalControlWork, CertifiedResponseClaimsAt,
        CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseNetworkOrFaultPreservesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
     /\ (AsyncNetworkStep \/ AsyncFaultStep)
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStepResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
    DEF CertifiedResponseClaimAuxStepResult,
@@ -3313,6 +3546,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3330,17 +3567,21 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        RuntimeReachRank, AsyncNetworkStep, AdmitIngressPacket,
        AsyncFaultStep, PreGstCrash, InjectUntrustedTransportCompletion,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseOuterPrefixPreservesAux ==
   \A node \in ValidatorIds:
     \A rank \in CertifiedResponseClaimAuxCarrier:
     /\ CertifiedResponseClaimBlockedAtAux(node, rank)
-    /\ \/ \E other \in ValidatorIds: OpenHistoricalRecovery(other)
-       \/ \E other \in AsyncCurrentResponsiveVoters:
-              DirectCommitCertificateDiscoveryStep(other)
-       \/ \E other \in asyncHistoricalRecoveryTargets:
-              DirectHistoricalCommitCertificateDiscoveryStep(other)
+    /\ (\/ \E other \in ValidatorIds: OpenHistoricalRecovery(other)
+        \/ \E other \in AsyncCurrentResponsiveVoters:
+               DirectCommitCertificateDiscoveryStep(other)
+        \/ \E other \in asyncHistoricalRecoveryTargets:
+               DirectHistoricalCommitCertificateDiscoveryStep(other))
+    /\ AsyncControlServiceSlotTransition
     => CertifiedResponseClaimAuxStepResult(node, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
    DEF CertifiedResponseClaimAuxStepResult,
@@ -3349,6 +3590,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        CertifiedResponseClaimBlockedAtAux,
        CertifiedResponseClaimAuxRank,
        CertifiedResponseClaimCapacityDebt,
+       CertifiedResponseClaimPacemakerWorkDebt,
+       CertifiedResponseClaimDirectPacemakerWorkTokens,
+       CertifiedResponseClaimCausalPacemakerWorkTokens,
+       CertifiedResponseClaimFreshEscapePotential,
        CertifiedResponseClaimBlockerRank,
        CertifiedResponseClaimOpenBlockerRank,
        CertifiedResponseClaimOpenDeferredRank,
@@ -3368,7 +3613,10 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(180)
        DirectHistoricalCommitCertificateDiscoveryStep,
        CommitCertificateDiscoveryStepWork,
        CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse, CanEnqueueClass,
-       AsyncQueueDepth, AsyncAllVars
+       AsyncQueueDepth, RetainedCertifiedFenceEscapePhase,
+       AsyncControlServiceSlotTransition,
+       AsyncCertifiedFenceEscapeStateAfterRuntime,
+       RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
 
 THEOREM ClaimedResponseBlockedAuxStep ==
   \A node \in ValidatorIds:
@@ -3391,6 +3639,10 @@ PROOF
              CertifiedResponseClaimRunnerOwned,
              CertifiedResponseClaimAuxRank,
              CertifiedResponseClaimCapacityDebt,
+             CertifiedResponseClaimPacemakerWorkDebt,
+             CertifiedResponseClaimDirectPacemakerWorkTokens,
+             CertifiedResponseClaimCausalPacemakerWorkTokens,
+             CertifiedResponseClaimFreshEscapePotential,
              CertifiedResponseClaimBlockerRank,
              CertifiedResponseClaimOpenBlockerRank,
              CertifiedResponseClaimOpenDeferredRank,
@@ -3398,45 +3650,48 @@ PROOF
              CertifiedResponseClaimOpenInnerRank,
              ReadyRunAuxRank, AsyncAllVars, AsyncSchedulerVars, vars
     <2>2. CASE AsyncNext
+      <3>0. AsyncControlServiceSlotTransition
+        BY <2>2 DEF AsyncNext
       <3>1. CASE \E other \in AsyncCurrentResponsiveVoters:
                     RunNode(other)
         <4>1. CASE RunNode(node)
-          BY <1>1, <2>2, <3>1, <4>1,
+          BY <1>1, <2>2, <3>0, <3>1, <4>1,
              ClaimedResponseSameNodeRunProducesAuxOutcome
              DEF CertifiedResponseClaimAuxStepResult, PostGstRunNode,
                  CertifiedResponseClaimCandidateProducerContinuationReentry,
                  CertifiedResponseClaimBlockedAtAux
         <4>2. CASE ~RunNode(node)
-          BY <1>1, <3>1, <4>2,
+          BY <1>1, <3>0, <3>1, <4>2,
              ClaimedResponseOtherRunnerPreservesAux
         <4> QED BY <4>1, <4>2
       <3>2. CASE \E other \in AsyncResponsiveAppliedArchiveServers:
                     RunHistoricalServer(other)
-        BY <1>1, <3>2, ClaimedResponseOtherRunnerPreservesAux
+        BY <1>1, <3>0, <3>2, ClaimedResponseOtherRunnerPreservesAux
       <3>3. CASE \E other \in asyncHistoricalRecoveryTargets:
                     RunHistoricalRecoveryNode(other)
         <4>1. CASE RunNode(node)
-          BY <1>1, <2>2, <3>3, <4>1,
+          BY <1>1, <2>2, <3>0, <3>3, <4>1,
              ClaimedResponseSameNodeRunProducesAuxOutcome
              DEF CertifiedResponseClaimAuxStepResult, PostGstRunNode,
                  CertifiedResponseClaimCandidateProducerContinuationReentry,
                  CertifiedResponseClaimBlockedAtAux
         <4>2. CASE ~RunNode(node)
-          BY <1>1, <3>3, <4>2,
+          BY <1>1, <3>0, <3>3, <4>2,
              ClaimedResponseOtherRunnerPreservesAux
              DEF RunNode, RunHistoricalRecoveryNode
         <4> QED BY <4>1, <4>2
       <3>4. CASE AsyncTick
-        BY <1>1, <3>4, ClaimedResponseClockPreservesOrDecreasesAux
+        BY <1>1, <3>0, <3>4,
+           ClaimedResponseClockPreservesOrDecreasesAux
       <3>5. CASE \E other \in ValidatorIds:
                     OpenHistoricalRecovery(other)
-        BY <1>1, <3>5, ClaimedResponseOuterPrefixPreservesAux
+        BY <1>1, <3>0, <3>5, ClaimedResponseOuterPrefixPreservesAux
       <3>6. CASE \/ \E discoveryNode \in AsyncCurrentResponsiveVoters:
                           DirectCommitCertificateDiscoveryStep(discoveryNode)
                    \/ \E recoveryNode \in asyncHistoricalRecoveryTargets:
                           DirectHistoricalCommitCertificateDiscoveryStep(
                             recoveryNode)
-        BY <1>1, <3>6, ClaimedResponseOuterPrefixPreservesAux
+        BY <1>1, <3>0, <3>6, ClaimedResponseOuterPrefixPreservesAux
       <3>7. CASE \/ \E archiveNode \in AsyncArchiveIoServiceNodes:
                           ServiceIoWorker(archiveNode)
                    \/ \E recoveryServer \in asyncHistoricalRecoveryTargets:
@@ -3446,9 +3701,10 @@ PROOF
                    \/ \E recoveryControl \in asyncHistoricalRecoveryTargets:
                           EnqueueHistoricalRecoveryIoLocalControl(
                             recoveryControl)
-        BY <1>1, <3>7, ClaimedResponseIoPreservesAux
+        BY <1>1, <3>0, <3>7, ClaimedResponseIoPreservesAux
       <3>8. CASE AsyncNetworkStep \/ AsyncFaultStep
-        BY <1>1, <3>8, ClaimedResponseNetworkOrFaultPreservesAux
+        BY <1>1, <3>0, <3>8,
+           ClaimedResponseNetworkOrFaultPreservesAux
       <3>9. CASE AsyncSetGST
         BY <1>1, <3>9
            DEF CertifiedResponseClaimBlockedAtAux, AsyncSetGST
@@ -3458,7 +3714,7 @@ PROOF
       <3>11. CASE \E other \in ValidatorIds:
                      \/ AsyncEnterIndexedServiceActivation(other)
                      \/ AsyncActivateServiceNode(other)
-        BY <1>1, <3>11,
+        BY <1>1, <3>0, <3>11,
            AsyncBracketNextPreservesStrongTypeInvariant, Isa
            DEF CertifiedResponseClaimAuxStepResult,
                CertifiedResponseClaimAuxStrictResult,
@@ -3467,6 +3723,10 @@ PROOF
                CertifiedResponseClaimBlockedAtAux,
                CertifiedResponseClaimAuxRank,
                CertifiedResponseClaimCapacityDebt,
+               CertifiedResponseClaimPacemakerWorkDebt,
+               CertifiedResponseClaimDirectPacemakerWorkTokens,
+               CertifiedResponseClaimCausalPacemakerWorkTokens,
+               CertifiedResponseClaimFreshEscapePotential,
                CertifiedResponseClaimBlockerRank,
                CertifiedResponseClaimOpenBlockerRank,
                CertifiedResponseClaimOpenDeferredRank,
@@ -3485,8 +3745,12 @@ PROOF
                AsyncServiceActivationFrameVars,
                AsyncSchedulerExceptServiceActivation,
                CertifiedResponseClaimsAt, CanEnqueueCertifiedResponse,
-               CanEnqueueClass, AsyncQueueDepth, AsyncAllVars
-      <3> QED BY <2>2, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+               CanEnqueueClass, AsyncQueueDepth,
+               RetainedCertifiedFenceEscapePhase,
+               AsyncControlServiceSlotTransition,
+               AsyncCertifiedFenceEscapeStateAfterRuntime,
+               RetainedCertifiedFenceEscapePhaseAfter, AsyncAllVars
+      <3> QED BY <2>2, <3>0, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
            <3>7, <3>8, <3>9, <3>10, <3>11
            DEF AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
                AsyncNonRunnerStep
@@ -3587,12 +3851,14 @@ PROOF
                     \/ CertifiedResponseClaimServeEpisodeResidual(
                          node, rank))
              /\ <<PostGstRunNode(node)>>_AsyncAllVars
+             /\ AsyncNext
             => \/ CertifiedResponseClaimAuxProgress(node, rank)'
                \/ CertifiedResponseClaimServeEpisodeResidual(node, rank)'
       BY ClaimedResponseSameNodeRunProducesAuxOutcome
          DEF CertifiedResponseClaimAuxStrictResult,
              CertifiedResponseClaimServeEpisodeResidual,
-             CertifiedResponseClaimCandidateProducerContinuationReentry
+             CertifiedResponseClaimCandidateProducerContinuationReentry,
+             AsyncNext
     <2>4. CertifiedResponseClaimBlockedAtAux(node, rank)
               /\ [AsyncNext]_AsyncAllVars
             => CertifiedResponseClaimBlockedAtAux(node, rank)'
@@ -3685,8 +3951,8 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-Once the dedicated Completion slot exists and the finite local prefix reaches
-Ingress, the selector's claimed-response priority drains the exact linear
+Once exact Completion admission is available and the finite local prefix
+reaches Ingress, the selector's claimed-response priority drains the exact linear
 owner on the next fair runner occurrence. The singleton rank below packages
 that fair-action closure for the same well-founded temporal combinator used by
 the surrounding service kernels. Applying the height is also terminal because
@@ -4183,32 +4449,30 @@ BY GstClaimedResponseAuxConvergence,
    DEF CertifiedResponseClaimAuxGoal
 
 (***************************************************************************
-Non-Completion causal debt reserves the exact class prefix that the causal
-head needs.  The debt is one above the number of serialized removals still
-required: when the head is blocked, a FIFO runtime step lowers this quantity
-by one, and the producer/unique-ingress gates prevent an outer source from
-refilling the released command slot before the causal head is admitted.
+Non-Completion causal debt is guarded by the exact production admission
+predicate, including class counts and retained certified credit.  Once that
+predicate blocks the causal head, queue depth plus one is a conservative
+finite removal debt: every serialized FIFO removal lowers it while the head
+remains blocked, and it drops to zero as soon as exact admission opens.  This
+does not equate class admission with a scalar queue-depth threshold.
 ***************************************************************************)
 
 CausalHeadCommandLimit(node) ==
-  LET candidate == HeadCausalCandidate(node)
-  IN CASE candidate.class = "Normal" -> AsyncNormalLimit
-       [] candidate.class = "Progress" -> AsyncProgressLimit
-       [] OTHER -> AsyncQueueCapacity
+  AsyncQueueCapacity + 1
 
 CausalCommandCapacityDebt(node) ==
   LET candidate == HeadCausalCandidate(node)
   IN IF NonCompletionCausalAdmissionDebt(node)
           /\ ~CandidateInFlight(candidate)
           /\ ~CanEnqueueClass(node, candidate.class)
-     THEN AsyncQueueDepth(node) - CausalHeadCommandLimit(node) + 1
+     THEN AsyncQueueDepth(node) + 1
      ELSE 0
 
 THEOREM CausalCommandCapacityDebtIsNatural ==
   \A node \in ValidatorIds:
     AsyncTypeInvariant => CausalCommandCapacityDebt(node) \in Nat
 BY Isa
-   DEF CausalCommandCapacityDebt, CausalHeadCommandLimit,
+   DEF CausalCommandCapacityDebt,
        NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
        AsyncQueueDepth, AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,

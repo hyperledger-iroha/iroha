@@ -184,7 +184,7 @@ pub(crate) async fn handle_top_up(
     }
     let instruction = TopUpKagemushaRecursiveV4::new(topup_request.clone());
     let mut transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         issuer.authority.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -277,7 +277,7 @@ pub(crate) async fn handle_redeem(
     let authorization = redeem_request.authorization.clone();
     let instruction = RedeemKagemushaRecursiveV4::new(redeem_request.clone());
     let mut transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         issuer.authority.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2295,7 +2295,7 @@ mod tests {
             .map(InstructionBox::from)
             .collect::<Vec<_>>();
         let transaction = TransactionBuilder::new(
-            ChainId::from("offline-submission-coordinator"),
+            crate::signed_query_test_network_id(),
             issuer.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2665,7 +2665,7 @@ mod tests {
         );
 
         let unrelated = TransactionBuilder::new(
-            ChainId::from("offline-submission-coordinator"),
+            crate::signed_query_test_network_id(),
             issuer.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2689,7 +2689,7 @@ mod tests {
         let front_runner = KeyPair::try_from_seed(vec![0x1D; 32], Algorithm::Ed25519)
             .expect("derive unauthorized offline front-run fixture key");
         let front_runner_transaction = TransactionBuilder::new(
-            ChainId::from("offline-submission-coordinator"),
+            crate::signed_query_test_network_id(),
             AccountId::new(front_runner.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

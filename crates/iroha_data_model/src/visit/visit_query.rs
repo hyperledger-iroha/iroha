@@ -134,6 +134,7 @@ fn try_visit_sorafs_singular_query<V: Visit + ?Sized>(
         visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence),
         visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus),
         visit_find_sorafs_pin_manifest(FindSorafsPinManifest),
+        visit_find_sorafs_pin_manifests(FindSorafsPinManifests),
         visit_find_sorafs_repair_task(FindSorafsRepairTask),
         visit_find_sorafs_repair_tasks(FindSorafsRepairTasks),
         visit_find_sorafs_repair_status(FindSorafsRepairStatus),
@@ -525,6 +526,9 @@ macro_rules! query_visitors {
             visit_find_sorafs_pin_manifest(
                 &$crate::query::sorafs::prelude::FindSorafsPinManifest
             ),
+            visit_find_sorafs_pin_manifests(
+                &$crate::query::sorafs::prelude::FindSorafsPinManifests
+            ),
             visit_find_sorafs_repair_task(
                 &$crate::query::sorafs::prelude::FindSorafsRepairTask
             ),
@@ -749,6 +753,7 @@ mod tests {
             SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
             SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
             SingularQueryBox::FindSorafsPinManifest(_) => {}
+            SingularQueryBox::FindSorafsPinManifests(_) => {}
             SingularQueryBox::FindSorafsRepairTask(_) => {}
             SingularQueryBox::FindSorafsRepairTasks(_) => {}
             SingularQueryBox::FindSorafsRepairStatus(_) => {}
@@ -1199,6 +1204,11 @@ mod tests {
                 crate::query::sorafs::prelude::FindSorafsPinManifest::new(
                     crate::sorafs::pin_registry::ManifestDigest::new([0x52; 32]),
                     None,
+                ),
+            ),
+            SingularQueryBox::FindSorafsPinManifests(
+                crate::query::sorafs::prelude::FindSorafsPinManifests::new(
+                    None, None, None, 25, 4096,
                 ),
             ),
             SingularQueryBox::FindSorafsReputationJournalEventBySourceId(

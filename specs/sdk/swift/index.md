@@ -127,9 +127,10 @@ is reused by Rust, Python, JavaScript, and Swift; CI enforces parity via
 - `PipelineStatusPollOptions` configures polling interval, timeout, max attempts, and the
   typed `PipelineTransactionState` sets used to classify success/failure. Defaults treat
   Approved/Committed/Applied as success and Rejected/Expired as failure.
-- `PipelineSubmitOptions` controls retry behaviour for transaction submission
-  (defaults: 3 retries, 0.5s backoff, multiplier 2.0, retrying 429/5xx and transport
-  errors).
+- `PipelineSubmitOptions` controls only the optional idempotency key for a single transaction
+  submission attempt. The SDK rejects redirects and never retries signed bodies after
+  transport failures or HTTP errors; reconcile ambiguous outcomes through the transaction
+  hash/status route.
 - `pipelineEndpointMode` toggles between the modern `/v1/pipeline/*` endpoints and the
   Torii nodes that have not adopted the pipeline routes yet.
 - Completion-based APIs return a `Task<Void, Never>` so callers can cancel outstanding
@@ -188,31 +189,26 @@ Key facts:
 - Regression tests live in
   `IrohaSwift/Tests/IrohaSwiftTests/NoritoRpcClientTests.swift`.
 
-### Offline queueing
+### Caller-managed transaction archives
 
-Set `IrohaSDK.pendingTransactionQueue` when a client needs to stage submissions while
-offline. With a queue configured, the SDK:
-
-- Persists every `SignedTransactionEnvelope` that exhausts its retry budget (network
-  errors, 429/5xx responses) via the pluggable `PendingTransactionQueue`.
-- Flushes the queue before sending new envelopes, replaying entries in FIFO order while
-  preserving their Norito payloads and transaction hashes.
-- Requeues entries automatically when replay attempts fail so operators can retry later or
-  inspect the on-disk artefacts.
+The SDK does not automatically queue, drain, or replay signed envelopes. Applications may
+use `FilePendingTransactionQueue` as an explicit local archive, but must first reconcile an
+ambiguous submission through `getTransactionStatus(hashHex:)` before making any later
+submission decision.
 
 `FilePendingTransactionQueue` stores base64-encoded JSON records (one per line) and works
 well for iOS/macOS apps that can supply an Application Support path:
 
 ```swift
-let queueURL = FileManager.default
+let archiveURL = FileManager.default
     .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     .appendingPathComponent("pending.queue")
-sdk.pendingTransactionQueue = try FilePendingTransactionQueue(fileURL: queueURL)
+let archive = try FilePendingTransactionQueue(fileURL: archiveURL)
+try archive.enqueue(envelope)
 ```
 
-When Torii rejects a replayed transaction the SDK surfaces `IrohaSDKError.toriiRejected`
-and leaves the remaining entries untouched, allowing wallets to present the failure and
-decide whether to discard or resubmit the affected envelope.
+This archive is storage only. The application remains responsible for inspecting and
+removing entries, and no queue operation transmits bytes to Torii.
 
 ### Kagemusha offline cash
 

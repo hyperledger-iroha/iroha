@@ -180,7 +180,7 @@ impl<'a> PenaltyApplier<'a> {
                         record.updated_at_height
                     )
                 })?;
-            if &artifact.height_context.chain_id != self.state.chain_id_ref() {
+            if &artifact.height_context.network_id != self.state.network_id_ref() {
                 return Err(eyre!(
                     "VRF epoch {} boundary finality artifact belongs to another chain",
                     record.epoch
@@ -495,7 +495,7 @@ fn height_context_for_evidence(
             "missing canonical Sumeragi v2 finality artifact at evidence height {height}"
         ));
     };
-    if &artifact.height_context.chain_id != state.chain_id_ref() {
+    if &artifact.height_context.network_id != state.network_id_ref() {
         return Err(eyre!(
             "Sumeragi v2 finality artifact at evidence height {height} belongs to another chain"
         ));
@@ -748,7 +748,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         block::{
             BlockHeader, SignedBlock,
             consensus::{
@@ -856,7 +856,7 @@ mod tests {
     }
 
     fn height_one_context(
-        chain_id: ChainId,
+        network_id: NetworkId,
         roster: &[PeerId],
         _block_hash: HashOf<BlockHeader>,
     ) -> HeightContext {
@@ -869,7 +869,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         HeightContext {
-            chain_id,
+            network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -895,13 +895,13 @@ mod tests {
     }
 
     fn install_height_one_artifact(state: &State, roster: &[PeerId]) -> HeightContext {
-        install_height_one_artifact_with_chain(state, roster, state.chain_id_ref().clone())
+        install_height_one_artifact_with_network(state, roster, state.network_id_ref().clone())
     }
 
-    fn install_height_one_artifact_with_chain(
+    fn install_height_one_artifact_with_network(
         state: &State,
         roster: &[PeerId],
-        chain_id: ChainId,
+        network_id: NetworkId,
     ) -> HeightContext {
         let roster_keys = roster_keys();
         assert_eq!(
@@ -927,7 +927,7 @@ mod tests {
             .store_block(Arc::clone(&block))
             .expect("store canonical test block");
 
-        let context = height_one_context(chain_id, roster, block.hash());
+        let context = height_one_context(network_id, roster, block.hash());
         let subject = BlockSubject {
             parent_block_hash: None,
             block_hash: block.hash(),
@@ -1070,7 +1070,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut context = HeightContext {
-            chain_id: state.chain_id_ref().clone(),
+            network_id: state.network_id_ref().clone(),
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             height: boundary_height,
             epoch: 0,
@@ -1150,7 +1150,7 @@ mod tests {
         certificate.aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate boundary CommitQC");
-        state
+        let _commit_receipt = state
             .kura()
             .store_v2_finality_artifact(&V2FinalityArtifact::new(
                 context.clone(),
@@ -1176,7 +1176,7 @@ mod tests {
         commit.bls_sig = Signature::try_new(
             signer_key.private_key(),
             &crate::sumeragi::consensus::v2_vrf_commit_preimage(
-                &context.chain_id,
+                &context.network_id,
                 crate::sumeragi::consensus::NPOS_TAG,
                 &commit,
             ),
@@ -1378,7 +1378,7 @@ mod tests {
         let state = fresh_state();
         let frozen_roster = roster();
         let mut context = height_one_context(
-            state.chain_id_ref().clone(),
+            state.network_id_ref().clone(),
             &frozen_roster,
             test_block_hash(0x91),
         );
@@ -1479,10 +1479,10 @@ mod tests {
     fn artifact_from_another_chain_fails_closed() {
         let state = fresh_state();
         let frozen_roster = roster();
-        install_height_one_artifact_with_chain(
+        install_height_one_artifact_with_network(
             &state,
             &frozen_roster,
-            ChainId::from("wrong-chain"),
+            crate::sumeragi::synthetic_network_id("wrong-genesis"),
         );
 
         let error = height_context_for_evidence(&state, &double_prepare_evidence(0, 1, 0, 0), 1)
@@ -1597,7 +1597,7 @@ mod tests {
         let state = fresh_state();
         let frozen_roster = roster();
         let mut context = height_one_context(
-            state.chain_id_ref().clone(),
+            state.network_id_ref().clone(),
             &frozen_roster,
             test_block_hash(0x90),
         );

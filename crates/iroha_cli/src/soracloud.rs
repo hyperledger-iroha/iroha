@@ -22587,7 +22587,6 @@ mod tests {
             .try_build_transaction_from_items(
                 [iroha::data_model::isi::sorafs::RegisterPinManifest::new(
                     manifest_bytes.clone(),
-                    42,
                     None,
                     None,
                 )],

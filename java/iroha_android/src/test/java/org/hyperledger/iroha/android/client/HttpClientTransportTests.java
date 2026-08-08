@@ -29,8 +29,6 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.hyperledger.iroha.android.IrohaKeyManager;
-import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
 import org.hyperledger.iroha.android.alias.AccountAliasName;
 import org.hyperledger.iroha.android.alias.AliasQuoteGuardV1;
 import org.hyperledger.iroha.android.alias.AliasSetupModels;
@@ -38,13 +36,12 @@ import org.hyperledger.iroha.android.alias.AliasSetupPlanRequestV1;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.alias.EnsureAlias;
 import org.hyperledger.iroha.android.alias.ResolvedAccountAliasV1;
-import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
-import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -56,13 +53,12 @@ import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestRecord;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestStatus;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
-import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
-import org.hyperledger.iroha.android.tx.TransactionBuilder;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.sorafs.AnonymityPolicy;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
@@ -84,7 +80,12 @@ public final class HttpClientTransportTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
   private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
-  private static final String VERIFYING_KEY_CHAIN_ID = "test-chain";
+  private static final NetworkId VERIFYING_KEY_NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+  private static final NetworkId OTHER_NETWORK_ID =
+      NetworkId.parse(
+          "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
 
   private static FeePaymentIntent feePayment(final Long gasLimit) {
     return FeePaymentIntent.authority(Collections.emptyList(), gasLimit);
@@ -119,19 +120,12 @@ public final class HttpClientTransportTests {
     submitBuildsToriiRequest();
     submitPropagatesExecutorFailure();
     submitSkipsRetryWhenNetworkRetriesDisabled();
-    submitRetriesOnServerError();
     retryPolicyRecognizesRetryableStatus();
     ledgerExecutedBlockWireIsExactBoundedAndFailClosed();
     privacyCapabilitiesAreTypedAndExact();
-    submitQueuesTransactionsWhenOffline();
-    submitQueuesTransactionsWithExportedKey();
-    submitReplaysPendingTransactions();
-    submitQueuesTransactionsSkipsExportWhenProviderDeclines();
     sorafsGatewayFetchUsesConfig();
-    submitEmitsPendingQueueGauge();
     submitEmitsNetworkContextTelemetry();
     submitEmitsDeviceProfileTelemetry();
-    submitEmitsRetryTelemetry();
     waitForTransactionStatusEmitsTelemetrySignals();
     pipelineStatusRedactionFailureUsesSignalId();
     uaidPortfolioRequestParsesResponse();
@@ -165,6 +159,7 @@ public final class HttpClientTransportTests {
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
     ed25519KeyRoutesRejectSmallOrderIdentityPoint();
     feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
+    feeQuoteRejectsLegacyFlatTransactionIdentityKeys();
     feeQuoteRejectsPayerRevisionAndGasSubstitution();
     feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
     feeSponsorProgramRejectsSubstitutedResponseId();
@@ -173,6 +168,7 @@ public final class HttpClientTransportTests {
     verifierKeyRequestsRejectMalformedInputsBeforeRequest();
     verifierKeyDraftCanonicalInstructionUsesU8StatusDiscriminant();
     verifierKeyDraftParserRejectsNonExactOrTamperedResponses();
+    verifyingKeyDraftRejectsGenesisTransactionDomain();
     verifierKeyDraftRejectsSemanticSubstitutionBeforeSigning();
     verifierKeyDraftRequiresLocalSigningContextBeforeRequest();
     callContractRequestParsesResponse();
@@ -319,36 +315,6 @@ public final class HttpClientTransportTests {
     assert executor.callCount == 1 : "Transport must not retry on network failures when disabled";
   }
 
-  private static void submitRetriesOnServerError() {
-    final SequencedExecutor executor = new SequencedExecutor();
-    final RecordingObserver observer = new RecordingObserver();
-    final ClientConfig config =
-        ClientConfig.builder()
-            .setBaseUri(URI.create("https://localhost:8080"))
-            .addObserver(observer)
-            .setRetryPolicy(
-                RetryPolicy.builder()
-                    .setMaxAttempts(2)
-                    .setBaseDelay(Duration.ZERO)
-                    .build())
-            .build();
-    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
-
-    final SignedTransaction transaction = transactionWithPayload((byte) 0x04);
-
-    final ClientResponse response = transport.submitTransaction(transaction).join();
-    assert response.statusCode() == 202 : "Final attempt should succeed";
-    assert executor.callCount == 2 : "Transport should retry once";
-    assert observer.requestCount.get() == 4
-        : "Observer should see capability and submit requests for both attempts";
-    assert observer.responseCount.get() == 3
-        : "Observer should see both capabilities and the successful submit response";
-    assert observer.failureCount.get() == 0 : "Retries on responses should not trigger failure callback";
-    final String expectedHash = SignedTransactionHasher.hashHex(transaction);
-    assert expectedHash.equals(response.hashHex().orElse(null))
-        : "Canonical hash must match SignedTransactionHasher output after retries";
-  }
-
   private static void retryPolicyRecognizesRetryableStatus() {
     final RetryPolicy defaultPolicy = RetryPolicy.builder().setMaxAttempts(1).build();
     assert defaultPolicy.isRetryableStatus(503) : "Server errors should be retryable by default";
@@ -486,7 +452,7 @@ public final class HttpClientTransportTests {
                 body,
                 "ok",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of(Integer.toString(body.length)))));
     final HttpClientTransport client =
         HttpClientTransport.withExecutor(
@@ -494,10 +460,14 @@ public final class HttpClientTransportTests {
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
                 .build());
-    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 snapshot =
-        client.getPrivacyCapabilities().join();
-    assert snapshot.committedHeight.equals(BigInteger.valueOf(42L));
-    assert snapshot.protocols.size() == 12;
+    boolean legacySnapshotRejected = false;
+    try {
+      client.getPrivacyCapabilities().join();
+    } catch (final CompletionException expected) {
+      legacySnapshotRejected = true;
+    }
+    assert legacySnapshotRejected
+        : "the retired JSON capability snapshot must not authorize Exact12";
     assert "GET".equals(executor.lastRequest.method());
     assert "/v1/privacy/capabilities".equals(executor.lastRequest.uri().getRawPath());
     final List<String> requestAccepts = new ArrayList<>();
@@ -507,25 +477,9 @@ public final class HttpClientTransportTests {
         requestAccepts.addAll(entry.getValue());
       }
     }
-    assert List.of("application/json").equals(requestAccepts)
+    assert List.of("application/x-norito").equals(requestAccepts)
         : "privacy capability request must contain exactly one canonical Accept value";
     assert Long.valueOf(256L * 1024L).equals(executor.lastRequest.maximumResponseBytes());
-
-    final org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitySnapshotV1 withoutContentLength =
-        HttpClientTransport.withExecutor(
-                new OneResponseExecutor(
-                    new TransportResponse(
-                        200,
-                        body,
-                        "ok",
-                        Map.of("Content-Type", List.of("application/json")))),
-                ClientConfig.builder()
-                    .setBaseUri(URI.create("https://torii.example"))
-                    .build())
-            .getPrivacyCapabilities()
-            .join();
-    assert withoutContentLength.committedHeight.equals(BigInteger.valueOf(42L))
-        : "Content-Length is optional when the remaining response is exact";
 
     for (final String defaultAcceptName : List.of("Accept", "aCcEpT")) {
       final OneResponseExecutor blockedExecutor =
@@ -534,14 +488,14 @@ public final class HttpClientTransportTests {
                   200,
                   body,
                   "ok",
-                  Map.of("Content-Type", List.of("application/json"))));
+                  Map.of("Content-Type", List.of("application/x-norito"))));
       boolean overrideRejected = false;
       try {
         HttpClientTransport.withExecutor(
                 blockedExecutor,
                 ClientConfig.builder()
                     .setBaseUri(URI.create("https://torii.example"))
-                    .putDefaultHeader(defaultAcceptName, "application/json")
+                    .putDefaultHeader(defaultAcceptName, "application/x-norito")
                     .build())
             .getPrivacyCapabilities();
       } catch (final IllegalArgumentException expected) {
@@ -551,64 +505,43 @@ public final class HttpClientTransportTests {
       assert blockedExecutor.requestCount == 0 : "invalid default Accept must not dispatch";
     }
 
-    final String retired =
-        privacyCapabilitySnapshotJson()
-            .replace("zk-ace-pq-authorization-v0", "sis-with-hints");
-    boolean retiredRejected = false;
-    try {
-      HttpClientTransport.withExecutor(
-              new OneResponseExecutor(
-                  new TransportResponse(
-                      200,
-                      retired.getBytes(StandardCharsets.UTF_8),
-                      "",
-                      Map.of("Content-Type", List.of("application/json")))),
-              ClientConfig.builder()
-                  .setBaseUri(URI.create("https://torii.example"))
-                  .build())
-          .getPrivacyCapabilities()
-          .join();
-    } catch (final CompletionException expected) {
-      retiredRejected = true;
-    }
-    assert retiredRejected : "retired privacy labels must fail closed";
-
     final String bodyLength = Integer.toString(body.length);
     final Map<String, List<String>> caseFoldedDuplicateContentType = new LinkedHashMap<>();
-    caseFoldedDuplicateContentType.put("Content-Type", List.of("application/json"));
-    caseFoldedDuplicateContentType.put("content-type", List.of("application/json"));
+    caseFoldedDuplicateContentType.put("Content-Type", List.of("application/x-norito"));
+    caseFoldedDuplicateContentType.put("content-type", List.of("application/x-norito"));
     final Map<String, List<String>> caseFoldedDuplicateContentLength = new LinkedHashMap<>();
-    caseFoldedDuplicateContentLength.put("Content-Type", List.of("application/json"));
+    caseFoldedDuplicateContentLength.put("Content-Type", List.of("application/x-norito"));
     caseFoldedDuplicateContentLength.put("Content-Length", List.of(bodyLength));
     caseFoldedDuplicateContentLength.put("content-length", List.of(bodyLength));
     final List<TransportResponse> hostileResponses =
         List.of(
             new TransportResponse(
-                201, body, "", Map.of("Content-Type", List.of("application/json"))),
+                201, body, "", Map.of("Content-Type", List.of("application/x-norito"))),
             new TransportResponse(200, body, "", Map.of()),
             new TransportResponse(
                 200,
                 body,
                 "",
-                Map.of("Content-Type", List.of("application/json; charset=utf-8"))),
+                Map.of("Content-Type", List.of("application/x-norito; charset=binary"))),
             new TransportResponse(
                 200,
                 body,
                 "",
-                Map.of("Content-Type", List.of("Application/Json"))),
+                Map.of("Content-Type", List.of("Application/X-Norito"))),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json", "application/json"))),
+                    "Content-Type",
+                    List.of("application/x-norito", "application/x-norito"))),
             new TransportResponse(200, body, "", caseFoldedDuplicateContentType),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of(bodyLength, bodyLength))),
             new TransportResponse(200, body, "", caseFoldedDuplicateContentLength),
             new TransportResponse(
@@ -616,42 +549,42 @@ public final class HttpClientTransportTests {
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of("0"))),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of("0" + bodyLength))),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of("+" + bodyLength))),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of(bodyLength + " "))),
             new TransportResponse(
                 200,
                 body,
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of("9".repeat(4096)))),
             new TransportResponse(
                 200,
                 new byte[0],
                 "",
                 Map.of(
-                    "Content-Type", List.of("application/json"),
+                    "Content-Type", List.of("application/x-norito"),
                     "Content-Length", List.of("0"))));
     for (final TransportResponse hostileResponse : hostileResponses) {
       assertPrivacyCapabilitiesResponseRejected(hostileResponse);
@@ -662,7 +595,7 @@ public final class HttpClientTransportTests {
             200,
             new byte[256 * 1024 + 1],
             "",
-            Map.of("Content-Type", List.of("application/json"))));
+            Map.of("Content-Type", List.of("application/x-norito"))));
   }
 
   private static void assertPrivacyCapabilitiesResponseRejected(
@@ -708,115 +641,6 @@ public final class HttpClientTransportTests {
         + "\"protocols\":["
         + rows
         + "]}";
-  }
-
-  private static void submitQueuesTransactionsWhenOffline() throws Exception {
-    final Path tempDir = Files.createTempDirectory("iroha-queue-offline-");
-    final FilePendingTransactionQueue queue =
-        new FilePendingTransactionQueue(tempDir.resolve("pending.queue"));
-    final SignedTransaction transaction = transactionWithPayload((byte) 0x11);
-
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            new FailingExecutor(new RuntimeException("offline")),
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://localhost:8080"))
-                .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
-                .setPendingQueue(queue)
-                .build());
-
-    boolean threw = false;
-    try {
-      transport.submitTransaction(transaction).join();
-    } catch (final RuntimeException ex) {
-      threw = true;
-    }
-    assert threw : "Submission should fail when executor errors";
-    assert queue.size() == 1 : "Transaction must be queued";
-    final List<SignedTransaction> persisted = queue.drain();
-    assert persisted.size() == 1 : "Drain must return queued transaction";
-    assert payloadEquals(transaction, persisted.get(0)) : "Queued payload must match original";
-  }
-
-  private static void submitReplaysPendingTransactions() throws Exception {
-    final Path tempDir = Files.createTempDirectory("iroha-queue-replay-");
-    final FilePendingTransactionQueue queue =
-        new FilePendingTransactionQueue(tempDir.resolve("pending.queue"));
-    final SignedTransaction first = transactionWithPayload((byte) 0x21);
-    final SignedTransaction second = transactionWithPayload((byte) 0x22);
-    queue.enqueue(first);
-    queue.enqueue(second);
-
-    final RecordingExecutor executor = new RecordingExecutor();
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://localhost:8080"))
-                .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
-                .setPendingQueue(queue)
-                .build());
-
-    final SignedTransaction live = transactionWithPayload((byte) 0x23);
-    transport.submitTransaction(live).join();
-    assert queue.size() == 0 : "Pending queue must be empty after replay";
-    final List<byte[]> payloadOrder = executor.payloads;
-    assert payloadOrder.size() == 3 : "Executor should receive queued transactions plus live submission";
-    assert java.util.Arrays.equals(
-            payloadOrder.get(0), SignedTransactionEncoder.encodeVersioned(first))
-        : "First queued transaction must be sent first";
-    assert java.util.Arrays.equals(
-            payloadOrder.get(1), SignedTransactionEncoder.encodeVersioned(second))
-        : "Second queued transaction must be sent second";
-    assert java.util.Arrays.equals(
-            payloadOrder.get(2), SignedTransactionEncoder.encodeVersioned(live))
-        : "Live transaction must be sent last";
-  }
-
-  private static void submitEmitsPendingQueueGauge() throws Exception {
-    final Path tempDir = Files.createTempDirectory("iroha-queue-telemetry-");
-    final FilePendingTransactionQueue queue =
-        new FilePendingTransactionQueue(tempDir.resolve("pending.queue"));
-    final RecordingTelemetrySink telemetrySink = new RecordingTelemetrySink();
-    final TelemetryOptions telemetryOptions =
-        TelemetryOptions.builder()
-            .setTelemetryRedaction(
-                TelemetryOptions.Redaction.builder()
-                    .setSaltHex("01020304")
-                    .setSaltVersion("2026Q1")
-                    .build())
-            .build();
-
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            new FailingExecutor(new RuntimeException("offline")),
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://localhost:8080"))
-                .setRetryPolicy(RetryPolicy.none())
-                .setPendingQueue(queue)
-                .setTelemetryOptions(telemetryOptions)
-                .setTelemetrySink(telemetrySink)
-                .build());
-
-    final SignedTransaction transaction = transactionWithPayload((byte) 0x33);
-
-    boolean threw = false;
-    try {
-      transport.submitTransaction(transaction).join();
-    } catch (final RuntimeException ex) {
-      threw = true;
-    }
-    assert threw : "Submission should fail when executor errors";
-
-    final RecordingTelemetrySink.GaugeEvent event =
-        telemetrySink.lastEvent("android.pending_queue.depth");
-    assert event != null : "Telemetry sink should capture queue depth emission";
-    assert "android.pending_queue.depth".equals(event.signalId())
-        : "Gauge must use the pending queue signal id";
-    assert "file".equals(event.fields().get("queue"))
-        : "Queue label should describe the implementation";
-    assert Long.valueOf(1L).equals(event.fields().get("depth"))
-        : "Queue depth gauge must report pending entry count";
   }
 
   private static void submitEmitsNetworkContextTelemetry() throws Exception {
@@ -888,54 +712,6 @@ public final class HttpClientTransportTests {
     assert event != null : "Telemetry sink should capture device profile emission";
     assert "enterprise".equals(event.fields().get("profile_bucket"))
         : "Profile bucket should match provider snapshot";
-  }
-
-  private static void submitEmitsRetryTelemetry() throws Exception {
-    final RecordingTelemetrySink telemetrySink = new RecordingTelemetrySink();
-    final TelemetryOptions telemetryOptions =
-        TelemetryOptions.builder()
-            .setTelemetryRedaction(
-                TelemetryOptions.Redaction.builder()
-                    .setSaltHex("0f0e0d0c")
-                    .setSaltVersion("2026Q1")
-                    .build())
-            .build();
-    final RetryPolicy retryPolicy =
-        RetryPolicy.builder().setMaxAttempts(2).setBaseDelay(Duration.ofMillis(250)).build();
-
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            new SequencedExecutor(),
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://retry.test:8080"))
-                .setRetryPolicy(retryPolicy)
-                .setTelemetryOptions(telemetryOptions)
-                .setTelemetrySink(telemetrySink)
-                .build());
-
-    final SignedTransaction transaction = transactionWithPayload((byte) 0x55);
-    final ClientResponse response = transport.submitTransaction(transaction).join();
-    assert response.statusCode() == 202 : "Submission should succeed after retry";
-
-    final RecordingTelemetrySink.GaugeEvent event =
-        telemetrySink.lastEvent("android.torii.http.retry");
-    assert event != null : "Retry telemetry signal must be emitted";
-    final Map<String, Object> fields = event.fields();
-    final String expectedHash =
-        telemetryOptions
-            .redaction()
-            .hashAuthority("retry.test:8080")
-            .orElseThrow(() -> new IllegalStateException("Hash must be present"));
-    assert expectedHash.equals(fields.get("authority_hash"))
-        : "Retry signal should carry hashed authority";
-    assert "/v1/pipeline/transactions".equals(fields.get("route"))
-        : "Route must describe the Torii submit endpoint";
-    assert Integer.valueOf(1).equals(fields.get("retry_count"))
-        : "First retry should report attempt #1";
-    assert "503".equals(fields.get("error_code"))
-        : "Error code must reflect the HTTP status";
-    assert Long.valueOf(250L).equals(fields.get("backoff_ms"))
-        : "Backoff must follow the retry policy";
   }
 
   private static void waitForTransactionStatusEmitsTelemetrySignals() {
@@ -1042,108 +818,6 @@ public final class HttpClientTransportTests {
       }
     }
     assert found : "Pipeline status redaction failures must reference the pipeline status signal";
-  }
-
-  private static void submitQueuesTransactionsWithExportedKey() throws Exception {
-    final SoftwareKeyProvider provider = new SoftwareKeyProvider();
-    final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
-    final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), keyManager);
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-            .setChainId("00000000")
-            .setAuthority(TestAccountIds.ed25519Authority(0x27))
-            .setInstructions(Collections.emptyList())
-            .build();
-    final SignedTransaction transaction =
-        builder.encodeAndSign(payload, "queued-alias", KeySecurityPreference.SOFTWARE_ONLY);
-
-    final char[] passphrase = "queue-passphrase".toCharArray();
-    final Path tempDir = Files.createTempDirectory("iroha-queue-export-");
-    final FilePendingTransactionQueue queue =
-        new FilePendingTransactionQueue(tempDir.resolve("pending.queue"));
-
-    final ClientConfig config =
-        ClientConfig.builder()
-            .setBaseUri(URI.create("https://localhost:8080"))
-            .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
-            .setPendingQueue(queue)
-            .setExportOptions(
-                ClientConfig.ExportOptions.builder()
-                    .setKeyManager(keyManager)
-                    .setPassphrase(passphrase)
-                    .build())
-            .build();
-
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            new FailingExecutor(new RuntimeException("offline")), config);
-
-    boolean threw = false;
-    try {
-      transport.submitTransaction(transaction).join();
-    } catch (final RuntimeException ex) {
-      threw = true;
-    }
-    assert threw : "Submission should fail when executor errors";
-
-    final List<SignedTransaction> drained = queue.drain();
-    assert drained.size() == 1 : "Queued transaction expected";
-    final SignedTransaction queued = drained.get(0);
-    assert queued.keyAlias().orElse("?").equals("queued-alias") : "Alias must be preserved";
-    assert queued.exportedKeyBundle().isPresent() : "Exported key bundle must be attached";
-    java.util.Arrays.fill(passphrase, '\0');
-  }
-
-  private static void submitQueuesTransactionsSkipsExportWhenProviderDeclines() throws Exception {
-    final SoftwareKeyProvider provider = new SoftwareKeyProvider();
-    final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
-    final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), keyManager);
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
-            .setChainId("00000000")
-            .setAuthority(TestAccountIds.ed25519Authority(0x28))
-            .setInstructions(Collections.emptyList())
-            .build();
-    final SignedTransaction transaction =
-        builder.encodeAndSign(payload, "skip-alias", KeySecurityPreference.SOFTWARE_ONLY);
-
-    final Path tempDir = Files.createTempDirectory("iroha-queue-skip-export-");
-    final FilePendingTransactionQueue queue =
-        new FilePendingTransactionQueue(tempDir.resolve("pending.queue"));
-
-    final char[] passphrase = "skip-passphrase".toCharArray();
-    final ClientConfig.ExportOptions exportOptions =
-        ClientConfig.ExportOptions.builder()
-            .setKeyManager(keyManager)
-            .setPassphraseProvider(
-                alias -> "skip-alias".equals(alias) ? null : passphrase.clone())
-            .build();
-
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            new FailingExecutor(new RuntimeException("offline")),
-            ClientConfig.builder()
-                .setBaseUri(URI.create("https://localhost:8080"))
-                .setRetryPolicy(RetryPolicy.builder().setMaxAttempts(1).build())
-                .setPendingQueue(queue)
-                .setExportOptions(exportOptions)
-                .build());
-
-    boolean threw = false;
-    try {
-      transport.submitTransaction(transaction).join();
-    } catch (final RuntimeException ex) {
-      threw = true;
-    }
-    assert threw : "Submission should fail when executor errors";
-
-    final List<SignedTransaction> drained = queue.drain();
-    assert drained.size() == 1 : "Queued transaction expected";
-    final SignedTransaction queued = drained.get(0);
-    assert queued.exportedKeyBundle().isEmpty() : "Export bundle should be omitted when provider declines";
-    java.util.Arrays.fill(passphrase, '\0');
   }
 
   private static void sorafsGatewayFetchUsesConfig() throws Exception {
@@ -3100,7 +2774,9 @@ public final class HttpClientTransportTests {
             executor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
     final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
-    unsignedPayload.put("chain", "test-chain");
+    unsignedPayload.put(
+        "domain",
+        Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
     unsignedPayload.put("authority", "alice");
     unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
 
@@ -3130,6 +2806,30 @@ public final class HttpClientTransportTests {
     assert executor.lastRequest() == request : "payer mismatch must fail before dispatch";
   }
 
+  private static void feeQuoteRejectsLegacyFlatTransactionIdentityKeys() throws Exception {
+    final CapturingExecutor executor = new CapturingExecutor();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    for (final String legacyField : List.of("chain", "chainId", "chain_id")) {
+      final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+      unsignedPayload.put(
+          "domain",
+          Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
+      unsignedPayload.put(legacyField, VERIFYING_KEY_NETWORK_ID.literal());
+      unsignedPayload.put("authority", "alice");
+      unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
+      expectIllegalArgument(
+          () ->
+              transport.quoteFees(
+                  unsignedPayload, canonicalAuth("alice", keyPair, null, null)),
+          "fee quote must reject legacy flat transaction identity key " + legacyField);
+      assert executor.lastRequest == null : "legacy identity must fail before dispatch";
+    }
+  }
+
   private static void feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle()
       throws Exception {
     final String sponsor = TestAccountIds.ed25519Authority(0x37);
@@ -3137,6 +2837,9 @@ public final class HttpClientTransportTests {
         "{\"id\":{\"sponsor\":\""
             + sponsor
             + "\",\"name\":\"wallet_fx\"},"
+            + "\"payout_account\":\""
+            + sponsor
+            + "\","
             + "\"lifecycle\":{\"state\":\"active\",\"value\":null},"
             + "\"active_revision\":3,\"staged_revision\":4,"
             + "\"scheduled_activation\":{\"revision\":4,\"activate_at_height\":100}}";
@@ -3157,6 +2860,7 @@ public final class HttpClientTransportTests {
 
     assert sponsor.equals(program.id().sponsor()) : "fee sponsor account mismatch";
     assert "wallet_fx".equals(program.id().name()) : "fee sponsor program name mismatch";
+    assert sponsor.equals(program.payoutAccount()) : "fee sponsor payout mismatch";
     assert program.lifecycle() == FeeSponsorProgramLifecycle.ACTIVE
         : "fee sponsor lifecycle mismatch";
     assert Long.valueOf(3L).equals(program.activeRevision())
@@ -3219,6 +2923,9 @@ public final class HttpClientTransportTests {
               executor,
               ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
       final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+      unsignedPayload.put(
+          "domain",
+          Map.of("kind", "network", "value", VERIFYING_KEY_NETWORK_ID.literal()));
       unsignedPayload.put("authority", "alice");
       unsignedPayload.put("fee_payment", requested.toJsonMap());
 
@@ -3374,7 +3081,8 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             executor,
             ClientConfig.builder()
-                .setLocalSigningContext(new LocalSigningContext(VERIFYING_KEY_CHAIN_ID))
+                .setLocalSigningContext(
+                    new LocalSigningContext(VERIFYING_KEY_NETWORK_ID))
                 .setBaseUri(URI.create("https://torii.example/api"))
                 .build());
 
@@ -3467,7 +3175,8 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             executor,
             ClientConfig.builder()
-                .setLocalSigningContext(new LocalSigningContext(VERIFYING_KEY_CHAIN_ID))
+                .setLocalSigningContext(
+                    new LocalSigningContext(VERIFYING_KEY_NETWORK_ID))
                 .setBaseUri(URI.create("https://torii.example/api"))
                 .build());
 
@@ -3600,7 +3309,9 @@ public final class HttpClientTransportTests {
     final String valid = verifyingKeyDraftJson(transactionPayload);
     final VerifyingKeyTransactionDraft parsed =
         VerifyingKeyTransactionDraft.parseRegister(
-            valid.getBytes(StandardCharsets.UTF_8), VERIFYING_KEY_CHAIN_ID, request);
+            valid.getBytes(StandardCharsets.UTF_8),
+            VERIFYING_KEY_NETWORK_ID,
+            request);
     assert !parsed.submitted() : "parsed VK draft must not be submitted";
     assert java.util.Arrays.equals(transactionPayload, parsed.transactionPayloadBytes())
         : "parsed VK draft transaction payload mismatch";
@@ -3613,7 +3324,7 @@ public final class HttpClientTransportTests {
                         "\"submitted\":false",
                         "\"submitted\":false,\"retired_private_key\":\"secret\"")
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         "VK draft parser must reject retired or unknown fields");
     expectIllegalArgument(
@@ -3622,7 +3333,7 @@ public final class HttpClientTransportTests {
                 valid
                     .replace("\"submitted\":false", "\"submitted\":true")
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         "VK draft parser must reject submitted responses");
     final String transactionPayloadB64 =
@@ -3633,7 +3344,7 @@ public final class HttpClientTransportTests {
                 valid
                     .replace(transactionPayloadB64, transactionPayloadB64 + "=")
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         "VK draft parser must reject non-canonical base64");
     final String signingMessageB64 =
@@ -3646,7 +3357,7 @@ public final class HttpClientTransportTests {
                         signingMessageB64,
                         Base64.getEncoder().encodeToString(new byte[31]))
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         "VK draft parser must require a 32-byte signing message");
     expectIllegalArgument(
@@ -3657,7 +3368,7 @@ public final class HttpClientTransportTests {
                         signingMessageB64,
                         Base64.getEncoder().encodeToString(new byte[32]))
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         "VK draft parser must reject a signing-message substitution");
     expectIllegalArgument(
@@ -3665,7 +3376,7 @@ public final class HttpClientTransportTests {
             VerifyingKeyTransactionDraft.parseRegister(
                 verifyingKeyDraftJson(new byte[] {1, 2, 3, 4})
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         "VK draft parser must reject a non-Norito transaction payload");
     expectIllegalArgument(
@@ -3674,7 +3385,7 @@ public final class HttpClientTransportTests {
                 valid
                     .replace("\"transaction_payload_b64\":", "\"payload_b64\":")
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         "VK draft parser must reject a missing transaction payload");
 
@@ -3682,7 +3393,8 @@ public final class HttpClientTransportTests {
         HttpClientTransport.withExecutor(
             new StubResponseExecutor(202, valid.getBytes(StandardCharsets.UTF_8)),
             ClientConfig.builder()
-                .setLocalSigningContext(new LocalSigningContext(VERIFYING_KEY_CHAIN_ID))
+                .setLocalSigningContext(
+                    new LocalSigningContext(VERIFYING_KEY_NETWORK_ID))
                 .setBaseUri(URI.create("https://torii.example"))
                 .build());
     try {
@@ -3721,7 +3433,7 @@ public final class HttpClientTransportTests {
         verifyingKeyTransactionPayload(
             request,
             VerifyingKeyDraftBinding.Operation.REGISTER,
-            VERIFYING_KEY_CHAIN_ID,
+            VERIFYING_KEY_NETWORK_ID,
             (String) request.get("authority"),
             List.of(expectedInstruction, expectedInstruction)),
         request,
@@ -3730,16 +3442,16 @@ public final class HttpClientTransportTests {
         verifyingKeyTransactionPayload(
             request,
             VerifyingKeyDraftBinding.Operation.REGISTER,
-            "other-chain",
+            OTHER_NETWORK_ID,
             (String) request.get("authority"),
             null),
         request,
-        "VK draft must reject another chain");
+        "VK draft must reject another network");
     expectVerifierDraftReject(
         verifyingKeyTransactionPayload(
             request,
             VerifyingKeyDraftBinding.Operation.REGISTER,
-            VERIFYING_KEY_CHAIN_ID,
+            VERIFYING_KEY_NETWORK_ID,
             TestAccountIds.ed25519Authority(0x59),
             null),
         request,
@@ -3765,6 +3477,34 @@ public final class HttpClientTransportTests {
     System.arraycopy(canonical, 1, noncanonical, 2, canonical.length - 1);
     expectVerifierDraftReject(
         noncanonical, request, "VK draft must reject non-canonical Norito");
+  }
+
+  public static void verifyingKeyDraftRejectsGenesisTransactionDomain() throws Exception {
+    final Map<String, Object> request =
+        HttpClientTransport.buildVerifyingKeyRegisterPayload(
+            verifierKeyRegisterRequestBuilder().build());
+    final byte[] canonical =
+        verifyingKeyTransactionPayload(
+            request, VerifyingKeyDraftBinding.Operation.REGISTER);
+    final int networkDomainLength = canonical[0] & 0xff;
+    if ((canonical[0] & 0x80) != 0
+        || networkDomainLength < 4
+        || canonical.length <= 1 + networkDomainLength) {
+      throw new AssertionError("fixture requires one exact one-byte-sized Network domain");
+    }
+    final byte[] genesis = new byte[canonical.length - networkDomainLength + 4];
+    genesis[0] = 4;
+    genesis[1] = 1;
+    System.arraycopy(
+        canonical,
+        1 + networkDomainLength,
+        genesis,
+        5,
+        canonical.length - 1 - networkDomainLength);
+    expectVerifierDraftReject(
+        genesis,
+        request,
+        "ordinary VK drafts must reject TransactionDomain::Genesis");
   }
 
   private static void verifierKeyDraftRequiresLocalSigningContextBeforeRequest() {
@@ -4517,7 +4257,7 @@ public final class HttpClientTransportTests {
         new AliasSetupModels.AliasTransactionPlanBodyV1(
             1,
             authority,
-            "test-chain",
+            VERIFYING_KEY_NETWORK_ID,
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             Collections.singletonList(
                 new AliasSetupModels.AliasPlanResourceV1(
@@ -5355,7 +5095,7 @@ public final class HttpClientTransportTests {
     return verifyingKeyTransactionPayload(
         request,
         operation,
-        VERIFYING_KEY_CHAIN_ID,
+        VERIFYING_KEY_NETWORK_ID,
         (String) request.get("authority"),
         null);
   }
@@ -5363,7 +5103,7 @@ public final class HttpClientTransportTests {
   private static byte[] verifyingKeyTransactionPayload(
       final Map<String, Object> request,
       final VerifyingKeyDraftBinding.Operation operation,
-      final String chainId,
+      final NetworkId networkId,
       final String authority,
       final List<InstructionBox> instructions) {
     final Integer discriminant =
@@ -5377,7 +5117,7 @@ public final class HttpClientTransportTests {
             : instructions;
     final TransactionPayload payload =
         TransactionPayload.builder()
-            .setChainId(chainId)
+            .setNetworkId(networkId)
             .setAuthority(authority)
             .setCreationTimeMs(1_700_000_000_000L)
             .setInstructions(instructionList)
@@ -5401,7 +5141,7 @@ public final class HttpClientTransportTests {
             VerifyingKeyTransactionDraft.parseRegister(
                 verifyingKeyDraftJson(transactionPayload)
                     .getBytes(StandardCharsets.UTF_8),
-                VERIFYING_KEY_CHAIN_ID,
+                VERIFYING_KEY_NETWORK_ID,
                 request),
         message);
   }
@@ -6833,24 +6573,6 @@ public final class HttpClientTransportTests {
     }
   }
 
-  private static final class SequencedExecutor implements HttpTransportExecutor {
-    private int callCount = 0;
-
-    @Override
-    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
-      if (isCapabilitiesRequest(request)) {
-        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
-      }
-      callCount++;
-      if (callCount == 1) {
-        return CompletableFuture.completedFuture(
-            new TransportResponse(503, "retry".getBytes(StandardCharsets.UTF_8), "", Map.of()));
-      }
-      return CompletableFuture.completedFuture(
-          new TransportResponse(202, new byte[0], "accepted", Map.of()));
-    }
-  }
-
   private static final class ScriptedExecutor implements HttpTransportExecutor {
     private final TransportResponse[] responses;
     private int index = 0;
@@ -6867,26 +6589,6 @@ public final class HttpClientTransportTests {
       final int position = index < responses.length ? index : responses.length - 1;
       index++;
       return CompletableFuture.completedFuture(responses[position]);
-    }
-  }
-
-  private static final class RecordingExecutor implements HttpTransportExecutor {
-    private final List<byte[]> payloads = new ArrayList<>();
-
-    @Override
-    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
-      if (isCapabilitiesRequest(request)) {
-        return CompletableFuture.completedFuture(compatibleCapabilitiesResponse());
-      }
-      try {
-        payloads.add(request.body());
-      } catch (final Exception ex) {
-        final CompletableFuture<TransportResponse> failed = new CompletableFuture<>();
-        failed.completeExceptionally(ex);
-        return failed;
-      }
-      return CompletableFuture.completedFuture(
-          new TransportResponse(202, new byte[0], "accepted", Map.of()));
     }
   }
 
@@ -7065,7 +6767,7 @@ public final class HttpClientTransportTests {
     java.util.Arrays.fill(publicKey, (byte) (fillValue + 2));
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
-            .setChainId(String.format("%08x", fillValue))
+            .setNetworkId(TestNetworkIds.fromSeed(fillValue & 0xffL))
             .setAuthority(TestAccountIds.ed25519Authority(0x26))
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
@@ -7093,22 +6795,10 @@ public final class HttpClientTransportTests {
             + kind
             + "\""
             + (applied ? ",\"block_height\":7" : "")
-            + "},\"summary\":\""
-            + kind
-            + "\",\"diagnostics\":[],\"scope\":\"global\",\"resolved_from\":\""
+            + "},\"scope\":\"global\",\"resolved_from\":\""
             + (applied ? "state" : "cache")
             + "\"}";
     return json.getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static boolean payloadEquals(
-      final SignedTransaction expected, final SignedTransaction actual) {
-    return java.util.Arrays.equals(expected.encodedPayload(), actual.encodedPayload())
-        && java.util.Arrays.equals(expected.signature(), actual.signature())
-        && java.util.Arrays.equals(expected.publicKey(), actual.publicKey())
-        && expected.schemaName().equals(actual.schemaName())
-        && expected.keyAlias().equals(actual.keyAlias())
-        && expected.exportedKeyBundle().equals(actual.exportedKeyBundle());
   }
 
 }

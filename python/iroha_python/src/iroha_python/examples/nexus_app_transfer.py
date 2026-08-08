@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from iroha_python import NetworkId
 from iroha_python.nexus_app import (
     NexusAppClient,
     NexusAppConfig,
@@ -9,7 +10,6 @@ from iroha_python.nexus_app import (
     NexusTransferInput,
     NexusWalletSignature,
 )
-
 
 ACCOUNT_ID = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
 DESTINATION_ACCOUNT_ID = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
@@ -73,7 +73,10 @@ class DemoToriiClient:
 
 def main() -> None:
     client = NexusAppClient(
-        NexusAppConfig(chain_id="test-chain"),
+        NexusAppConfig(
+            network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+            chain_id="test-chain",
+        ),
         connect_transport=DemoConnectTransport(),
         transaction_codec=DemoTransactionCodec(),
         torii_client=DemoToriiClient(),

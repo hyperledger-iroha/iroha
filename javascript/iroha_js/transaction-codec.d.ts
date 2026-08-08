@@ -1,4 +1,5 @@
 import type { NexusTransactionCodec } from "./nexus-app.js";
+import type { NetworkId } from "./index.js";
 
 /** Browser-safe structural view of the runtime KotodamaQuantity class. */
 export interface BrowserKotodamaQuantity {
@@ -47,7 +48,10 @@ export type BrowserTransactionMetadataValue =
   | { readonly [key: string]: BrowserTransactionMetadataValue };
 
 export interface BrowserTransferInput {
-  chainId: string;
+  networkId: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority: string;
   sourceAssetHoldingId?: string;
   sourceAssetId?: string;
@@ -65,7 +69,10 @@ export interface BrowserTransferInput {
 }
 
 export interface BrowserInstructionTransactionInput {
-  chainId: string;
+  networkId: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority: string;
   instructions: readonly object[];
   /** Required signature-bound fee payer, charge maxima, and gas bound. */
@@ -94,7 +101,10 @@ export type BrowserExecutableBatchEntry =
     };
 
 export interface BrowserExecutableBatchInput {
-  chainId: string;
+  networkId: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority: string;
   entries: readonly BrowserExecutableBatchEntry[];
   /** Must include `gasLimit` when any entry is a contract call. */
@@ -164,7 +174,7 @@ export function buildBrowserVerifyingKeyTransactionPayload(
 export function decodeCanonicalVerifyingKeyTransactionPayload(
   payloadBytes: BrowserTransactionBytes,
   constraints: {
-    expectedChainId: string;
+    expectedNetworkId: NetworkId;
     expectedAuthority: string;
     operation: "register" | "update";
   },

@@ -29,7 +29,7 @@ use iroha_config::parameters::{
     is_production_runtime_handle,
 };
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     isi::sorafs::CompleteReplicationOrder,
     musubi::ArchiveId,
@@ -1166,6 +1166,8 @@ pub struct ProviderIngestCompletionSigningContextV1 {
     pub baseline_finalized_cursor: ProviderIngestFinalizedCursorV1,
     /// Exact chain to which the completion may be submitted.
     pub chain_id: ChainId,
+    /// Exact genesis-derived network identity signed into the payload.
+    pub network_id: NetworkId,
     /// Current finalized owner of the configured provider identity.
     pub provider_owner: AccountId,
     /// Exact governed signer policy resolved at the finalized baseline.
@@ -1184,6 +1186,7 @@ impl fmt::Debug for ProviderIngestCompletionSigningContextV1 {
             .debug_struct("ProviderIngestCompletionSigningContextV1")
             .field("baseline_finalized_cursor", &self.baseline_finalized_cursor)
             .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("provider_owner", &self.provider_owner)
             .field("signer_policy", &self.signer_policy)
             .field("assignment_revision", &self.assignment_revision)
@@ -5438,7 +5441,7 @@ fn validate_completion_signing_context(
         || context.chain_id.as_str().len()
             > provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1
         || !completion_account_id_fits_canonical_bound(&context.provider_owner)
-        || context.expected_payload.chain() != &context.chain_id
+        || context.expected_payload.network_id() != Some(&context.network_id)
         || context.expected_payload.authority() != &context.provider_owner
         || context.expected_payload.time_to_live().is_none()
     {
@@ -5676,7 +5679,7 @@ fn validate_completion_transaction(
         return Err(ProviderIngestOutboxError::InvalidSignedTransaction);
     }
     if transaction.payload() != &context.expected_payload
-        || transaction.chain() != &context.chain_id
+        || transaction.network_id() != Some(&context.network_id)
         || transaction.authority() != &context.provider_owner
         || transaction.attachments().is_some()
         || transaction.multisig_signatures().is_some()
@@ -6643,6 +6646,14 @@ mod tests {
     use tempfile::{TempDir, tempdir};
 
     use super::*;
+
+    fn test_network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"provider-ingest-outbox-test"),
+        ))
+    }
 
     fn policy() -> ProviderIngestOutboxPolicyV1 {
         ProviderIngestOutboxPolicyV1 {
@@ -7767,7 +7778,7 @@ mod tests {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
         let provider_owner = AccountId::new(key.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            ChainId::from("provider-ingest-outbox-test"),
+            test_network_id(),
             provider_owner.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7863,7 +7874,10 @@ mod tests {
     ) -> ProviderIngestCompletionSigningContextV1 {
         ProviderIngestCompletionSigningContextV1 {
             baseline_finalized_cursor,
-            chain_id: transaction.chain().clone(),
+            chain_id: ChainId::from("provider-ingest-outbox-test"),
+            network_id: *transaction
+                .network_id()
+                .expect("ordinary completion transaction network"),
             provider_owner: transaction.authority().clone(),
             signer_policy: signer_policy(1),
             assignment_revision: 1,

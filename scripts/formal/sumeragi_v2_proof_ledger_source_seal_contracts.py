@@ -51,7 +51,7 @@ _PRODUCTION_EFFECT_CANDIDATE_TLA_OPERATOR_SHA256 = {
         "00a780f6b919c66fc03507311341ff7590f4d37cba9bc4711ee73ec29e23eeef"
     ),
     "ExactAsyncCandidateIdentity": (
-        "ea61970ab14753196453163eb63728d5d84bcd2b79ddc6a2dd3668279730ebbf"
+        "ceeaebbac450ef309c949f0fc399393ea441763fbb91948bdd5bb8c89f9a165f"
     ),
     "FreshCommandSuccessors": (
         "387d64f773b0d6df95e41ce65e108bd37e23c6b3574ecdd0f049b242b2235997"
@@ -63,7 +63,7 @@ _PRODUCTION_EFFECT_CANDIDATE_TLA_OPERATOR_SHA256 = {
 
 _PRODUCTION_EFFECT_CANDIDATE_TLA_THEOREM_SHA256 = {
     "CommandSuccessorsRetainCausalOrigin": (
-        "2ea1ea72d3500d58aa8cd88b242a05182fcd717d9fab0c513931cd1bbdf3ca25"
+        "cf52b0688a75691dc706a787f2f776f71d929013d82566ddaead6cfb36602247"
     ),
 }
 
@@ -98,10 +98,10 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "0964e3e5d76ef3f72a240c03c46c3c15a71c52572acaa34784276c97858d3ab7"
     ),
     "command_is_blocked_by_deferred_fence": (
-        "05f8139fb6d9566a2749cc01e8e906c180ebca304448d635f2d276a5935f3757"
+        "069222d7ba0857ef873a6784ccd4cbc8ecd38882a7914a1cb7d87d27ec5ec7d6"
     ),
     "authenticated_command_reaches_fenced_reducer": (
-        "9a4aa6932087f18a3b4897e3946bb40a9e600c99fd4841ebce7a801247ee9835"
+        "75b1f243e311b75994e8caf13f64192a4672359b9a7daff0c7d48f674e7f66b9"
     ),
     "ready_to_finish": (
         "039df6143d8b4505489db3c75ab2d3d24c01a30a4da0f0d277d865f44cfa0ffa"
@@ -117,11 +117,11 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "drive_effects": (
         "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
     ),
-    "pop_fence_completion_with_ownership": (
-        "615fbf207bf034f1660f2f42e0434e10fd070f57407a3e90e6bbc9055de5e0b9"
+    "pop_fence_dependency_with_ownership": (
+        "cf5a9312b16db72176857a1dfad4e7b64636f7bebd7edc7142f052ec3a2e567b"
     ),
-    "fence_blocked_lifecycle_owners": (
-        "a6ab663afdf61312dd4da128d54967c262f749f966a953dc63abc77d3751c83d"
+    "fence_blocked_occurrence_owners": (
+        "45b2891248d62b2a998ebcaf2e29d35bfeb1687a8869a0b27776904ee6b3f778"
     ),
     "freeze_due_clock_owners": (
         "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
@@ -136,10 +136,10 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "f6db1825402a97f52f35c0ef7cabda380be9055ca7507dfae0476d339057304c"
     ),
     "enqueue_after_clock_reservation": (
-        "913aa38626b74b70200f4c8212c061b5eb85e72d112ffbba805ba743b90873d6"
+        "d71a57ec0eb41724bb65040a35e9d0ac308a2ef387868c207070add6e02be541"
     ),
     "scheduler_arbitration_inputs": (
-        "0f041e2f24fb6ad723c393a6bec10da8215ffed5a6a655f2751e88b436137239"
+        "926499ad5bca5e49d512774f85206ab108748834ee27f4864cb88b081d7fdc36"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
@@ -151,31 +151,171 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "1d27b616e3804e98006a4353d9c7d1e03005ce9299c2e0b0ccbb7782209210df"
     ),
     "minimum_active_lifecycle_ordinal_for_deferred_excluding": (
-        "2707d2e2a3172161c3e68d8bb9779b686c53bb6414001c3827b5141e13c9483d"
+        "eca0b361eb0d72cf5e92e3d38563e04efe062ccde0ffd0db0d75942a40e12505"
     ),
     "eligible_deferred_admission_ordinals": (
-        "80c315add06cdc5b0a18d672ff0f3f6c114bb8f81ecd9f8303ff0b78bce6cfe6"
+        "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
     "runtime_step": (
-        "b0e2eb20330d892f7c0dec448e673bdf528db4e3bab6b191de5d9164fc72a74a"
+        "07f2cca3bebd7dc32b9f4a4eb969a66d028d09504bdde4dceba8fd15cb4db1a3"
     ),
     "runtime_step_recovery": (
-        "7b81ecba71a58b71e2aae931f8c47f20a99c8b823e60e314d9a7467ca05c3e1a"
+        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
     "dispatch_one_adapter_deferred": (
-        "51c2fad21770428bf8c40aaacea930b6e524540ade28c50099b9d8c7bf33cf70"
+        "d87f6e86b65a0b37be7198f880ad2103a4e99c7eb72d2ad32b376865c40d45da"
     ),
     "dispatch_one_fence_dependency": (
-        "7b3230ab5ceaf5e69725fa6769db4477b0b6d5e63480a033facc53f4c79ec5fd"
+        "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
     ),
     "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo": (
-        "fd73f3acdd805bc9f4f34b6f660e49ef8a3b1b3327589e40d745770abd5ace12"
+        "ff24e1cb542c713b888110865eb7e976ab71f6e00aaa2739230d8df29d8f9ddb"
     ),
     "fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers": (
         "93f8290d3a87f463bc2b99d13a9585edc988794ce18f5d2a2e3d80282a79e2ca"
     ),
     "tc_promoted_lock_requires_same_subject_reproposal_before_commit": (
-        "4a6ae3cd80c629e1ec63e32eadc6d6cfcb68a9ccc77a15997a4915931818279c"
+        "0fc1c6de5c9da37a971aa56a6da9120bd590996060ee2a3e8b83f5bb087f9fb0"
+    ),
+}
+
+# Structural inventory for the process-local capability chain which binds an
+# exceptional fence/pacemaker selection to one immutable physical queue
+# occurrence and one exact signer incarnation. Exact token digests are kept in
+# the reviewed SHA-256 tables once refreshed; this inventory independently
+# prevents a helper from disappearing from the proof-ledger fidelity pass.
+_PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_HELPER_CHAIN = (
+    "cached_queue_occurrence_owner",
+    "ownership_snapshot",
+    "mint_selection_seal",
+    "contains_queue_occurrence_owner",
+    "restore_selected_command",
+    "oldest_active_lifecycle_ordinal_before_physical_cut_excluding",
+    "physically_eligible_deferred_admission_ordinals",
+    "pop_pacemaker_progress_with_ownership",
+    "runtime_queue_occurrence_owner_projection_hash",
+    "runtime_queue_ownership_snapshot_projection_hash",
+    "runtime_queue_occurrence_set_matches_snapshot",
+    "runtime_queue_selection_seal_projection_hash",
+    "matches_scheduler_occurrence",
+    "runtime_scheduler_projection_hash",
+    "current_signature_fence_identity",
+    "clear_fence_retry_blocked_fifo_owners",
+    "reconcile_fence_retry_blocked_fifo_owners",
+    "retain_fence_retry_blocked_fifo_owner",
+    "retain_scheduler_ownership",
+    "try_step_pacemaker_escape",
+    "dispatch_one_pacemaker_progress",
+)
+
+_PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
+    "cached_queue_occurrence_owner": (
+        "a113678ffffef7c7bfae9ba827bfddff80e069dd1c1e84d9dbb5525e99138103"
+    ),
+    "ownership_snapshot": (
+        "b46fe089ce520f215926646c49fb991755ae3e2ba6b4dda5242808df6f8d0645"
+    ),
+    "mint_selection_seal": (
+        "981e90ec1cfb8388e1e6058874ecab69d8e415b7319890c5587c683e4dec7568"
+    ),
+    "contains_queue_occurrence_owner": (
+        "c116a2a5423be69a43d6dbf13c00525a416f974020cd96ad7f55282a27293a98"
+    ),
+    "restore_selected_command": (
+        "af1497f566c0c9547983f23469490478ecb322286899a44d7f2761dd668af3a4"
+    ),
+    "oldest_active_lifecycle_ordinal_before_physical_cut_excluding": (
+        "469e352d63c31ef4776fa31bfce7484c16a33f00982058005317494fd87f9e17"
+    ),
+    "physically_eligible_deferred_admission_ordinals": (
+        "0b51819b618a5d50f632ffb772a94be1560e960b57746c10ba3e077aa97b60d3"
+    ),
+    "pop_pacemaker_progress_with_ownership": (
+        "10beefbc980f21e6eb3e07de7153be4e72568a323908211afe1042335125eca9"
+    ),
+    "runtime_queue_occurrence_owner_projection_hash": (
+        "c220a852adcdb9e7a2a20cec297ee79a87cf5b88acac55410eac3c824614d1a6"
+    ),
+    "runtime_queue_ownership_snapshot_projection_hash": (
+        "bb6d0062be867b73c5269979c4f850bc9614e8f15c76f65c60dbc9e44d497eb9"
+    ),
+    "runtime_queue_occurrence_set_matches_snapshot": (
+        "c89fd5e9e3df83fb51e201555e53799c625c9978932fb61be844476ad2c977be"
+    ),
+    "runtime_queue_selection_seal_projection_hash": (
+        "b9036732219388125a51d4652ce4143aaefe00574d7f9f9f359cc90b76b56368"
+    ),
+    "matches_scheduler_occurrence": (
+        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+    ),
+    "runtime_scheduler_projection_hash": (
+        "bcee96f000cf6652240fe9dbfa5411f667e3979dc156710e3b1803bc88c63e08"
+    ),
+    "current_signature_fence_identity": (
+        "d3e7b714af5442d66ec2e8f4e1c57bfe649c5b8f41b310d71929fa6586baf0ed"
+    ),
+    "clear_fence_retry_blocked_fifo_owners": (
+        "2ce5c0a06b37a5342eaa297e3fef4ae70ea0856344f03c8eaaf08fe5488097ae"
+    ),
+    "reconcile_fence_retry_blocked_fifo_owners": (
+        "d603d692ea6053b116efce0eb77fb0872e2f0277480239a5a4183583015de370"
+    ),
+    "retain_fence_retry_blocked_fifo_owner": (
+        "f6c5e5ac82dfda26d972715a073a2ddb7a41135ef9be0ee02ed77944f9e186f8"
+    ),
+    "retain_scheduler_ownership": (
+        "4addd609c67402a1a5de9704e093e23bb8a7ea6cef2c2477a9adb6e2aedc5cb6"
+    ),
+    "try_step_pacemaker_escape": (
+        "aa0a41501d13d502e119566bb4fc55e202f820ece97cf66e486ac851b458c64d"
+    ),
+    "dispatch_one_pacemaker_progress": (
+        "54493a9c9ee90735c473e7a11b8abcb171be883e0b4d708256b297b98793de4e"
+    ),
+    "occurrence_owner_validate_exact": (
+        "0f018cbe8ab36b2a5e1f3aa128d7c22c367083b399184aedc8c829f9228db8e3"
+    ),
+    "occurrence_owner_matches_queued": (
+        "e8544136325028c614b22287649c3e7af5779669328b0b64918093edabb8302a"
+    ),
+    "queue_snapshot_validate_identity": (
+        "9ee5bf23ffa531c168a3722a216ef32a9c2cf83f4265e25dde0fe750b4fa890f"
+    ),
+    "queue_selection_validate_identity": (
+        "18019651786d6151ee975cc68de9f43f2e9ece72e979d3957fb67acbb7c09774"
+    ),
+    "queue_selection_matches_scheduler_occurrence": (
+        "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
+    ),
+    "scheduler_evidence_validate_exact": (
+        "04da1f906e4e197bad4e49e962a92ae7d99c2749f6aecfdfe28f256c4426a188"
+    ),
+    "adapter_pacemaker_escape_is_parked": (
+        "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
+    ),
+    "adapter_signature_fence_is_active": (
+        "2012f7befb770adf8ab34a94452c592836dc3ae6c8e4e8ca4c3148f745e4db38"
+    ),
+    "adapter_signature_fence_identity": (
+        "3bfa48370472e85c7727695165fae3c6758a4a9ff228111c806e558929f7faad"
+    ),
+    "runtime_driver_certified_progress_bypasses_signature_fence": (
+        "6c6761d3f63a292cf04fd123fc055891200081b7dda8f211482f58cfef7b385d"
+    ),
+    "runtime_driver_completion_unblocks_deferred_fence": (
+        "1379d6ae2714aa4bfc2b02cec74611a0f65799319ab94b8fc37b04ef0fec62a5"
+    ),
+    "runtime_driver_command_is_blocked_by_deferred_fence": (
+        "63b773eb42e48fc13be96b5aecd992d9e23a264ba28d0720e450eace4578dc5d"
+    ),
+    "runtime_driver_pacemaker_escape_is_parked": (
+        "4ed5db3024338e14145b7186c4392feb1c14348e887f3695d813f980ad6680e7"
+    ),
+    "runtime_driver_signature_fence_is_active": (
+        "34aa7d6b66cf8ad39f348f2b0ebecd773f4c771867951769222215f5ab877294"
+    ),
+    "runtime_driver_signature_fence_identity": (
+        "135fcb20dbb91a2adfa807031ee70a6b11e396b8369959dbeca22a8aba2718f7"
     ),
 }
 
@@ -206,6 +346,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     ),
     "runtime_ingress_leader_wire_physical_carrier": (
         "964b47b38e48c18e93b0a4e9d63ac711f5ef14ed89d933ffbe1e93233d59d7c5"
+    ),
+    "runtime_ingress_is_physical_leader_wire_replay": (
+        "7af77803b6cb064c9f611601e930c2ee13db7e961a5c85fad10a80900299792a"
     ),
     "runtime_ingress_earliest_physical_carrier": (
         "aab95bf9cc5928cda4550fa375c56f8958b473940ab865b7527946eb5f235325"
@@ -241,7 +384,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "488ba0d5d7896c09a4966d90d16c831090f516c42ab213c70c62aead6b49f0b5"
     ),
     "runtime_deferred_lifecycle_validate_exact": (
-        "df41281db59b26ee4efd086c324d33d9655378f4a2c571335588396db1a71c38"
+        "63e7de646d2eb0dcbc7c9e8aaa87562e44ee3bb007b3185e51237b0b554e4cb3"
     ),
     "runtime_deferred_lifecycle_validate_against_ingress": (
         "5584747a03531f1709f299d16b7cd1884becd7cbd5a37c7619777277112b4e30"
@@ -250,7 +393,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "0ae0c8bde63fd29b4732f301498515f9444a9991f8008aaf3fc23a9a27583918"
     ),
     "runtime_deferred_lifecycle_rebase_deferred_ingress": (
-        "b18470839079c4922c39341a62f804bee2119123e05758c55100b62e183eb363"
+        "981bd3b563516a04eb013b82fbacc7017b4d3a8df16756bcf5c5d7cd72808de4"
     ),
     "reconcile_deferred_ingress_ownership": (
         "37ebb9c8e38cf6d1eda06a31a83570c40f45771f0847adea36d3305d7a6d38bc"
@@ -274,22 +417,20 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "6fccf9497abffa385d06a6e4f4fd9a0f641745ca51b17f8b6e7dcede26c449eb"
     ),
     "accept_driver_dispatch": (
-        "464c41421edc5a6e7b4dfe4b5a8e192cd27e32c29ef7031a90c49318c87266fb"
+        "650c7e0b0c9e1af79cb835080e7ff5f9cdf63a0e80e476586c211e6566e6d9f9"
     ),
-    "enqueue_network_with_ingress_ownership": (
-        "4d24ee550fa9377701d25f13cf660429b5caed20e51955fdb2a91a5604a20a33"
-    ),
-    "can_admit_pre_runtime_leader_wire": (
-        "3e049b47299eba83b510bb0bcbba25a48cd5614a77dbbd8189ebbb83b42ac6f7"
-    ),
+    # TODO: Replace these individually after the timeout-episode semantic
+    # mutations prove the reviewed pre-runtime and mutating admission paths.
+    "enqueue_network_with_ingress_ownership": "PENDING_BEHAVIOR_VALIDATION",
+    "can_admit_pre_runtime_leader_wire": "PENDING_BEHAVIOR_VALIDATION",
     "can_admit_network_message_with_ingress_ownership": (
-        "338ddd65e84755b37a84a618375f27631ddabc72e478b2405ee7f9904b5ecad3"
+        "PENDING_BEHAVIOR_VALIDATION"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
     ),
-    "commit_certificate_response_coalesces_with_exact_busy_deferred_qc": (
-        "29cc0769d5f9224ea11e10410b05b97a4e33fb75b9327ee4a18f19e12babbfe9"
+    "network_admission_uses_exact_normal_and_progress_reservations": (
+        "df256be7d1e1d89c254cb75c6e8a064157b9d584c4c095c73f7253917520703d"
     ),
 }
 
@@ -310,31 +451,435 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
     ),
     "distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner": (
-        "1cbfe8b5786abec4911f1846e7ca3338441ff1bbd60c4cb0af42e167683e7924"
+        "9fd964c7159754e3a01d6d905f40423fb1fb4d573f033f031b3497b02969c1d4"
     ),
+    # TODO: Replace with the reviewed token digest after the focused production
+    # replay regressions and negative mutations pass.
+    "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+}
+
+# Exact comment/literal-free token seals for the finite current-view
+# TimeoutVote recovery episode. Each entry is approved only after its focused
+# positive baseline and negative mutations pass together; no digest in this
+# inventory may be bulk-refreshed.
+_TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
+    "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner": (
+        "be2e39948e3696646e15c3331e020351b8f5065ecb25d9aef466674afc18b648"
+    ),
+    "ingress::try_recv_if_checked": (
+        "091f57ccb6adaafd50864565891f636b364658cb8ed70cc5254d521901779a82"
+    ),
+    "ingress::try_recv_if_checked_retiring_obsolete": (
+        "06c5d041e60dd73dbddb63a9e4600772d7ff1e80d250255612a18a3ecb7b7733"
+    ),
+    "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass": (
+        "36e0d2de5bd03d5f3547ab4e7b9be43a74d51b7abfb2f4ca72753171f8605bf6"
+    ),
+    "ingress::try_recv_if_at_checked": (
+        "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
+    ),
+    "ingress::try_recv_if_at_checked_classified": (
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
+    ),
+    "runner::run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    "runner::drain_v2_ingress": (
+        "dad59f9959e17dd1d504935ab1bacb07e7dc8652d71727ff96e6316ec6f3f5c5"
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against": (
+        "fb2a98e36b7014a4199ae78eda34119f69cec26fc25fff2d4ce5758f41d74777"
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeOwner::same_lifecycle_owner_as": (
+        "4c7e987d86308f3f71c36a9c91f9f4dfdda750f411382dd5934fbb61554668bb"
+    ),
+    "runtime::RuntimeTimeoutVoteEpisodeAdmissionPlan::count_transition": (
+        "63923a863bfa409746d6f5efe7a5609913a9ebd19ffe98d65281a2e9a94f310f"
+    ),
+    "runtime::emitted_timeout_recovery_owner": (
+        "62364351b1c0cbc70ec583b61313e53a374b60fc83e4b4257beefcd35c953fa5"
+    ),
+    "runtime::timeout_recovery_episode_allows_clock_blockers": (
+        "4c52b5a78486a535d247919079bb60090ace9ba4b77e1759763aec0f48627f55"
+    ),
+    "runtime::timeout_vote_recovery_candidate_from_fair": (
+        "8a3399864c9016a838a2c64df3ac10e1642e9acdf9275e7b054c0160e7905072"
+    ),
+    "runtime::timeout_vote_recovery_candidate_from_runtime": (
+        "edbe98f16b7a80cb790a6eee1c0a3026c7e6030e005aeaf0d4ef81de45403594"
+    ),
+    "runtime::timeout_vote_recovery_candidate": (
+        "46f46e7ce5eae9a06ff23fbf54c582addeccc5bfe5cef9372e54c1a6053ceda0"
+    ),
+    "runtime::timeout_vote_episode_admission_plan": (
+        "a4e4b2455b2c355c57bdeab05470e4a700afa498980adb02ed31504f75ed01ec"
+    ),
+    "runtime::enqueue_network_with_ingress_ownership": (
+        "422f7ae170b202c5023c98f94182a4526eb883c39e7576d3c1e0ba69f0723958"
+    ),
+    "runtime::can_admit_timeout_vote_recovery_episode": (
+        "9b99f56691a9752e95501583a1e187d8727498035d8d899c55277ccd3ffde47b"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
+    "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner": (
+        "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
+    ),
+    "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut": (
+        "00eb6a4425997fe9ef985adb09e792913c5df8805e58c4de9473e7fd720724d2"
+    ),
+    "pre_timeout_scheduler_owner_may_publish_across_the_physical_snapshot": (
+        "47d9e77bbf51c1564dbdb4bb7ab2f5d3dafecc279a11fb59f91dcdeed2254d7f"
+    ),
+    "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view": (
+        "7b7545acd3419b5e23f92402787307896e18465e6ad8a922b94a1ec0bddb6581"
+    ),
+    "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission": (
+        "5cfdf24f7d136889a6bf829dbe980858899c7b663bc6574445c63d08ca869344"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256 = {
+    "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier": (
+        "394810ab62d382e3016e5a6c88660778c34beca86d0804b567a74be47f8694d5"
+    ),
+}
+
+_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
+    "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
+        "0fc0836ffbbd67bdd8174d4a981eb6f9e9baf6918705df9d30d3b393bc8fb625"
+    ),
+}
+
+# Comment-normalized formal operators for the same finite producer episode.
+# These remain fail-closed placeholders until every listed semantic mutation
+# is observed to fail independently.
+_TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncLeaderWireCanonicalLifecyclePayload": (
+            "b921a227ed962459b4973297dd0d9be90c81401af62ba7f385e398de31a8b453"
+        ),
+        "AsyncLeaderWireLifecycleSubject": (
+            "77c927fa76dda21438c34668681704a702894bde0e6497f57c3518c9f4acb1cb"
+        ),
+        "AsyncLeaderWireLifecycleIdentityAt": (
+            "3144055cc1d2ba15799bc2f716423a113d1998fcdfe2e1e5410e437aafac0045"
+        ),
+        "AsyncLeaderWireLifecycleRecord": (
+            "854dd230bb474215e7b417f3d80d3327811b5aaf3a1eb5cb2ca4c3c3bdb6bc51"
+        ),
+        "AsyncLeaderWireLifecycleTyped": (
+            "dc59143994e349417932182b8042555bd572c60cfa7a6ccf37dd3db9d2252053"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerDispositions": (
+            "f6d0a37b228934a0f88c3d9ae8cc46aec9ed1331ae9172b5784ef78ec6092090"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionDispositions": (
+            "2c2ef87daca3055b2b0747d1664ad617a826c85370434509f8ea58b6050c4c23"
+        ),
+        "AsyncTimeoutRecoveryEpisodeKey": (
+            "61dfcd9bf069add7d70901f79ac047bf57fad89e302b3855c9dddc3ea390da59"
+        ),
+        "AsyncTimeoutRecoveryEpisodeKeySet": (
+            "35f54e3863b1adea21d2f768a5be5862d13d9c4aaff3e41c9eb54fbb3db3a37a"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerSlot": (
+            "681ac1b76eedfd4cf39b4407c5f75a199fc3088fcb89ff2704ef0450e32e757f"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerUniverse": (
+            "eb5c4dc611f078a882b491ffba0e33446987966a124e23630b9835d214e5cdb5"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerValidForEpisode": (
+            "5a7bdb2dff26729c0a73dd25a76f084af512fd78152d84511d77f0cf48b9faa0"
+        ),
+        "AsyncTimeoutRecoveryEpisodeValidIn": (
+            "ebc240a8012b97d2d93de0c8e89b8dc59d16555b4b6246bc5f80640e974aa53d"
+        ),
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant": (
+            "67dda9f1b2cf4edf41d7ef7a7e7279615e9472dc97895e9e677208b882560879"
+        ),
+        "AsyncTimeoutRecoveryVoteBasicBinding": (
+            "7bb504333f577e6112b7d4e700c5bd06273c6a991f37f19b5a2ad148bd3fe286"
+        ),
+        "AsyncTimeoutRecoveryVoteIngressRecordsFor": (
+            "bfa3c52d46c7f667b1c4692190c73202864dde163cb07948424677b7336c0ebf"
+        ),
+        "AsyncTimeoutRecoveryVotePreCutDescent": (
+            "e281c02fe826ce29730d14d8d1660a1fe850ef6e37ba9957d6239e494d8278fb"
+        ),
+        "AsyncTimeoutRecoveryVoteRestoredDescent": (
+            "b62e3824511a155faa4a16e5b264675d112b41c47705d634dc0da866880e1db1"
+        ),
+        "AsyncTimeoutRecoveryVoteFreshReplenishment": (
+            "866f9a2e43a1e7434faa9ed0aabfa15e5a880e8d34b50812c39331763df2bed5"
+        ),
+        "AsyncTimeoutRecoveryVoteDispositionMatches": (
+            "7d7b112535e7390fcc77ea79d994ece09822223bc2f58c255dd57732dd7437f9"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateOwners": (
+            "30123fde668ec8ff7f8142ba8eb692926e42c9a4bdbb17a568ac3cbd940d1173"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateDefined": (
+            "0050d45aafb4106ebc997e8b044c310806bbfdaf5233b712374a0a6d3e9889a6"
+        ),
+        "AsyncTimeoutRecoveryVoteCandidateOwner": (
+            "f7fdd337e582dc62d429eab16fd16674b17e07890d2753301f66d9ae0c91bc66"
+        ),
+        "AsyncTimeoutRecoveryVoteIncumbents": (
+            "5de335606d8bf7816ddfea5b85dd1716545d0ca267bd22e89e9888bb732350a1"
+        ),
+        "AsyncTimeoutRecoverySameVoteLifecycleOwner": (
+            "7c638dd0530b7bd889e0755a45eda303f98359575397a219e86593067a78caff"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionPlan": (
+            "d0da8ba07c67af4fd18a668523e3748f3972a66f85b05c2b12795ece44068b55"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionRequired": (
+            "2f5ee1a824beb7736d0bbb7f0c051b29fee24fb4a782c56a3a7b1ab863afc273"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionAllowed": (
+            "8dd0ff9ee7a45c7bd12d8cee1c0ba3c155115b1ec6f8cc83bbdfc237fe14b7d9"
+        ),
+        "AsyncTimeoutRecoveryVoteBarrierException": (
+            "d8522b9b23b8314bdbbe6b6a81d601dfab6d3fbaa389e51e76029b33db0f5b5e"
+        ),
+        "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier": (
+            "085073b59232d8c3e930b7fead0151ac8d6a37602452c556ad4174a98b734988"
+        ),
+        "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
+            "d2f99c02442f82c8ae6041155b28d431bc38821ca3bb7b5420e032930baa6145"
+        ),
+        "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget": (
+            "86ad64b20c4ec9626b9fc1221b15c3d51a67187d0664a0c41bcd22b48c66a94b"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep": (
+            "28f5c1e16034f5dd5c3cae9ccf22c81cb02e1d9ffc1eb20aa04f04e6b915b385"
+        ),
+        "AsyncTimeoutRecoveryVoteRuntimeRecordsAfter": (
+            "48aa5a6e4b6422d73214ea872f4fa817071bd17b2a6fa4c55b59aa100f0ac5b2"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionNodesThisStep": (
+            "cc519f7ac25e4fed87ac00a68d907e97b72b1385eb6d527d4ed94facde6456a8"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmission": (
+            "f49556faa311370cee18c10d8af8489054c87bfceca95df7e10ca49f4114e0b2"
+        ),
+        "AsyncTimeoutRecoveryVoteOwnerStateAfterAdmission": (
+            "37d807e2f76d7170ca7145829e8ebe8b2fafd5f2b24ea0130e3beff0fa5d6021"
+        ),
+        "AsyncTimeoutRecoveryPreAdmissionStateForSlotTransition": (
+            "acf7fbae28f75e45ecd317451bc2e38ab865fab16acdc736d0bd8024d952d200"
+        ),
+        "AsyncTimeoutRecoveryAdmittedVoteSlots": (
+            "b09ad8beca8d2938814d9d19fd3446c596f01131e885bbb4f8875f1749800183"
+        ),
+        "AsyncTimeoutRecoveryRemainingProducerSlots": (
+            "a3c7c870d7110bfcf64c6be0e5889f13fb836379b55954775349f11ab762a75c"
+        ),
+        "AsyncTimeoutRecoveryProducerEpisodeMeasure": (
+            "316131577d432419223b8e039fc85c66144da1996701736cf6a04882105747b7"
+        ),
+    },
+}
+
+# Exact theorem statements and proofs which close the finite producer episode.
+# These seals stay deliberately unapproved until every independent theorem and
+# downstream-provider mutation fails after its local digest is refreshed.
+_TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite": (
+            "1df06952a3664f7770385d6d4175e73bfbeddc53200715e3ccd627ac925a39f9"
+        ),
+        "AsyncTimeoutRecoveryFreshOwnerRemovesExactlyItsRemainingSlot": (
+            "88bd8b5a5262c9e4220a14c1041492fea1435795035c0df5833da6b01ae7b8f6"
+        ),
+        "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission": (
+            "09724aa3803ff9a87bbc61b24f101afa4d2ead895f167a3c05beb3bd59403698"
+        ),
+        "AsyncTimeoutRecoveryFirstAdmissionConsumesExactlyOneProducerSlot": (
+            "44874f718618e4409812b99ff62e28cefa9dc904a4938889e04104a5a4f1485b"
+        ),
+        "AsyncTimeoutRecoveryCoalescedRetryPreservesProducerEpisode": (
+            "4c25562e7e3e5ba4b301a083caf80fc507ca23793fdff5f0d83a61d98ab598db"
+        ),
+        "AsyncTimeoutRecoveryFreshReplenishmentConsumesFiniteProducerSlot": (
+            "402d555a2123de59812a33b3beb9efd8018fa08f70d293b34284ea83d12ebd12"
+        ),
+        "AsyncTimeoutRecoveryUpdatedEpisodeIsRetainedByAdmissionState": (
+            "81b6e5c8ab71af82a8099a563a96db2e5ee106fc31c9d773b86db2c7652c064e"
+        ),
+        "AsyncTimeoutRecoveryEpisodeAfterVoteAdmissionIsStateIndependent": (
+            "f23a0f081c1b20572022d0756f8daa9ee1dbc06da96b1e4ed933fe2406b53686"
+        ),
+        "AsyncControlServiceTransitionRequiresAtomicLifecycleReservation": (
+            "4ff696a18c898ff16ba41a705e464668de9083c018efdafe1baccbeceeae3cb7"
+        ),
+        "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode": (
+            "21fad6c95f6d72febeaea68a67b42c917c44c5d3958203eb2fc2e442227c1529"
+        ),
+        "AsyncTimeoutVoteFairIngressDrainLeavesCoreState": (
+            "579691707af9891234bdee0b535a018dd864baac48548c17ddac66f428dec26e"
+        ),
+        "AsyncPostGstHasNoControlServiceReset": (
+            "d738c3b56078f2a44f76f15c319d310288f9fad7a2ec011a7cdc04af5d06e36d"
+        ),
+        "AsyncTimeoutRecoveryEpisodeCurrentBoundaryForNode": (
+            "d3cd30a1100860fd8c718fce20f20379aba20ed13974fa7eed912503f9138ce8"
+        ),
+        "AsyncUnchangedCoreStatePreservesTimeoutBoundary": (
+            "47d944b51bd1a575c066d1d3218e62de883b07984b04725ae9355234f73a20cc"
+        ),
+        "AsyncTimeoutVoteIngressDrainRetainsCurrentEpisodeBoundary": (
+            "2ea11aa8dc93fa7684d2ecb2a96cb4af7dbbbc8da63d30a008048a2a1fd045aa"
+        ),
+        "AsyncUnchangedCoreStateExcludesPersistInstall": (
+            "095b9ab62786836bcfbb5a4363477378905311a89aebc4d1fcf4feb4bd7ba97f"
+        ),
+        "AsyncFairIngressDrainPreservesRetransmitTimerState": (
+            "b473620a788d1b0f680dc34677d31471a8f218415ab2572c2d18835c1e64b2d9"
+        ),
+        "AsyncFairIngressDrainExcludesDirectRetransmit": (
+            "ad31fdd4ae63ba80ec7d6ca8e9944f5dcc0f8c237ceb6596b35d23d12f7ea674"
+        ),
+        "AsyncTypedOutstandingTagRemovalChangesFunction": (
+            "8ea219351421de1566369e590290bebafc6fd19d80ef1f3173b81d9cafdc11de"
+        ),
+        "AsyncDeferredRetransmitRemovesOutstandingTag": (
+            "4b85c87bc746d4fee0e6844c5f1f3cb72c53a9acaf3cdb8b0f15a2fd69744bb0"
+        ),
+        "AsyncFairIngressDrainExcludesDeferredRetransmit": (
+            "bc19fc379f8da8f848667b77cb0c859605fae3153e2ba6d2a2be334f0b40c17b"
+        ),
+        "AsyncIngressDrainDoesNotCompleteRetransmitLifecycle": (
+            "21b37b8848a7bd3922bf934c2ae2533af315f563465cd07866562762a82dd959"
+        ),
+        "AsyncIngressDrainFramesDeferredAndCausalQueues": (
+            "ed85c48c72dd007237193ba7a5087ba3f635b4fb2c5d9e3c05f5ac3fd78ceb59"
+        ),
+        "AsyncTimeoutVoteFairIngressFramesCommandAndWork": (
+            "9ec8a9f5753e50c531e67e7ff18140a6a442f82afee336a0da542aa24f370c9c"
+        ),
+        "AsyncSequenceSetAfterAppendAddsOnlyValue": (
+            "54303c304b4d75584ef078930e256dbc611662ba19d72a80907c555c4d328ee2"
+        ),
+        "AsyncUnionOfSequenceSetsAfterAppendAtAnyKeyAddsOnlyValue": (
+            "41fef605e80b132b9fa9dc1e8be04bbcdc05b95cd3ecb7816db3866d2bcdf01e"
+        ),
+        "AsyncTimeoutVoteIngressDrainFramesSchedulerCarriers": (
+            "333bf376ecd4a6de1510f3ef6be559e847804cfc5b5c99abe06bff76a27e241b"
+        ),
+        "AsyncTimeoutVoteIngressDrainAddsOnlyDeliveryOrigin": (
+            "ec3bf0910e32f4ff43e9c2de072985cfce9ee193894b49857cba30fb2a95222c"
+        ),
+        "AsyncProposedTimeoutCausalOriginHasBeginTimeoutPhase": (
+            "9f877ab73f3e7dd856d0e815adcd53f49537531203273d688470bee4af9cf8bf"
+        ),
+        "AsyncOwnedTimeoutLifecycleOriginHasBeginTimeoutPhase": (
+            "9e91b44806f1f022f7b864cf76c6195a7e4a7d4e47e47685f5cb8db75e426053"
+        ),
+        "AsyncCurrentTimeoutCausalOriginUsesEffectiveOrigin": (
+            "7895a9a9334907f80dafa4f489440db25dd1834c76d1aec5aad4fbf6b3343ae2"
+        ),
+        "AsyncOwnedTimeoutRecoveryCurrentOriginHasBeginTimeoutPhase": (
+            "24f1cc906957182fcb9cc2070f04a36d3d412c649f7eb3266efaac4af6fc3774"
+        ),
+        "AsyncDeliveryCandidateOriginPhaseEqualsDeliveryKind": (
+            "6738b6c3ff4b2f59e8a76c0f3d48a45a1596f33c1034e63bbccee12f687aef9b"
+        ),
+        "AsyncTimeoutVoteDeliveryOriginHasDistinctPhase": (
+            "8575237ea078b3f9aa6ae52221c7005926d933edd1f64e6f76d105ee10b1bde1"
+        ),
+        "AsyncTimeoutVoteIngressDrainDoesNotTransferTimeoutLifecycle": (
+            "ef4c3d237655ff50311beb25ccd505c64a08ec4d7101dc8cfb8561eb27a442ad"
+        ),
+        "AsyncTimeoutVoteIngressDrainEstablishesRecoveryFrame": (
+            "f042e10c01d4109284f2557ce3da9806f771009526a3ea528b8d899ad794cb64"
+        ),
+        "AsyncTimeoutVoteFairIngressDrainFramesRecoveryEpisode": (
+            "43b470ee0007250242614c689a697ece3ba3c5b97a508ae5dd184f12d9431c28"
+        ),
+        "AsyncControlServiceSlotTransitionPublishesTimeoutRecoveryVoteState": (
+            "47d20f52eb8495d81169989c68ba754f7f36bfa6622b02a56433240f41367c54"
+        ),
+        "AsyncTimeoutRecoveryVoteAdmissionRetainsUpdatedEpisodeAcrossSlotTransition": (
+            "9b7852d4c48d9c782e1e06ad51abdf998b9fe770e65a4c656a13231ce080f93f"
+        ),
+    },
+    "SumeragiV2AdequateLeaderServiceClosureProofs.tla": {
+        "AdequateLeaderFreshTimeoutVoteReplenishmentConsumesProducerSlotAndOpensNonDescentEpisode": (
+            "3cb5653b8cceb88b3a193570b5b344cde20f58e5759bfb770fa343f9e392126c"
+        ),
+    },
 }
 
 # Exact production effect-executor entry points which retain the authenticated
 # ingress carrier and latch a fail-stop restart on malformed ownership.
 _EFFECT_CAPACITY_PRODUCTION_RUST_ITEM_SHA256 = {
-    "enqueue_network_with_ingress_ownership": (
-        "9bf3e8ec45247e920681de7f13941d8544df863b73c5a3ac243adcacae0b2587"
-    ),
+    # TODO: Approve separately after timeout-episode capacity mutations pass.
+    "enqueue_network_with_ingress_ownership": "PENDING_BEHAVIOR_VALIDATION",
     "can_admit_network_message_with_ingress_ownership": (
-        "644421658388af9adb80656b4b0d7b402835187c13d5c32b92e43f41ae5ff10f"
+        "PENDING_BEHAVIOR_VALIDATION"
     ),
 }
 
 # The retained exact Fetch lifecycle must not duplicate service work while its
-# immutable owner is already installed, and completion must publish the
-# reserved runtime successor before retiring any local owner.  Bind both full
-# methods in addition to the focused ordering checks below.
+# immutable owner is already installed. Completion must publish the reserved
+# runtime successor before retiring local ownership; protected-view transfer
+# must move an unpublished token with its Fetch consumer; every terminal Fetch
+# path must retire either that token or its exact restart-restored stage-7
+# parent before releasing P/Q ownership. The checker separately binds the
+# persist-first deferred batch, restart-only producer frontier, persistent-root
+# rebind, and live leader-wire recovery cut by ordered source contracts. Bind
+# the complete production methods and adversarial regressions in addition to
+# focused order and coordinate checks.
 _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
     "begin_fetch": (
-        "e9a2a7ee26765b3160f0a4b8062aa0d5b67f2ab639cf3ea9f359062328fb7650"
+        "9d50ba3ff1b4227c8e0ce7a8444796eb1b50c6c1a23b8c5f5669991652f7f4e0"
+    ),
+    "reserve_body_available_with_owner": (
+        "e720fe33878affa2fc49d22d23c55d163b2f01ecd4d845104fc7b72544b88779"
+    ),
+    "rebind_unpublished_body_available": (
+        "00bbe44f9d02199bee50f805425df0760caffc257598003f55aaa35ddb47d46c"
+    ),
+    "retire_unpublished_body_available": (
+        "c692816b54ef0184f6453614a2c8272168ac445e5e1f397ab27a6b508354c6fd"
+    ),
+    "effect_runtime_rebind_unpublished_body_available": (
+        "e126b97f8f5a75b0868f6334ada164ec16e2d35b924e6940daa91f5b5fe3550e"
+    ),
+    "effect_runtime_retire_unpublished_body_available": (
+        "3ed15174c27d497028b91f264a25ec2c1294c35e228298ebc5caa51f74332df5"
+    ),
+    "commit_pending_fetch_retirement": (
+        "294abee0df04fbef2a13698769e7b9def5202abea2c35b92140baf75a44d2a01"
+    ),
+    "install_view": (
+        "27598c65a38ebe1921d51003a18203315d01e85133b755eed26b29e2251c7850"
     ),
     "commit_fetch_completion": (
         "ee63eedba56be13b1af788f81f9f69dc380a834bc0a8d0b36e1de3910f041f92"
+    ),
+    "retain_retransmit_effect_ownership_for_test": (
+        "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
+    ),
+    "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
+        "a97f5cab5c218297c5df0dbc3c9aa803c9a0284b50fc7c8ad960c2314e56b861"
+    ),
+    "ready_body_backpressure_retains_exact_ingress_until_capacity_retry": (
+        "320015eab09976a0e9f6e823b77f366df19ddca3968aff99627fded06595d085"
+    ),
+    "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
+        "361886bd2c3217c8ba621e15c51bbf80971812557fcd78c16c808fb024b696f1"
+    ),
+    "tc_retires_unprotected_retryable_body_token_before_the_next_fetch": (
+        "7ccd83a8975e7fa6c970e517cbdd546468fa19ca876b0deefe34a14f3db76638"
+    ),
+    "durable_sign_preemption_retires_a_retryable_body_token": (
+        "4eff93945c51ac3473a2817a29dfe493a6606b3b2919ba33ff957ee121b325c1"
     ),
 }
 
@@ -359,13 +904,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 826
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 829
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "d87b65dd729e85f6c2f4c3a18be3d8996e8cbfdd90d46433b819aaef6a0f9bfc"
+    "aade985a59315e4e94a0933d175065594e063cd041a2c5009b6d6ea03c4b0c0c"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "e0cbc059d724b0cf5172d864b563d094f3d3d975f2140cfcbfc4075c521175bd"
+    "64096be7977ae27db644ad5cdd0fb7f5a2e633ba9f20ea4a3244bba1fc5af64f"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "616752567a30ec73d904d1b6a5bb2c4d53e90d2070b6270aee180b7adfc18da9"
@@ -379,7 +924,7 @@ _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 309
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 310
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "b7588b8ab1f3dcba654bd32ec9fc2c196dc129eebc4821de6df89d5b69253cfb"
+    "bd13d718a1362dd242aad04a75d6c55113181f84545b061cf8517236ac6057fe"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -439,14 +984,14 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
         "79c2caea8dfd6f17885ff3d72253a41cb34db7a99d7976b52d5fdab45c0e9a89"
     ),
     "successor_context_requires_the_durable_cryptographic_parent": (
-        "43ac1f9d461eaebc54570a59b0846abadaa9e8791a8bfc89e02a234e99276555"
+        "f7ff90422e2b67a0d696eecd7da5ca64fcc692cf13f69779c2ea74f58da4e7a3"
     ),
     "authentication_rejects_valid_commitment_conflicts_without_mutating_adapter": (
-        "414c5f5bf9c7156f38222f256673c42e1ce2394293193487fe9d5d2d24044286"
+        "423991082e2c3a6151fdd80b69b643d56b56d2cb7963331024453b2fab7c037c"
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
-    "ae4bca0b785e6d7d5db41dd5516ce2859464f0f0526d5d7d3a52a3c930f6025e"
+    "b0457ed9453abd1999e7246c3cd2d96aa1dc6e4763466a5f7c76635699997344"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 13),
@@ -455,7 +1000,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        41,
+        43,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -490,7 +1035,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 34),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 131),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 132),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -569,11 +1114,13 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::roster_origin_relay_completion_has_authenticated_source_count_and_byte_owner",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_wire_index_keeps_authenticated_origins_distinct",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_reserves_same_source_transport_completion_behind_auxiliary_pressure",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_escape_survives_exact_same_source_saturation",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_serializes_distinct_timeout_certificates_per_source",
     "sumeragi::serviced_candidate_store::tests::leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots",
     "sumeragi::v2_effects::tests::effect_dispatch_consumes_leader_wire_terminal_created_while_batch_drains",
     "sumeragi::v2_effects::tests::retained_live_retry_consumes_decision_retirement_terminal_same_cycle",
     "sumeragi::v2_effects::tests::retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle",
-    "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_and_owner_replacement_fails_closed",
+    "sumeragi::v2_effects::tests::exact_candidate_retry_coalesces_under_the_incumbent_owner",
     "sumeragi::v2_effects::tests::fetch_owner_replacement_is_rejected_before_upgrade_refinement_or_request_work",
     "sumeragi::v2_effects::tests::adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes",
     "sumeragi::v2_runtime::tests::adapter_effect_binding_is_exact_route_neutral_and_three_bounded",
@@ -644,7 +1191,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_lane_work::tests::duplicate_reply_effect_retains_alternate_sources_across_source_update",
     "sumeragi::v2_lane_work::tests::temporarily_unserviceable_effect_requeues_behind_later_reserved_work",
     "sumeragi::v2_lane_work::tests::retired_sidecar_route_between_drain_and_lane_queue_preserves_live_sibling",
-    "sumeragi::v2_runtime::tests::commit_certificate_response_coalesces_with_exact_busy_deferred_qc",
+    "sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix",
     "peer::run::tests::authenticated_source_credit_precedes_network_and_subscriber_backlogs",
     "peer::run::tests::recoverable_post_acknowledges_only_after_full_write_and_flush",
     "peer::run::tests::partial_write_error_closes_ack_without_false_completion",
@@ -918,7 +1465,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally",
     "sumeragi::v2_effects::tests::reproposal_commit_qc_applies_the_exact_unchanged_body",
     "sumeragi::v2_effects::tests::reproposal_commit_signing_uses_its_same_round_validation_marker",
-    "sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot",
+    "sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer",
     "sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation",
     "sumeragi::v2_transport::tests::reproposal_commit_qc_authenticates_its_exact_same_round_body",
     "block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round",
@@ -976,6 +1523,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
+    "sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
     "sumeragi::v2_worker::tests::exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
     "sumeragi::v2_worker::tests::repeated_exact_serve_claims_close_all_older_sources_before_later_io",
     "sumeragi::v2_worker::tests::exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission",
@@ -989,7 +1537,8 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack",
     "sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection",
     "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
-    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_resumes_same_lifecycle",
+    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
+    "sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry",
     "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
     "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
     "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
@@ -1026,14 +1575,38 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
 # semantic ordering fragments below so failures identify the violated seam.
 _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "consume_effects": (
-        "e52cf5a95fff03c6bf9982ac6f8933cfd940d0e8c4d2673a22a73a17ed5f74fa"
+        "e25571feeb68bdfdd4af602b39a40e63c87f11e39619b90281212c48513c71f5"
+    ),
+    "retain_effect_batch": (
+        "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
+    ),
+    "retain_effect_batch_at_frontier": (
+        "9f9d0352ea5921e9d081c0cc4775ed26676b0f213866870a681cf9d901d6aa98"
+    ),
+    "preflight_effect_batch_frontier": (
+        "6845921d95bbe60c8e0cd303a30bff4d8dd3aaee120dda41fc93546f932a581f"
+    ),
+    "prepare_parked_effects_for_frontier": (
+        "2311f641861b3fafe8f90c34a7824596287bf1d6d8e791e30ba7b59438c178db"
+    ),
+    "commit_reconciliation_frontier": (
+        "1deed24b38bdba50796b402def3fc3ef9e9eaad44c93449e8e96f1bdb38c430c"
     ),
     "drain_retained_effect_batch": (
-        "d973c4b573c75870a27334050546a1d9f7996ca8f5da6b0c4fb96d23c985e39b"
+        "b796ca52147def7d7642b5f8c352f55e6ab2214b3c8d5c1a631ac5aa9c64bba5"
     ),
-    "step": "7f88caed1111bc8a98699d31100deaa1fa9d3ae01b9891b4396acd546f17d3d7",
+    "consume_pacemaker_effects": (
+        "f9675525191cc1f949cdd7fef4d86facf0a974f8c96c627eba96123246e738db"
+    ),
+    "consume_pending_tip_recovery_effects": (
+        "275bb4749f89c76810b7154c1eca151f2c85e970c162fb3f737034870520578b"
+    ),
+    "step_pacemaker_once": (
+        "09140d1b32a493a591303e376d5ed642ea1479cb2fddae358d8d4d9b5b2a7df5"
+    ),
+    "step": "c56df5c78384e0685390837f6442bf17f81f37134a840445cb2522326a226bcb",
     "step_pending_tip_recovery": (
-        "e5a7cf7d1db1e5558d888b22275a578baa273dbcbc6e282047e6c8d399127172"
+        "2fea51da5e34af31e90c8a42ed6915cb8d6e64dc18a7df89ef0a0545b81b6f94"
     ),
 }
 
@@ -1361,7 +1934,12 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
+    "run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    # TODO: Approve with the helper's exact-output alias after its focused
+    # non-descent and handoff mutations pass.
+    "rollover_finalized_height_outputs": "PENDING_BEHAVIOR_VALIDATION",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
@@ -1391,22 +1969,22 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
 
 _EXACT_SERVE_RUNTIME_EPISODE_STRUCT_SHA256 = {
     "V2IoCertifiedServeIngressReservation": (
-        "0d557912a3a40130e201547acf520ed5c9c4ec33e5dda93b52ab6bd79dfa0dcf"
+        "3691c0fd33c09e59c339ee7cb869b2bffd836cd4361bb2d2259c07e6013f18f8"
     ),
     "CertifiedServeProducerEpisode": (
         "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b"
     ),
     "V2IoCommandQueueState": (
-        "d5984aed11709061a31526159de2d21b91daff351892499e2d28d07099f0063f"
+        "95fe80ab3bb8703ea55dfcac5a8b107f6dd7f35a663e4100ed5923cf2f8fa5db"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESERVATION_ITEM_SHA256 = {
     "barrier": (
-        "0fd794936441324fa30589c8b167829bd9653da162d7155717d01017e0084ad1"
+        "bce35afb422de5e3b0b7a2667bea940f9170f0ba95dfae03bbea01c36de5a9ad"
     ),
     "matches_barrier": (
-        "3e4b041edb19097dedb4907b8ac46217cac63bd6db20364af4e1fd7979f5c002"
+        "d4ba831e00f4262e51db685213bd83bbdac6edb12ebc691b9aaa62774880a3b8"
     ),
 }
 
@@ -1415,16 +1993,19 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3"
     ),
     "V2IoCommandQueue::reserve_serve_ingress": (
-        "879cf4ba9107a88226a572068e941693ffd3c2f69c8f1dce943c709cc1321693"
+        "310f5f50fcf4e1bc7c99823c0c8b5c53f60bd8ab3b5ac4166c559287909312b3"
+    ),
+    "V2IoCommandQueue::retire_selected_serve_ingress_occurrence": (
+        "c0821d882ae2997fa2632ab0855afde09bf051d353a4a1bd76293b9491d0dce1"
     ),
     "V2IoCommandQueue::try_begin_producer_episode": (
-        "918c8208cde905cc74c7146a81eca81a4f6df71c73ddab94b1728cea02c726c0"
+        "31abb399d6e4ee100a51caa5c7213977aa99835a586d1e129057d4a9f9f2c8d0"
     ),
     "V2IoCommandQueue::suspend_materialized_serve_barrier_for_runtime_predecessor": (
         "af55e56ebf4bffef6b765e06aec105ede58a1be56f9612c310799fe67aef2ec1"
     ),
     "V2IoCommandQueue::serve_barrier": (
-        "dee6a2b1e77fa2dcf0293a601b25a21006eefd2d8557051d9be4beef33630003"
+        "1104236dd8cfd0ccec5ea0f3171b9d23c6dc1b0f257f0ec13ff6fe8685ad7d4e"
     ),
     "V2IoCommandQueue::claim_serve_runtime_episode": (
         "776649d85722700536fff55e1af781a66aa8694492c550ba3361255d516d0c2e"
@@ -1436,7 +2017,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "02d2bb266994d99ca4fdef5ec8d90fef193a969fe2136eb6e0f0a7f0ae47f0df"
     ),
     "V2IoCommandQueue::try_send_as": (
-        "4b09b1fb37cd30d067a58a3f9902ebb3f23d22af95e5f72b49bfccbb39a1587f"
+        "6c7a0afdfa074b745803704e6910671ab28099c9bc294c21c5fe67a55fd3905d"
     ),
     "ProductionV2Services::certified_serve_barrier": (
         "2daa1fafb0049a95cb78d01630aa55932539b3de9a0db99eb169c0e5e031f56d"
@@ -1454,19 +2035,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_WORKER_ITEM_SHA256 = {
         "b86f953644efbd6a73d81bba2a3cbc23195cc9dcb68e44bc90e6b9a4a8cfd15f"
     ),
     "ProductionV2Services::take_exact_serve_predecessor_completion": (
-        "08a9eddfb80c1b792988ce4433b0f200e2dccd9a8498b9c8869feb3758647307"
+        "c033089df5ad252d912aec754b9535d16f5a96d99c718a47239116c5916dad88"
+    ),
+    "ProductionV2Services::take_lifecycle_prefix_completion": (
+        "4e8e73973d093f5b642996a26b0995247a38b2c13726567d2b719fbae232d1b6"
     ),
     "ProductionV2Services::drain_exact_serve_runtime_predecessor": (
         "aa2d628cbb2b5f54d0901f9949d3581d6188efe72a3656958e95e9e9dacbae92"
     ),
     "ProductionV2Services::drain_completions_inner": (
-        "412bd6deef3d72f2cf66d11b56c36ad6e85bbeb9f66c602a821b0d4929dd12ec"
+        "08bc6f3ac8bb6d47a59a3c7812717ad06ffab68821cee79559d3f588df129098"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256 = {
     "advance_executor_once_before_exact_serve": (
-        "0d3580e1ced5446597465ca2dd3a177a16dc168b66b8b8c9e2350b68fb03b86b"
+        "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26"
     ),
 }
 
@@ -1484,19 +2068,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_ITEM_SHA256 = {
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
-        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
+        "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
+    ),
+    "minimum_runnable_lifecycle_ordinal": (
+        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
     ),
     "active_lifecycle_uses_ordinal": (
-        "3383cbf7969a7f8d792f56ed9c148c4ca523f6366bfac8c60b53a68af427a4fc"
+        "ae450e3b7d749e88ebb10ea93d575ffd88257f1c691bc58d9478adde058cd869"
     ),
     "older_lifecycle_predates_exact_serve": (
-        "2b832129d3f5e91ea0e333400277c9715785f896b460b0de55e398d2cdc69b30"
+        "ae0059eeb7251a27345ea821209d9d018623f3011643970833a6c6fbd0dad30a"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
     "oldest_active_lifecycle_ordinal": (
-        "fa6fbffb7201f69529caec900bafba3eb4f9433f00ec31289ca3e23e2363c7d4"
+        "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "uses_lifecycle_ordinal": (
         "248f70bfe769734211acc566c8b91b7e0faf037990be47f95b231d5f102a557a"
@@ -1504,14 +2091,17 @@ _EXACT_SERVE_RUNTIME_EPISODE_INGRESS_ITEM_SHA256 = {
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
+    "final_serve_retirement_yields_one_producer_episode_before_replenishment": (
+        "059218b1bec2859b84f8fe440c785360072fca157e1ea7a4579bff252cd6dde0"
+    ),
     "exact_serve_predecessor_episode_services_older_local_without_admitting_later_io": (
         "51623ab6cf102b45554a8135cb4fbca35062b0d5db6bea99cbabba0eb2305d9f"
     ),
     "repeated_exact_serve_claims_close_all_older_sources_before_later_io": (
-        "7dd6f52990432a274101c3d3ef6f6295d6537a13553db2a405549dfef33457e8"
+        "e97bed021406e0a72e692d2ac6ed58e491a4826b5a9054f17ca8a64d95ef0968"
     ),
     "exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission": (
-        "ac73fa43251f1cbf99d71722f412cf2c6fda79c5b109d41af20cd762b3422d19"
+        "ebeeb9606074ce7e7d51aea4d55d54dabacd23435d639d81ac6f0a9849616e21"
     ),
     "worker_completion_is_retained_behind_a_full_runtime_fifo": (
         "4e807f3dd45e855a96923c803bd970dbc2a6684583b8dfa84aa6db788c5206c1"
@@ -1520,22 +2110,22 @@ _EXACT_SERVE_RUNTIME_EPISODE_REGRESSION_TEST_SHA256 = {
         "913796745fa6c589f20dd309da632c1dfb05f84aa963377b04ffa9a0556e21eb"
     ),
     "drained_exact_retransmission_gets_fresh_scheduler_ordinal": (
-        "f21eea2060d0b4f969dda5681df7ea0e208af2b0080aaa9fc23271cef72e1b56"
+        "8c4b30a4d0c7d2730d6d2e4c702efb2cc48e514a64513d6b84751f8c91654811"
     ),
     "certified_serve_future_slot_blocks_control_and_consensus_replenishment": (
-        "d1ff8afcad02c99641e66021fd334b88f7f93eb8d3713dc346c08cff915d3342"
+        "4eb2da42d968642c6eaf184f0ddda6f726e4a7fe49d6b6c2499092ee3c97d075"
     ),
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RUNTIME_REGRESSION_TEST_SHA256 = {
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
-        "653fac9ef34bfb376711f643fe231ee9860cb7c1ef29570d514a3f870a531c1c"
+        "4173b41c9622f676b9c9d412a267cb0b3b2aca91ed9725e2a5c450485d7442d9"
     ),
 }
 
 _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
     "restored_productive_retry_freezes_the_current_physical_source_prefix": (
-        "3fa33cdfc0eb55bf7e025c57d340439fbe527c5cf1ba29b48e8779db5be8cd65"
+        "0717cee735d0b0a435bdcd502ca6e29c87a554a9f017cb7edbf1efb46ef33d20"
     ),
     "restored_older_logical_owner_cannot_cross_an_earlier_physical_leader_wire": (
         "e994c3391ce2626972c26c57a37039f71573adb9d82bbcfa64619edb70640255"
@@ -1544,24 +2134,32 @@ _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
 
 _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
     "fair_v2_ingress_admit_leader_wire": (
-        "140325f2b05a0c93744b2fbd483e485d95f17a0c8ce08ac1bf41808047e306f4"
+        "bda06e6c542397e50d18cde8fd85fb568e619de471719967a594cfbdfc850350"
     ),
-    "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+    "try_recv_if_at_checked_classified": (
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
+    "bind_leader_wire_lifecycle_gate": (
+        "d6d8898d1a10684cc1f1aea7c91aa84dfb2f90862378d41d0f0908d57e2dfcc2"
+    ),
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9",
-    "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
+    "run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    "service_certified_serve_barrier_liveness_turn": (
+        "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
+    ),
+    "advance_executor": "ce2f1975fd47aac0b33326547595f05779ab0a920e5996499bf450330c457f93",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
     ),
     "outer_ingress_turns": (
-        "1c08dc7293a6aacd522d211e8acd862cf8be0fb4926bb943b6464f4bd002e223"
+        "a5408a498d6ee0837e31c5fc1b152c043b3d2930eda580d750eaec4f2704ef18"
     ),
     "apply_bounded_sidecar_admissions": (
         "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad"
@@ -1574,6 +2172,48 @@ _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
     ),
     "ProductionV2Services::drain_completions": (
         "dbdb63d50e19b3dfe3617aaedf53e7d7f13c105c4b844c5367d31487fad10ea3"
+    ),
+}
+
+# Exact comment/literal-free source seals for the production-shaped selected
+# Serve timeout-recovery regression. These are approved independently only
+# after each corresponding digest-refreshed semantic mutation is rejected.
+_PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256 = {
+    "runner::CertifiedServeBarrierLivenessAction": (
+        "4a520a5e830e2eb78e6384de5e353c50d488698ab1f3ee622bcb97a7b8dc2d5b"
+    ),
+    "runner::complete_certified_serve_episode_cannot_veto_pacemaker": (
+        "7de69abaf47816cabdc50c70d9eff0b7fa69342a24b5962ef1da2f1c133c2e47"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture": (
+        "93ec9360435a8cd4e38ba96fd646aac445ba2c5cda6f2e1d06afeda9e6d22629"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::new": (
+        "21c7fd7fcca5641266d01a3c0a3446490c7e130c0f626e46f0d49b442b825f4a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix": (
+        "26a00adf1b9a47ba3ca88124cd9e2a93ff4b693db65c6f4d7c0fa9e88c53d89a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode": (
+        "aa266e22920cc2b8b5ce8ea0095b519da73c93827d9d916e075df8002ddeca50"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_recovery_prefix": (
+        "26f8db46c991874a993888431415631adee676513c41ba1671176f8e7b91bd9a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::service_pacemaker": (
+        "38dbb93aa1cb6f4326767382a354244d21e07a97c78119472da994558d96f65c"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::entered_view_one": (
+        "dff5113863756090795cfd2ff950a3bfd390e5120260d9ef7986b8a95772d93c"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::assert_complete": (
+        "6f322ae1a6658bfa8b5275ed3c7220a8e9a0dbffcd86851340e00358005fdda9"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::assert_missing_proposal_serve_selected": (
+        "72b5987aae636d8c8be84bcc96617451c63fc3d0b2765a189737a7bb04365c7a"
+    ),
+    "worker::SelectedServeTimeoutRecoveryFixture::drop": (
+        "ce14c1b4e75b8ba5c1b225653eac74cfa39a0432dfd7a84592791342f6cb9881"
     ),
 }
 
@@ -1879,17 +2519,50 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 }
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
+    # TODO: Approve drain_v2_ingress separately after its three-mode drain
+    # mutations pass.
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
     ),
-    "drain_v2_ingress": (
-        "5afe9ea25184f2f95aa5e150bc672c4d2aa70880a4a5021bf7f32f72d37bbfa1"
-    ),
+    "drain_v2_ingress": "PENDING_BEHAVIOR_VALIDATION",
+    # TODO: Approve after the exact-output handoff mutation survives refreshing
+    # this helper's own token digest.
+    "rollover_finalized_height_outputs": "PENDING_BEHAVIOR_VALIDATION",
     "dispatch_lane_work_effects": (
         "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c"
     ),
     "dispatch_lane_work_effect": (
         "4f26246db63b064c5b6f6389e9960f36968df9861ae9520d911eedbe4c5b317c"
+    ),
+}
+
+# Exact joint ownership of the two per-height fair-ingress gates. Each pending
+# seal is promoted only after a focused mutation refreshes that exact item
+# digest and the semantic close/validate/atomic-unbind contract still rejects
+# the change.
+_PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
+    "runner::LeaderWireIngressBinding::bind": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::LeaderWireIngressBinding::retire": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::LeaderWireIngressBinding::drop": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::HeightIngressBindings::new": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::HeightIngressBindings::retire": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::HeightIngressBindings::drop": "PENDING_BEHAVIOR_VALIDATION",
+    "runner::close_ingress_for_rollover": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::unbind_leader_wire_lifecycle_gate": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "ingress::unbind_height_ingress_gates": "PENDING_BEHAVIOR_VALIDATION",
+    "ingress::close": "PENDING_BEHAVIOR_VALIDATION",
+}
+_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256 = {
+    "runner::height_ingress_bindings_retire_both_gates_in_one_closed_cut": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "runner::height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership": (
+        "PENDING_BEHAVIOR_VALIDATION"
+    ),
+    "worker::closed_height_atomically_retires_serve_and_leader_ingress": (
+        "PENDING_BEHAVIOR_VALIDATION"
     ),
 }
 
@@ -1922,6 +2595,212 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
     ),
+}
+
+# Exact token seals for the serialized runtime's disjoint C/P/K/+1 queue
+# geometry.  The retained certificate is classified from the immutable queued
+# command, so arrival order cannot consume an ordinary Completion or Progress
+# reservation and several distinct certificates still share one physical
+# credit.
+_PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256 = {
+    "RuntimeQueueConfig::validate": (
+        "f2bfef98a26b8817ca45fcc55c5669d215ae0768f8f09425baea4bec1024b52f"
+    ),
+    "RuntimeQueueConfig::normal_limit": (
+        "fb3d747ef54e8a0432a6ff94407135ef68f16fc94773609f3975a93ab043dfa4"
+    ),
+    "RuntimeQueueConfig::progress_limit": (
+        "5e87c00d381779d2e6a9af03a4497f1fc6f5eba07cf802de46d14f24e78bf72c"
+    ),
+    "RuntimeQueueConfig::ordinary_total_limit": (
+        "1180f68279ceb396f9d3bf49d2bc3c79e138bb1d7ce2f64aba17f0f75562c27f"
+    ),
+    "BoundedIngress::certified_fence_escape_credit": (
+        "94d47c1be045f5eb4f4b7840550b242df8471480033cdfc839d2614467c96ff0"
+    ),
+    "BoundedIngress::check_capacity_change_inner": (
+        "b32cae42a3a389680b1d3566c21012b9db3aa19729dcb83d0c6a0e127a10cc0c"
+    ),
+    "BoundedIngress::remaining_capacity": (
+        "533205971ebce432b614faaa4fdcdb8c86285ef7aeef75314eab78c12cd59f93"
+    ),
+    "wire_payload_is_certified_fence_escape": (
+        "01d6853abc2e1b0e5f2a84197ce271fff2c4b71ba7467f64e0d7c85b3da8237a"
+    ),
+    "SerializedV2Runtime::has_certified_fence_escape_credit": (
+        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
+    ),
+    "test::certified_commit_uses_physical_slot_reserved_from_completions": (
+        "fe5d361fd09f716cca60ceecab8f4c3acfb1ec01080d16b9851af71277f15e53"
+    ),
+    "test::certified_commit_arriving_first_preserves_every_ordinary_reserve": (
+        "5c1aa2de8dfce58415d400d2d4db69988d63fc43d57090ca31f96202625acadd"
+    ),
+    "test::distinct_certificates_share_exactly_one_physical_credit": (
+        "b8a97dace4bd30ba1cac54a69d12e89640ce9b3cbc6b9c15368a7d17c6728630"
+    ),
+    "test::invalid_configuration_is_rejected": (
+        "6ac0e66e597904f6a3b682eeed89bcb2c185b6ce2a402618071fc0490a645d49"
+    ),
+    "test::queue_configuration_excludes_one_certified_credit_from_ordinary_limits": (
+        "e7ddac2312bc5e327d444eb3e24b022d332032d5534a46c56b09857fb50dd3ea"
+    ),
+    "test::prepare_qc_cannot_spend_the_certified_physical_credit": (
+        "aa348cc05ab9331f2b738eeae41cbd4dc74946fb759ab8e3ed1c41c347e9b376"
+    ),
+    "test::retiring_the_sole_certificate_does_not_fake_completion_headroom": (
+        "51a5d55dad394a320c0606a2e57981e8235d2ee5f4cf994693fc0624dcaa87d6"
+    ),
+    "test::unpublished_body_replacement_cannot_overbook_the_certified_slot": (
+        "072ea1652e9a443d701aaad32437f5b135df3563d10205a2e4ebc8dca77104a5"
+    ),
+}
+
+# Exact source seals for the retained certified-body response's one-shot
+# pacemaker escape.  The carrier phase is process-local and deliberately not
+# serialized: Fresh may admit one direct authenticated root, Charged records
+# an already-owned root, and Spent is absorbing until this carrier retires.
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
+    "effects::RetainedCertifiedBodyResponse": (
+        "a02346d6e21ac701d7019d6eb235e23d4bdf9551ab01da5123680c9602df0512"
+    ),
+    "effects::accept_certified_body_response_with_ingress_ownership": (
+        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
+    ),
+    "effects::retained_response_may_admit_certified_fence_escape": (
+        "f29a3e106087c871ba0f5f684b4bd47974b783d81085c7751da2c9d314e6c635"
+    ),
+    "effects::reconcile_retained_response_certified_fence_escape_phase": (
+        "4fcb519c7dfd10f164301a0f2342f8be3a771ce9cd6937d8f49f461334762f42"
+    ),
+    "runtime::has_certified_fence_escape_credit": (
+        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
+    ),
+    "runner::run_inner": (
+        "aa466d49eb691176f43cb0562f27814442175f78bf87e9ab302e397834453f38"
+    ),
+    "test::retained_response_certificate_escape_is_charged_only_once": (
+        "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
+    ),
+}
+
+# Comment-normalized TLA+ seals for the production-corresponding latch,
+# direct-certificate classifier, runner case split, and strictly descending
+# retained-response rank.  File qualification prevents an identically named
+# helper in another shard from satisfying the contract.
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncCertifiedFenceEscapeKinds": (
+            "786d33483ab9bf86aaa0136d745ff96c8328d8d9e36350ec747f1b382966c7ca"
+        ),
+        "AsyncCertifiedFenceEscapeItem": (
+            "bd98c586610ed4fb438fefa1ec50c77d35e7cb79e9761aa648bddbf08893ffad"
+        ),
+        "AsyncAuthenticatedCertifiedFenceEscapeAuthorities": (
+            "7a26804157995e484ebf8f7915a7cde93edf5a14b3a3a94bae59e5a805bdedb5"
+        ),
+        "AsyncQueuedCandidateIsCertifiedFenceEscape": (
+            "5d63ceac0c420a599ff962b17a038a2366deef93f8835fe1d9b9d756a0fbf26b"
+        ),
+        "AsyncCandidateHasCertifiedFenceRoot": (
+            "a3f22434b15e088720a58cf37b7afa9c9b5d90451878440b64eec1646eb23037"
+        ),
+        "RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape": (
+            "6f0f721bafbac4ec2aec426010344a5baa9ca4af56b4a13ce6bc3b26151164d9"
+        ),
+        "AsyncCertifiedResponseClaimStateAfterRetirement": (
+            "a7aff8755d881b501f36057d9afca78185d642821f1cfdeaae7a4c50f7254048"
+        ),
+        "AsyncCertifiedResponseClaimStateAfterAdmission": (
+            "8717fca0467d129da9478a981f060b7648d8a62449d91b19546a9b7192c98d60"
+        ),
+        "RetainedCertifiedFenceEscapePhaseAfter": (
+            "c1dd6b64617c5eee7b4e801985323cd3e43f647a548f8a95fb70c2b08c403508"
+        ),
+        "AsyncCertifiedFenceEscapeStateAfterRuntime": (
+            "f7f3c06acfd57dc457b8abc7487a0e4e1bc9d7d350c7323460a2ab8f900a78bc"
+        ),
+        "EnqueueCandidate": (
+            "8d58a005cea2550753196f96cacc3ed54e62bf2eb1a3e4195215d3b8062754f9"
+        ),
+        "SerializedCertifiedPacemakerStep": (
+            "c1d1fdaf28b0451f5daebde2f068fab93debcdaa77cde0b97c8b69e1cc9b8813"
+        ),
+        "RunNodeWork": (
+            "551f97e97f2ecb6ba67053464f480e2fe1cd6d59290a2b1fed261182e2fd1aab"
+        ),
+        "AsyncControlServiceStateTypeInvariant": (
+            "db13faef3cc8f08ecbbfebb6227bb4847fcbdf0262a0de66f841b66fe78e0577"
+        ),
+        "AsyncControlServiceSlotTransition": (
+            "31d5e5b7a2ecfacc11da4ac09c3c2f54858e7f256096283de3e3f541cd50bfd8"
+        ),
+        "AsyncTransportInit": (
+            "979da4a2d4de28cb42373c1824d5952431d10a78793800a8194e03228ac8eb06"
+        ),
+        "AsyncCompletionReserveInvariant": (
+            "b7756857d8b495cb29494dc89dd3ee626f5999418ec3e37c01dc1ee1216a58c1"
+        ),
+        "AsyncCertifiedFenceEscapeEpisodeInvariant": (
+            "f1a0278402350d50b71621bb4db20ca3b5b785c9243fa5024295983c366351fc"
+        ),
+    },
+    "SumeragiV2AsyncTemporalRankProofs.tla": {
+        "CertifiedResponseClaimDirectPacemakerWorkTokens": (
+            "25b7e46a7d3e7a5d43d7eeff22e5bcb62b818c65f777a5181eacdcb88668fd0f"
+        ),
+        "CertifiedResponseClaimCausalPacemakerWorkTokens": (
+            "1dffc9f727616ff82bca3caf18a6619a304c91c762fa7eb857945dc77ea201e7"
+        ),
+        "CertifiedResponseClaimPacemakerWorkDebt": (
+            "c2215cbc829f79413da4eda26729f6c024d2af7f304ec2ea5754eb14acb39b2b"
+        ),
+        "CertifiedResponseClaimFreshEscapePotential": (
+            "2e58407806507852a2cb2baa1f2c40c27991c04f73cdfa8f200ef43839ba496b"
+        ),
+        "CertifiedResponseClaimPacemakerDebtBound": (
+            "426bfa46b5f8a8421bfa0832d5343f3b2725ef86d38fd794f7d67faf2f884c8b"
+        ),
+        "CertifiedResponseClaimCapacityDebt": (
+            "d9ad22b46691768a71fe0014fc65eb72aafebc37dc620ab556e78e313480a789"
+        ),
+        "CertifiedResponseClaimAuxRank": (
+            "8e2c0484e46949f9dc137b134b621f17d280ef487e581cee7a392422be76a820"
+        ),
+        "CertifiedResponseClaimAuxCarrier": (
+            "31495b77a98cbe265801912add8b51eeff6f99e371598b3cb9e44d65f4a4b731"
+        ),
+        "CertifiedResponseClaimAuxOrdering": (
+            "1d50cd09000834fdc169eff83eb20d88b4e4a79d2d9caa643e7b97bc02e22a90"
+        ),
+    },
+}
+
+_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_THEOREM_SHA256 = {
+    "SumeragiV2AsyncNetwork.tla": {
+        "AsyncInternalCertificateSuccessorsCannotRetainFenceCredit": (
+            "eb6f36a361852fda4e1bf31b4e45efdb28ced19a05d0a0f4dd61a9f3f4264bd7"
+        ),
+    },
+    "SumeragiV2AsyncInstallRunnerProofs.tla": {
+        "SerializedCertifiedPacemakerPreservesClaimIngressOwnership": (
+            "8943a6e12fe98c7a816a0f8229964c2304b0e48a208ad672264ee75329f29890"
+        ),
+        "SerializedCertifiedPacemakerRefinesCoreBracketNext": (
+            "b7352d2bf625ed6732277874a52e357bd4188a37d475da900799cdbe231e34d8"
+        ),
+        "SerializedCertifiedPacemakerPreservesSchedulerType": (
+            "5dc5c0e9994a08bbaa623cea84e8f9f5f04a6f8a114962672095bb0ed784e45d"
+        ),
+        "RunNodeWorkConcreteActionCaseSplit": (
+            "35bd614265c192fb0d22201c20fde0ec55ffc461c449c932c94dfe8088875792"
+        ),
+    },
+    "SumeragiV2AsyncTemporalRankProofs.tla": {
+        "ClaimedResponseSerializedCertifiedPacemakerDecreasesAux": (
+            "4f38a2ed305c71bc8c80ad245dbb4626bf0954e094d4238259509c97abd2b42d"
+        ),
+    },
 }
 
 # Complete token seals for the process-local fair-ingress carrier and every
@@ -1970,7 +2849,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "6bc433297ce152cc25f8c67fe66d314f250806a7abf8408a11720cb0480165c8"
     ),
     "effects::accept_certified_body_response_with_ingress_ownership": (
-        "0f42039eb636c26adf431576ffb70a9cc59885f1bd19355c2a221d2fdbf59322"
+        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
     ),
     "effects::classify_payload_chunk_lifecycle": (
         "e6cdcf1439d8ef97a2912811be1ac65a0feb417b168a5480b9a3d9ec57a02333"
@@ -2472,7 +3351,7 @@ _PRODUCTION_SM_DISTID_GEOMETRY_ITEM_SHA256 = {
     ),
 }
 
-# Exact pure geometry and admission items connecting the abstract 4N+2H+2
+# Exact pure geometry and admission items connecting the concrete 5N+3H+2
 # owner model to the authoritative production queue.  Whole-item token seals are
 # intentional here: every numeric term contributes to a progress reservation,
 # and comments or test-only lookalikes cannot satisfy this contract.
@@ -2481,13 +3360,13 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "749f33ce31fcfe4ecf84e2264c181b909d30043bb759a90cbf6e5ebb1a40d0e0"
     ),
     "fair_v2_ingress_required_capacity": (
-        "838df8ad9c809753541a1ee4f75390a763fd4f3362231407626e80102acad249"
+        "eec628b52b06d4e8d2238cc1d05f3b18a53347e186c438723fc4861d442db550"
     ),
     "fair_v2_ingress_current_protected_slots": (
-        "277b32d5a3f4564a998edee5a0267204553f659134fce846de04353bd0ba34d4"
+        "58767f7d72045788225efb6019570df5e4f34d0aa4520a414d225f0ea1449549"
     ),
     "fair_v2_ingress_lane_protected_slots": (
-        "da25270d56a0bd3011ad224033c9b4a5c7a42ca4e86e66f1eb6ca1018415b9ea"
+        "9ded1cd333e6cdb7415aced353a72caca4965fd74c705d11d3916faf251e4af8"
     ),
     "fair_v2_ingress_required_byte_capacity": (
         "f3b4cfc1017778a7d7ba68b1e4c3a24c2f00f5f20252d3375eded1e986bd0799"
@@ -2504,11 +3383,14 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_required_quorum_certificate_bytes": (
         "0335a87586cee9c0d8bf68ba87581f873ccbfdce5c316b1e033ccf0019801629"
     ),
+    "fair_v2_ingress_required_certified_fence_escape_bytes": (
+        "1706b7bac95b09fd83b5f1b111364c47639ec7c74b0ae156c80127277f89838e"
+    ),
     "fair_v2_ingress_required_proposal_bytes": (
         "f87150d121741f99778f8108a82cc95a0811afe51edae3cf06ee8e955337985b"
     ),
     "fair_v2_ingress_network_message_bytes_from_block_message": (
-        "c92a1c58b6296fd3afb040497b3f971ec509ffa2b5408f7c0cb48c5ec0a5b979"
+        "3e9310afc887443851e090698197623e01be8165583d6643b92223119e412573"
     ),
     "fair_v2_ingress_network_message_bytes": (
         "5e605df8dc71ee5961cf2c40b3dc8c6108c1c745662a5249d533b1dc8c9fd6eb"
@@ -2557,21 +3439,26 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "b8d9a480d1cd0e582576891f2af20370ef35f5af4dcdc6c9fe24eafc6e30f3c1"
+        "303393eaa7ab5d1fe034cc7ca90a692fa7e316ed1f870dc5c5c2b50594d6ac49"
     ),
     "configure_roster_for_context": (
-        "13d8e7a240e22e620a6627a6f34c5be856eb22cb9e2f8a38bd2b3e3f95b21334"
+        "d9f224713b9f28a0689baf7b8f9416cec8583931917927eb69bb3f0d06631cfe"
     ),
     "configure_roster_with_byte_requirements": (
-        "193a8e4586cc6ee7689c9cc15e45474c129a217e91be760559027fd1939f9d02"
+        "dd118c20b0f64df0f6c0ff317320c4704bc8376d68c085b493ac763621b59cf9"
     ),
     "open": (
-        "d19623cdc7ad56922f91c7a9c0d2513199ecafa4e6ad26ea2717073d561b41eb"
+        "0a55b773a082a1d72592558a4941355d16d9c2231f9b08d25b778d25749ebcc1"
     ),
     "try_push_at": (
-        "5dc0c2bc91dfedf3972f1d7f13b45c0d8ce923d6e1ba25ea139b77f82285857b"
+        "30ae6c2db810338e07a3dc33562d38ecb45ca07df2ecc5780f1baff01b7d4f70"
     ),
-    "try_recv_if_at_checked": (
-        "f4769c2e4fd24483e1834c0143f4a316be7951b805ff3c41c60ed03486f748f4"
+    "try_recv_if_at_checked_classified": (
+        "cbf4e2244e6f120a4ddf33b2e58c987a1b8f75fafa94c35dc0e10d0652813da9"
+    ),
+}
+_PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
+    "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
+        "21be2f06d20172b6b2ee4fe324f92723895ad5a4fceb50ce84d50234812881c4"
     ),
 }

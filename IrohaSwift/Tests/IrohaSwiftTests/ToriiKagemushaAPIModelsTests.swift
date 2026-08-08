@@ -560,6 +560,17 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         ))
     }
 
+    func testAxtErrorDetailsExposeExactActiveEraAndNextCounter() throws {
+        let details = try KagemushaAxtErrorDetails(
+            code: "handle_sequence_mismatch",
+            activeHandleEra: 9,
+            nextHandleCounter: 4
+        )
+
+        XCTAssertEqual(details.activeHandleEra, 9)
+        XCTAssertEqual(details.nextHandleCounter, 4)
+    }
+
     func testOperationReferenceRejectsInvalidUtf8AndNonCanonicalFraming() throws {
         var invalidString = CompactNoritoWriter()
         invalidString.writeLength(1)

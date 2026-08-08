@@ -22,7 +22,10 @@ pub use asset_definition::{
     visit_transfer_asset_definition, visit_unregister_asset_definition,
 };
 /// Re-export bridge visitor helpers.
-pub use bridge::{visit_apply_sccp_route_governance, visit_record_bridge_receipt};
+pub use bridge::{
+    visit_apply_sccp_route_governance, visit_fund_sccp_route_escrow, visit_record_bridge_receipt,
+    visit_refund_sccp_route_escrow,
+};
 /// Re-export domain visitor helpers used by the default executor.
 pub use domain::{
     visit_register_domain, visit_remove_domain_key_value, visit_set_domain_key_value,
@@ -33,7 +36,8 @@ pub use executor::visit_upgrade;
 /// Re-export governance visitors handled by the default executor.
 pub use governance::{
     visit_approve_governance_proposal, visit_cast_parliament_ballot, visit_enact_referendum,
-    visit_finalize_referendum, visit_propose_sccp_route_governance,
+    visit_enact_sccp_route_governance, visit_finalize_referendum,
+    visit_propose_sccp_route_governance, visit_propose_sorafs_provider_governance,
     visit_propose_validation_fee_policy, visit_register_citizen,
 };
 use iroha_smart_contract::Iroha;
@@ -68,12 +72,16 @@ use iroha_smart_contract::data_model::{
             RebindAccountAlias, RenewAliasLease,
         },
         asset_alias::SetAssetDefinitionAlias,
-        bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
+        bridge::{
+            ApplySccpRouteGovernance, FundSccpRouteEscrow, RecordBridgeReceipt,
+            RefundSccpRouteEscrow,
+        },
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{
-            ApproveGovernanceProposal, CastParliamentBallot, EnactReferendum, FinalizeReferendum,
-            ProposeSccpRouteGovernance, ProposeValidationFeePayoutLifecycle,
+            ApproveGovernanceProposal, CastParliamentBallot, EnactReferendum,
+            EnactSccpRouteGovernance, FinalizeReferendum, ProposeSccpRouteGovernance,
+            ProposeSorafsProviderGovernance, ProposeValidationFeePayoutLifecycle,
             ProposeValidationFeePolicy, RegisterCitizen,
         },
         nexus::{
@@ -319,7 +327,7 @@ fn account_exists_before_transaction<V: Execute + Visit + ?Sized>(
 mod contract_deployment_bootstrap_tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::{AccountAlias, NewAccount, OpaqueAccountId},
         isi::smart_contract_code::{
@@ -1243,8 +1251,20 @@ impl InstructionDispatch for InstructionBox {
             bridge::visit_apply_sccp_route_governance(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<FundSccpRouteEscrow>() {
+            bridge::visit_fund_sccp_route_escrow(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RefundSccpRouteEscrow>() {
+            bridge::visit_refund_sccp_route_escrow(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<ProposeSccpRouteGovernance>() {
             governance::visit_propose_sccp_route_governance(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeSorafsProviderGovernance>() {
+            governance::visit_propose_sorafs_provider_governance(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<ProposeValidationFeePolicy>() {
@@ -1269,6 +1289,10 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<EnactReferendum>() {
             governance::visit_enact_referendum(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<EnactSccpRouteGovernance>() {
+            governance::visit_enact_sccp_route_governance(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<RegisterCitizen>() {
@@ -1482,11 +1506,11 @@ pub mod settlement {
                     "FX corridor policy updates require an exact typed policy permission"
                 );
             }
-            // Core resolves governed sources and applies the source-specific authorization.
-            // Bilateral DvP/PvP requires an exact counterparty-issued consent token bound to
-            // the complete intent; transaction-authority FX corridors are self-service while
-            // fixed-account corridors require their exact typed permission.
-            SettlementInstructionBox::SettleFxCorridor(_) => execute!(executor, isi),
+            // Core binds native FX funding/refunds to the immutable owner and settlement source
+            // debits to the signing account; no manager permission can authorize either debit.
+            SettlementInstructionBox::FundFxCorridorEscrow(_)
+            | SettlementInstructionBox::RefundFxCorridorEscrow(_)
+            | SettlementInstructionBox::SettleFxCorridor(_) => execute!(executor, isi),
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {
                 execute!(executor, isi);
             }
@@ -1510,13 +1534,14 @@ mod core_authorization_dispatch_tests {
                 CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
                 RebindAccountAlias, RenewAliasLease,
             },
-            settlement::SettleFxCorridor,
+            settlement::{FxCorridorOracleEvidence, SettleFxCorridor},
         },
         nexus::DataSpaceId,
         offline::{
             KagemushaDevicePublicKeyV2, OfflineDeviceAttestationPolicy,
             OfflineDeviceAttestationRegistration,
         },
+        oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
     };
 
@@ -1656,6 +1681,17 @@ mod core_authorization_dispatch_tests {
     #[test]
     fn fx_settlement_reaches_core_without_executor_permission() {
         let authority = account(0x41);
+        let request_hash = Hash::new(b"executor-fx-oracle-request");
+        let oracle_event = FeedEvent {
+            feed_id: "mobile_aed_pkr_rate".parse().expect("valid feed id"),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 1,
+            request_hash,
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(76, 0),
+                entries: Vec::new(),
+            }),
+        };
         let settlement = SettlementInstructionBox::SettleFxCorridor(SettleFxCorridor {
             policy_id: "mobile_aed_pkr".parse().expect("valid FX policy name"),
             expected_policy_revision: 1,
@@ -1664,6 +1700,14 @@ mod core_authorization_dispatch_tests {
             settlement_id: "mobile_fx_1".parse().expect("valid settlement id"),
             recipient: account(0x42),
             source_amount: Quantity::from(10_u32),
+            expected_destination_amount: Quantity::from(760_u32),
+            oracle_evidence: FxCorridorOracleEvidence {
+                feed_id: oracle_event.feed_id.clone(),
+                feed_config_version: oracle_event.feed_config_version,
+                slot: oracle_event.slot,
+                request_hash: oracle_event.request_hash,
+                event_hash: HashOf::new(&oracle_event),
+            },
         });
         let mut executor = TestExecutor::new(authority);
 
@@ -1769,6 +1813,17 @@ pub mod governance {
         execute!(executor, isi)
     }
 
+    /// Dispatch a typed SoraFS provider-owner proposal to Core.
+    ///
+    /// Core admits proposal authors separately; only a successful referendum
+    /// enactment can mutate the owner registry.
+    pub fn visit_propose_sorafs_provider_governance<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ProposeSorafsProviderGovernance,
+    ) {
+        execute!(executor, isi)
+    }
+
     /// Dispatch a bonded-citizen validation-fee proposal to the Parliament lifecycle in Core.
     pub fn visit_propose_validation_fee_policy<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -1813,6 +1868,14 @@ pub mod governance {
     pub fn visit_enact_referendum<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &EnactReferendum,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch the full-preimage SCCP referendum enactment to Core.
+    pub fn visit_enact_sccp_route_governance<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &EnactSccpRouteGovernance,
     ) {
         execute!(executor, isi)
     }
@@ -1937,13 +2000,11 @@ pub mod nexus {
 /// Permission-checked visitors for `SoraFS` registry and pricing instructions.
 pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
-        CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanManageSorafsPopRegistry, CanManageSorafsReputationJournalPolicy,
-        CanOperateSorafsPopIssuer, CanRecordSorafsReputationJournal,
-        CanRegisterSorafsProviderOwner, CanResolveSorafsCapacityDispute, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanFileSorafsCapacityDispute,
+        CanIssueSorafsReplicationOrder, CanManageSorafsModeration, CanManageSorafsPopRegistry,
+        CanManageSorafsReputationJournalPolicy, CanOperateSorafsPopIssuer,
+        CanRecordSorafsReputationJournal, CanResolveSorafsCapacityDispute, CanSetSorafsPricing,
+        CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -2428,34 +2489,26 @@ pub mod sorafs {
         execute!(executor, isi);
     }
 
-    /// Approve a pending `SoraFS` pin manifest when permitted.
+    /// Submit a threshold-signed approval for a pending `SoraFS` pin manifest.
+    ///
+    /// Core validates the governed approval envelope. The submitting account
+    /// does not receive broad pin-registry authority merely by relaying it.
     pub fn visit_approve_pin_manifest<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &ApprovePinManifest,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanApproveSorafsPin.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't approve SoraFS pin manifest");
+        execute!(executor, isi);
     }
 
-    /// Retire a `SoraFS` pin manifest when permitted.
+    /// Retire an account-owned `SoraFS` pin manifest.
+    ///
+    /// Core requires the authenticated transaction authority to be the exact
+    /// original submitter.
     pub fn visit_retire_pin_manifest<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RetirePinManifest,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanRetireSorafsPin.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't retire SoraFS pin manifest");
+        execute!(executor, isi);
     }
 
     /// Bind or update a `SoraFS` manifest alias when permitted.
@@ -2641,78 +2694,36 @@ pub mod sorafs {
         deny!(executor, "Can't expire SoraFS replication order");
     }
 
-    /// Register or update the owner binding for a `SoraFS` provider when permitted.
+    /// Dispatch the retired direct owner-registration surface so Core can reject it uniformly.
     pub fn visit_register_provider_owner<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RegisterProviderOwner,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanRegisterSorafsProviderOwner
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't register SoraFS provider owner binding");
+        execute!(executor, isi)
     }
 
-    /// Remove the owner binding for a `SoraFS` provider when permitted.
+    /// Dispatch the retired direct owner-removal surface so Core can reject it uniformly.
     pub fn visit_unregister_provider_owner<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &UnregisterProviderOwner,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanUnregisterSorafsProviderOwner
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't unregister SoraFS provider owner binding");
+        execute!(executor, isi)
     }
 
-    /// Set a provider-ingest completion authority when permitted.
+    /// Dispatch completion-authority rotation; Core requires the exact governed owner.
     pub fn visit_set_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SetProviderIngestCompletionAuthority,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanRegisterSorafsProviderOwner
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(
-            executor,
-            "Can't set SoraFS provider-ingest completion authority"
-        );
+        execute!(executor, isi)
     }
 
-    /// Revoke a provider-ingest completion authority when permitted.
+    /// Dispatch completion-authority revocation; Core requires the exact governed owner.
     pub fn visit_revoke_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RevokeProviderIngestCompletionAuthority,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanUnregisterSorafsProviderOwner
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(
-            executor,
-            "Can't revoke SoraFS provider-ingest completion authority"
-        );
+        execute!(executor, isi)
     }
 
     /// Update the `SoraFS` pricing schedule when permitted.
@@ -3382,7 +3393,6 @@ pub mod domain {
             }
             AnyPermission::CanManageFeeSponsorProgram(_)
             | AnyPermission::CanEnrollFeeSponsorProgram(_)
-            | AnyPermission::CanWithdrawFeeSponsorProgram(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
@@ -3410,10 +3420,6 @@ pub mod domain {
             | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
-            | AnyPermission::CanSettleFxCorridor(_)
-            | AnyPermission::CanRegisterSorafsPin(_)
-            | AnyPermission::CanApproveSorafsPin(_)
-            | AnyPermission::CanRetireSorafsPin(_)
             | AnyPermission::CanBindSorafsAlias(_)
             | AnyPermission::CanDeclareSorafsCapacity(_)
             | AnyPermission::CanSubmitSorafsTelemetry(_)
@@ -3683,9 +3689,6 @@ pub mod account {
             AnyPermission::CanEnrollFeeSponsorProgram(permission) => {
                 permission.program_id.sponsor == *account_id
             }
-            AnyPermission::CanWithdrawFeeSponsorProgram(permission) => {
-                permission.program_id.sponsor == *account_id
-            }
             AnyPermission::CanInvokeContractEntrypoint(permission) => {
                 permission.contract.subject_id() == *account_id
             }
@@ -3734,10 +3737,6 @@ pub mod account {
             | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
-            | AnyPermission::CanSettleFxCorridor(_)
-            | AnyPermission::CanRegisterSorafsPin(_)
-            | AnyPermission::CanApproveSorafsPin(_)
-            | AnyPermission::CanRetireSorafsPin(_)
             | AnyPermission::CanBindSorafsAlias(_)
             | AnyPermission::CanDeclareSorafsCapacity(_)
             | AnyPermission::CanSubmitSorafsTelemetry(_)
@@ -4055,10 +4054,6 @@ pub mod asset_definition {
             | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
-            | AnyPermission::CanSettleFxCorridor(_)
-            | AnyPermission::CanRegisterSorafsPin(_)
-            | AnyPermission::CanApproveSorafsPin(_)
-            | AnyPermission::CanRetireSorafsPin(_)
             | AnyPermission::CanBindSorafsAlias(_)
             | AnyPermission::CanDeclareSorafsCapacity(_)
             | AnyPermission::CanSubmitSorafsTelemetry(_)
@@ -4086,8 +4081,7 @@ pub mod asset_definition {
             | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
             | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
             | AnyPermission::CanManageFeeSponsorProgram(_)
-            | AnyPermission::CanEnrollFeeSponsorProgram(_)
-            | AnyPermission::CanWithdrawFeeSponsorProgram(_) => false,
+            | AnyPermission::CanEnrollFeeSponsorProgram(_) => false,
         }
     }
 }
@@ -5027,7 +5021,7 @@ pub mod parameter {
         if updates_sccp_governance(isi) {
             deny!(
                 executor,
-                "The reserved SCCP registry cannot be changed through SetParameter; use ApplySccpRouteGovernance"
+                "The reserved SCCP registry cannot be changed through SetParameter; enact a finalized typed SCCP referendum"
             );
         }
         if updates_validation_fee_governance(isi) {
@@ -5569,10 +5563,6 @@ pub mod trigger {
             | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
-            | AnyPermission::CanSettleFxCorridor(_)
-            | AnyPermission::CanRegisterSorafsPin(_)
-            | AnyPermission::CanApproveSorafsPin(_)
-            | AnyPermission::CanRetireSorafsPin(_)
             | AnyPermission::CanBindSorafsAlias(_)
             | AnyPermission::CanDeclareSorafsCapacity(_)
             | AnyPermission::CanSubmitSorafsTelemetry(_)
@@ -5600,8 +5590,7 @@ pub mod trigger {
             | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
             | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
             | AnyPermission::CanManageFeeSponsorProgram(_)
-            | AnyPermission::CanEnrollFeeSponsorProgram(_)
-            | AnyPermission::CanWithdrawFeeSponsorProgram(_) => false,
+            | AnyPermission::CanEnrollFeeSponsorProgram(_) => false,
         }
     }
 
@@ -5624,17 +5613,16 @@ pub mod trigger {
             },
             nexus::{
                 CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
-                CanPublishSpaceDirectoryManifestForAccountDomain, CanWithdrawFeeSponsorProgram,
+                CanPublishSpaceDirectoryManifestForAccountDomain,
             },
             sccp::CanManageSccpGovernance,
             sorafs::{
-                CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-                CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute,
-                CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-                CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
-                CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-                CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
-                CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+                CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
+                CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+                CanManageSorafsModeration, CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer,
+                CanRegisterSorafsProviderOwner, CanSetSorafsPricing, CanSetSorafsReservePolicy,
+                CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
+                CanUpsertSorafsProviderCredit,
             },
             soranet::{
                 CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
@@ -5670,9 +5658,6 @@ pub mod trigger {
 
         fn sora_permissions() -> Vec<AnyPermission> {
             vec![
-                AnyPermission::CanRegisterSorafsPin(CanRegisterSorafsPin),
-                AnyPermission::CanApproveSorafsPin(CanApproveSorafsPin),
-                AnyPermission::CanRetireSorafsPin(CanRetireSorafsPin),
                 AnyPermission::CanBindSorafsAlias(CanBindSorafsAlias),
                 AnyPermission::CanDeclareSorafsCapacity(CanDeclareSorafsCapacity),
                 AnyPermission::CanSubmitSorafsTelemetry(CanSubmitSorafsTelemetry),
@@ -5822,12 +5807,7 @@ pub mod trigger {
                     },
                 )),
                 Permission::from(AnyPermission::CanEnrollFeeSponsorProgram(
-                    CanEnrollFeeSponsorProgram {
-                        program_id: program_id.clone(),
-                    },
-                )),
-                Permission::from(AnyPermission::CanWithdrawFeeSponsorProgram(
-                    CanWithdrawFeeSponsorProgram { program_id },
+                    CanEnrollFeeSponsorProgram { program_id },
                 )),
             ];
 
@@ -6079,13 +6059,11 @@ mod sorafs_permission_tests {
         },
     };
     use iroha_executor_data_model::permission::sorafs::{
-        CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanManageSorafsPopRegistry, CanManageSorafsReputationJournalPolicy,
-        CanOperateSorafsPopIssuer, CanRecordSorafsReputationJournal, CanRegisterSorafsPin,
-        CanRegisterSorafsProviderOwner, CanResolveSorafsCapacityDispute, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanFileSorafsCapacityDispute,
+        CanIssueSorafsReplicationOrder, CanManageSorafsModeration, CanManageSorafsPopRegistry,
+        CanManageSorafsReputationJournalPolicy, CanOperateSorafsPopIssuer,
+        CanRecordSorafsReputationJournal, CanResolveSorafsCapacityDispute, CanSetSorafsPricing,
+        CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
@@ -6176,7 +6154,7 @@ mod sorafs_permission_tests {
         instruction: T,
         visit: impl Fn(&mut MockExecutor, &T),
     ) {
-        with_mock_permissions(vec![PermissionObject::from(CanRegisterSorafsPin)], || {
+        with_mock_permissions(vec![PermissionObject::from(CanBindSorafsAlias)], || {
             let mut executor = MockExecutor::new(false);
             visit(&mut executor, &instruction);
             assert!(
@@ -6239,18 +6217,17 @@ mod sorafs_permission_tests {
     fn register_pin_manifest() -> RegisterPinManifest {
         RegisterPinManifest::new(
             include_bytes!("../../../../fixtures/sorafs_gateway/1.0.0/manifest_v1.to").to_vec(),
-            1,
             None,
             None,
         )
     }
 
     fn approve_pin_manifest() -> ApprovePinManifest {
-        ApprovePinManifest::new(sample_manifest_digest(), 2, None, None)
+        ApprovePinManifest::new(sample_manifest_digest(), None, None)
     }
 
     fn retire_pin_manifest() -> RetirePinManifest {
-        RetirePinManifest::new(sample_manifest_digest(), 3, None)
+        RetirePinManifest::new(sample_manifest_digest(), None)
     }
 
     fn bind_manifest_alias() -> BindManifestAlias {
@@ -6563,19 +6540,18 @@ mod sorafs_permission_tests {
         );
     }
 
-    sorafs_permission_case!(
-        approve_pin_manifest_requires_permission,
-        approve_pin_manifest(),
-        CanApproveSorafsPin,
-        sorafs::visit_approve_pin_manifest
-    );
+    #[test]
+    fn approve_pin_manifest_relays_governed_envelopes_without_permission() {
+        assert_allowed_without_permission(
+            approve_pin_manifest(),
+            sorafs::visit_approve_pin_manifest,
+        );
+    }
 
-    sorafs_permission_case!(
-        retire_pin_manifest_requires_permission,
-        retire_pin_manifest(),
-        CanRetireSorafsPin,
-        sorafs::visit_retire_pin_manifest
-    );
+    #[test]
+    fn retire_pin_manifest_defers_exact_owner_check_to_core() {
+        assert_allowed_without_permission(retire_pin_manifest(), sorafs::visit_retire_pin_manifest);
+    }
 
     sorafs_permission_case!(
         bind_manifest_alias_requires_permission,
@@ -6663,33 +6639,29 @@ mod sorafs_permission_tests {
         sorafs::visit_expire_replication_order
     );
 
-    sorafs_permission_case!(
-        register_provider_owner_requires_permission,
-        register_provider_owner(),
-        CanRegisterSorafsProviderOwner,
-        sorafs::visit_register_provider_owner
-    );
+    #[test]
+    fn retired_direct_provider_owner_instructions_reach_core_for_uniform_rejection() {
+        assert_allowed_without_permission(
+            register_provider_owner(),
+            sorafs::visit_register_provider_owner,
+        );
+        assert_allowed_without_permission(
+            unregister_provider_owner(),
+            sorafs::visit_unregister_provider_owner,
+        );
+    }
 
-    sorafs_permission_case!(
-        unregister_provider_owner_requires_permission,
-        unregister_provider_owner(),
-        CanUnregisterSorafsProviderOwner,
-        sorafs::visit_unregister_provider_owner
-    );
-
-    sorafs_permission_case!(
-        set_provider_ingest_completion_authority_requires_permission,
-        set_provider_ingest_completion_authority(),
-        CanRegisterSorafsProviderOwner,
-        sorafs::visit_set_provider_ingest_completion_authority
-    );
-
-    sorafs_permission_case!(
-        revoke_provider_ingest_completion_authority_requires_permission,
-        revoke_provider_ingest_completion_authority(),
-        CanUnregisterSorafsProviderOwner,
-        sorafs::visit_revoke_provider_ingest_completion_authority
-    );
+    #[test]
+    fn completion_authority_instructions_reach_core_owner_check() {
+        assert_allowed_without_permission(
+            set_provider_ingest_completion_authority(),
+            sorafs::visit_set_provider_ingest_completion_authority,
+        );
+        assert_allowed_without_permission(
+            revoke_provider_ingest_completion_authority(),
+            sorafs::visit_revoke_provider_ingest_completion_authority,
+        );
+    }
 
     sorafs_permission_case!(
         set_pricing_schedule_requires_permission,
@@ -6900,7 +6872,7 @@ mod sorafs_permission_tests {
 
     #[test]
     fn derived_default_visit_dispatches_private_juror_eligibility_query() {
-        with_mock_permissions(vec![PermissionObject::from(CanRegisterSorafsPin)], || {
+        with_mock_permissions(vec![PermissionObject::from(CanBindSorafsAlias)], || {
             let query = iroha_smart_contract::data_model::query::AnyQueryBox::Singular(
                 FindSorafsModerationJurorEligibility::new(
                     "appeal-case".to_owned(),
@@ -6933,7 +6905,7 @@ mod sorafs_permission_tests {
 
     #[test]
     fn derived_default_visit_dispatches_orderbook_pages_through_permission_checks() {
-        with_mock_permissions(vec![PermissionObject::from(CanRegisterSorafsPin)], || {
+        with_mock_permissions(vec![PermissionObject::from(CanBindSorafsAlias)], || {
             for query in orderbook_page_queries() {
                 let mut executor = MockExecutor::new(false);
                 executor.visit_query(&query);
@@ -6988,7 +6960,7 @@ mod sorafs_permission_tests {
     }
 
     #[test]
-    fn sccp_route_governance_dispatch_requires_dedicated_permission() {
+    fn direct_sccp_route_governance_dispatch_is_retired_for_every_permission() {
         let instruction = remove_sccp_route();
         assert_denied_without_permission(
             instruction.clone(),
@@ -6999,7 +6971,7 @@ mod sorafs_permission_tests {
             PermissionObject::from(CanSetParameters),
             bridge::visit_apply_sccp_route_governance,
         );
-        assert_allowed_with_permission(
+        assert_denied_with_permission(
             instruction.clone(),
             PermissionObject::from(CanManageSccpGovernance),
             bridge::visit_apply_sccp_route_governance,
@@ -7011,8 +6983,8 @@ mod sorafs_permission_tests {
                 let mut executor = MockExecutor::new(false);
                 visit_instruction(&mut executor, &InstructionBox::from(instruction));
                 assert!(
-                    executor.verdict().is_ok(),
-                    "known SCCP governance ISI must reach its permission-checked dispatcher"
+                    executor.verdict().is_err(),
+                    "direct SCCP governance must remain closed even for legacy managers"
                 );
             },
         );
@@ -7284,10 +7256,10 @@ mod sorafs_permission_tests {
     }
 
     #[test]
-    fn genesis_can_apply_typed_sccp_governance_without_seeded_permission() {
+    fn genesis_cannot_bypass_typed_sccp_referendum_governance() {
         let mut executor = MockExecutor::new(true);
         bridge::visit_apply_sccp_route_governance(&mut executor, &remove_sccp_route());
-        assert!(executor.verdict().is_ok());
+        assert!(executor.verdict().is_err());
     }
 }
 
@@ -7352,9 +7324,7 @@ mod governed_offline_permission_tests {
         prelude::{AccountId, Grant, Json, Register, Revoke, Role, RoleId, ValidationFail},
     };
     use iroha_executor_data_model::permission::{
-        nexus::{
-            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
-        },
+        nexus::{CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram},
         offline::{
             CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
             CanManageOfflineEscrow,
@@ -7559,10 +7529,7 @@ mod governed_offline_permission_tests {
             PermissionObject::from(CanManageFeeSponsorProgram {
                 sponsor: sponsor.clone(),
             }),
-            PermissionObject::from(CanEnrollFeeSponsorProgram {
-                program_id: program_id.clone(),
-            }),
-            PermissionObject::from(CanWithdrawFeeSponsorProgram { program_id }),
+            PermissionObject::from(CanEnrollFeeSponsorProgram { program_id }),
         ];
         let previous =
             test_override::replace_permissions(vec![PermissionObject::from(CanSetParameters)]);
@@ -7703,26 +7670,7 @@ pub mod log {
 
 /// Permission-checked visitors for bridge instructions.
 pub mod bridge {
-    use iroha_executor_data_model::permission::sccp::CanManageSccpGovernance;
-    use iroha_smart_contract::data_model::isi::BuiltInInstruction;
-    use norito::NoritoSerialize;
-
     use super::*;
-
-    fn visit_sccp_governance<V: Execute + Visit + ?Sized>(
-        executor: &mut V,
-        isi: &(impl BuiltInInstruction + NoritoSerialize),
-    ) {
-        if executor.context().curr_block.is_genesis()
-            || CanManageSccpGovernance.is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-        deny!(
-            executor,
-            "Can't apply SCCP route governance without CanManageSccpGovernance"
-        );
-    }
 
     /// Records a bridge receipt without additional permission gates.
     pub fn visit_record_bridge_receipt<V: Execute + Visit + ?Sized>(
@@ -7735,8 +7683,27 @@ pub mod bridge {
     /// Applies one typed governed SCCP registry action.
     pub fn visit_apply_sccp_route_governance<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &ApplySccpRouteGovernance,
+        _isi: &ApplySccpRouteGovernance,
     ) {
-        visit_sccp_governance(executor, isi)
+        deny!(
+            executor,
+            "direct SCCP route mutation is retired; enact a finalized threshold referendum"
+        )
+    }
+
+    /// Dispatch owner-bound route escrow funding to Core.
+    pub fn visit_fund_sccp_route_escrow<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &FundSccpRouteEscrow,
+    ) {
+        execute!(executor, isi)
+    }
+
+    /// Dispatch owner-bound inactive-route escrow refund to Core.
+    pub fn visit_refund_sccp_route_escrow<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RefundSccpRouteEscrow,
+    ) {
+        execute!(executor, isi)
     }
 }

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.alias
 
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Strict parser for lease-renewal and auto-renew planner responses. */
 object AliasLifecycleTransactionPlanJsonParser {
@@ -25,7 +26,7 @@ object AliasLifecycleTransactionPlanJsonParser {
         parser.exactKeys(
             root,
             setOf(
-                "version", "authority", "chain_id", "anchor", "operation", "disposition",
+                "version", "authority", "network_id", "anchor", "operation", "disposition",
                 "instruction", "quote", "totals_by_asset", "warnings", "blockers",
                 "valid_until_ms",
             ),
@@ -34,7 +35,7 @@ object AliasLifecycleTransactionPlanJsonParser {
         return AliasLifecycleTransactionPlanBodyV1(
             parser.intField(root, "version", "body.version"),
             parser.stringField(root, "authority", "body.authority"),
-            parser.stringField(root, "chain_id", "body.chain_id"),
+            NetworkId.parse(parser.stringField(root, "network_id", "body.network_id")),
             parser.parseAnchor(parser.objectField(root, "anchor", "body.anchor")),
             parseOperation(parser.objectField(root, "operation", "body.operation"), "body.operation"),
             parseDisposition(

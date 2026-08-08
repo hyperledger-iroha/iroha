@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
-    ChainId, block::consensus_v2 as wire, isi::RegisterBox, nexus::PublicLaneValidatorStatus,
+    NetworkId, block::consensus_v2 as wire, isi::RegisterBox, nexus::PublicLaneValidatorStatus,
     peer::PeerId, transaction::Executable,
 };
 use iroha_genesis::GenesisBlock;
@@ -218,24 +218,12 @@ pub fn freeze_staged_genesis_v2(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let first_transaction = genesis
-        .0
-        .external_transactions()
-        .next()
-        .ok_or(V2GenesisBootstrapError::MissingTransaction)?;
-    let chain_id = first_transaction.chain().clone();
-    if genesis
-        .0
-        .external_transactions()
-        .any(|transaction| transaction.chain() != &chain_id)
-    {
-        return Err(V2GenesisBootstrapError::MixedChainIds);
-    }
+    let network_id = staged.network_id;
 
     let (epoch_end_height, leader_seed) = match mode {
         wire::ConsensusMode::Permissioned => {
             let mut seed_preimage = b"sumeragi-v2:permissioned-leader-seed".to_vec();
-            seed_preimage.extend_from_slice(&chain_id.encode());
+            seed_preimage.extend_from_slice(&network_id.encode());
             let seed: [u8; 32] = Hash::new(seed_preimage).into();
             (u64::MAX, seed)
         }
@@ -255,14 +243,14 @@ pub fn freeze_staged_genesis_v2(
         roster,
         leader_seed,
     };
-    let next_epoch_snapshot = finalized_next_epoch_snapshot(staged, &chain_id, 1, &election)
+    let next_epoch_snapshot = finalized_next_epoch_snapshot(staged, &network_id, 1, &election)
         .map_err(|error| V2GenesisBootstrapError::Context(error.to_string()))?;
     let staged_nexus_amx_context_hash =
         verify_staged_nexus_amx_context_hash(staged, signed_parameters.nexus_amx_context_hash)?;
     let staged_execution_policy_hash =
         verify_staged_execution_policy_hash(staged, signed_parameters.execution_policy_hash)?;
     let context = build_genesis_height_context(GenesisContextInputs {
-        chain_id,
+        network_id,
         election,
         next_epoch_snapshot,
         nexus_amx_context_hash: staged_nexus_amx_context_hash,
@@ -393,12 +381,6 @@ fn verify_staged_execution_policy_hash(
 /// Failure to derive an exact fresh-genesis reducer bootstrap.
 #[derive(Debug, Error)]
 pub enum V2GenesisBootstrapError {
-    /// Genesis contains no transaction from which to derive the chain id.
-    #[error("Sumeragi v2 genesis contains no transaction")]
-    MissingTransaction,
-    /// Genesis transactions disagree on the signed chain id.
-    #[error("Sumeragi v2 genesis transactions contain different chain ids")]
-    MixedChainIds,
     /// A genesis transaction uses an executable form that cannot define the
     /// deterministic bootstrap roster.
     #[error("Sumeragi v2 genesis transactions must contain instruction batches")]
@@ -492,8 +474,8 @@ impl FrozenElectionInputs {
 /// Consensus-relevant immutable inputs selected at genesis.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GenesisContextInputs {
-    /// Fresh chain identifier.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network identity.
+    pub network_id: NetworkId,
     /// Initial finalized election snapshot.
     pub election: FrozenElectionInputs,
     /// Old-roster-authenticated transition when height one ends epoch zero.
@@ -514,7 +496,7 @@ pub(crate) fn build_genesis_height_context(
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
     let context = wire::HeightContext {
-        chain_id: inputs.chain_id,
+        network_id: inputs.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: inputs.election.epoch,
@@ -555,7 +537,7 @@ pub(crate) fn build_successor_height_context(
     }
 
     let context = wire::HeightContext {
-        chain_id: parent.height_context.chain_id.clone(),
+        network_id: parent.height_context.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height,
         epoch: election.epoch,
@@ -614,7 +596,7 @@ pub(crate) fn build_successor_height_context_from_state(
         .ok_or(V2ContextBuildError::HeightOverflow)?;
     let election = successor_election_inputs(parent, height)?;
     let next_epoch_snapshot =
-        finalized_next_epoch_snapshot(state, &parent.height_context.chain_id, height, &election)?;
+        finalized_next_epoch_snapshot(state, &parent.height_context.network_id, height, &election)?;
     build_successor_height_context(parent, nexus_amx_context_hash, next_epoch_snapshot)
 }
 
@@ -628,7 +610,7 @@ pub(crate) fn build_successor_height_context_from_state(
 /// elections, never retroactively for the imminent validator set.
 pub(crate) fn finalized_next_epoch_snapshot(
     state: &impl StateReadOnly,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     height: wire::Height,
     election: &FrozenElectionInputs,
 ) -> Result<Option<wire::finality::FinalizedNextEpochSnapshot>, V2ContextBuildError> {
@@ -668,7 +650,7 @@ pub(crate) fn finalized_next_epoch_snapshot(
             .ok_or(V2ContextBuildError::MissingPreBoundaryVrfRecord)?;
         Some(
             super::v2_npos::authenticated_successor_seed(
-                chain_id,
+                network_id,
                 election.epoch,
                 election.epoch_end_height,
                 election.leader_seed,
@@ -794,7 +776,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         account::AccountId,
         block::{BlockHeader, SignedBlock},
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
@@ -817,6 +799,12 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
+
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
 
     fn roster(powers: &[u64]) -> Vec<wire::ValidatorPower> {
         let mut entries = powers
@@ -851,7 +839,7 @@ mod tests {
             }
         });
         build_genesis_height_context(GenesisContextInputs {
-            chain_id: "v2-context-builder-test".into(),
+            network_id: test_network_id(0x41),
             election: FrozenElectionInputs {
                 epoch: 4,
                 epoch_end_height: end,
@@ -904,8 +892,7 @@ mod tests {
                 pop,
             )));
         }
-        let transaction = TransactionBuilder::new(
-            "v2-context-signed-roster-test".into(),
+        let transaction = TransactionBuilder::new_genesis(
             AccountId::new(authority.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -985,7 +972,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: ChainId::from("signed-genesis-finality-authority-test"),
+                network_id: test_network_id(0x42),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
@@ -1444,16 +1431,25 @@ mod tests {
             leader_seed: [0x72; 32],
         };
         assert!(matches!(
-            finalized_next_epoch_snapshot(&expiring_view, &chain_id, BOUNDARY_HEIGHT, &election),
+            finalized_next_epoch_snapshot(
+                &expiring_view,
+                expiring_view.network_id(),
+                BOUNDARY_HEIGHT,
+                &election,
+            ),
             Err(V2ContextBuildError::MissingNextEpochProofOfPossession)
         ));
 
         let activating_state = state_with_lifecycle(false);
         let activating_view = activating_state.view();
-        let snapshot =
-            finalized_next_epoch_snapshot(&activating_view, &chain_id, BOUNDARY_HEIGHT, &election)
-                .expect("derive successor snapshot")
-                .expect("boundary snapshot");
+        let snapshot = finalized_next_epoch_snapshot(
+            &activating_view,
+            activating_view.network_id(),
+            BOUNDARY_HEIGHT,
+            &election,
+        )
+        .expect("derive successor snapshot")
+        .expect("boundary snapshot");
         assert_eq!(snapshot.roster, election.roster);
         assert_eq!(snapshot.validator_set_pops.len(), election.roster.len());
         wire::finality::verify_validator_power_roster_pops(
@@ -1496,7 +1492,7 @@ mod tests {
         };
 
         assert_eq!(
-            finalized_next_epoch_snapshot(&view, &chain_id, BOUNDARY_HEIGHT, &election),
+            finalized_next_epoch_snapshot(&view, view.network_id(), BOUNDARY_HEIGHT, &election,),
             Err(V2ContextBuildError::MissingPreBoundaryVrfRecord)
         );
     }
@@ -1504,7 +1500,7 @@ mod tests {
     #[test]
     fn genesis_rejects_non_unit_consensus_power() {
         let error = build_genesis_height_context(GenesisContextInputs {
-            chain_id: "bad-permissioned-context".into(),
+            network_id: test_network_id(0x43),
             election: FrozenElectionInputs {
                 epoch: 0,
                 epoch_end_height: 10,
@@ -1550,7 +1546,7 @@ mod tests {
         };
 
         assert_eq!(
-            finalized_next_epoch_snapshot(&view, &chain_id, u64::MAX, &election),
+            finalized_next_epoch_snapshot(&view, view.network_id(), u64::MAX, &election),
             Ok(None),
             "terminal construction must not inspect or increment next-epoch state"
         );

@@ -300,11 +300,16 @@ mod tests {
             .expect("derive checked block-builder fixture keypair")
     }
 
+    fn test_network_id() -> crate::NetworkId {
+        crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x15; Hash::LENGTH]),
+        ))
+    }
+
     #[test]
     fn builder_roots_match_manual_construction() {
         // Minimal header
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
-        let chain: ChainId = "test-chain".parse().unwrap();
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -313,14 +318,14 @@ mod tests {
 
         // Two txs
         let tx1 = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(core::iter::empty::<InstructionBox>())
         .sign(&private_key);
         let tx2 = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

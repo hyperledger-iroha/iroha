@@ -82,11 +82,11 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var payloadVector = new OfflineNoritoWriter();
+        var payloadVector = new CanonicalNoritoWriter();
         payloadVector.WriteUInt64LittleEndian((ulong)orderPayload.Length);
         payloadVector.WriteBytes(orderPayload);
 
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(
             ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(payloadVector.ToArray());
@@ -153,7 +153,7 @@ public sealed record class ProviderIngestCompletionSignerPolicyV1
 
     internal byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(Convert.FromHexString(PolicyId));
         writer.WriteField(context.EncodeUInt64(Revision));
         writer.WriteField(
@@ -186,7 +186,7 @@ public sealed record class ProviderIngestCompletionAuthorityV1
 
     internal byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeAccountId(ProviderOwner));
         writer.WriteField(SignerPolicy.EncodePayload(context));
         return writer.ToArray();
@@ -214,7 +214,7 @@ public sealed record class ProviderIngestFinalizedAnchorV1
 
     internal byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(context.EncodeUInt64(Height));
         writer.WriteField(Convert.FromHexString(BlockHash));
         return writer.ToArray();
@@ -270,7 +270,7 @@ public sealed record class CompleteReplicationOrderInstruction : TransactionInst
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(
             ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(
@@ -307,7 +307,7 @@ public sealed record class ExpireReplicationOrderInstruction : TransactionInstru
 
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(
             ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(context.EncodeUInt64(ExpirationEpoch));
@@ -375,14 +375,14 @@ internal static class ReplicationOrderInstructionValidation
 
     internal static byte[] EncodeIdentifierNewtype(string value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         writer.WriteField(Convert.FromHexString(value));
         return writer.ToArray();
     }
 
     internal static byte[] EncodeOptionalFixedByteArray(string? value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         if (value is null)
         {
             writer.WriteByte(0);
@@ -390,7 +390,7 @@ internal static class ReplicationOrderInstructionValidation
         }
 
         writer.WriteByte(1);
-        var array = new OfflineNoritoWriter();
+        var array = new CanonicalNoritoWriter();
         foreach (var item in Convert.FromHexString(value))
         {
             array.WriteField(new[] { item });
@@ -401,7 +401,7 @@ internal static class ReplicationOrderInstructionValidation
 
     internal static byte[] EncodeOptionalIdentifierNewtype(string? value)
     {
-        var writer = new OfflineNoritoWriter();
+        var writer = new CanonicalNoritoWriter();
         if (value is null)
         {
             writer.WriteByte(0);

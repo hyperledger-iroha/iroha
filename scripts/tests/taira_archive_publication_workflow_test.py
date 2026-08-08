@@ -66,6 +66,7 @@ def _assert_split_trust_architecture(source: str) -> None:
         "macos-native-build",
         "macos-secret-free-qualification",
         "macos-candidate-authority",
+        "linux-boi-qualification",
         "macos-deploy",
         "macos-publish",
     ]
@@ -75,9 +76,14 @@ def _assert_split_trust_architecture(source: str) -> None:
         "public-privacy-input",
         "linux-native-authority",
         "macos-candidate-authority",
+        "linux-boi-qualification",
         "macos-publish",
     }
-    product_execution_jobs = {"macos-secret-free-qualification", "macos-deploy"}
+    product_execution_jobs = {
+        "macos-secret-free-qualification",
+        "linux-boi-qualification",
+        "macos-deploy",
+    }
 
     for name, raw_job in jobs.items():
         assert isinstance(raw_job, dict)
@@ -114,19 +120,27 @@ def _assert_split_trust_architecture(source: str) -> None:
         "macos-native-build",
     ]
     assert jobs["macos-candidate-authority"]["needs"] == "macos-secret-free-qualification"
+    assert jobs["linux-boi-qualification"]["needs"] == "macos-candidate-authority"
     assert jobs["macos-deploy"]["needs"] == [
         "macos-candidate-authority",
+        "linux-boi-qualification",
         "macos-native-build",
         "linux-native-authority",
     ]
     assert jobs["macos-publish"]["needs"] == "macos-deploy"
 
     assert jobs["macos-secret-free-qualification"]["environment"] == "taira-validator-qualification"
+    assert jobs["linux-boi-qualification"]["environment"] == (
+        "taira-validator-boi-qualification"
+    )
     assert jobs["macos-deploy"]["environment"] == "taira-validator-deploy"
     assert jobs["macos-publish"]["environment"] == "taira-validator-publish"
     assert jobs["linux-native-authority"]["runs-on"][-1] == "taira-linux-authority"
     assert jobs["macos-secret-free-qualification"]["runs-on"][-1] == "taira-secret-free-qualification"
     assert jobs["macos-candidate-authority"]["runs-on"][-1] == "taira-candidate-authority"
+    assert jobs["linux-boi-qualification"]["runs-on"][-1] == (
+        "taira-boi-qualification"
+    )
     assert jobs["macos-deploy"]["runs-on"][-1] == "taira-deploy"
     assert jobs["macos-publish"]["runs-on"][-1] == "taira-publish-authority"
 
@@ -208,7 +222,7 @@ def _assert_fixed_controller_contract(source: str) -> None:
             )
         ):
             assert 'sudo -n "$TAIRA_CONTROLLER_COMMAND"' in line
-    assert source.count('EXPECTED_UID: "0"') == 9
+    assert source.count('EXPECTED_UID: "0"') == 10
 
     for trust_arg in (
         "--expected-launcher-sha256",
@@ -220,7 +234,7 @@ def _assert_fixed_controller_contract(source: str) -> None:
         "--platform",
         "--role",
     ):
-        assert source.count(trust_arg) == 10, trust_arg
+        assert source.count(trust_arg) == 11, trust_arg
     assert source.count("--source-commit") >= 10
     assert source.count("inspect-handoff") >= 9
     assert source.count("--stage-name") == source.count("inspect-handoff")
@@ -280,7 +294,12 @@ def test_downloaded_artifacts_are_quarantined_staged_and_consumed_only_after_ins
     consumers = {
         "linux-native-authority": ("linux-unsigned", "public-privacy-input"),
         "macos-secret-free-qualification": ("linux-authority", "macos-build"),
-        "macos-candidate-authority": ("linux-authority", "qualification-receipt"),
+        "macos-candidate-authority": (
+            "linux-authority",
+            "qualification-receipt",
+            "privacy-v1-boi-artifacts",
+        ),
+        "linux-boi-qualification": ("candidate", "privacy-v1-boi-artifacts"),
         "macos-deploy": ("linux-authority", "candidate", "macos-build"),
         "macos-publish": ("candidate",),
     }
@@ -293,6 +312,34 @@ def test_downloaded_artifacts_are_quarantined_staged_and_consumed_only_after_ins
         assert "staged_root" in text
 
 
+def test_boi_cross_run_input_is_required_content_validated_and_deploy_gating() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
+    jobs = _workflow()
+    candidate = _job_text(jobs["macos-candidate-authority"])
+    qualification = _job_text(jobs["linux-boi-qualification"])
+
+    assert "privacy_v1_boi_artifact_run_id:" in source
+    assert source.count("run-id: ${{ inputs.privacy_v1_boi_artifact_run_id }}") == 2
+    assert source.count(
+        "privacy-v1-boi-artifacts-${{ github.sha }}-${{ inputs.validator_release_ref }}"
+    ) == 2
+    assert source.count(
+        '[[ "$TAIRA_INPUT_BOI_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]'
+    ) == 2
+    for text in (candidate, qualification):
+        assert "--expected-kind privacy-v1-boi-artifacts" in text
+        assert "staged_root" in text
+    assert '--boi-artifact-handoff-dir "$boi_stage"' in source
+    assert "assemble-boi --" in qualification
+    assert "admit -- init-replay-ledger" in qualification
+    assert '--artifact-handoff-root "$boi_stage"' in source
+    assert '--candidate-replay-ledger "$replay_ledger"' in source
+    assert "TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" not in qualification
+    assert "TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" not in qualification
+    assert "linux-boi-qualification" in jobs["macos-deploy"]["needs"]
+    assert "TAIRA_PRIVACY_V1_BOI_ARTIFACT_PATH" not in source
+
+
 def test_authority_host_attestations_are_distinct_and_cannot_be_reused() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
     for variable in (
@@ -300,18 +347,21 @@ def test_authority_host_attestations_are_distinct_and_cannot_be_reused() -> None
         "TAIRA_LINUX_AUTHORITY_HOST_ID",
         "TAIRA_QUALIFICATION_HOST_ID",
         "TAIRA_CANDIDATE_AUTHORITY_HOST_ID",
+        "TAIRA_BOI_QUALIFICATION_HOST_ID",
         "TAIRA_DEPLOY_HOST_ID",
         "TAIRA_PUBLISH_HOST_ID",
         "TAIRA_PUBLIC_INPUT_INSTALLATION_ID",
         "TAIRA_LINUX_AUTHORITY_INSTALLATION_ID",
         "TAIRA_QUALIFICATION_INSTALLATION_ID",
         "TAIRA_CANDIDATE_AUTHORITY_INSTALLATION_ID",
+        "TAIRA_BOI_QUALIFICATION_INSTALLATION_ID",
         "TAIRA_DEPLOY_INSTALLATION_ID",
         "TAIRA_PUBLISH_INSTALLATION_ID",
     ):
         assert f"vars.{variable}" in source
     assert "--role macos-qualification" in source
     assert "--role macos-candidate-authority" in source
+    assert "--role linux-boi-qualification" in source
     assert "--role macos-deploy" in source
     assert "--role macos-publish" in source
 

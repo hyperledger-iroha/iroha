@@ -6823,8 +6823,7 @@ mod tests {
 
     #[test]
     fn provider_attestation_replay_requires_the_consensus_archive_binding() {
-        let (mut world, authority, location_key, instruction) =
-            archive_location_replay_fixture(0x39);
+        let (world, authority, location_key, instruction) = archive_location_replay_fixture(0x39);
         let provider = world
             .musubi_archive_locations
             .view()

@@ -6,7 +6,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Mutex, MutexGuard, Once},
+    sync::{
+        Mutex, MutexGuard, Once,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -33,7 +36,7 @@ use iroha_config_base::{
     toml::{TomlSource, WriteExt as _},
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PrivateKey, PublicKey};
-use iroha_data_model::{account::AccountId, name::Name};
+use iroha_data_model::account::AccountId;
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
 use toml::{Table, Value as TomlValue};
@@ -46,6 +49,38 @@ fn fixtures_dir() -> PathBuf {
             .expect("tests run relative to crate root");
     });
     PathBuf::from("tests/fixtures")
+}
+
+static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+struct TestDir(PathBuf);
+
+impl TestDir {
+    fn create(label: &str) -> Self {
+        for _ in 0..1024 {
+            let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "iroha-config-fixtures-{label}-{}-{sequence}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create test directory {}: {error}", path.display()),
+            }
+        }
+        panic!("could not allocate a unique configuration fixture directory");
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn parse_env(raw: impl AsRef<str>) -> HashMap<String, String> {
@@ -455,8 +490,6 @@ fn minimal_config_snapshot() {
                     exit_class: "standard",
                     meter_family: "soranet.vpn.standard",
                     helper_ticket_secret: None,
-                    fee_asset_id: "xor#universal.universal",
-                    escrow_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                     operator_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                     lease_fee: Quantity(
                         Numeric {
@@ -600,7 +633,7 @@ fn minimal_config_snapshot() {
                 ),
                 file: None,
                 manifest_json: None,
-                expected_hash: { iroha_crypto::hash::HashOf<iroha_data_model::block::BlockHeader> 0000000000000000000000000000000000000000000000000000000000000001 },
+                expected_hash: { iroha_crypto::hash::HashOf<iroha_data_model::block::header::model::BlockHeader> 0000000000000000000000000000000000000000000000000000000000000001 },
             },
             torii: Torii {
                 address: WithOrigin {
@@ -779,6 +812,10 @@ fn minimal_config_snapshot() {
                 zk_ivm_prove_job_max_entries: 1024,
                 zk_ivm_prove_job_max_retained_bytes: Bytes(
                     134217728,
+                ),
+                zk_ivm_prove_job_max_entries_per_owner: 32,
+                zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes(
+                    33554432,
                 ),
                 connect: Connect {
                     enabled: true,
@@ -1421,21 +1458,6 @@ fn minimal_config_snapshot() {
                             29,
                             55,
                         ],
-                        projection: Some(
-                            AssetDefinitionProjection {
-                                domain: DomainId {
-                                    name: Name(
-                                        "sora",
-                                    ),
-                                    dataspace: Name(
-                                        "universal",
-                                    ),
-                                },
-                                name: Name(
-                                    "xor",
-                                ),
-                            },
-                        ),
                     },
                     asset_scale: 9,
                     pricing: SorafsAppealPricingPolicy {
@@ -1965,7 +1987,7 @@ fn minimal_config_snapshot() {
                 queues: SumeragiQueues {
                     commands: 1024,
                     authenticated_non_validator_sources: 2,
-                    bodies: 130,
+                    bodies: 163,
                     body_bytes: 242221056,
                     body_source_bytes: 34603008,
                     chunks: 2048,
@@ -2340,6 +2362,13 @@ fn minimal_config_snapshot() {
                 },
                 merkle_chunk_size_bytes: 1048576,
                 max_payload_bytes: 1073741824,
+                resources: SnapshotResourcePolicy {
+                    max_decode_depth: 128,
+                    max_decode_items: 10000000,
+                    max_string_bytes: 1048576,
+                    max_blob_bytes: 67108864,
+                    max_transient_bytes: 2147483648,
+                },
                 verification_public_key: None,
                 signing_private_key: None,
                 bootstrap: SnapshotBootstrapPolicy {
@@ -2758,7 +2787,6 @@ fn minimal_config_snapshot() {
                         29,
                         55,
                     ],
-                    projection: None,
                 },
                 citizenship_asset_id: AssetDefinitionId {
                     aid_bytes: [
@@ -2779,7 +2807,6 @@ fn minimal_config_snapshot() {
                         29,
                         55,
                     ],
-                    projection: None,
                 },
                 citizenship_bond_amount: Quantity(
                     Numeric {
@@ -2848,7 +2875,6 @@ fn minimal_config_snapshot() {
                             29,
                             55,
                         ],
-                        projection: None,
                     },
                     follow_reward_amount: Quantity(
                         Numeric {
@@ -2890,6 +2916,12 @@ fn minimal_config_snapshot() {
                     require_council_signatures: false,
                     approval_quorum: 1,
                     approval_signers: [],
+                    max_global_manifests: 1000000,
+                    max_global_bytes: 1125899906842624,
+                    max_manifests_per_authority: 10000,
+                    max_bytes_per_authority: 1099511627776,
+                    max_lineage_depth: 64,
+                    max_successor_fanout: 32,
                 },
                 sorafs_pin_fee_asset_id: AssetDefinitionId {
                     aid_bytes: [
@@ -2910,7 +2942,6 @@ fn minimal_config_snapshot() {
                         55,
                         45,
                     ],
-                    projection: None,
                 },
                 sorafs_pin_fee_treasury_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 sorafs_pricing: PricingScheduleRecord {
@@ -3046,7 +3077,6 @@ fn minimal_config_snapshot() {
                         123,
                         238,
                     ],
-                    projection: None,
                 },
                 parliament_alternate_size: None,
                 parliament_quorum_bps: 6667,
@@ -4478,17 +4508,132 @@ fn missing_fields() {
 
 #[test]
 fn soranet_transport_identity_is_required_even_with_streaming_identity() {
+    let mut layer = canonical_test_base_table();
+    layer.remove("soranet_transport_private_key");
     let error = ConfigReader::new()
         .with_env(MockEnv::new())
-        .read_toml_with_extends(fixtures_dir().join("bad.missing_fields.toml"))
-        .expect("empty fixture should be readable")
+        .with_toml_source(TomlSource::inline(layer))
         .read_and_complete::<UserConfig>()
-        .expect_err("dedicated SoraNet transport identity must be required");
+        .expect("missing private source remains structurally readable")
+        .parse()
+        .expect_err("dedicated SoraNet transport private source must be required");
     let message = strip_ansi_codes(&format!("{error:?}"));
-    assert_contains!(message, "missing parameter: `soranet_transport_public_key`");
     assert_contains!(
         message,
-        "missing parameter: `soranet_transport_private_key`"
+        "missing private-key source; configure exactly one of soranet_transport_private_key or soranet_transport_private_key_file"
+    );
+}
+
+#[test]
+fn owner_held_identity_files_populate_all_runtime_key_pairs() {
+    let mut layer = canonical_test_base_table();
+    let node_private = layer
+        .remove("private_key")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("base validator private key");
+    let soranet_private = layer
+        .remove("soranet_transport_private_key")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("base SoraNet private key");
+    let streaming = layer
+        .get_mut("streaming")
+        .and_then(TomlValue::as_table_mut)
+        .expect("base streaming table");
+    let streaming_private = streaming
+        .remove("identity_private_key")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("base streaming private key");
+
+    let private_dir = TestDir::create("private-keys");
+    let node_path = private_dir.path().join("node.key");
+    let soranet_path = private_dir.path().join("soranet.key");
+    let streaming_path = private_dir.path().join("streaming.key");
+    fs::write(&node_path, format!("{node_private}\n")).expect("write node private key");
+    fs::write(&soranet_path, format!("{soranet_private}\n")).expect("write SoraNet private key");
+    fs::write(&streaming_path, format!("{streaming_private}\n"))
+        .expect("write streaming private key");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        for path in [&node_path, &soranet_path, &streaming_path] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("restrict private-key file permissions");
+        }
+    }
+
+    streaming.insert(
+        "identity_private_key_file".into(),
+        TomlValue::String(streaming_path.to_string_lossy().into_owned()),
+    );
+    layer.insert(
+        "private_key_file".into(),
+        TomlValue::String(node_path.to_string_lossy().into_owned()),
+    );
+    layer.insert(
+        "soranet_transport_private_key_file".into(),
+        TomlValue::String(soranet_path.to_string_lossy().into_owned()),
+    );
+
+    let config = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .with_toml_source(TomlSource::inline(layer))
+        .read_and_complete::<UserConfig>()
+        .expect("owner-held identity config should complete")
+        .parse()
+        .expect("owner-held identity config should parse");
+
+    assert_eq!(
+        ExposedPrivateKey(config.common.key_pair.private_key().clone()).to_string(),
+        node_private
+    );
+    assert_eq!(
+        ExposedPrivateKey(
+            config
+                .common
+                .soranet_transport_key_pair
+                .private_key()
+                .clone()
+        )
+        .to_string(),
+        soranet_private
+    );
+    assert_eq!(
+        ExposedPrivateKey(
+            config
+                .streaming
+                .key_material
+                .identity()
+                .private_key()
+                .clone()
+        )
+        .to_string(),
+        streaming_private
+    );
+}
+
+#[test]
+fn inline_and_file_private_key_sources_are_rejected() {
+    let mut layer = canonical_test_base_table();
+    let private_dir = TestDir::create("ambiguous-private-key");
+    let private_path = private_dir.path().join("node.key");
+    fs::write(&private_path, "").expect("write private-key test file");
+    layer.insert(
+        "private_key_file".into(),
+        TomlValue::String(private_path.to_string_lossy().into_owned()),
+    );
+
+    let error = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .with_toml_source(TomlSource::inline(layer))
+        .read_and_complete::<UserConfig>()
+        .expect("duplicate private sources remain structurally readable")
+        .parse()
+        .expect_err("duplicate private sources must fail");
+    let message = strip_ansi_codes(&format!("{error:?}"));
+    assert_contains!(
+        message,
+        "private_key and private_key_file are mutually exclusive"
     );
 }
 
@@ -5192,11 +5337,11 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, and 65536 timeout-vote bytes (minimum 33784840, configured 16777216)",
+            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 65536 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 33850376, configured 16777216)",
         ),
         (
             "bad.sumeragi_body_queue_too_small.toml",
-            "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum 10, configured 9)",
+            "sumeragi.queues.bodies must reserve five positions for at least one validator, three per authenticated non-validator source, and two anonymous positions (minimum 13, configured 9)",
         ),
         (
             "bad.sumeragi_body_bytes_too_small.toml",
@@ -5419,11 +5564,11 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
         2
     );
-    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 130);
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 163);
     assert_eq!(
         defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
-        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
-            + 2 * defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+        5 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            + 3 * defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
             + 2
     );
     assert_eq!(
@@ -5436,6 +5581,10 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     );
     assert_eq!(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES, 64 * 1024);
     assert_eq!(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, 64 * 1024);
+    assert_eq!(
+        defaults::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+        64 * 1024
+    );
     assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
     assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
     assert_eq!(npos::EPOCH_LENGTH_BLOCKS, 3_600);
@@ -5457,7 +5606,7 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
             .get(),
         2
     );
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 130);
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 163);
     assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),

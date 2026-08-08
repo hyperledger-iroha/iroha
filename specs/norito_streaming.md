@@ -90,9 +90,11 @@ Kyber key material and feed the `StreamingKeyMaterial` passed to
 provided together; omitting them keeps HPKE disabled. Operators running with a
 non-Ed25519 validator key (for example TC26 GOST) can still satisfy the Ed25519
 requirement for control-plane signatures by supplying `streaming.identity_public_key`
-and `streaming.identity_private_key`; these fields expect Ed25519 multihash
-strings (matching the format returned by `kagami keys`). When omitted, the
-node’s main key pair is reused, preserving the previous behaviour. The
+and exactly one of `streaming.identity_private_key` or
+`streaming.identity_private_key_file`. The inline form expects an Ed25519
+multihash string (matching the format returned by `kagami keys`); production
+profiles use the bounded owner-held file form. When omitted, the node’s main
+key pair is reused. The
 `streaming.session_store_dir` parameter selects the directory where encrypted
 session snapshots land (default `./storage/streaming`). The runtime derives the
 snapshot encryption key deterministically from the streaming identity, so

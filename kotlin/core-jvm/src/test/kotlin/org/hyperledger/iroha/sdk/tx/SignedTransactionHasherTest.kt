@@ -23,6 +23,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
@@ -229,7 +230,7 @@ class SignedTransactionHasherTest {
         metadata: Map<String, JsonValue> = emptyMap(),
         attachments: List<ProofAttachment>? = null,
     ): TransactionPayload = TransactionPayload(
-        chainId = "00000001",
+        networkId = TestNetworkIds.canonical(),
         authority = AccountAddress
             .fromAccount(TestEd25519Keys.publicKey(0x2C), "ed25519")
             .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1),

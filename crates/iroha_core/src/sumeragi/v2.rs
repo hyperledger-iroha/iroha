@@ -59,7 +59,7 @@ const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 /// A reducer transition without persistence already has this exact source
 /// bound. Persistence is acknowledged synchronously, but the record-specific
 /// budgets below prove that replacing the sole `Persist` effect with its
-/// causal `Persisted` continuation produces at most five effects. Keeping the
+/// causal `Persisted` continuation produces at most four effects. Keeping the
 /// adapter bound equal to the reducer bound therefore matches the executor's
 /// retained-batch contract without inflating either queue.
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
@@ -74,11 +74,12 @@ const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACR
 
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
-/// The witness is locally formed `InstallTimeout`: one local TimeoutVote
-/// broadcast precedes `Persist`, then the acknowledgement can emit the TC
-/// broadcast, `EnterView`, one protected-body fetch, and one reconstructed
-/// locked Commit signature. Thus `2 - 1 + 4 = 5`.
-const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 5;
+/// The witness is locally formed `InstallTimeout`: its individual TimeoutVote
+/// is subsumed by the certificate, so the source emits only `Persist`; the
+/// acknowledgement can emit `EnterView`, one protected-body fetch, the TC
+/// broadcast, and one reconstructed locked Commit signature. Thus the exact
+/// maximum is four.
+const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 4;
 
 // Every persistence-flattened batch must fit the executor's already verified
 // source-transition capacity. A future record shape which breaks this
@@ -138,9 +139,10 @@ impl PersistenceMacroStepClass {
             Self::LockAndCommit => PersistenceMacroStepBudget::new(3, 1),
             // TimeoutElapsed emits only Persist; Persisted emits Sign.
             Self::TimeoutIntent => PersistenceMacroStepBudget::new(1, 1),
-            // Signed TimeoutVote can prefix Persist with its vote broadcast;
-            // Persisted can emit TC broadcast, EnterView, fetch, and Sign.
-            Self::InstallTimeout => PersistenceMacroStepBudget::new(2, 4),
+            // A quorum-forming signed TimeoutVote is subsumed by its TC and
+            // emits only Persist; Persisted can emit EnterView, fetch, the TC
+            // broadcast, and Sign.
+            Self::InstallTimeout => PersistenceMacroStepBudget::new(1, 4),
             // Signed CommitVote can prefix Persist with its vote broadcast;
             // Persisted can emit the CommitQC broadcast and one body/apply
             // stage. Decision invalidates every queued pre-decision signer.
@@ -407,7 +409,7 @@ impl VerifiedHeightContext {
             .checked_add(1)
             .ok_or(AdapterError::ParentContextMismatch)?;
         if context.height != expected_height
-            || context.chain_id != parent_artifact.height_context.chain_id
+            || context.network_id != parent_artifact.height_context.network_id
             || context.mode != parent_artifact.height_context.mode
             || context.da_layout != parent_artifact.height_context.da_layout
             || context.execution_policy_hash != parent_artifact.height_context.execution_policy_hash
@@ -1345,6 +1347,40 @@ impl DeferredOccurrenceOwnershipEvidence {
         };
         evidence.projection_hash = deferred_occurrence_ownership_projection_hash(&evidence);
         evidence.validate_exact().then_some(evidence)
+    }
+
+    /// Mint one exact local/causal Busy capability and its matching runtime
+    /// seal for serialized-runtime boundary tests.
+    #[cfg(test)]
+    pub(crate) fn local_for_runtime_test(
+        source: &DeferredAdmissionOrdinalSource,
+        causal_lifecycle_key: Hash,
+        initial_lifecycle_ordinal: u128,
+        physical_cut: u128,
+    ) -> (Self, DeferredRuntimeOwnershipSeal) {
+        let mut admission_capability = source
+            .mint(DeferredAdmissionOrigin::LocalOrCausal)
+            .expect("test deferred ordinal source remains exact");
+        admission_capability.runtime_ownership = Some(DeferredRuntimeOwnershipBinding {
+            causal_lifecycle_key,
+            initial_lifecycle_ordinal,
+            authenticated_ingress: false,
+            source_physical_ordinal: None,
+            physical_cut,
+        });
+        let runtime_seal = admission_capability
+            .runtime_ownership_seal()
+            .expect("test deferred capability owns one exact runtime seal");
+        let mut evidence = Self {
+            admission_ordinal: admission_capability.ordinal,
+            authenticated_ingress: false,
+            source_identity: Arc::clone(&admission_capability.source_identity),
+            admission_capability,
+            projection_hash: Hash::new([]),
+        };
+        evidence.projection_hash = deferred_occurrence_ownership_projection_hash(&evidence);
+        assert!(evidence.validate_exact());
+        (evidence, runtime_seal)
     }
 
     /// Validate the private actor capability and immutable provenance bit.
@@ -2527,10 +2563,13 @@ impl ServicedCandidateStage {
 /// same-height crash.
 ///
 /// This is an internal proof/refinement classifier, not a wire field or
-/// configuration knob. Active continuation hashes are never persisted. Only
-/// the classes backed by an independently owned local durable source may
-/// reserve a continuation; conditional transport and pre-store body results
-/// deliberately remain continuation-free.
+/// configuration knob. It classifies physical replay and capacity ownership,
+/// not whether restart-stable logical lifecycle metadata exists. In
+/// particular, `BodyAvailable` retains its logical producer lifecycle across
+/// restart, but neither body bytes nor a latent FIFO slot: `FetchBody`
+/// reacquires the bytes and the exact completion spends one fresh FIFO slot.
+/// Only classes backed by an independently owned local durable source install
+/// a dormant local FIFO reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProducerParentReplaySource {
     /// Authenticated ingress is useful only under the explicit responsive-peer
@@ -4056,7 +4095,7 @@ impl SumeragiV2Adapter {
         let local_validator = local_validator
             .map(|index| registry.validator_id(index))
             .transpose()?;
-        let chain_hash: [u8; 32] = Hash::new(wire_context.chain_id.encode()).into();
+        let chain_hash = *wire_context.network_id.as_bytes();
         let serviced_candidate_owner: [u8; 32] = fingerprints.node.into();
         let candidate_lifecycle_capacity =
             candidate_lifecycle_capacity(wire_context.roster.len(), capacity_geometry);
@@ -4174,6 +4213,7 @@ impl SumeragiV2Adapter {
             replay_complete: false,
             fail_closed: false,
         };
+        adapter.reconcile_restored_reserved_producer_frontier()?;
         adapter.reclaim_serviced_candidates()?;
         let replay_tag = adapter.reducer.current_tag();
         let replay_event = reducer::Event::ResumeAfterReplay { tag: replay_tag };
@@ -4191,6 +4231,12 @@ impl SumeragiV2Adapter {
     /// Return the tag which must accompany a new asynchronous operation.
     pub(crate) const fn current_tag(&self) -> reducer::EventTag {
         self.reducer.current_tag()
+    }
+
+    /// Borrow the immutable wire context authenticated by this height's
+    /// reducer adapter.
+    pub(crate) const fn wire_context(&self) -> &wire::HeightContext {
+        &self.wire_context
     }
 
     /// Return the reducer body state for one wire identity in seam tests.
@@ -4256,6 +4302,198 @@ impl SumeragiV2Adapter {
         admission_ordinal.map_or(Dormant::Absent, |admission_ordinal| Dormant::Exact {
             admission_ordinal,
         })
+    }
+
+    /// Retire one exact restart-dormant producer before its volatile runtime
+    /// replacement is released without reducer service.
+    ///
+    /// Stage-7 `BodyAvailable` reconstruction deliberately reacquires a fresh
+    /// physical FIFO slot after restart while retaining this durable logical
+    /// producer reservation. A certified view change, Decision, or durable
+    /// signing preemption can make that fetch unnecessary before the
+    /// completion reaches the reducer. Persist the exact durable removal
+    /// first so a crash cannot reopen the already-retired stage again.
+    pub(crate) fn retire_restored_producer_continuation(
+        &mut self,
+        causal_lifecycle_key: Hash,
+        admission_ordinal: u128,
+        producer_stage: u8,
+    ) -> Result<bool, AdapterError> {
+        self.ensure_ingress()?;
+        if admission_ordinal == 0
+            || producer_stage != ServicedCandidateStage::BodyAvailable as u8
+            || self.selected_producer_lifecycle.is_some()
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "restored producer retirement carried an invalid stage, ordinal, or active selection"
+                    .to_owned(),
+            ));
+        }
+
+        let matches = self
+            .producer_continuations
+            .iter()
+            .filter_map(|(address, record)| {
+                let identity = record.identity();
+                (identity.causal_lifecycle_key() == causal_lifecycle_key
+                    && identity.admission_ordinal() == admission_ordinal
+                    && identity.stage() == producer_stage)
+                    .then_some((*address, record.clone()))
+            })
+            .collect::<Vec<_>>();
+        let [(address, record)] = matches.as_slice() else {
+            return match matches.len() {
+                0 => Ok(false),
+                _ => Err(self.fail_serviced_candidate_store(
+                    "restored producer retirement matched multiple bounded addresses".to_owned(),
+                )),
+            };
+        };
+        self.persist_restored_body_producer_retirement(*address, record)?;
+        Ok(true)
+    }
+
+    /// Retire the exact restart-dormant stage-7 parent named by a terminal
+    /// reconstructed-body fetch.
+    ///
+    /// A restart intentionally gives `FetchBody` a fresh physical runtime
+    /// lifecycle, so that volatile owner cannot carry the old producer key.
+    /// Recover the authority from the adapter's persisted route-neutral body
+    /// coordinates instead. A supplied manifest must reproduce the complete
+    /// serviced-candidate identity; a manifest-less fetch is accepted only
+    /// when those coordinates select one unique dormant stage-7 record.
+    pub(crate) fn retire_restored_body_fetch_parent(
+        &mut self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        manifest: Option<&wire::PayloadManifest>,
+    ) -> Result<bool, AdapterError> {
+        self.ensure_ingress()?;
+        if self.selected_producer_lifecycle.is_some()
+            || round.context_id != self.wire_context.id()
+            || round.height != self.wire_context.height
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "restored body-fetch retirement crossed its durable height geometry".to_owned(),
+            ));
+        }
+        let core_round = reducer::Round::new(round.height, round.view);
+        let core_subject = reducer::Subject::new(Hash::new(subject.encode()).into());
+        let expected_candidate = manifest
+            .map(|manifest| {
+                manifest.validate(&self.wire_context)?;
+                if manifest.round != round || manifest.subject != subject {
+                    return Err(AdapterError::DurableBodyMismatch);
+                }
+                let event = reducer::Event::BodyAvailable {
+                    tag: self.reducer.current_tag(),
+                    round: core_round,
+                    subject: core_subject,
+                };
+                let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+                    manifest: manifest.clone(),
+                };
+                self.serviced_candidate(&event, DeferredPriority::Completion, Some(&evidence), None)
+                    .map(|(candidate, _, _)| candidate)
+                    .ok_or_else(|| {
+                        self.fail_serviced_candidate_store(
+                            "restored body-fetch parent had no serviced-candidate stage".to_owned(),
+                        )
+                    })
+            })
+            .transpose()?;
+
+        let coordinate_matches = self
+            .producer_continuations
+            .iter()
+            .filter_map(|(address, record)| {
+                let identity = record.identity();
+                let candidate = identity.candidate();
+                (identity.stage() == ServicedCandidateStage::BodyAvailable as u8
+                    && candidate.source_view() == round.view
+                    && candidate.target() == Some(*core_subject.as_bytes())
+                    && record.status() == ProducerContinuationStatus::Reserved
+                    && record.source_class() == ProducerContinuationSourceClass::VolatileBody
+                    && self.durable_producer_continuations.get(address) == Some(record)
+                    && self
+                        .restored_dormant_producer_continuations
+                        .contains(address))
+                .then_some((*address, record.clone()))
+            })
+            .collect::<Vec<_>>();
+        let [(address, record)] = coordinate_matches.as_slice() else {
+            return match coordinate_matches.len() {
+                0 => Ok(false),
+                _ => Err(self.fail_serviced_candidate_store(
+                    "restored body-fetch coordinates matched multiple dormant producers".to_owned(),
+                )),
+            };
+        };
+        if expected_candidate.is_some_and(|expected| record.identity().candidate() != expected) {
+            return Err(self.fail_serviced_candidate_store(
+                "restored body-fetch manifest changed its persisted producer identity".to_owned(),
+            ));
+        }
+        self.persist_restored_body_producer_retirement(*address, record)?;
+        Ok(true)
+    }
+
+    /// Persist the removal of one preflighted restart-dormant body producer.
+    fn persist_restored_body_producer_retirement(
+        &mut self,
+        address: ProducerContinuationAddress,
+        record: &ProducerContinuationRecord,
+    ) -> Result<(), AdapterError> {
+        if record.status() != ProducerContinuationStatus::Reserved
+            || record.source_class() != ProducerContinuationSourceClass::VolatileBody
+            || record.identity().address() != address
+            || record.identity().stage() != ServicedCandidateStage::BodyAvailable as u8
+            || self.durable_producer_continuations.get(&address) != Some(record)
+            || !self
+                .restored_dormant_producer_continuations
+                .contains(&address)
+            || self
+                .deferred_producer_continuations
+                .values()
+                .any(|reservation| reservation.address == address)
+            || self.pending_producer_handoffs.contains_key(&address)
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "restored producer retirement did not own one exact dormant durable record"
+                    .to_owned(),
+            ));
+        }
+
+        let process_previous = self
+            .producer_continuations
+            .remove(&address)
+            .expect("matched process producer remains present");
+        let durable_previous = self
+            .durable_producer_continuations
+            .remove(&address)
+            .expect("matched durable producer remains present");
+        let dormant_removed = self
+            .restored_dormant_producer_continuations
+            .remove(&address);
+        debug_assert!(dormant_removed);
+        if let Err(reason) = self
+            .serviced_candidate_store
+            .persist_with_producer_continuations(
+                &self.durable_serviced_candidates,
+                &self.durable_producer_continuations,
+                self.serviced_candidates_decision_reclaimed,
+            )
+        {
+            self.producer_continuations
+                .insert(address, process_previous);
+            self.durable_producer_continuations
+                .insert(address, durable_previous);
+            if dormant_removed {
+                self.restored_dormant_producer_continuations.insert(address);
+            }
+            return Err(self.fail_serviced_candidate_store(reason));
+        }
+        Ok(())
     }
 
     /// Return the restart-dormant Local stages which already reserve a
@@ -5546,7 +5784,7 @@ impl SumeragiV2Adapter {
             .registry
             .round_to_core(manifest.round, &self.wire_context)?;
         let subject = self.registry.register_subject(manifest.subject)?;
-        self.rollback_deferred_conflicting_proposal(round, subject, &manifest);
+        self.rollback_deferred_conflicting_proposal(round, subject, &manifest)?;
         let core_manifest = self
             .registry
             .manifest_to_core(&manifest, &self.wire_context)?;
@@ -5598,12 +5836,11 @@ impl SumeragiV2Adapter {
         &mut self,
         tag: reducer::EventTag,
         manifest: &wire::PayloadManifest,
-    ) -> usize {
+    ) -> Result<usize, AdapterError> {
         let round = reducer::Round::new(manifest.round.height, manifest.round.view);
         let subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
-        let before = self.deferred_completions.len();
-        self.deferred_completions.retain(|input| {
-            !matches!(
+        let matches = |input: &DeferredInput| {
+            matches!(
                 &input.event,
                 reducer::Event::BodyAvailable {
                     tag: queued_tag,
@@ -5611,10 +5848,19 @@ impl SumeragiV2Adapter {
                     subject: queued_subject,
                 } if *queued_tag == tag && *queued_round == round && *queued_subject == subject
             )
-        });
+        };
+        let retiring = self
+            .deferred_completions
+            .iter()
+            .filter(|input| matches(input))
+            .map(|input| input.admission_ordinal)
+            .collect::<BTreeSet<_>>();
+        self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
+        let before = self.deferred_completions.len();
+        self.deferred_completions.retain(|input| !matches(input));
         let retired = before.saturating_sub(self.deferred_completions.len());
-        self.retire_unowned_deferred_producer_continuations();
-        retired
+        debug_assert_eq!(retired, retiring.len());
+        Ok(retired)
     }
 
     /// Count every Busy-deferred completion stage for one exact body pipeline.
@@ -5657,9 +5903,28 @@ impl SumeragiV2Adapter {
         tag: reducer::EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
-    ) -> super::v2_runtime::RetiredBodyPipelineCompletions {
+    ) -> Result<super::v2_runtime::RetiredBodyPipelineCompletions, AdapterError> {
         let round = reducer::Round::new(round.height, round.view);
         let subject = reducer::Subject::new(Hash::new(subject.encode()).into());
+        let retirements = self
+            .deferred_completions
+            .iter()
+            .chain(&self.deferred_inputs)
+            .filter_map(|input| {
+                deferred_body_pipeline_completion_stage(input, tag, round, subject)
+                    .map(|stage| (input.admission_ordinal, stage))
+            })
+            .collect::<Vec<_>>();
+        let retiring = retirements
+            .iter()
+            .map(|(ordinal, _)| *ordinal)
+            .collect::<BTreeSet<_>>();
+        if retiring.len() != retirements.len() {
+            return Err(self.fail_serviced_candidate_store(
+                "one deferred body occurrence occupied multiple serialized queues".to_owned(),
+            ));
+        }
+        self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
         let mut retired = super::v2_runtime::RetiredBodyPipelineCompletions::default();
         let mut retire = |queue: &mut VecDeque<DeferredInput>| {
             queue.retain(|input| {
@@ -5686,8 +5951,7 @@ impl SumeragiV2Adapter {
         };
         retire(&mut self.deferred_completions);
         retire(&mut self.deferred_inputs);
-        self.retire_unowned_deferred_producer_continuations();
-        retired
+        Ok(retired)
     }
 
     /// Count logical and exact completion owners in the Busy-deferred lane.
@@ -5815,6 +6079,127 @@ impl SumeragiV2Adapter {
             .collect()
     }
 
+    /// Return exact body-stage terminal evidence retained behind the Busy
+    /// reducer boundary. `BodyAvailable` is intentionally excluded because
+    /// its persistent producer and restart aliases have stricter ownership
+    /// rules than the cached Store/Validate terminal stages.
+    pub(crate) fn deferred_body_pipeline_terminal_candidates(
+        &self,
+    ) -> Vec<(u128, reducer::EventTag, BodyPipelineCompletionEvidence)> {
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_inputs)
+            .filter_map(|input| {
+                let evidence = input.completion_evidence.as_ref()?;
+                let tag = match (&input.event, evidence) {
+                    (
+                        reducer::Event::LocalProposalReady { tag, .. },
+                        BodyPipelineCompletionEvidence::LocalProposalReady { .. },
+                    )
+                    | (
+                        reducer::Event::BodyStored { tag, .. },
+                        BodyPipelineCompletionEvidence::BodyStored { .. },
+                    )
+                    | (
+                        reducer::Event::ValidationCompleted {
+                            tag, valid: true, ..
+                        },
+                        BodyPipelineCompletionEvidence::ValidationSucceeded { .. },
+                    )
+                    | (
+                        reducer::Event::ValidationCompleted {
+                            tag, valid: false, ..
+                        },
+                        BodyPipelineCompletionEvidence::ValidationFailed { .. },
+                    ) => *tag,
+                    _ => return None,
+                };
+                let (wire_round, wire_subject, expected_stage) = match evidence {
+                    BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => (
+                        manifest.round,
+                        manifest.subject,
+                        DeferredBodyPipelineCompletionStage::LocalProposalReady,
+                    ),
+                    BodyPipelineCompletionEvidence::BodyStored { round, subject, .. } => (
+                        *round,
+                        *subject,
+                        DeferredBodyPipelineCompletionStage::BodyStored,
+                    ),
+                    BodyPipelineCompletionEvidence::ValidationSucceeded {
+                        round, subject, ..
+                    }
+                    | BodyPipelineCompletionEvidence::ValidationFailed { round, subject } => (
+                        *round,
+                        *subject,
+                        DeferredBodyPipelineCompletionStage::Validation,
+                    ),
+                    BodyPipelineCompletionEvidence::BodyAvailable { .. } => return None,
+                };
+                let round = reducer::Round::new(wire_round.height, wire_round.view);
+                let subject = reducer::Subject::new(Hash::new(wire_subject.encode()).into());
+                if deferred_body_pipeline_completion_stage(input, tag, round, subject)
+                    != Some(expected_stage)
+                {
+                    return None;
+                }
+                Some((input.admission_ordinal, tag, evidence.clone()))
+            })
+            .collect()
+    }
+
+    /// Report whether the exact Busy-deferred `BodyAvailable` owner carries
+    /// the adapter's sole persistent producer reservation.
+    ///
+    /// View-change coalescence must never retire this owner in favour of an
+    /// ordinary volatile runtime destination: doing so would remove the only
+    /// record from which a same-height restart can reconstruct `FetchBody`.
+    /// Validate every process/durable alias before granting that authority so
+    /// corrupt metadata fails closed before either queue is mutated.
+    pub(crate) fn deferred_body_available_has_persistent_producer(
+        &mut self,
+        tag: reducer::EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<bool, AdapterError> {
+        let candidate = BodyPipelineCompletionEvidence::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        let ordinals = self.deferred_body_pipeline_completion_exact_owner_ordinals(tag, &candidate);
+        let ordinal = match ordinals.as_slice() {
+            [] => return Ok(false),
+            [ordinal] => *ordinal,
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one exact deferred body completion occupied multiple Busy owners".to_owned(),
+                ));
+            }
+        };
+        let Some(reservation) = self.deferred_producer_continuations.get(&ordinal) else {
+            return Ok(false);
+        };
+        let address = reservation.address;
+        let Some(record) = self.producer_continuations.get(&address) else {
+            return Err(self.fail_serviced_candidate_store(
+                "deferred body producer lost its process reservation".to_owned(),
+            ));
+        };
+        if record.status() != ProducerContinuationStatus::Reserved
+            || record.source_class() != ProducerContinuationSourceClass::VolatileBody
+            || record.identity().address() != address
+            || record.identity().stage() != ServicedCandidateStage::BodyAvailable as u8
+            || self.durable_producer_continuations.get(&address) != Some(record)
+            || self
+                .restored_dormant_producer_continuations
+                .contains(&address)
+            || self.pending_producer_handoffs.contains_key(&address)
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "deferred body producer did not retain one exact live durable reservation"
+                    .to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
     /// Classify exact decided `LocalProposalReady` owners without mutating any
     /// Busy-deferred lane.
     pub(crate) fn deferred_decided_local_proposal_counts(
@@ -5858,72 +6243,76 @@ impl SumeragiV2Adapter {
         decision_round: wire::ConsensusRound,
         decision_subject: wire::BlockSubject,
         decision_commitment: wire::ExecutionCommitment,
-    ) {
+    ) -> Result<(), AdapterError> {
         let core_round = reducer::Round::new(decision_round.height, decision_round.view);
         let core_subject = reducer::Subject::new(Hash::new(decision_subject.encode()).into());
-        let retire = |queue: &mut VecDeque<DeferredInput>| {
-            queue.retain(|input| {
-                let remove = match &input.event {
-                    reducer::Event::ProposalReceived { proposal, .. }
-                        if proposal.proposal().round().height() == decision_round.height =>
-                    {
-                        true
+        let remove = |input: &DeferredInput| match &input.event {
+            reducer::Event::ProposalReceived { proposal, .. }
+                if proposal.proposal().round().height() == decision_round.height =>
+            {
+                true
+            }
+            reducer::Event::LocalProposalReady { tag, .. } => input
+                .completion_evidence
+                .as_ref()
+                .and_then(|evidence| match evidence {
+                    BodyPipelineCompletionEvidence::LocalProposalReady { manifest, .. } => {
+                        Some(manifest.round.height)
                     }
-                    reducer::Event::LocalProposalReady { tag, .. } => input
-                        .completion_evidence
-                        .as_ref()
-                        .and_then(|evidence| match evidence {
-                            BodyPipelineCompletionEvidence::LocalProposalReady {
-                                manifest, ..
-                            } => Some(manifest.round.height),
-                            BodyPipelineCompletionEvidence::BodyAvailable { .. }
-                            | BodyPipelineCompletionEvidence::BodyStored { .. }
-                            | BodyPipelineCompletionEvidence::ValidationSucceeded { .. }
-                            | BodyPipelineCompletionEvidence::ValidationFailed { .. } => None,
-                        })
-                        .is_some_and(|height| height == decision_round.height)
-                        .then(|| {
-                            !matches!(
-                                classify_deferred_decided_local_proposal(
-                                    input,
-                                    decision_tag,
-                                    decision_round,
-                                    decision_subject,
-                                    decision_commitment,
-                                ),
-                                Some(DecisionLocalProposalDisposition::Retain)
-                            )
-                        })
-                        .unwrap_or(tag.height() == decision_round.height),
-                    reducer::Event::ResumeAfterReplay { .. }
-                    | reducer::Event::ProposalReceived { .. }
-                    | reducer::Event::VoteReceived { .. }
-                    | reducer::Event::QuorumCertificateReceived { .. }
-                    | reducer::Event::TimeoutVoteReceived { .. }
-                    | reducer::Event::TimeoutCertificateReceived { .. }
-                    | reducer::Event::TimeoutElapsed { .. }
-                    | reducer::Event::RetransmitElapsed { .. }
-                    | reducer::Event::BodyAvailable { .. }
-                    | reducer::Event::BodyStored { .. }
-                    | reducer::Event::ValidationCompleted { .. }
-                    | reducer::Event::Persisted { .. }
-                    | reducer::Event::PersistenceFailed { .. }
-                    | reducer::Event::Signed { .. }
-                    | reducer::Event::ApplicationCompleted { .. } => false,
-                };
-                !remove
-            });
+                    BodyPipelineCompletionEvidence::BodyAvailable { .. }
+                    | BodyPipelineCompletionEvidence::BodyStored { .. }
+                    | BodyPipelineCompletionEvidence::ValidationSucceeded { .. }
+                    | BodyPipelineCompletionEvidence::ValidationFailed { .. } => None,
+                })
+                .is_some_and(|height| height == decision_round.height)
+                .then(|| {
+                    !matches!(
+                        classify_deferred_decided_local_proposal(
+                            input,
+                            decision_tag,
+                            decision_round,
+                            decision_subject,
+                            decision_commitment,
+                        ),
+                        Some(DecisionLocalProposalDisposition::Retain)
+                    )
+                })
+                .unwrap_or(tag.height() == decision_round.height),
+            reducer::Event::ResumeAfterReplay { .. }
+            | reducer::Event::ProposalReceived { .. }
+            | reducer::Event::VoteReceived { .. }
+            | reducer::Event::QuorumCertificateReceived { .. }
+            | reducer::Event::TimeoutVoteReceived { .. }
+            | reducer::Event::TimeoutCertificateReceived { .. }
+            | reducer::Event::TimeoutElapsed { .. }
+            | reducer::Event::RetransmitElapsed { .. }
+            | reducer::Event::BodyAvailable { .. }
+            | reducer::Event::BodyStored { .. }
+            | reducer::Event::ValidationCompleted { .. }
+            | reducer::Event::Persisted { .. }
+            | reducer::Event::PersistenceFailed { .. }
+            | reducer::Event::Signed { .. }
+            | reducer::Event::ApplicationCompleted { .. } => false,
         };
-        retire(&mut self.deferred_completions);
-        retire(&mut self.deferred_progress_inputs);
-        retire(&mut self.deferred_inputs);
+        let retiring = self
+            .deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
+            .filter(|input| remove(input))
+            .map(|input| input.admission_ordinal)
+            .collect::<BTreeSet<_>>();
+        self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
+        self.deferred_completions.retain(|input| !remove(input));
+        self.deferred_progress_inputs.retain(|input| !remove(input));
+        self.deferred_inputs.retain(|input| !remove(input));
         if self.active_subject.is_some_and(|(round, subject)| {
             round.height() == decision_round.height
                 && (round != core_round || subject != core_subject)
         }) {
             self.active_subject = None;
         }
-        self.retire_unowned_deferred_producer_continuations();
+        Ok(())
     }
 
     /// Retire deferred proposals made unsafe by an installed durable lock.
@@ -5935,40 +6324,49 @@ impl SumeragiV2Adapter {
         &mut self,
         locked_round: wire::ConsensusRound,
         locked_subject: wire::BlockSubject,
-    ) -> usize {
+    ) -> Result<usize, AdapterError> {
         let locked_round = reducer::Round::new(locked_round.height, locked_round.view);
         let locked_subject = reducer::Subject::new(Hash::new(locked_subject.encode()).into());
-        let before = self.deferred_inputs.len();
-        self.deferred_inputs.retain(|input| {
+        let context_id = self.reducer.context().id();
+        let remove = |input: &DeferredInput| {
             let reducer::Event::ProposalReceived { proposal, .. } = &input.event else {
-                return true;
+                return false;
             };
             let proposal = proposal.proposal();
-            if proposal.context_id() != self.reducer.context().id()
+            if proposal.context_id() != context_id
                 || proposal.round().height() != locked_round.height()
             {
-                return true;
-            }
-            if proposal.round().view() < locked_round.view() {
                 return false;
             }
-            if proposal.manifest().subject() == locked_subject {
+            if proposal.round().view() < locked_round.view() {
                 return true;
+            }
+            if proposal.manifest().subject() == locked_subject {
+                return false;
             }
             let reducer::ProposalJustification::Timeout(certificate) = proposal.justification()
             else {
-                return false;
+                return true;
             };
-            certificate.highest_prepare().is_some_and(|highest| {
+            !certificate.highest_prepare().is_some_and(|highest| {
                 highest.phase() == reducer::Phase::Prepare
                     && highest.subject() == proposal.manifest().subject()
                     && highest.round().view() > locked_round.view()
             })
-        });
+        };
+        let retiring = self
+            .deferred_inputs
+            .iter()
+            .filter(|input| remove(input))
+            .map(|input| input.admission_ordinal)
+            .collect::<BTreeSet<_>>();
+        self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
+        let before = self.deferred_inputs.len();
+        self.deferred_inputs.retain(|input| !remove(input));
         let retired = before.saturating_sub(self.deferred_inputs.len());
         self.active_subject = Some((locked_round, locked_subject));
-        self.retire_unowned_deferred_producer_continuations();
-        retired
+        debug_assert_eq!(retired, retiring.len());
+        Ok(retired)
     }
 
     /// Stage one exact completion at the adapter boundary for runtime/executor seam tests.
@@ -6253,7 +6651,7 @@ impl SumeragiV2Adapter {
         round: reducer::Round,
         subject: reducer::Subject,
         canonical: &wire::PayloadManifest,
-    ) -> bool {
+    ) -> Result<bool, AdapterError> {
         let Some((
             registered_manifest,
             registered_proposal,
@@ -6261,7 +6659,7 @@ impl SumeragiV2Adapter {
             registered_equivocation,
         )) = self.deferred_conflicting_proposal_owner(round, subject, canonical)
         else {
-            return false;
+            return Ok(false);
         };
         let key = (round, subject);
         let owns_conflict = |input: &DeferredInput| {
@@ -6273,8 +6671,14 @@ impl SumeragiV2Adapter {
             )
         };
 
+        let retiring = self
+            .deferred_inputs
+            .iter()
+            .filter(|input| owns_conflict(input))
+            .map(|input| input.admission_ordinal)
+            .collect::<BTreeSet<_>>();
+        self.release_deferred_producer_continuations_before_owner_removal(&retiring)?;
         self.deferred_inputs.retain(|input| !owns_conflict(input));
-        self.retire_unowned_deferred_producer_continuations();
         let removed_proposal = self.registry.proposals.remove(&key);
         let removed_manifest = self.registry.manifests.remove(&key);
         let removed_equivocation = self.ingress_equivocations.remove(&admission_key);
@@ -6282,7 +6686,7 @@ impl SumeragiV2Adapter {
         debug_assert_eq!(removed_proposal, Some(registered_proposal));
         debug_assert_eq!(removed_manifest, Some(registered_manifest));
         debug_assert_eq!(removed_equivocation, Some(registered_equivocation));
-        true
+        Ok(true)
     }
 
     fn deferred_input_owns_registered_proposal(
@@ -7512,6 +7916,35 @@ impl SumeragiV2Adapter {
         AdapterError::ServicedCandidateStore(reason)
     }
 
+    /// Verify the sole producer-owner state permitted after a durable Decision.
+    ///
+    /// The Decision WAL acknowledgement reclaims every candidate and producer
+    /// owner for the height in one adjacent durable snapshot. Producer tokens
+    /// reserved before that acknowledgement are therefore obsolete once this
+    /// canonical empty epoch is published; applying their undo payload would
+    /// resurrect state which the Decision permanently retired.
+    fn ensure_canonical_reclaimed_producer_state_after_decision(
+        &mut self,
+    ) -> Result<bool, AdapterError> {
+        if self.reducer.durable_state().decision().is_none() {
+            return Ok(false);
+        }
+        if !self.serviced_candidates_decision_reclaimed
+            || !self.serviced_candidates.is_empty()
+            || !self.durable_serviced_candidates.is_empty()
+            || !self.producer_continuations.is_empty()
+            || !self.durable_producer_continuations.is_empty()
+            || !self.restored_dormant_producer_continuations.is_empty()
+            || !self.deferred_producer_continuations.is_empty()
+            || !self.pending_producer_handoffs.is_empty()
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "durable Decision did not retain canonical reclaimed producer state".to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
     /// Bind the immutable lifecycle selected by the serialized runtime to the
     /// next adapter transition.
     ///
@@ -7578,32 +8011,148 @@ impl SumeragiV2Adapter {
             .ok_or_else(|| "bounded producer lifecycle slots are exhausted".to_owned())
     }
 
+    /// Return whether an independently authenticated route selected a
+    /// semantic producer which is already owned by one live Busy-deferred
+    /// occurrence.
+    ///
+    /// Fair ingress deliberately gives distinct authenticated origins
+    /// independent outer lifecycle tokens. Two such tokens can both reach the
+    /// serialized FIFO before the first occurrence crosses into Busy storage;
+    /// a later pacemaker escape may therefore select the second token while
+    /// the first still owns the sole route-neutral producer continuation.
+    /// Treat that second occurrence as an in-flight duplicate only after
+    /// proving the original producer, deferred input, and runtime ownership
+    /// seal form one exact live chain. Restart-dormant or otherwise unowned
+    /// producer metadata must continue through the strict reservation path and
+    /// fail closed on an immutable-identity mismatch.
+    fn live_deferred_producer_alias(
+        &mut self,
+        candidate: (ServicedCandidateKey, wire::View, ServicedCandidatePolicy),
+        authenticated_ingress: bool,
+    ) -> Result<bool, AdapterError> {
+        if !authenticated_ingress {
+            return Ok(false);
+        }
+        let Some(selected) = self.selected_producer_lifecycle.clone() else {
+            return Ok(false);
+        };
+        let matches = self
+            .producer_continuations
+            .iter()
+            .filter(|(_, record)| record.identity().candidate() == candidate.0)
+            .map(|(address, record)| (*address, record.clone()))
+            .collect::<Vec<_>>();
+        let (address, record) = match matches.as_slice() {
+            [] => return Ok(false),
+            [entry] => entry.clone(),
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one logical producer candidate occupied multiple bounded addresses".to_owned(),
+                ));
+            }
+        };
+        let identity = record.identity();
+        let same_key = identity.causal_lifecycle_key() == selected.causal_lifecycle_key;
+        let same_ordinal = identity.admission_ordinal() == selected.admission_ordinal;
+        if same_key && same_ordinal {
+            return Ok(false);
+        }
+        if same_key || same_ordinal {
+            return Err(self.fail_serviced_candidate_store(
+                "live producer alias partially changed its immutable key or ordinal".to_owned(),
+            ));
+        }
+
+        let owners = self
+            .deferred_producer_continuations
+            .iter()
+            .filter(|(_, reservation)| reservation.address == address)
+            .map(|(ordinal, reservation)| (*ordinal, reservation.clone()))
+            .collect::<Vec<_>>();
+        let (deferred_ordinal, reservation) = match owners.as_slice() {
+            [] => return Ok(false),
+            [entry] => entry.clone(),
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one live producer continuation had multiple Busy owners".to_owned(),
+                ));
+            }
+        };
+        let inputs = self
+            .deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
+            .filter(|input| input.admission_ordinal == deferred_ordinal)
+            .cloned()
+            .collect::<Vec<_>>();
+        let input = match inputs.as_slice() {
+            [input] => input,
+            [] => {
+                return Err(self.fail_serviced_candidate_store(
+                    "live producer continuation lost its Busy occurrence".to_owned(),
+                ));
+            }
+            _ => {
+                return Err(self.fail_serviced_candidate_store(
+                    "one live producer continuation had multiple deferred occurrences".to_owned(),
+                ));
+            }
+        };
+        let input_candidate = self.serviced_candidate(
+            &input.event,
+            input.priority,
+            input.completion_evidence.as_ref(),
+            input.authenticated_wire_identity.as_deref(),
+        );
+        let runtime_binding = input.admission_capability.runtime_ownership.as_ref();
+        let exact_live_owner = reservation.address == address
+            && record.status() == ProducerContinuationStatus::Reserved
+            && record.source_class() == ProducerContinuationSourceClass::ConditionalTransport
+            && identity.address() == address
+            && self.durable_producer_continuations.get(&address) == Some(&record)
+            && !self
+                .restored_dormant_producer_continuations
+                .contains(&address)
+            && !self.pending_producer_handoffs.contains_key(&address)
+            && input_candidate == Some(candidate)
+            && input.retag_authenticated_ingress
+            && input.authenticated_wire_identity.is_some()
+            && input.admission_capability.origin.is_authenticated()
+            && Arc::ptr_eq(
+                &input.admission_capability.source_identity,
+                &self.deferred_admission_ordinals.identity,
+            )
+            && !input.admission_capability.adapter_service_is_claimed()
+            && !input.admission_capability.runtime_handoff_is_claimed()
+            && runtime_binding.is_some_and(|binding| {
+                binding.validate_exact()
+                    && binding.authenticated_ingress
+                    && binding.source_physical_ordinal.is_some()
+                    && binding.causal_lifecycle_key == identity.causal_lifecycle_key()
+                    && binding.initial_lifecycle_ordinal == identity.admission_ordinal()
+            });
+        if !exact_live_owner {
+            return Err(self.fail_serviced_candidate_store(
+                "live producer alias did not retain one exact authenticated Busy owner".to_owned(),
+            ));
+        }
+        Ok(true)
+    }
+
     /// Reserve the exact selected lifecycle-stage address before reducer
     /// service can retire its source.
     fn reserve_selected_producer_continuation(
         &mut self,
         candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
     ) -> Result<Option<ProducerReservationToken>, AdapterError> {
-        if self.reducer.durable_state().decision().is_some() {
+        if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
             // The durable Decision is the sole restart owner for the rest of
             // this height. Reclamation publishes an empty owner epoch before
             // any post-Decision application, timer, or queued ingress can be
             // serviced. Reserving another producer here would persist a live
             // owner beside `decision_reclaimed = true`, contradicting that
             // durable boundary before the reducer can discard the occurrence.
-            if !self.serviced_candidates_decision_reclaimed
-                || !self.serviced_candidates.is_empty()
-                || !self.durable_serviced_candidates.is_empty()
-                || !self.producer_continuations.is_empty()
-                || !self.durable_producer_continuations.is_empty()
-                || !self.restored_dormant_producer_continuations.is_empty()
-                || !self.deferred_producer_continuations.is_empty()
-                || !self.pending_producer_handoffs.is_empty()
-            {
-                return Err(self.fail_serviced_candidate_store(
-                    "durable Decision did not retain canonical reclaimed producer state".to_owned(),
-                ));
-            }
             return Ok(None);
         }
         let (Some((candidate, _, _)), Some(selected)) =
@@ -7804,34 +8353,109 @@ impl SumeragiV2Adapter {
         let Some(token) = token else {
             return Ok(());
         };
-        self.pending_producer_handoffs.remove(&token.address);
-        match token.change {
-            ProducerReservationChange::Unchanged
-            | ProducerReservationChange::Inserted
-            | ProducerReservationChange::ClaimedDormant => {
-                self.producer_continuations.remove(&token.address);
-                self.durable_producer_continuations.remove(&token.address);
-                self.restored_dormant_producer_continuations
-                    .remove(&token.address);
+        self.persist_unrecorded_producer_releases(std::slice::from_ref(&token))
+    }
+
+    /// Publish one or more producer releases as a single durable transition.
+    ///
+    /// Every caller still owns the source occurrence while this method runs.
+    /// The durable snapshot is therefore the first externally visible step:
+    /// persistence failure restores every process alias, and success permits
+    /// the caller to remove its volatile queue owner without a restart window
+    /// which could resurrect the retired producer.
+    fn persist_unrecorded_producer_releases(
+        &mut self,
+        tokens: &[ProducerReservationToken],
+    ) -> Result<(), AdapterError> {
+        if tokens.is_empty() {
+            return Ok(());
+        }
+        if self.ensure_canonical_reclaimed_producer_state_after_decision()? {
+            // Decision reclamation is the authoritative release for every
+            // token reserved before its WAL acknowledgement. Applying an old
+            // token's undo payload here would resurrect the reclaimed epoch.
+            return Ok(());
+        }
+        let mut addresses = BTreeSet::new();
+        for token in tokens {
+            if !addresses.insert(token.address) {
+                return Err(self.fail_serviced_candidate_store(
+                    "one producer address had multiple simultaneous release authorities".to_owned(),
+                ));
             }
-            ProducerReservationChange::ReplacedTerminal {
-                process_previous,
-                durable_previous,
-            } => {
-                self.producer_continuations
-                    .insert(token.address, process_previous);
-                match durable_previous {
-                    Some(previous) => {
-                        self.durable_producer_continuations
-                            .insert(token.address, previous);
-                    }
-                    None => {
-                        self.durable_producer_continuations.remove(&token.address);
+            let Some(current) = self.producer_continuations.get(&token.address) else {
+                return Err(self.fail_serviced_candidate_store(
+                    "producer release authority lost its process record".to_owned(),
+                ));
+            };
+            if current.status() != ProducerContinuationStatus::Reserved
+                || current.identity().address() != token.address
+                || self.durable_producer_continuations.get(&token.address) != Some(current)
+                || self.pending_producer_handoffs.contains_key(&token.address)
+            {
+                return Err(self.fail_serviced_candidate_store(
+                    "producer release authority did not own one exact durable reservation"
+                        .to_owned(),
+                ));
+            }
+            let dormant = self
+                .restored_dormant_producer_continuations
+                .contains(&token.address);
+            if dormant {
+                return Err(self.fail_serviced_candidate_store(
+                    "a live producer release authority was still restart-dormant".to_owned(),
+                ));
+            }
+        }
+
+        let process_previous = self.producer_continuations.clone();
+        let durable_previous = self.durable_producer_continuations.clone();
+        let dormant_previous = self.restored_dormant_producer_continuations.clone();
+        let handoffs_previous = self.pending_producer_handoffs.clone();
+        for token in tokens {
+            self.pending_producer_handoffs.remove(&token.address);
+            match &token.change {
+                ProducerReservationChange::Unchanged
+                | ProducerReservationChange::Inserted
+                | ProducerReservationChange::ClaimedDormant => {
+                    self.producer_continuations.remove(&token.address);
+                    self.durable_producer_continuations.remove(&token.address);
+                    self.restored_dormant_producer_continuations
+                        .remove(&token.address);
+                }
+                ProducerReservationChange::ReplacedTerminal {
+                    process_previous,
+                    durable_previous,
+                } => {
+                    self.producer_continuations
+                        .insert(token.address, process_previous.clone());
+                    match durable_previous {
+                        Some(previous) => {
+                            self.durable_producer_continuations
+                                .insert(token.address, previous.clone());
+                        }
+                        None => {
+                            self.durable_producer_continuations.remove(&token.address);
+                        }
                     }
                 }
             }
         }
-        self.persist_producer_lifecycles()
+        if let Err(reason) = self
+            .serviced_candidate_store
+            .persist_with_producer_continuations(
+                &self.durable_serviced_candidates,
+                &self.durable_producer_continuations,
+                self.serviced_candidates_decision_reclaimed,
+            )
+        {
+            self.producer_continuations = process_previous;
+            self.durable_producer_continuations = durable_previous;
+            self.restored_dormant_producer_continuations = dormant_previous;
+            self.pending_producer_handoffs = handoffs_previous;
+            return Err(self.fail_serviced_candidate_store(reason));
+        }
+        Ok(())
     }
 
     fn terminalize_producer_continuation(
@@ -7859,43 +8483,42 @@ impl SumeragiV2Adapter {
         Ok(Some(previous))
     }
 
-    /// Close producer reservations whose adapter-owned Busy occurrence was
-    /// retired by an exact state-changing corridor update.
-    ///
-    /// Queue-retirement APIs intentionally keep their existing infallible
-    /// signatures. Any impossible missing/corrupt reservation latches the
-    /// adapter fail-closed through `terminalize_producer_continuation`; the
-    /// next ingress or executor turn then reports that state.
-    fn retire_unowned_deferred_producer_continuations(&mut self) {
+    /// Persistently release producer reservations before their exact
+    /// adapter-owned Busy occurrences are removed.
+    fn release_deferred_producer_continuations_before_owner_removal(
+        &mut self,
+        retiring: &BTreeSet<u128>,
+    ) -> Result<(), AdapterError> {
         let active = self.all_deferred_admission_ordinals();
-        let retired = self
-            .deferred_producer_continuations
-            .keys()
-            .filter(|ordinal| !active.contains(ordinal))
-            .copied()
-            .collect::<Vec<_>>();
-        for ordinal in retired {
-            let Some(reservation) = self.deferred_producer_continuations.remove(&ordinal) else {
-                continue;
-            };
-            // A strict view advance or Decision removed the deferred source
-            // before service. It is a goal/exited lifecycle, not a synthetic
-            // successor acknowledgement. Restore any older durable incumbent
-            // and otherwise reopen the bounded address for reconstructed work.
-            if self
-                .release_goal_reached_producer(Some(reservation))
-                .is_err()
-            {
-                break;
-            }
+        if !retiring.is_subset(&active)
+            || !self
+                .deferred_producer_continuations
+                .keys()
+                .all(|ordinal| active.contains(ordinal))
+        {
+            return Err(self.fail_serviced_candidate_store(
+                "deferred producer release did not retain one exact Busy owner".to_owned(),
+            ));
         }
+        let tokens = self
+            .deferred_producer_continuations
+            .iter()
+            .filter(|(ordinal, _)| retiring.contains(ordinal))
+            .map(|(_, reservation)| reservation.clone())
+            .collect::<Vec<_>>();
+        self.persist_unrecorded_producer_releases(&tokens)?;
+        for ordinal in retiring {
+            self.deferred_producer_continuations.remove(ordinal);
+        }
+        Ok(())
     }
 
     /// Release a speculative active record when the same macro-step reached a
     /// durable goal (Decision or strict view advance) before a producer
-    /// continuation was needed. If the active reservation temporarily
-    /// replaced an older durable terminal at the same bounded address, restore
-    /// that exact restart-safe incumbent in process memory.
+    /// continuation was needed. A strict view advance restores an exact older
+    /// incumbent temporarily replaced at the same bounded address. A Decision
+    /// instead discards the obsolete token after verifying its canonical empty
+    /// owner epoch.
     fn release_goal_reached_producer(
         &mut self,
         reservation: Option<ProducerReservationToken>,
@@ -8020,11 +8643,21 @@ impl SumeragiV2Adapter {
                     "selected producer reservation was not live at the runtime handoff".to_owned(),
                 )
             })?;
+        let consumes_volatile_dormant_body = matches!(
+            &reservation.change,
+            ProducerReservationChange::ClaimedDormant
+        ) && token.identity().stage()
+            == ServicedCandidateStage::BodyAvailable as u8;
         let pending = PendingProducerHandoff {
             token,
             service_view,
-            durable_store_terminal: durable_terminal_retirement,
-            durable_terminal_evidence,
+            // Stage 7 persists only the logical producer lifecycle. The body
+            // bytes and physical FIFO owner are deliberately reacquired after
+            // restart, so servicing that restored BodyAvailable consumes the
+            // durable reservation instead of replacing it with a terminal
+            // which could resurrect the already-spent reconstruction.
+            durable_store_terminal: durable_terminal_retirement && !consumes_volatile_dormant_body,
+            durable_terminal_evidence: durable_terminal_evidence && !consumes_volatile_dormant_body,
             durable_previous: match reservation.change {
                 ProducerReservationChange::ReplacedTerminal {
                     durable_previous, ..
@@ -8232,6 +8865,107 @@ impl SumeragiV2Adapter {
             .collect()
     }
 
+    /// Reconcile restart-only Reserved producers against the replayed durable
+    /// frontier before the runtime can install dormant capacity.
+    ///
+    /// During a live EnterView macro-step an older Reserved record still has a
+    /// process owner and must survive until that owner explicitly hands off.
+    /// After a crash no such alias exists. The replayed current view therefore
+    /// retires every older Reserved producer except the exact body pipeline of
+    /// the durable protected lock. Persisting this cut before runtime creation
+    /// closes the WAL-before-executor-cleanup crash window.
+    fn reconcile_restored_reserved_producer_frontier(&mut self) -> Result<(), AdapterError> {
+        if self.reducer.durable_state().decision().is_some() {
+            // Decision reclamation below owns the stronger all-producer cut.
+            return Ok(());
+        }
+        let current_view = self.reducer.current_tag().view();
+        let protected = self.reducer.durable_state().locked().map(|certificate| {
+            (
+                certificate.proposal_round().view(),
+                *certificate.subject().as_bytes(),
+            )
+        });
+        let restored = self
+            .producer_continuations
+            .iter()
+            .map(|(address, record)| (*address, record.clone()))
+            .collect::<Vec<_>>();
+        let mut retiring = Vec::new();
+        for (address, record) in restored {
+            if record.status() == ProducerContinuationStatus::Terminal {
+                continue;
+            }
+            if record.status() != ProducerContinuationStatus::Reserved
+                || record.identity().address() != address
+                || self.durable_producer_continuations.get(&address) != Some(&record)
+                || !self
+                    .restored_dormant_producer_continuations
+                    .contains(&address)
+            {
+                return Err(self.fail_serviced_candidate_store(
+                    "restored producer frontier contained an inexact Reserved alias".to_owned(),
+                ));
+            }
+            let identity = record.identity();
+            let candidate = identity.candidate();
+            if candidate.source_view() > current_view {
+                return Err(self.fail_serviced_candidate_store(
+                    "restored producer originated beyond the replayed durable view".to_owned(),
+                ));
+            }
+            if candidate.source_view() == current_view {
+                continue;
+            }
+            let stage = ServicedCandidateStage::from_code(identity.stage()).ok_or_else(|| {
+                self.fail_serviced_candidate_store(
+                    "restored producer frontier carried an unknown stage".to_owned(),
+                )
+            })?;
+            let protects_body_pipeline = protected.is_some_and(|(view, subject)| {
+                candidate.source_view() == view
+                    && candidate.target() == Some(subject)
+                    && matches!(
+                        stage,
+                        ServicedCandidateStage::LocalProposalReady
+                            | ServicedCandidateStage::BodyAvailable
+                            | ServicedCandidateStage::BodyStored
+                            | ServicedCandidateStage::ValidationCompleted
+                    )
+            });
+            if !protects_body_pipeline {
+                retiring.push(address);
+            }
+        }
+        if retiring.is_empty() {
+            return Ok(());
+        }
+
+        let process_previous = self.producer_continuations.clone();
+        let durable_previous = self.durable_producer_continuations.clone();
+        let dormant_previous = self.restored_dormant_producer_continuations.clone();
+        for address in retiring {
+            self.producer_continuations.remove(&address);
+            self.durable_producer_continuations.remove(&address);
+            self.restored_dormant_producer_continuations
+                .remove(&address);
+        }
+        if let Err(reason) = self
+            .serviced_candidate_store
+            .persist_with_producer_continuations(
+                &self.durable_serviced_candidates,
+                &self.durable_producer_continuations,
+                self.serviced_candidates_decision_reclaimed,
+            )
+        {
+            self.producer_continuations = process_previous;
+            self.durable_producer_continuations = durable_previous;
+            self.restored_dormant_producer_continuations = dormant_previous;
+            return Err(self.fail_serviced_candidate_store(reason));
+        }
+        Ok(())
+    }
+
     /// Reclaim only epochs made obsolete by a strict certified view advance
     /// or by the first durable Decision in this height.
     fn reclaim_serviced_candidates(&mut self) -> Result<(), AdapterError> {
@@ -8331,6 +9065,15 @@ impl SumeragiV2Adapter {
     #[cfg(test)]
     fn serviced_candidate_count_for_test(&self) -> usize {
         self.serviced_candidates.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn producer_continuation_counts_for_test(&self) -> (usize, usize, usize) {
+        (
+            self.producer_continuations.len(),
+            self.durable_producer_continuations.len(),
+            self.deferred_producer_continuations.len(),
+        )
     }
 
     #[cfg(test)]
@@ -8484,6 +9227,29 @@ impl SumeragiV2Adapter {
         } else {
             None
         };
+        let live_producer_alias = producer_candidate
+            .map(|candidate| {
+                self.live_deferred_producer_alias(candidate, retag_authenticated_ingress)
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if live_producer_alias {
+            if let Some(admission) = admission {
+                self.record_ingress_delivery(admission);
+            }
+            let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
+            self.record_disposition(disposition);
+            self.publish_status()?;
+            self.log_body_progress(&queued, disposition, 0);
+            return Ok(DeferPolicyOutcome {
+                outcome: AdapterOutcome {
+                    disposition,
+                    effects: Vec::new(),
+                    deferred_admission_ordinal: None,
+                    producer_handoff: None,
+                },
+            });
+        }
         let producer_reservation =
             self.reserve_selected_producer_continuation(producer_candidate)?;
         if let Err(error) =
@@ -8961,6 +9727,40 @@ impl SumeragiV2Adapter {
                 || !self.deferred_inputs.is_empty())
     }
 
+    /// Return whether replay or a pending safety-WAL acknowledgement owns the
+    /// only legal next reducer transition. Pacemaker ingress must remain
+    /// queued until that exact asynchronous completion is delivered.
+    pub(crate) fn pacemaker_escape_is_parked(&self) -> bool {
+        !self.fail_closed
+            && (!self.replay_complete || self.reducer.pending_persistence_record().is_some())
+    }
+
+    /// Return whether an active signature request is the sole reducer fence.
+    /// Certified TC/CommitQC ingress may bypass only this state; persistence
+    /// and replay fences always precede every network transition.
+    pub(crate) fn signature_fence_is_active(&self) -> bool {
+        !self.fail_closed
+            && self.replay_complete
+            && self.reducer.pending_persistence_record().is_none()
+            && self.reducer.awaiting_signature().is_some()
+    }
+
+    /// Return the exact active signer owner used to scope runtime retry
+    /// exclusions. A duplicate certified message leaves this identity
+    /// unchanged, while consuming the signer or installing a successor
+    /// signable changes it even when both tasks share one reducer tag.
+    pub(crate) fn signature_fence_identity(
+        &self,
+    ) -> Option<(reducer::EventTag, reducer::SignableMessage)> {
+        if !self.signature_fence_is_active() {
+            return None;
+        }
+        self.reducer
+            .awaiting_signature()
+            .cloned()
+            .map(|message| (self.reducer.current_tag(), message))
+    }
+
     /// Return whether one exact runtime completion opens the active signing
     /// fence which currently makes older adapter-owned debt unserviceable.
     ///
@@ -8998,8 +9798,11 @@ impl SumeragiV2Adapter {
     /// [`Self::completion_unblocks_deferred_fence`].
     ///
     /// This is deliberately a proof, not a broad command-class hint. Internal
-    /// callbacks must survive reducer preflight, while authenticated ingress
-    /// must have a fresh semantic-admission path and convert against the
+    /// callbacks must retain the current tag and survive reducer preflight,
+    /// while queued authenticated ingress is deliberately retagged at
+    /// dispatch and must therefore be classified against the current reducer
+    /// incarnation regardless of its stored tag. Authenticated input must
+    /// also have a fresh semantic-admission path and convert against the
     /// current registry. A duplicate, equivocation report, unsafe proposal,
     /// capacity terminal, stale view, malformed conversion, or independent
     /// signature callback therefore remains an ordinary ordered owner.
@@ -9014,7 +9817,6 @@ impl SumeragiV2Adapter {
 
         if self.fail_closed
             || !self.replay_complete
-            || tag != self.reducer.current_tag()
             || self.reducer.pending_persistence_record().is_some()
             || self.reducer.awaiting_signature().is_none()
         {
@@ -9031,15 +9833,20 @@ impl SumeragiV2Adapter {
             | AdapterCommand::ValidationSucceeded { .. }
             | AdapterCommand::ValidationFailed { .. }
             | AdapterCommand::ApplicationCompleted(_) => {
-                self.preflight_runtime_command_admission(tag, command) == AdmissionPreflight::Admit
+                tag == self.reducer.current_tag()
+                    && self.preflight_runtime_command_admission(tag, command)
+                        == AdmissionPreflight::Admit
             }
         }
     }
 
-    /// Conservatively prove that authenticated ingress reaches `Reducer::step`
-    /// in the current adapter state. Once this returns `true`, the active
-    /// signing fence makes the non-`Signed` reducer event unconditionally
-    /// `Busy` before any phase handler can run.
+    /// Conservatively prove that authenticated ingress reaches the reducer's
+    /// active signing fence in the current adapter state.
+    ///
+    /// A verified TC or CommitQC is deliberately excluded: those certified
+    /// transitions supersede the fenced reducer incarnation. Every other
+    /// non-`Signed` event which returns `true` is unconditionally `Busy`
+    /// before its phase handler can run.
     fn authenticated_command_reaches_fenced_reducer(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -9142,15 +9949,29 @@ impl SumeragiV2Adapter {
             wire::ConsensusMessageV2Payload::Vote(vote) => {
                 registry.vote_to_core(vote, &self.wire_context).is_ok()
             }
-            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
-                registry.qc_to_core(certificate, &self.wire_context).is_ok()
-            }
+            wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => registry
+                .qc_to_core(certificate, &self.wire_context)
+                .is_ok_and(|certificate| {
+                    !reducer::Reducer::certified_progress_bypasses_signature_fence(
+                        &reducer::Event::QuorumCertificateReceived {
+                            tag: self.reducer.current_tag(),
+                            certificate,
+                        },
+                    )
+                }),
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => registry
                 .timeout_vote_to_core(vote, &self.wire_context)
                 .is_ok(),
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
-                registry.tc_to_core(certificate, &self.wire_context).is_ok()
-            }
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => registry
+                .tc_to_core(certificate, &self.wire_context)
+                .is_ok_and(|certificate| {
+                    !reducer::Reducer::certified_progress_bypasses_signature_fence(
+                        &reducer::Event::TimeoutCertificateReceived {
+                            tag: self.reducer.current_tag(),
+                            certificate,
+                        },
+                    )
+                }),
             wire::ConsensusMessageV2Payload::PayloadManifest(_)
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
@@ -10071,7 +10892,7 @@ impl WireRegistry {
             self.context_id
                 .expect("registry is constructed with a height context"),
         );
-        let chain_id = reducer::ChainId::new(Hash::new(context.chain_id.encode()).into());
+        let chain_id = reducer::ChainId::new(*context.network_id.as_bytes());
         let nexus_hash = reducer::Digest::new(*context.nexus_amx_context_hash.as_ref());
         let execution_policy_hash = reducer::Digest::new(*context.execution_policy_hash.as_ref());
         let da_hash = reducer::Digest::new(Hash::new(context.da_layout.encode()).into());
@@ -11425,6 +12246,12 @@ mod tests {
     use super::*;
     use crate::sumeragi::v2_chunks::encode_payload;
 
+    fn test_network_id(seed: u8) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])))
+    }
+
     #[derive(Debug)]
     struct TestAggregator;
 
@@ -11458,7 +12285,7 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort();
         wire::HeightContext {
-            chain_id: "sumeragi-v2-adapter-test".into(),
+            network_id: test_network_id(0x61),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 1,
@@ -11665,7 +12492,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "sumeragi-v2-auth-test".into(),
+            network_id: test_network_id(0x62),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 3,
@@ -13218,6 +14045,747 @@ mod tests {
         );
     }
 
+    struct StageSevenCrashCut {
+        wire_context: wire::HeightContext,
+        round: wire::ConsensusRound,
+        body_subject: wire::BlockSubject,
+        manifest: wire::PayloadManifest,
+        logical_key: Hash,
+        logical_ordinal: u128,
+        restored_address: ProducerContinuationAddress,
+    }
+
+    fn persist_stage_seven_crash_cut(directory: &TempDir, marker: u8) -> StageSevenCrashCut {
+        let wire_context = context();
+        let round = wire::ConsensusRound {
+            context_id: wire_context.id(),
+            height: wire_context.height,
+            view: 0,
+        };
+        let body_subject = subject(marker);
+        let payload = vec![marker; 32];
+        let chunks = wire::encode_payload_chunks(wire_context.da_layout, &payload)
+            .expect("encode canonical body chunks");
+        let manifest = wire::PayloadManifest::derive(
+            &wire_context,
+            round,
+            body_subject,
+            u64::try_from(payload.len()).expect("fixture payload length fits u64"),
+            &chunks,
+        )
+        .expect("derive canonical body manifest");
+        let logical_key;
+        let logical_ordinal;
+        let restored_address;
+        {
+            let (adapter, startup) = open_test(directory).expect("open original adapter");
+            assert!(startup.is_empty());
+            let tag = adapter.current_tag();
+            let fetch = AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject: body_subject,
+                manifest: Some(manifest.clone()),
+                certified_sources: Vec::new(),
+                certificate: None,
+            };
+            let started_at = Instant::now();
+            let lifecycle_ordinals =
+                super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0);
+            let (mut runtime, startup) =
+                super::super::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                    adapter,
+                    vec![fetch.clone()],
+                    started_at,
+                    Duration::from_secs(4),
+                    super::super::v2_runtime::RuntimeQueueConfig::new(6, 2, 1),
+                    lifecycle_ordinals,
+                )
+                .expect("construct runtime with the original body fetch");
+            assert_eq!(startup, vec![fetch]);
+            let mut ownership = runtime
+                .take_effect_ownership(1)
+                .expect("take the original body-fetch ownership");
+            let fetch_ownership = ownership.pop().expect("one body-fetch owner");
+            assert!(ownership.is_empty());
+            logical_key = fetch_ownership.owner().causal_origin().lifecycle_key;
+            logical_ordinal = fetch_ownership.owner().lifecycle_ordinal();
+            assert_eq!(logical_ordinal, 1);
+
+            let mut adapter = runtime.into_driver();
+            let event = reducer::Event::BodyAvailable {
+                tag,
+                round: reducer::Round::new(round.height, round.view),
+                subject: reducer::Subject::new(Hash::new(body_subject.encode()).into()),
+            };
+            let completion_evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+                manifest: manifest.clone(),
+            };
+            let candidate = adapter
+                .serviced_candidate(
+                    &event,
+                    DeferredPriority::Completion,
+                    Some(&completion_evidence),
+                    None,
+                )
+                .expect("BodyAvailable has a producer stage");
+            adapter
+                .bind_selected_producer_lifecycle(logical_key, logical_ordinal)
+                .expect("bind the body-fetch lifecycle");
+            let reservation = adapter
+                .reserve_selected_producer_continuation(Some(candidate))
+                .expect("persist before the BodyAvailable reducer step")
+                .expect("BodyAvailable reserves a producer continuation");
+            restored_address = reservation.address;
+            let record = &adapter.producer_continuations[&restored_address];
+            assert_eq!(record.status(), ProducerContinuationStatus::Reserved);
+            assert_eq!(
+                record.identity().stage(),
+                ServicedCandidateStage::BodyAvailable as u8
+            );
+            assert_eq!(
+                record.source_class(),
+                ProducerContinuationSourceClass::VolatileBody
+            );
+            assert_eq!(
+                adapter
+                    .durable_producer_continuations
+                    .get(&restored_address),
+                Some(record),
+                "the stage-7 crash cut must be durable before reducer service"
+            );
+        }
+        StageSevenCrashCut {
+            wire_context,
+            round,
+            body_subject,
+            manifest,
+            logical_key,
+            logical_ordinal,
+            restored_address,
+        }
+    }
+
+    #[test]
+    fn body_rebind_coalescence_preserves_the_only_persistent_producer() {
+        let directory = TempDir::new().expect("temporary durable coalescence directory");
+        let StageSevenCrashCut {
+            wire_context,
+            round,
+            body_subject,
+            manifest,
+            logical_key,
+            logical_ordinal,
+            restored_address,
+        } = persist_stage_seven_crash_cut(&directory, 0xBC);
+        let (restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen the stage-7 coalescence crash cut");
+        assert!(startup.is_empty());
+        let previous = restarted.current_tag();
+        let certificate = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject: body_subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"coalescence parent state"),
+                Hash::new(b"coalescence post state"),
+                Hash::new(b"coalescence writes"),
+                Hash::new(b"coalescence executed block"),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xBC; 96],
+        };
+        certificate
+            .validate(&wire_context)
+            .expect("coalescence reconstruction certificate is structurally valid");
+        let fetch = AdapterEffect::FetchBody {
+            tag: previous,
+            round,
+            subject: body_subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: wire_context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate),
+        };
+        let lifecycle_ordinals =
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
+                logical_ordinal,
+            );
+        let started_at = Instant::now();
+        let (mut runtime, startup) =
+            super::super::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                restarted,
+                vec![fetch.clone()],
+                started_at,
+                Duration::from_secs(4),
+                super::super::v2_runtime::RuntimeQueueConfig::new(6, 2, 1),
+                lifecycle_ordinals,
+            )
+            .expect("construct runtime for durable coalescence");
+        assert_eq!(startup, vec![fetch]);
+        let mut ownership = runtime
+            .take_effect_ownership(1)
+            .expect("take the reconstructed body-fetch owner");
+        let fetch_ownership = ownership.pop().expect("one reconstructed fetch owner");
+        let reservation = runtime
+            .reserve_body_available_with_owner(previous, manifest.clone(), &fetch_ownership)
+            .expect("reserve the restart-restored body completion");
+        runtime
+            .commit_body_available(reservation)
+            .expect("materialize the restart-restored source owner");
+
+        let rebound = reducer::EventTag::new(
+            previous.height(),
+            previous.view() + 1,
+            reducer::Generation::new(previous.generation().get() + 1),
+        );
+        runtime
+            .observe_effects_with_test_ownership(
+                started_at,
+                &[AdapterEffect::EnterView {
+                    tag: rebound,
+                    certificate: wire::TimeoutCertificate {
+                        round,
+                        groups: vec![wire::TimeoutVoteGroup {
+                            highest_prepare_qc: None,
+                            signers: vec![0, 1, 2],
+                            aggregate_signature: vec![0xCD; 96],
+                        }],
+                    },
+                    protected_body: Some((round, body_subject)),
+                }],
+            )
+            .expect("install the certified destination incarnation");
+        runtime
+            .enqueue_volatile_body_available_for_test(rebound, manifest.clone())
+            .expect("stage an independently volatile destination owner");
+        assert_eq!(runtime.queued_commands(), 2);
+
+        assert!(
+            runtime
+                .rebind_body_available(previous, rebound, &manifest)
+                .expect("coalesce while retaining the persistent source")
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(
+            !runtime
+                .rebind_body_available(previous, rebound, &manifest)
+                .expect("the old source tag is now vacant")
+        );
+        let retained = runtime
+            .driver()
+            .producer_continuations
+            .get(&restored_address)
+            .expect("coalescence retains the process producer record");
+        assert_eq!(retained.identity().causal_lifecycle_key(), logical_key);
+        assert_eq!(retained.identity().admission_ordinal(), logical_ordinal);
+        assert_eq!(
+            runtime
+                .driver()
+                .durable_producer_continuations
+                .get(&restored_address),
+            Some(retained),
+        );
+        assert!(
+            runtime
+                .driver()
+                .restored_dormant_producer_continuations
+                .contains(&restored_address),
+            "the rebound volatile carrier aliases the same restart-dormant producer",
+        );
+
+        drop(runtime.into_driver());
+        let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(3),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen after durable-owner coalescence");
+        let reopened = restarted_again
+            .producer_continuations
+            .get(&restored_address)
+            .expect("the surviving producer remains restart-recoverable");
+        assert_eq!(reopened.identity().causal_lifecycle_key(), logical_key);
+        assert_eq!(reopened.identity().admission_ordinal(), logical_ordinal);
+        assert!(
+            restarted_again
+                .restored_dormant_producer_continuations
+                .contains(&restored_address),
+        );
+    }
+
+    #[test]
+    fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_does_not_resurrect()
+     {
+        let directory = TempDir::new().expect("temporary directory");
+        let StageSevenCrashCut {
+            wire_context,
+            round,
+            body_subject,
+            manifest,
+            logical_key,
+            logical_ordinal,
+            restored_address,
+        } = persist_stage_seven_crash_cut(&directory, 0xB7);
+
+        let (restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen the stage-7 crash cut");
+        assert!(startup.is_empty());
+        let restored = restarted
+            .producer_continuations
+            .get(&restored_address)
+            .expect("stage-7 logical lifecycle reopens");
+        assert_eq!(restored.status(), ProducerContinuationStatus::Reserved);
+        assert_eq!(restored.identity().causal_lifecycle_key(), logical_key);
+        assert_eq!(restored.identity().admission_ordinal(), logical_ordinal);
+        assert_eq!(
+            restored.source_class(),
+            ProducerContinuationSourceClass::VolatileBody
+        );
+        assert!(
+            restarted
+                .dormant_local_fifo_reservations()
+                .expect("validate restored BodyAvailable metadata")
+                .is_empty(),
+            "stage 7 preserves logical identity without a latent FIFO slot"
+        );
+
+        let restarted_tag = restarted.current_tag();
+        let certificate = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject: body_subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"stage-seven parent state"),
+                Hash::new(b"stage-seven post state"),
+                Hash::new(b"stage-seven writes"),
+                Hash::new(b"stage-seven executed block"),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xB7; 96],
+        };
+        certificate
+            .validate(&wire_context)
+            .expect("certified reconstruction is structurally valid");
+        let reconstructed_fetch = AdapterEffect::FetchBody {
+            tag: restarted_tag,
+            round,
+            subject: body_subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: wire_context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate),
+        };
+        let lifecycle_ordinals =
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
+                logical_ordinal,
+            );
+        let started_at = Instant::now();
+        let (mut runtime, startup) =
+            super::super::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                restarted,
+                vec![reconstructed_fetch.clone()],
+                started_at,
+                Duration::from_secs(4),
+                super::super::v2_runtime::RuntimeQueueConfig::new(6, 2, 1),
+                lifecycle_ordinals.clone(),
+            )
+            .expect("construct runtime with the reconstructed body fetch");
+        assert_eq!(startup, vec![reconstructed_fetch.clone()]);
+        runtime
+            .arm_live_clocks(started_at)
+            .expect("arm the restarted runtime");
+        let mut ownership = runtime
+            .take_effect_ownership(1)
+            .expect("take reconstructed body-fetch ownership");
+        let fetch_ownership = ownership.pop().expect("one reconstructed fetch owner");
+        assert!(ownership.is_empty());
+        assert_ne!(
+            fetch_ownership.owner().causal_origin().lifecycle_key,
+            logical_key,
+            "certified reconstruction owns a different physical Fetch lifecycle"
+        );
+        assert_eq!(
+            fetch_ownership.owner().lifecycle_ordinal(),
+            logical_ordinal + 1
+        );
+        assert_eq!(
+            lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the shared source before completion admission"),
+            Some(logical_ordinal + 2),
+            "the certified Fetch owns one new external lifecycle before completion admission"
+        );
+
+        let capacity_before = runtime.remaining_completion_capacity();
+        let reservation = runtime
+            .reserve_body_available_with_owner(restarted_tag, manifest.clone(), &fetch_ownership)
+            .expect("reserve the reconstructed stage-7 completion");
+        assert!(reservation.owns_new_slot());
+        assert_eq!(runtime.remaining_completion_capacity(), capacity_before - 1);
+        let source_after_reserve = lifecycle_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect the shared source after completion admission");
+        assert_eq!(source_after_reserve, Some(logical_ordinal + 3));
+
+        let retry = runtime
+            .reserve_body_available_with_owner(restarted_tag, manifest.clone(), &fetch_ownership)
+            .expect("exact reconstruction retry coalesces with its token");
+        assert_eq!(retry, reservation);
+        assert_eq!(runtime.remaining_completion_capacity(), capacity_before - 1);
+        assert_eq!(
+            lifecycle_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect the shared source after exact retry"),
+            source_after_reserve,
+            "an exact retry cannot spend a second physical admission position"
+        );
+
+        runtime
+            .commit_body_available(retry)
+            .expect("materialize the reconstructed completion");
+        assert_eq!(runtime.queued_commands(), 1);
+        let step = runtime
+            .step(started_at)
+            .expect("service the restored BodyAvailable handoff");
+        let super::super::v2_runtime::RuntimeStep::Advanced(effects) = step else {
+            panic!("the restored BodyAvailable completion must dispatch");
+        };
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("BodyAvailable dispatch publishes scheduler ownership");
+        if !effects.is_empty() {
+            runtime
+                .take_effect_ownership(effects.len())
+                .expect("take BodyAvailable successor ownership");
+        }
+        let terminal = runtime
+            .driver()
+            .producer_continuations
+            .get(&restored_address)
+            .expect("service acknowledgement retains a process-local terminal");
+        assert_eq!(terminal.status(), ProducerContinuationStatus::Terminal);
+        assert_eq!(terminal.identity().causal_lifecycle_key(), logical_key);
+        assert_eq!(terminal.identity().admission_ordinal(), logical_ordinal);
+        assert!(
+            !runtime
+                .driver()
+                .durable_producer_continuations
+                .contains_key(&restored_address),
+            "the service handoff removes the restart-stable stage-7 record"
+        );
+
+        drop(runtime.into_driver());
+        let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(3),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen after the stage-7 service handoff");
+        assert!(
+            restarted_again.producer_continuations.is_empty()
+                && restarted_again.durable_producer_continuations.is_empty()
+                && restarted_again
+                    .restored_dormant_producer_continuations
+                    .is_empty(),
+            "the serviced old stage cannot resurrect on a second restart"
+        );
+    }
+
+    fn assert_restored_stage_seven_retirement_does_not_resurrect(
+        marker: u8,
+        reserve_completion: bool,
+        materialize_before_retirement: bool,
+        inject_persistence_failure: bool,
+    ) {
+        let directory = TempDir::new().expect("temporary stage-7 retirement directory");
+        let StageSevenCrashCut {
+            wire_context,
+            round,
+            body_subject,
+            manifest,
+            logical_key,
+            logical_ordinal,
+            restored_address,
+        } = persist_stage_seven_crash_cut(&directory, marker);
+        let (restarted, startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen the stage-7 retirement crash cut");
+        assert!(startup.is_empty());
+        assert!(
+            restarted
+                .restored_dormant_producer_continuations
+                .contains(&restored_address)
+        );
+
+        let restarted_tag = restarted.current_tag();
+        let certificate = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject: body_subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new([marker, 3]),
+                Hash::new([marker, 4]),
+                Hash::new([marker, 5]),
+                Hash::new([marker, 6]),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![marker; 96],
+        };
+        certificate
+            .validate(&wire_context)
+            .expect("certified retirement reconstruction is structurally valid");
+        let reconstructed_fetch = AdapterEffect::FetchBody {
+            tag: restarted_tag,
+            round,
+            subject: body_subject,
+            manifest: (marker != 0xBD).then_some(manifest.clone()),
+            certified_sources: wire_context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate),
+        };
+        let lifecycle_ordinals =
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
+                logical_ordinal,
+            );
+        let started_at = Instant::now();
+        let (mut runtime, startup) =
+            super::super::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                restarted,
+                vec![reconstructed_fetch.clone()],
+                started_at,
+                Duration::from_secs(4),
+                super::super::v2_runtime::RuntimeQueueConfig::new(6, 2, 1),
+                lifecycle_ordinals,
+            )
+            .expect("construct runtime for restored stage-7 retirement");
+        assert_eq!(startup, vec![reconstructed_fetch.clone()]);
+        runtime
+            .arm_live_clocks(started_at)
+            .expect("arm the stage-7 retirement runtime");
+        let mut ownership = runtime
+            .take_effect_ownership(1)
+            .expect("take reconstructed retirement fetch ownership");
+        let fetch_ownership = ownership.pop().expect("one reconstructed fetch owner");
+        assert!(ownership.is_empty());
+        assert_ne!(
+            fetch_ownership.owner().causal_origin().lifecycle_key,
+            logical_key
+        );
+
+        let capacity_before = runtime.remaining_completion_capacity();
+        if !reserve_completion {
+            assert!(
+                runtime
+                    .retire_restored_body_fetch_parent(&reconstructed_fetch, &fetch_ownership)
+                    .expect("persist terminal restored fetch-parent retirement")
+            );
+            assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+            assert!(
+                !runtime
+                    .driver()
+                    .producer_continuations
+                    .contains_key(&restored_address)
+                    && !runtime
+                        .driver()
+                        .durable_producer_continuations
+                        .contains_key(&restored_address)
+                    && !runtime
+                        .driver()
+                        .restored_dormant_producer_continuations
+                        .contains(&restored_address),
+                "terminal fetch cancellation must remove its dormant stage-7 parent"
+            );
+            drop(runtime.into_driver());
+            let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+                directory.path().join("safety.wal"),
+                verified_genesis(context()),
+                Some(0),
+                reducer::Generation::new(3),
+                [0x11; 32],
+                fingerprints(),
+                Box::new(TestAggregator),
+                deferred_admission_ordinals(),
+            )
+            .expect("reopen after terminal restored fetch cancellation");
+            assert!(restarted_again.producer_continuations.is_empty());
+            return;
+        }
+        let reservation = runtime
+            .reserve_body_available_with_owner(restarted_tag, manifest, &fetch_ownership)
+            .expect("reserve the restored completion before terminal retirement");
+        assert_eq!(runtime.remaining_completion_capacity(), capacity_before - 1);
+        assert!(
+            !inject_persistence_failure || !materialize_before_retirement,
+            "the persistence-failure seam targets the unpublished token"
+        );
+        let sabotaged_snapshot = inject_persistence_failure.then(|| {
+            let path = runtime
+                .driver()
+                .serviced_candidate_store_path_for_test()
+                .to_path_buf();
+            let bytes = std::fs::read(&path).expect("read the stage-7 producer snapshot");
+            std::fs::remove_file(&path).expect("remove the published producer snapshot");
+            std::fs::create_dir(&path).expect("replace producer snapshot with a directory");
+            (path, bytes)
+        });
+        let retired = if materialize_before_retirement {
+            runtime
+                .commit_body_available(reservation)
+                .expect("materialize restored completion before pipeline retirement");
+            runtime
+                .retire_body_pipeline_completions(restarted_tag, round, body_subject)
+                .map(|retired| retired.body_available())
+        } else {
+            runtime.retire_unpublished_body_available(restarted_tag, round, body_subject)
+        };
+        if let Some((path, bytes)) = sabotaged_snapshot {
+            assert!(
+                retired.is_err(),
+                "a failed durable release cannot publish volatile token retirement"
+            );
+            assert_eq!(
+                runtime.remaining_completion_capacity(),
+                capacity_before - 1,
+                "failed persistence retains the exact unpublished physical owner"
+            );
+            assert!(runtime.driver().fail_closed);
+            assert_eq!(
+                runtime
+                    .driver()
+                    .producer_continuations
+                    .get(&restored_address),
+                runtime
+                    .driver()
+                    .durable_producer_continuations
+                    .get(&restored_address),
+                "failed persistence restores both in-memory producer aliases"
+            );
+            assert!(
+                runtime
+                    .driver()
+                    .restored_dormant_producer_continuations
+                    .contains(&restored_address)
+            );
+            std::fs::remove_dir(&path).expect("remove sabotaged producer directory");
+            std::fs::write(&path, bytes).expect("restore the pre-retirement producer snapshot");
+            drop(runtime.into_driver());
+            let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+                directory.path().join("safety.wal"),
+                verified_genesis(context()),
+                Some(0),
+                reducer::Generation::new(3),
+                [0x11; 32],
+                fingerprints(),
+                Box::new(TestAggregator),
+                deferred_admission_ordinals(),
+            )
+            .expect("reopen the retained stage-7 producer after failed retirement");
+            assert!(
+                restarted_again
+                    .restored_dormant_producer_continuations
+                    .contains(&restored_address),
+                "failed retirement must reopen the old owner instead of losing it"
+            );
+            return;
+        }
+        assert!(retired.expect("persist and retire the restored body completion"));
+        assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+        assert!(
+            !runtime
+                .driver()
+                .producer_continuations
+                .contains_key(&restored_address)
+                && !runtime
+                    .driver()
+                    .durable_producer_continuations
+                    .contains_key(&restored_address)
+                && !runtime
+                    .driver()
+                    .restored_dormant_producer_continuations
+                    .contains(&restored_address),
+            "terminal runtime retirement must persistently release the restored producer"
+        );
+
+        drop(runtime.into_driver());
+        let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(3),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen after terminal stage-7 retirement");
+        assert!(
+            restarted_again.producer_continuations.is_empty()
+                && restarted_again.durable_producer_continuations.is_empty()
+                && restarted_again
+                    .restored_dormant_producer_continuations
+                    .is_empty(),
+            "a terminally retired stage-7 producer cannot resurrect on restart"
+        );
+    }
+
+    #[test]
+    fn restored_body_available_terminal_retirement_is_persistent_before_token_release() {
+        assert_restored_stage_seven_retirement_does_not_resurrect(0xB8, true, false, false);
+        assert_restored_stage_seven_retirement_does_not_resurrect(0xB9, true, true, false);
+        assert_restored_stage_seven_retirement_does_not_resurrect(0xBA, true, false, true);
+        assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
+        assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
+    }
+
     #[test]
     fn live_producer_owner_cannot_replace_immutable_identity() {
         let directory = TempDir::new().expect("temporary directory");
@@ -13637,6 +15205,99 @@ mod tests {
     }
 
     #[test]
+    fn durable_decision_release_does_not_restore_stale_process_only_predecessor() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let replacement = reserve_process_only_producer_replacement(&mut adapter, 0x4B);
+        adapter.clear_selected_producer_lifecycle();
+
+        let decided_subject = subject(0x4C);
+        let leader = adapter.wire_context.leader(0);
+        let proposal = proposal(&adapter.wire_context, leader, decided_subject);
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal helper returns a proposal")
+        };
+        let manifest = proposal.manifest;
+        let (_, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+        let mut decision = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decided_subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS-normal key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        authenticate_qc(&mut decision, &keys);
+        adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    decision,
+                )),
+            ))
+            .expect("install the durable Decision and reclaim producer ownership");
+        assert!(adapter.serviced_candidates_decision_reclaimed);
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        assert!(adapter.restored_dormant_producer_continuations.is_empty());
+        assert!(adapter.deferred_producer_continuations.is_empty());
+        assert!(adapter.pending_producer_handoffs.is_empty());
+        let reclaimed_snapshot = std::fs::read(adapter.serviced_candidate_store_path_for_test())
+            .expect("read canonical reclaimed owner snapshot");
+
+        adapter
+            .release_unrecorded_producer(Some(replacement.reservation))
+            .expect("discard stale pre-Decision undo token");
+        assert!(adapter.serviced_candidates.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert!(adapter.producer_continuations.is_empty());
+        assert!(adapter.durable_producer_continuations.is_empty());
+        assert!(adapter.restored_dormant_producer_continuations.is_empty());
+        assert!(adapter.deferred_producer_continuations.is_empty());
+        assert!(adapter.pending_producer_handoffs.is_empty());
+        assert_eq!(
+            std::fs::read(adapter.serviced_candidate_store_path_for_test())
+                .expect("reread canonical reclaimed owner snapshot"),
+            reclaimed_snapshot,
+            "a stale pre-Decision undo token cannot republish reclaimed ownership"
+        );
+
+        adapter
+            .bind_selected_producer_lifecycle(Hash::new(b"post-Decision retry"), 3)
+            .expect("bind post-Decision retry");
+        assert!(
+            adapter
+                .reserve_selected_producer_continuation(Some(replacement.candidate))
+                .expect("canonical post-Decision retry remains serviceable")
+                .is_none(),
+            "the durable Decision remains the sole restart owner"
+        );
+        assert!(!adapter.fail_closed);
+
+        drop(adapter);
+        let (restarted, _) = open_test(&directory).expect("replay the durable Decision");
+        assert!(restarted.reducer.durable_state().decision().is_some());
+        assert!(restarted.serviced_candidates_decision_reclaimed);
+        assert!(restarted.serviced_candidates.is_empty());
+        assert!(restarted.durable_serviced_candidates.is_empty());
+        assert!(restarted.producer_continuations.is_empty());
+        assert!(restarted.durable_producer_continuations.is_empty());
+        assert!(restarted.restored_dormant_producer_continuations.is_empty());
+        assert!(restarted.deferred_producer_continuations.is_empty());
+        assert!(restarted.pending_producer_handoffs.is_empty());
+    }
+
+    #[test]
     fn process_only_producer_replacement_handoff_does_not_resurrect_predecessor() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
@@ -13729,7 +15390,9 @@ mod tests {
             .deferred_producer_continuations
             .insert(admission_ordinal, reservation);
 
-        adapter.retire_deferred_body_pipeline_completions(tag, round, subject);
+        adapter
+            .retire_deferred_body_pipeline_completions(tag, round, subject)
+            .expect("persist exact local-parent retirement before queue release");
 
         assert!(adapter.deferred_completions.is_empty());
         assert!(
@@ -13741,6 +15404,359 @@ mod tests {
             !adapter.producer_continuations.contains_key(&address),
             "goal-reaching retirement cannot manufacture successor acknowledgement"
         );
+    }
+
+    #[test]
+    fn failed_busy_parent_retirement_retains_queue_and_durable_owner() {
+        let directory = TempDir::new().expect("temporary deferred-retirement directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+        let subject = subject(0x4B);
+        let manifest = encode_payload(&adapter.wire_context, round, subject, &[0x4B, 2])
+            .expect("encode deferred-retirement payload")
+            .manifest()
+            .clone();
+        adapter
+            .defer_body_pipeline_stage_for_test(
+                tag,
+                &manifest,
+                DeferredBodyPipelineStageForTest::BodyStored,
+            )
+            .expect("stage exact deferred producer");
+        let (admission_ordinal, candidate) = {
+            let input = adapter
+                .deferred_completions
+                .back()
+                .expect("deferred producer input");
+            (
+                input.admission_ordinal,
+                adapter
+                    .serviced_candidate(
+                        &input.event,
+                        input.priority,
+                        input.completion_evidence.as_ref(),
+                        input.authenticated_wire_identity.as_deref(),
+                    )
+                    .expect("deferred body-store producer identity"),
+            )
+        };
+        adapter
+            .bind_selected_producer_lifecycle(
+                Hash::new(b"failed deferred producer retirement"),
+                admission_ordinal,
+            )
+            .expect("bind exact deferred lifecycle");
+        let reservation = adapter
+            .reserve_selected_producer_continuation(Some(candidate))
+            .expect("reserve deferred producer")
+            .expect("deferred producer has one durable reservation");
+        let address = reservation.address;
+        adapter
+            .deferred_producer_continuations
+            .insert(admission_ordinal, reservation);
+
+        let path = adapter
+            .serviced_candidate_store_path_for_test()
+            .to_path_buf();
+        let snapshot = std::fs::read(&path).expect("read producer snapshot before sabotage");
+        std::fs::remove_file(&path).expect("remove producer snapshot");
+        std::fs::create_dir(&path).expect("replace producer snapshot with a directory");
+        assert!(matches!(
+            adapter.retire_deferred_body_pipeline_completions(tag, round, subject),
+            Err(AdapterError::ServicedCandidateStore(_))
+        ));
+        assert!(adapter.fail_closed);
+        assert_eq!(adapter.deferred_completions.len(), 1);
+        assert!(
+            adapter
+                .deferred_producer_continuations
+                .contains_key(&admission_ordinal)
+        );
+        assert_eq!(
+            adapter.producer_continuations.get(&address),
+            adapter.durable_producer_continuations.get(&address),
+            "failed publication restores both producer aliases before returning"
+        );
+
+        std::fs::remove_dir(&path).expect("remove sabotaged producer directory");
+        std::fs::write(&path, snapshot).expect("restore pre-retirement producer snapshot");
+        drop(adapter);
+        let (restarted, _startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("restart after failed deferred retirement");
+        assert!(
+            restarted
+                .restored_dormant_producer_continuations
+                .contains(&address),
+            "failed retirement must reopen the exact producer instead of losing work"
+        );
+    }
+
+    #[test]
+    fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
+        let directory = TempDir::new().expect("temporary protected-frontier directory");
+        let expected_addresses;
+        let expected_stage_codes = BTreeSet::from([
+            ServicedCandidateStage::LocalProposalReady as u8,
+            ServicedCandidateStage::BodyAvailable as u8,
+            ServicedCandidateStage::BodyStored as u8,
+            ServicedCandidateStage::ValidationCompleted as u8,
+        ]);
+        let protected_target;
+        {
+            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+            assert!(startup.is_empty());
+            let tag = adapter.current_tag();
+            let round = wire::ConsensusRound {
+                context_id: adapter.wire_context.id(),
+                height: adapter.wire_context.height,
+                view: tag.view(),
+            };
+            let body_subject = subject(0x4C);
+            let manifest = encode_payload(&adapter.wire_context, round, body_subject, &[0x4C, 2])
+                .expect("encode protected producer payload")
+                .manifest()
+                .clone();
+            let mut addresses = BTreeSet::new();
+            for (stage, lifecycle_marker, lifecycle_ordinal) in [
+                (
+                    DeferredBodyPipelineStageForTest::LocalProposalReady,
+                    0x40,
+                    41,
+                ),
+                (DeferredBodyPipelineStageForTest::BodyAvailable, 0x41, 42),
+                (DeferredBodyPipelineStageForTest::BodyStored, 0x42, 43),
+                (
+                    DeferredBodyPipelineStageForTest::ValidationSucceeded,
+                    0x43,
+                    44,
+                ),
+            ] {
+                adapter
+                    .defer_body_pipeline_stage_for_test(tag, &manifest, stage)
+                    .expect("stage protected body producer");
+                let (deferred_ordinal, candidate) = {
+                    let input = adapter
+                        .deferred_completions
+                        .back()
+                        .expect("protected producer input");
+                    (
+                        input.admission_ordinal,
+                        adapter
+                            .serviced_candidate(
+                                &input.event,
+                                input.priority,
+                                input.completion_evidence.as_ref(),
+                                input.authenticated_wire_identity.as_deref(),
+                            )
+                            .expect("protected body stage has a producer identity"),
+                    )
+                };
+                adapter
+                    .bind_selected_producer_lifecycle(
+                        Hash::new([0x4C, lifecycle_marker]),
+                        lifecycle_ordinal,
+                    )
+                    .expect("bind one protected producer lifecycle");
+                let reservation = adapter
+                    .reserve_selected_producer_continuation(Some(candidate))
+                    .expect("persist protected producer stage")
+                    .expect("protected body stage reserves one address");
+                assert!(addresses.insert(reservation.address));
+                assert!(
+                    adapter
+                        .deferred_producer_continuations
+                        .insert(deferred_ordinal, reservation)
+                        .is_none()
+                );
+                adapter.clear_selected_producer_lifecycle();
+            }
+            assert_eq!(addresses.len(), expected_stage_codes.len());
+
+            let (_, validated) = validated_receipts_for_manifest(&adapter.wire_context, &manifest);
+            let mut keys = (1_u8..=4)
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic BLS-normal key")
+                })
+                .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let mut prepare = wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject: body_subject,
+                execution_commitment: validated.execution_commitment(),
+                signers: vec![1, 2, 3],
+                aggregate_signature: Vec::new(),
+            };
+            authenticate_qc(&mut prepare, &keys);
+            let timeout_signers = vec![1, 2, 3];
+            let timeout_preimage = wire::TimeoutVote {
+                round,
+                highest_prepare_qc: Some(prepare.clone()),
+                signer: timeout_signers[0],
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let timeout_shares = timeout_signers
+                .iter()
+                .map(|signer| {
+                    Signature::new(
+                        keys[usize::try_from(*signer).expect("small fixture signer")].private_key(),
+                        &timeout_preimage,
+                    )
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let timeout_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &timeout_shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate protected frontier timeout votes");
+            let timeout = wire::TimeoutCertificate {
+                round,
+                groups: vec![wire::TimeoutVoteGroup {
+                    highest_prepare_qc: Some(prepare),
+                    signers: timeout_signers,
+                    aggregate_signature: timeout_signature,
+                }],
+            };
+            adapter
+                .receive_verified(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
+                ))
+                .expect("durably install the protected lock and successor view");
+            assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+            let locked = adapter
+                .reducer
+                .durable_state()
+                .locked()
+                .expect("TC installs its highest PrepareQC as the durable lock");
+            protected_target = *locked.subject().as_bytes();
+            assert_eq!(locked.proposal_round().view(), tag.view());
+            expected_addresses = addresses;
+        }
+
+        let (restarted, _startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen the protected four-stage producer frontier");
+        assert_eq!(restarted.current_tag().view(), 1);
+        assert_eq!(
+            restarted.restored_dormant_producer_continuations, expected_addresses,
+            "restart must retain every and only protected body-pipeline stage"
+        );
+        assert_eq!(
+            restarted
+                .producer_continuations
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            expected_addresses
+        );
+        assert_eq!(
+            restarted
+                .durable_producer_continuations
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            expected_addresses
+        );
+        let restored_stage_codes = restarted
+            .producer_continuations
+            .values()
+            .map(|record| {
+                assert_eq!(record.status(), ProducerContinuationStatus::Reserved);
+                assert_eq!(record.identity().candidate().source_view(), 0);
+                assert_eq!(
+                    record.identity().candidate().target(),
+                    Some(protected_target)
+                );
+                record.identity().stage()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(restored_stage_codes, expected_stage_codes);
+        assert_eq!(
+            restarted
+                .dormant_local_fifo_reservations()
+                .expect("project protected Local stages into FIFO reservations")
+                .len(),
+            3,
+            "BodyAvailable remains fetch-backed while the other three protected stages retain local FIFO slots"
+        );
+        assert!(!restarted.fail_closed);
+    }
+
+    #[test]
+    fn restart_frontier_rejects_reserved_producer_beyond_the_durable_view() {
+        let directory = TempDir::new().expect("temporary future-producer directory");
+        {
+            let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+            assert!(startup.is_empty());
+            let current = adapter.current_tag();
+            let future = reducer::EventTag::new(
+                current.height(),
+                current.view() + 1,
+                reducer::Generation::new(current.generation().get() + 1),
+            );
+            let event = reducer::Event::TimeoutElapsed { tag: future };
+            let candidate = adapter
+                .serviced_candidate(&event, DeferredPriority::Completion, None, None)
+                .expect("future timeout has a producer identity");
+            assert_eq!(candidate.0.source_view(), current.view() + 1);
+            adapter
+                .bind_selected_producer_lifecycle(
+                    Hash::new(b"future producer beyond durable view"),
+                    51,
+                )
+                .expect("bind future producer fixture");
+            let reservation = adapter
+                .reserve_selected_producer_continuation(Some(candidate))
+                .expect("persist future producer fixture")
+                .expect("future producer reserves one address");
+            assert_eq!(
+                adapter.producer_continuations[&reservation.address].status(),
+                ProducerContinuationStatus::Reserved
+            );
+            assert_eq!(adapter.current_tag(), current);
+        }
+
+        assert!(matches!(
+            SumeragiV2Adapter::open_with_aggregator(
+                directory.path().join("safety.wal"),
+                verified_genesis(context()),
+                Some(0),
+                reducer::Generation::new(2),
+                [0x11; 32],
+                fingerprints(),
+                Box::new(TestAggregator),
+                deferred_admission_ordinals(),
+            ),
+            Err(AdapterError::ServicedCandidateStore(reason))
+                if reason.contains("originated beyond the replayed durable view")
+        ));
     }
 
     #[test]
@@ -13769,12 +15785,42 @@ mod tests {
             height: adapter.wire_context.height,
             view: tag.view(),
         };
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS-normal key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let timeout_signers = vec![0, 1, 2];
+        let timeout_preimage = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: timeout_signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let timeout_shares = timeout_signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small fixture signer")].private_key(),
+                    &timeout_preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let timeout_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &timeout_shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate strict-view timeout votes");
         let timeout = wire::TimeoutCertificate {
             round,
             groups: vec![wire::TimeoutVoteGroup {
                 highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xA5; 96],
+                signers: timeout_signers,
+                aggregate_signature: timeout_signature,
             }],
         };
         adapter
@@ -13799,6 +15845,47 @@ mod tests {
         assert_eq!(retry.address, address);
         assert_eq!(retry.change, ProducerReservationChange::Unchanged);
         assert!(!adapter.fail_closed);
+
+        drop(retry);
+        drop(adapter);
+        let (restarted, _startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(2),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen after the WAL won before volatile owner cleanup");
+        assert!(
+            !restarted.producer_continuations.contains_key(&address)
+                && !restarted
+                    .durable_producer_continuations
+                    .contains_key(&address)
+                && !restarted
+                    .restored_dormant_producer_continuations
+                    .contains(&address),
+            "restart must persistently prune an obsolete old-view Reserved producer"
+        );
+        drop(restarted);
+        let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+            directory.path().join("safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(3),
+            [0x11; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen after persisted restored-frontier pruning");
+        assert!(
+            !restarted_again
+                .producer_continuations
+                .contains_key(&address)
+        );
     }
 
     #[test]
@@ -14550,7 +16637,7 @@ mod tests {
     }
 
     #[test]
-    fn persistence_macro_step_budgets_have_exact_five_effect_maximum() {
+    fn persistence_macro_step_budgets_have_exact_four_effect_maximum() {
         let expected = [
             (
                 PersistenceMacroStepClass::ProposalIntent,
@@ -14574,7 +16661,7 @@ mod tests {
             ),
             (
                 PersistenceMacroStepClass::InstallTimeout,
-                PersistenceMacroStepBudget::new(2, 4),
+                PersistenceMacroStepBudget::new(1, 4),
             ),
             (
                 PersistenceMacroStepClass::Decision,
@@ -14604,8 +16691,74 @@ mod tests {
                 .budget()
                 .flattened_effects(),
             MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP,
-            "local TC formation is the unique five-effect persistence witness"
+            "local TC formation is the four-effect persistence witness"
         );
+    }
+
+    #[test]
+    fn quorum_forming_local_timeout_flattens_to_certificate_only() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = reducer::Round::new(tag.height(), tag.view());
+        let context_id = adapter.reducer.context().id();
+
+        for signer_index in [1_u32, 2] {
+            let signer = adapter
+                .registry
+                .validator_id(signer_index)
+                .expect("remote timeout signer belongs to the frozen roster");
+            let retained = adapter
+                .reducer
+                .step(reducer::Event::TimeoutVoteReceived {
+                    tag,
+                    vote: reducer::SignedTimeoutVote::new(
+                        reducer::TimeoutVote::new(context_id, round, signer, None),
+                        reducer::OpaqueSignature::new(vec![
+                            u8::try_from(signer_index)
+                                .expect("small signer index");
+                            96
+                        ]),
+                    ),
+                })
+                .expect("retain the remote timeout share before local signing");
+            assert!(retained.effects().is_empty());
+        }
+
+        let sign = adapter
+            .timeout_elapsed(tag)
+            .expect("persist the local timeout intent");
+        let sign_tag = match sign.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected timeout signing frontier: {effects:?}"),
+        };
+        let formed = adapter
+            .signature_completed(sign_tag, vec![0xA1; 96])
+            .expect("flatten the quorum-forming timeout persistence boundary");
+        assert!(matches!(
+            formed.effects(),
+            [
+                AdapterEffect::EnterView {
+                    tag: entered_tag,
+                    protected_body: None,
+                    ..
+                },
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+                    ..
+                }),
+            ] if entered_tag.view() == tag.view() + 1
+                && certificate.round.view == tag.view()
+                && certificate.groups.iter().any(|group| group.signers.contains(&0))
+        ));
+        assert_eq!(adapter.current_tag().view(), tag.view() + 1);
+        assert!(!adapter.fail_closed);
     }
 
     #[test]
@@ -15016,6 +17169,153 @@ mod tests {
         assert!(matches!(sign.as_slice(), [AdapterEffect::Sign { .. }]));
         assert_eq!(adapter.wal.recovered_records().len(), 1);
         assert_eq!(adapter.reducer.durable_state().last_id().get(), 1);
+    }
+
+    #[test]
+    fn pacemaker_certificate_stays_queued_until_exact_wal_acknowledgement() {
+        use super::super::v2_runtime::{
+            RuntimeQueueConfig, RuntimeSelectedCandidateOwnership, RuntimeSelectedOwnerKind,
+            RuntimeStep, SerializedV2Runtime,
+        };
+
+        let directory = TempDir::new().expect("temporary pending-WAL directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let pending = adapter
+            .reducer
+            .step(reducer::Event::TimeoutElapsed {
+                tag: adapter.current_tag(),
+            })
+            .expect("stage one real TimeoutIntent persistence fence");
+        assert!(matches!(
+            pending.effects(),
+            [reducer::Effect::Persist { .. }]
+        ));
+        assert!(adapter.pacemaker_escape_is_parked());
+        assert!(!adapter.signature_fence_is_active());
+
+        let wire_context = adapter.wire_context.clone();
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic pending-WAL key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        assert!(
+            keys.iter()
+                .zip(&wire_context.roster)
+                .all(|(key, validator)| key.public_key() == validator.validator.public_key())
+        );
+        let round = wire::ConsensusRound {
+            context_id: wire_context.id(),
+            height: wire_context.height,
+            view: 0,
+        };
+        let signers = vec![0, 1, 2];
+        let preimage = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
+                    &preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let certificate = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
+                round,
+                groups: vec![wire::TimeoutVoteGroup {
+                    highest_prepare_qc: None,
+                    signers,
+                    aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                        .expect("aggregate pending-WAL timeout certificate"),
+                }],
+            }),
+        );
+
+        let now = Instant::now();
+        let (mut runtime, startup) = SerializedV2Runtime::new(
+            adapter,
+            startup,
+            now,
+            Duration::from_secs(10),
+            RuntimeQueueConfig::new(4, 1, 1),
+        )
+        .expect("construct runtime across the pending persistence cut");
+        assert!(startup.is_empty());
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime while persistence owns dispatch");
+        runtime
+            .enqueue_network(certificate)
+            .expect("admit the authenticated TC behind the WAL fence");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(
+            runtime
+                .try_step_pacemaker_escape(now)
+                .expect("parked pacemaker observation remains valid")
+                .is_none(),
+            "certified progress cannot cross an unacknowledged safety write"
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(runtime.last_scheduler_ownership().is_none());
+
+        let post_persist = runtime
+            .driver_mut_for_test()
+            .drive_effects(pending.into_effects())
+            .expect("append, fsync, and acknowledge the exact TimeoutIntent");
+        assert!(matches!(
+            post_persist.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+        runtime
+            .observe_effects_with_test_ownership(now, &post_persist)
+            .expect("retain the signer effect's runtime owner");
+        assert!(!runtime.driver().pacemaker_escape_is_parked());
+        assert!(runtime.driver().signature_fence_is_active());
+
+        let escaped = runtime
+            .try_step_pacemaker_escape(now)
+            .expect("post-ack pacemaker selection remains exact")
+            .expect("the queued TC advances after its WAL predecessor");
+        let RuntimeStep::Advanced(effects) = escaped else {
+            panic!("the post-ack TC unexpectedly idled")
+        };
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::EnterView { tag, .. }] if tag.view() == 1
+        ));
+        let evidence = runtime
+            .take_last_scheduler_ownership()
+            .expect("post-ack TC retains one exact scheduler owner");
+        assert_eq!(
+            evidence.selected,
+            RuntimeSelectedOwnerKind::PacemakerProgress
+        );
+        assert!(matches!(
+            evidence.candidate,
+            RuntimeSelectedCandidateOwnership::Exact(_)
+        ));
+        assert_eq!(evidence.validate_exact(), Ok(()));
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("consume the post-ack EnterView ownership");
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(!runtime.driver().fail_closed);
     }
 
     #[test]
@@ -16634,6 +18934,112 @@ mod tests {
     }
 
     #[test]
+    fn locally_signed_timeout_quorum_leads_with_enter_view_and_subsumes_vote() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+
+        for signer in [1, 2] {
+            let retained = adapter
+                .receive_verified(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                        round,
+                        highest_prepare_qc: None,
+                        signer,
+                        signature: vec![signer as u8; 96],
+                    }),
+                ))
+                .expect("retain a remote TimeoutVote before the local timeout");
+            assert_eq!(retained.disposition(), reducer::StepDisposition::Applied);
+            assert!(retained.effects().is_empty());
+        }
+
+        let timeout = adapter
+            .timeout_elapsed(tag)
+            .expect("persist the local timeout intent");
+        let sign_tag = match timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected local TimeoutVote effects: {effects:?}"),
+        };
+        let entered = adapter
+            .signature_completed(sign_tag, vec![0xF2; 96])
+            .expect("the local signature completes the retained timeout quorum")
+            .into_effects();
+
+        assert!(
+            matches!(
+                entered.as_slice(),
+                [
+                    AdapterEffect::EnterView {
+                        tag: entered_tag,
+                        protected_body: None,
+                        ..
+                    },
+                    AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+                        ..
+                    }),
+                ] if entered_tag.view() == round.view + 1
+                    && certificate.round == round
+                    && certificate.groups.iter().any(|group| group.signers.contains(&0))
+            ),
+            "the advancing WAL continuation must lead and its durable TC must subsume the old-view vote: {entered:?}"
+        );
+    }
+
+    #[test]
+    fn locally_signed_timeout_without_quorum_broadcasts_only_the_vote() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: tag.view(),
+        };
+
+        let timeout = adapter
+            .timeout_elapsed(tag)
+            .expect("persist the local timeout intent");
+        let sign_tag = match timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected local TimeoutVote effects: {effects:?}"),
+        };
+        let signed = adapter
+            .signature_completed(sign_tag, vec![0xF3; 96])
+            .expect("complete the non-quorum local TimeoutVote")
+            .into_effects();
+
+        assert!(
+            matches!(
+                signed.as_slice(),
+                [AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+                    ..
+                })] if vote.round == round && vote.signer == 0
+            ),
+            "a non-quorum local timeout must emit only its vote broadcast: {signed:?}"
+        );
+    }
+
+    #[test]
     fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
         let _guard = crate::sumeragi::status::rbc_status_test_guard();
         crate::sumeragi::status::clear_v2_status();
@@ -18122,7 +20528,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn unowned_busy_certificates_roll_back_staged_registry_and_active_subject() {
+    fn unowned_busy_prepare_certificate_rolls_back_staged_registry_and_active_subject() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -18152,66 +20558,27 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![marker; 96],
         };
-        let deferred_qcs = [
-            qc(wire::GlobalPhase::Prepare, 0xE0),
-            qc(wire::GlobalPhase::Commit, 0xE1),
-        ];
-        for (ordinal, certificate) in deferred_qcs.into_iter().enumerate() {
-            let certificate_wire_identity = authenticated_wire_identity(
-                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
-            );
-            let certificate = adapter
-                .registry
-                .qc_to_core(&certificate, &adapter.wire_context)
-                .expect("convert certificate lane fixture");
-            adapter.deferred_progress_inputs.push_back(DeferredInput {
-                admission_ordinal: u128::try_from(ordinal)
-                    .expect("bounded fixture ordinal fits u128")
-                    .saturating_add(1),
-                admission_capability: DeferredAdmissionCapability::for_authenticated_test(
-                    u128::try_from(ordinal)
-                        .expect("bounded fixture ordinal fits u128")
-                        .saturating_add(1),
-                ),
-                event: reducer::Event::QuorumCertificateReceived { tag, certificate },
-                completion_evidence: None,
-                retag_authenticated_ingress: true,
-                priority: DeferredPriority::Progress,
-                protected_progress: false,
-                admission: None,
-                authenticated_wire_identity: Some(certificate_wire_identity),
-                admitted_at: Instant::now(),
-                eligible_skips: 0,
-            });
-        }
-        let deferred_timeout = wire::TimeoutCertificate {
-            round: wire_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xE2; 96],
-            }],
-        };
-        let deferred_timeout_wire_identity = authenticated_wire_identity(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(deferred_timeout.clone()),
+        let deferred_prepare = qc(wire::GlobalPhase::Prepare, 0xE0);
+        let deferred_prepare_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(deferred_prepare.clone()),
         );
-        let deferred_timeout = adapter
+        let deferred_prepare = adapter
             .registry
-            .tc_to_core(&deferred_timeout, &adapter.wire_context)
-            .expect("convert timeout-certificate lane fixture");
+            .qc_to_core(&deferred_prepare, &adapter.wire_context)
+            .expect("convert PrepareQC lane fixture");
         adapter.deferred_progress_inputs.push_back(DeferredInput {
-            admission_ordinal: 4,
-            admission_capability: DeferredAdmissionCapability::for_authenticated_test(4),
-            event: reducer::Event::TimeoutCertificateReceived {
+            admission_ordinal: 1,
+            admission_capability: DeferredAdmissionCapability::for_authenticated_test(1),
+            event: reducer::Event::QuorumCertificateReceived {
                 tag,
-                certificate: deferred_timeout,
+                certificate: deferred_prepare,
             },
             completion_evidence: None,
             retag_authenticated_ingress: true,
             priority: DeferredPriority::Progress,
             protected_progress: false,
             admission: None,
-            authenticated_wire_identity: Some(deferred_timeout_wire_identity),
+            authenticated_wire_identity: Some(deferred_prepare_wire_identity),
             admitted_at: Instant::now(),
             eligible_skips: 0,
         });
@@ -18219,37 +20586,14 @@ mod tests {
         let registry_before = adapter.registry.clone();
         let active_subject_before = adapter.active_subject;
         let deferred_before = adapter.deferred_progress_inputs.clone();
-        for certificate in [
-            qc(wire::GlobalPhase::Prepare, 0xE3),
-            qc(wire::GlobalPhase::Commit, 0xE4),
-        ] {
-            let outcome = adapter
-                .receive_verified(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
-                ))
-                .expect("apply certificate-class backpressure");
-            assert_eq!(
-                outcome.disposition(),
-                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-            );
-            assert_eq!(adapter.deferred_progress_inputs, deferred_before);
-            assert_registry_eq(&adapter.registry, &registry_before);
-            assert_eq!(adapter.active_subject, active_subject_before);
-        }
-
-        let timeout_with_new_high_qc = wire::TimeoutCertificate {
-            round: wire_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: Some(qc(wire::GlobalPhase::Prepare, 0xE5)),
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xE5; 96],
-            }],
-        };
         let outcome = adapter
             .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_with_new_high_qc),
+                wire::ConsensusMessageV2Payload::QuorumCertificate(qc(
+                    wire::GlobalPhase::Prepare,
+                    0xE3,
+                )),
             ))
-            .expect("apply timeout-certificate-class backpressure");
+            .expect("apply PrepareQC-class backpressure");
         assert_eq!(
             outcome.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
@@ -18982,7 +21326,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn adjacent_future_timeout_vote_remains_retryable_until_current_view_advances() {
+    fn certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -18996,15 +21340,13 @@ mod tests {
         let local_timeout = adapter
             .timeout_elapsed(current_tag)
             .expect("start the local TimeoutVote signature fence");
-        let sign_tag = match local_timeout.effects() {
-            [
-                AdapterEffect::Sign {
-                    tag,
-                    request: SignRequest::TimeoutVote(_),
-                },
-            ] => *tag,
-            effects => panic!("unexpected timeout effects: {effects:?}"),
-        };
+        assert!(matches!(
+            local_timeout.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            },]
+        ));
 
         let timeout_certificate = wire::TimeoutCertificate {
             round: current_round,
@@ -19014,37 +21356,22 @@ mod tests {
                 aggregate_signature: vec![0xC1; 96],
             }],
         };
-        let deferred_tc = adapter
+        let installed = adapter
             .receive_verified(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
             ))
-            .expect("defer the current-view TC behind the signature fence");
-        assert_eq!(
-            deferred_tc.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
-
-        let current_vote = wire::TimeoutVote {
-            round: current_round,
-            highest_prepare_qc: None,
-            signer: 1,
-            signature: vec![0xC2],
-        };
-        let current_key = IngressSemanticKey::TimeoutVote {
-            round: current_round,
-            signer: 1,
-        };
-        let deferred_current = adapter
-            .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutVote(current_vote),
-            ))
-            .expect("defer one current-view owner for the signer");
-        assert_eq!(
-            deferred_current.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
-        assert!(adapter.ingress_deliveries.contains_key(&current_key));
-        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+            .expect("authenticated TC bypasses the hung local signature");
+        assert_eq!(installed.disposition(), reducer::StepDisposition::Applied);
+        assert!(matches!(
+            installed.effects(),
+            [AdapterEffect::EnterView {
+                tag,
+                protected_body: None,
+                ..
+            }] if tag.view() == current_round.view + 1
+        ));
+        assert_eq!(adapter.current_tag().view(), current_round.view + 1);
+        assert!(adapter.deferred_progress_inputs.is_empty());
 
         let adjacent_round = wire::ConsensusRound {
             view: current_round
@@ -19062,41 +21389,6 @@ mod tests {
             round: adjacent_round,
             signer: 1,
         };
-        for attempt in 0..2 {
-            let busy = adapter
-                .receive_verified(wire::ConsensusMessageV2::new(
-                    wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
-                ))
-                .expect("adjacent TimeoutVote remains retryable behind its current owner");
-            assert_eq!(
-                busy.disposition(),
-                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy),
-                "pre-advance attempt {attempt} must remain retryable"
-            );
-            assert_eq!(
-                adapter.deferred_progress_inputs.len(),
-                2,
-                "one signer cannot consume both retained timeout-round partitions"
-            );
-            assert!(adapter.ingress_equivocations.contains_key(&adjacent_key));
-            assert!(
-                !adapter.ingress_deliveries.contains_key(&adjacent_key),
-                "unowned adjacent traffic must not be poisoned as delivered"
-            );
-        }
-
-        adapter
-            .signature_completed(sign_tag, vec![0xC4; 96])
-            .expect("complete the local TimeoutVote signature");
-        let enter_view = adapter
-            .drain_deferred()
-            .expect("install the deferred TC in its own macro-step");
-        assert!(enter_view.iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::EnterView { tag, .. } if tag.view() == adjacent_round.view
-        )));
-        assert_eq!(adapter.current_tag().view(), adjacent_round.view);
-
         let applied = adapter
             .receive_verified(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::TimeoutVote(adjacent_vote.clone()),
@@ -19133,7 +21425,7 @@ mod tests {
         let first_timeout = adapter
             .timeout_elapsed(first_tag)
             .expect("start the first local TimeoutVote signature fence");
-        let first_sign_tag = match first_timeout.effects() {
+        let _first_sign_tag = match first_timeout.effects() {
             [
                 AdapterEffect::Sign {
                     tag,
@@ -19142,24 +21434,6 @@ mod tests {
             ] => *tag,
             effects => panic!("unexpected first timeout effects: {effects:?}"),
         };
-
-        let timeout_certificate = wire::TimeoutCertificate {
-            round: first_round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xD7; 96],
-            }],
-        };
-        let deferred_tc = adapter
-            .receive_verified(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
-            ))
-            .expect("defer the TC behind the first signature fence");
-        assert_eq!(
-            deferred_tc.disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
-        );
 
         let old_timeout = wire::TimeoutVote {
             round: first_round,
@@ -19175,7 +21449,7 @@ mod tests {
             .receive_verified(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::TimeoutVote(old_timeout.clone()),
             ))
-            .expect("defer the old-view TimeoutVote behind the TC");
+            .expect("defer the old-view TimeoutVote behind the signature fence");
         assert_eq!(
             deferred_old.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
@@ -19187,7 +21461,7 @@ mod tests {
                 .is_some_and(|record| record.capacity_bypass)
         );
         assert!(adapter.ingress_deliveries.contains_key(&old_key));
-        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
         let old_input = adapter
             .deferred_progress_inputs
             .back()
@@ -19216,21 +21490,23 @@ mod tests {
             duplicate_old.disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
-        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+        assert_eq!(adapter.deferred_progress_inputs.len(), 1);
 
-        let signed = adapter
-            .signature_completed(first_sign_tag, vec![0xD9; 96])
-            .expect("complete the first signature before installing the deferred TC")
-            .into_effects();
-        assert!(
-            signed
-                .iter()
-                .all(|effect| !matches!(effect, AdapterEffect::EnterView { .. }))
-        );
+        let timeout_certificate = wire::TimeoutCertificate {
+            round: first_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xD7; 96],
+            }],
+        };
         let enter_view = adapter
-            .drain_deferred()
-            .expect("install the deferred TC as a separate macro-step");
-        assert!(enter_view.iter().any(|effect| matches!(
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+            ))
+            .expect("authenticated TC bypasses the first signature fence");
+        assert_eq!(enter_view.disposition(), reducer::StepDisposition::Applied);
+        assert!(enter_view.effects().iter().any(|effect| matches!(
             effect,
             AdapterEffect::EnterView { tag, .. } if tag.view() == 1
         )));
@@ -20381,7 +22657,9 @@ mod tests {
             }) if *tag == rebound_tag
         ));
         assert_eq!(
-            adapter.retire_deferred_body_available(rebound_tag, &manifest),
+            adapter
+                .retire_deferred_body_available(rebound_tag, &manifest)
+                .expect("persist rebound completion retirement"),
             1
         );
         assert!(adapter.deferred_completions.is_empty());

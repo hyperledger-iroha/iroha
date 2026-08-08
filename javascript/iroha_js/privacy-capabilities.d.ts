@@ -208,3 +208,107 @@ export function getPrivacyCapabilitiesV1(
   client: PrivacyCapabilitiesNodeClientV1,
   options?: PrivacyCapabilitiesNodeRequestOptions,
 ): Promise<PrivacyCapabilitySnapshotV1>;
+
+export type PrivacyOperationSchemaV1 =
+  | "zk_ace_authorization_action_v1"
+  | "anonymous_pgc_payment_action_v1"
+  | "verange_range_proof_v1"
+  | "zk_ams_admission_and_provisioning_v1"
+  | "vega_credential_presentation_v1"
+  | "zk_x509_identity_presentation_v1"
+  | "jindo_polynomial_evaluation_v1"
+  | "bootle_lantern_credential_presentation_v1"
+  | "orchard_note_action_v1"
+  | "fcmp_membership_payment_v1"
+  | "ivm_private_note_action_v1"
+  | "pq_masp_note_action_v1";
+export type PrivacyExecutionModeV1 =
+  | "authorization_action"
+  | "payment_action"
+  | "component"
+  | "admission_action"
+  | "presentation_action"
+  | "note_action";
+export type PrivacyCapabilityReadinessV1 =
+  | Readonly<{ readiness: "available" | "available-experimental"; detail: null }>
+  | Readonly<{
+      readiness: "unavailable";
+      detail: Extract<PrivacyCompiledProfileResultV1, { status: "unavailable" }>["value"];
+    }>;
+export type PrivacyCapabilityActivationStateV1 = Readonly<{
+  activation_state:
+    | "not-registered"
+    | "proposed"
+    | "active"
+    | "suspended"
+    | "retired";
+  detail: null;
+}>;
+export type PrivacyCapabilityLimitationV1 = Readonly<{
+  limitation: "missing-distribution-wide-knowledge-soundness-evidence";
+  detail: null;
+}>;
+export interface PrivacyExact12CapabilityRowV1 extends PrivacyCapabilityRowV1 {
+  readonly operation_schema: Readonly<{
+    operation_schema: PrivacyOperationSchemaV1;
+    value: null;
+  }>;
+  readonly execution_mode: Readonly<{
+    execution_mode: PrivacyExecutionModeV1;
+    value: null;
+  }>;
+  readonly privacy_feature_mask: number;
+  readonly readiness: PrivacyCapabilityReadinessV1;
+  readonly activation_state: PrivacyCapabilityActivationStateV1;
+  readonly limitation: PrivacyCapabilityLimitationV1 | null;
+}
+
+/** Native-validated immutable view of Torii's canonical Exact12 bytes. */
+export declare class PrivacyExact12CapabilityManifestV1 {
+  private constructor();
+  readonly version: 1;
+  readonly committed_height: PrivacyU64V1;
+  readonly consensus_policy: PrivacyConsensusPolicyV1;
+  readonly protocols: readonly PrivacyExact12CapabilityRowV1[];
+  readonly manifest_digest: PrivacyFixed32BytesV1;
+  canonicalBytes(): Uint8Array;
+}
+
+export interface PrivacyExact12CapabilityAdmissionV1 {
+  readonly manifest_digest: PrivacyFixed32BytesV1;
+  readonly committed_height: PrivacyU64V1;
+  readonly protocol_id: PrivacyProtocolIdV1;
+  readonly operation_schema: PrivacyOperationSchemaV1;
+  readonly execution_mode: PrivacyExecutionModeV1;
+  readonly privacy_feature_mask: number;
+  readonly readiness: "available" | "available-experimental";
+  readonly activation_state: "active";
+  readonly limitation: "missing-distribution-wide-knowledge-soundness-evidence" | null;
+  readonly compiled_profile: PrivacyCompiledProfileBindingsV1 &
+    Readonly<{ protocol_limits: PrivacyProtocolLimitsV1 }>;
+}
+
+export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1: 1;
+export const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES_V1: 262144;
+
+/** Local native catalog bytes; never sufficient to authorize network use. */
+export function compiledProfileCatalogV1(): Uint8Array;
+export function decodePrivacyExact12CapabilityManifestV1(
+  canonicalArchive: ArrayBufferView | ArrayBuffer,
+): PrivacyExact12CapabilityManifestV1;
+export function getPrivacyExact12CapabilityManifestV1(
+  client: PrivacyCapabilitiesNodeClientV1,
+  options?: PrivacyCapabilitiesNodeRequestOptions,
+): Promise<PrivacyExact12CapabilityManifestV1>;
+export function requirePrivacyExact12CapabilityTupleV1(
+  manifest: PrivacyExact12CapabilityManifestV1,
+  protocolId: PrivacyProtocolIdV1,
+): PrivacyExact12CapabilityAdmissionV1;
+export function requirePrivacyExact12CapabilityAdmissionV1(
+  manifest: PrivacyExact12CapabilityManifestV1,
+  protocolId: PrivacyProtocolIdV1,
+): PrivacyExact12CapabilityAdmissionV1;
+
+export declare class PrivacyExact12CapabilityManifestError extends TypeError {
+  readonly path: string;
+}

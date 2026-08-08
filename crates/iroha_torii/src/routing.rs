@@ -174,9 +174,11 @@ pub mod debug_match_flag {
 
 use crate::bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache};
 use crate::sorafs::{
-    PorCoordinatorError, PorStatusExportPageV1, PorStatusFilter, PorStatusPageV1, QuotaExceeded,
-    SorafsAction, SorafsQuotaEnforcer,
-    por::{POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusPageCursor, PorStatusPageLimits},
+    PorCoordinatorError, QuotaExceeded, SorafsAction, SorafsQuotaEnforcer,
+    por::{
+        POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusExportPageV1, PorStatusFilter,
+        PorStatusPageCursor, PorStatusPageLimits, PorStatusPageV1,
+    },
 };
 #[cfg(feature = "app_api")]
 use crate::{
@@ -524,6 +526,13 @@ fn checked_routing_fixture_keypair(
 }
 
 #[cfg(test)]
+fn routing_test_network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([seed; Hash::LENGTH]),
+    ))
+}
+
+#[cfg(test)]
 #[test]
 fn checked_routing_fixture_keypair_rejects_all_zero_seed_material() {
     assert!(
@@ -536,21 +545,14 @@ fn checked_routing_fixture_keypair_rejects_all_zero_seed_material() {
 fn dummy_accepted_transaction() -> iroha_core::tx::AcceptedTransaction<'static> {
     use std::{borrow::Cow, time::Duration};
 
-    use iroha_data_model::{
-        ChainId, Level, account::AccountId, isi::Log, transaction::TransactionBuilder,
-    };
-
-    let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-        .parse()
-        .expect("valid chain id");
+    use iroha_data_model::{Level, account::AccountId, isi::Log, transaction::TransactionBuilder};
     let keypair = checked_routing_fixture_keypair(
         0xe1,
         Algorithm::Ed25519,
         "derive dummy accepted transaction fixture key",
     );
     let authority = AccountId::new(keypair.public_key().clone());
-    let mut builder = TransactionBuilder::new(
-        chain_id,
+    let mut builder = TransactionBuilder::new_genesis(
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -1682,6 +1684,22 @@ where
             .as_ref()
             .expect("telemetry metrics requested without handle");
         telemetry.metrics().await
+    }
+
+    /// Access metrics after a bounded synchronization with the telemetry worker.
+    ///
+    /// Unlike [`Self::metrics`], this reports synchronization failure so a
+    /// consistency-sensitive endpoint can refuse to mix metric frontiers.
+    #[cfg(feature = "telemetry")]
+    #[allow(clippy::future_not_send)]
+    pub async fn metrics_fresh_checked(
+        &self,
+    ) -> Result<&iroha_telemetry::metrics::Metrics, String> {
+        let telemetry = self
+            .telemetry
+            .as_ref()
+            .expect("telemetry metrics requested without handle");
+        telemetry.metrics_fresh_checked().await
     }
 
     /// Map the handle to another gate value while retaining the telemetry instance.
@@ -3589,6 +3607,11 @@ fn quote_app_api_transaction_builder(
     state: &CoreState,
     context: &str,
 ) -> Result<TransactionBuilder> {
+    if builder.payload().domain != TransactionDomain::Network(*state.network_id_ref()) {
+        return Err(conversion_error(format!(
+            "failed to quote {context} transaction fees: payload targets the wrong network"
+        )));
+    }
     let mut payload = builder
         .into_payload()
         .map_err(|err| app_api_transaction_signing_error(context, err))?;
@@ -3799,9 +3822,6 @@ mod app_api_transaction_signing_tests {
 
     #[test]
     fn app_api_transaction_checked_signing_verifies() {
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
         let key_pair = checked_app_api_fixture_keypair(
             b"iroha:torii:routing:test:app-api-transaction-signing".to_vec(),
             "derive Torii app-api transaction signing fixture key",
@@ -3809,7 +3829,7 @@ mod app_api_transaction_signing_tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let tx = sign_app_api_transaction(
             TransactionBuilder::new(
-                chain_id,
+                routing_test_network_id(0x31),
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -3833,7 +3853,7 @@ mod app_api_transaction_signing_tests {
         );
         let authority = AccountId::new(key_pair.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            (*app.chain_id).clone(),
+            *app.state.network_id_ref(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3859,9 +3879,6 @@ mod app_api_transaction_signing_tests {
 
     #[test]
     fn app_api_scaffold_transaction_preserves_requested_authority() {
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
         let requested_authority = AccountId::new(
             checked_app_api_fixture_keypair(
                 b"iroha:torii:routing:test:app-api-scaffold-authority".to_vec(),
@@ -3872,7 +3889,7 @@ mod app_api_transaction_signing_tests {
         );
         let tx = sign_app_api_scaffold_transaction(
             TransactionBuilder::new(
-                chain_id,
+                routing_test_network_id(0x32),
                 requested_authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -4023,9 +4040,8 @@ mod app_api_transaction_signing_tests {
             "derive SCCP attacker authority",
         );
         let authority = AccountId::new(authority_key.public_key().clone());
-        let chain_id: ChainId = "sccp-authority-binding-test".parse().expect("chain id");
         let builder = TransactionBuilder::new(
-            chain_id,
+            routing_test_network_id(0x33),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7665,7 +7681,7 @@ mod sccp_first_release_api_tests {
             iroha_core::state::World::default(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),
-            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+            iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
                 .parse()
                 .expect("Taira chain id"),
         )
@@ -7811,9 +7827,7 @@ mod sccp_first_release_api_tests {
         let transaction_key = KeyPair::try_random().expect("SCCP archive transaction key");
         let authority = AccountId::new(transaction_key.public_key().clone());
         let transaction = TransactionBuilder::new(
-            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
-                .parse()
-                .expect("Taira chain id"),
+            routing_test_network_id(0x34),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7924,7 +7938,7 @@ mod sccp_first_release_api_tests {
             world,
             Arc::clone(&kura),
             iroha_core::query::store::LiveQueryStore::start_test(),
-            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+            iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
                 .parse()
                 .expect("Taira chain id"),
         );
@@ -8961,9 +8975,6 @@ mod sccp_first_release_api_tests {
             },
             payload: BridgeProofPayload::SccpDestination(fixture.bridge_proof.clone()),
         };
-        let chain_id: ChainId = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
-            .parse()
-            .expect("Taira chain id");
         let key_pair = KeyPair::try_from_seed(
             b"iroha:torii:sccp:default-race".to_vec(),
             Algorithm::Secp256k1,
@@ -8971,8 +8982,9 @@ mod sccp_first_release_api_tests {
         .expect("derive generic SCCP signer");
         let authority = AccountId::new(key_pair.public_key().clone());
         let creation_time_ms = 1_700_000_000_777_u64;
+        let mut state = empty_taira_state();
         let mut builder = TransactionBuilder::new(
-            chain_id.clone(),
+            *state.network_id_ref(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -8984,14 +8996,12 @@ mod sccp_first_release_api_tests {
             .expect("sign prepared SCCP payload");
         let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
 
-        let mut state = empty_taira_state();
         let mut changed_pipeline = state.pipeline_snapshot();
         changed_pipeline.gas.accepted_assets = vec!["changed-default#missing".to_owned()];
         state.set_pipeline(changed_pipeline);
 
         let transaction = build_exact_sccp_signed_transaction(
             &state,
-            &chain_id,
             &authority,
             creation_time_ms,
             &bridge_proof,
@@ -9022,7 +9032,6 @@ mod sccp_first_release_api_tests {
             base64::engine::general_purpose::STANDARD.encode(non_default_signature.payload());
         let error = build_exact_sccp_signed_transaction(
             &state,
-            &chain_id,
             &authority,
             creation_time_ms,
             &bridge_proof,
@@ -13012,7 +13021,6 @@ mod multisig_guard_tests {
     #[test]
     fn direct_multisig_signing_rejected_during_admission() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let chain_id: ChainId = "multisig-direct-sign-guard".parse().unwrap();
         let signer_keypair = super::checked_routing_fixture_keypair(
             0xe7,
             iroha_crypto::Algorithm::Ed25519,
@@ -13033,7 +13041,7 @@ mod multisig_guard_tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
         let tx = TransactionBuilder::new(
-            chain_id,
+            *state.network_id_ref(),
             multisig_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -13052,7 +13060,6 @@ mod multisig_guard_tests {
     #[test]
     fn single_signatory_with_multisig_role_is_not_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let chain_id: ChainId = "multisig-role-guard".parse().unwrap();
         let signer = super::checked_routing_fixture_keypair(
             0xe8,
             iroha_crypto::Algorithm::Ed25519,
@@ -13073,7 +13080,7 @@ mod multisig_guard_tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
         let tx = TransactionBuilder::new(
-            chain_id,
+            *state.network_id_ref(),
             signatory_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -13090,7 +13097,6 @@ mod multisig_guard_tests {
     #[test]
     fn multisig_authority_with_custom_instruction_envelope_is_not_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let chain_id: ChainId = "multisig-custom-envelope-guard".parse().unwrap();
         let signer_keypair = super::checked_routing_fixture_keypair(
             0xe9,
             iroha_crypto::Algorithm::Ed25519,
@@ -13113,7 +13119,7 @@ mod multisig_guard_tests {
 
         let custom: InstructionBox = CustomInstruction::new("multisig-envelope").into();
         let tx = TransactionBuilder::new(
-            chain_id,
+            *state.network_id_ref(),
             multisig_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -13130,7 +13136,6 @@ mod multisig_guard_tests {
 
 /// Validate a transaction at Torii ingress and return the accepted form.
 pub fn accept_transaction_for_ingress(
-    chain_id: Arc<ChainId>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
     telemetry: &MaybeTelemetry,
@@ -13212,9 +13217,10 @@ pub fn accept_transaction_for_ingress(
         TransactionEntrypoint::Time(_) => (0, tx_limits.max_signatures().get(), "time"),
     };
     let crypto_cfg = state.crypto();
+    let network_id = *state.network_id_ref();
     match iroha_core::tx::AcceptedTransaction::accept_entrypoint(
         tx,
-        &chain_id,
+        &network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
@@ -13262,19 +13268,15 @@ pub fn accept_transaction_for_ingress(
 
 /// Validate an already decoded signed transaction at Torii ingress.
 pub fn accept_decoded_signed_transaction_for_ingress(
-    chain_id: Arc<ChainId>,
     state: Arc<CoreState>,
     tx: DecodedVersionedSignedTransaction,
     telemetry: &MaybeTelemetry,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
-    accept_decoded_signed_transaction_for_ingress_with_precheck(
-        chain_id, state, tx, telemetry, false, None,
-    )
+    accept_decoded_signed_transaction_for_ingress_with_precheck(state, tx, telemetry, false, None)
 }
 
 /// Validate an already decoded signed transaction at Torii ingress after Ed25519 precheck.
 pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
-    chain_id: Arc<ChainId>,
     state: Arc<CoreState>,
     tx: DecodedVersionedSignedTransaction,
     telemetry: &MaybeTelemetry,
@@ -13339,17 +13341,18 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
     };
 
     let crypto_cfg = state.crypto();
+    let network_id = *state.network_id_ref();
     let accepted = if let Some(err) = precheck_rejection {
         Err(err)
     } else if single_ed25519_prechecked {
         tx.into_accepted_after_single_ed25519_precheck(
-            &chain_id,
+            &network_id,
             max_clock_drift,
             tx_limits,
             crypto_cfg.as_ref(),
         )
     } else {
-        tx.into_accepted(&chain_id, max_clock_drift, tx_limits, crypto_cfg.as_ref())
+        tx.into_accepted(&network_id, max_clock_drift, tx_limits, crypto_cfg.as_ref())
     };
 
     match accepted {
@@ -13696,7 +13699,7 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
 }
 
 fn handle_transaction_inner_sync(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: impl Into<TransactionEntrypoint>,
@@ -13704,7 +13707,7 @@ fn handle_transaction_inner_sync(
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
     reject_ingress_if_queue_capacity_saturated(queue.as_ref(), state.as_ref(), 1)?;
-    let accepted_tx = accept_transaction_for_ingress(chain_id, state.clone(), tx, _telemetry)?;
+    let accepted_tx = accept_transaction_for_ingress(state.clone(), tx, _telemetry)?;
     iroha_logger::debug!(
         tx = %accepted_tx.hash(),
         "transaction accepted by Torii; enqueuing"
@@ -17707,7 +17710,7 @@ fn normalize_asset_transfer_request_shape(
 
 #[cfg(feature = "app_api")]
 impl NormalizedAssetTransfer {
-    fn transaction_builder(&self, chain_id: &ChainId) -> TransactionBuilder {
+    fn transaction_builder(&self, network_id: NetworkId) -> TransactionBuilder {
         let source_asset_id = AssetId::with_scope(
             self.asset_definition_id.clone(),
             self.authority.clone(),
@@ -17727,7 +17730,7 @@ impl NormalizedAssetTransfer {
             );
         }
         let mut builder = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             self.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -17820,7 +17823,6 @@ fn asset_transfer_pipeline_status_response(
                 iroha_torii_shared::PipelineTransactionStatus {
                     kind: "Applied".to_owned(),
                     block_height,
-                    rejection_reason: None,
                 },
                 "local".to_owned(),
                 "state".to_owned(),
@@ -17845,7 +17847,7 @@ async fn submit_asset_transfer_request(
     let (mut transfer, signing_state) =
         normalize_asset_transfer_request_shape(chain_id.as_ref(), request)?;
     let builder = quote_app_api_transaction_builder(
-        transfer.transaction_builder(chain_id.as_ref()),
+        transfer.transaction_builder(*state.network_id_ref()),
         queue.as_ref(),
         state.as_ref(),
         "asset transfer",
@@ -18004,6 +18006,12 @@ mod asset_transfer_request_tests {
 
     const NOW_MS: u64 = 1_700_000_000_000;
 
+    fn fixture_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x42; Hash::LENGTH]),
+        ))
+    }
+
     fn fixture_keypair(seed: u8) -> KeyPair {
         checked_routing_fixture_keypair(
             seed,
@@ -18065,6 +18073,7 @@ mod asset_transfer_request_tests {
 
     fn signed_fixture_request(
         authority_keypair: &KeyPair,
+        network_id: NetworkId,
         creation_time_ms: u64,
         transaction_ttl_ms: u64,
     ) -> (AssetTransferRequestDto, HashOf<SignedTransaction>) {
@@ -18078,7 +18087,7 @@ mod asset_transfer_request_tests {
             normalize_asset_transfer_request_shape(&chain_id, request.clone())
                 .expect("normalize signed fixture shape");
         assert!(matches!(signing_state, AssetTransferSigningState::Prepare));
-        let builder = transfer.transaction_builder(&chain_id);
+        let builder = transfer.transaction_builder(network_id);
         let signature = Signature::try_new(
             authority_keypair.private_key(),
             &builder.payload_hash_bytes(),
@@ -18180,7 +18189,7 @@ mod asset_transfer_request_tests {
         assert!(matches!(state, AssetTransferSigningState::Prepare));
 
         let transaction = transfer
-            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .transaction_builder(fixture_network_id())
             .try_sign(authority_keypair.private_key())
             .expect("sign fixture transaction");
         transaction
@@ -18239,7 +18248,7 @@ mod asset_transfer_request_tests {
         let authority_keypair = fixture_keypair(0x35);
         let (transfer, _) = normalize(fixture_request(&authority_keypair)).expect("normalize");
         let scaffold = sign_app_api_scaffold_transaction(
-            transfer.transaction_builder(&ChainId::from("asset-transfer-test")),
+            transfer.transaction_builder(fixture_network_id()),
             transfer.authority.clone(),
             "asset transfer test",
         )
@@ -18255,7 +18264,7 @@ mod asset_transfer_request_tests {
         )
         .expect("sign payload hash");
         let final_transaction = transfer
-            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .transaction_builder(fixture_network_id())
             .build_with_signature(signature);
         final_transaction
             .verify_signature()
@@ -18296,7 +18305,7 @@ mod asset_transfer_request_tests {
         let (prepared, _) =
             normalize(fixture_request(&authority_keypair)).expect("normalize preparation");
         let signing_hash = prepared
-            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .transaction_builder(fixture_network_id())
             .payload_hash_bytes();
         let exact_signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
             .expect("sign exact payload hash");
@@ -18310,7 +18319,7 @@ mod asset_transfer_request_tests {
             panic!("exact signing pair must select submit")
         };
         submitted
-            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .transaction_builder(fixture_network_id())
             .build_with_signature(signature)
             .verify_signature()
             .expect("exact submit signature verifies");
@@ -18325,7 +18334,7 @@ mod asset_transfer_request_tests {
         };
         assert!(
             tampered
-                .transaction_builder(&ChainId::from("asset-transfer-test"))
+                .transaction_builder(fixture_network_id())
                 .build_with_signature(signature)
                 .verify_signature()
                 .is_err(),
@@ -18341,7 +18350,7 @@ mod asset_transfer_request_tests {
         let base_request = fixture_request(&authority_keypair);
         let (prepared, _) = normalize(base_request.clone()).expect("normalize preparation");
         let signing_hash = prepared
-            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .transaction_builder(fixture_network_id())
             .payload_hash_bytes();
         let signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
             .expect("sign exact payload hash");
@@ -18396,7 +18405,7 @@ mod asset_transfer_request_tests {
                 Ok((transfer, AssetTransferSigningState::Submit { signature, .. })) => {
                     assert!(
                         transfer
-                            .transaction_builder(&ChainId::from("asset-transfer-test"))
+                            .transaction_builder(fixture_network_id())
                             .build_with_signature(signature)
                             .verify_signature()
                             .is_err(),
@@ -18418,7 +18427,7 @@ mod asset_transfer_request_tests {
         let (prepared, _) =
             normalize(fixture_request(&authority_keypair)).expect("normalize preparation");
         let signing_hash = prepared
-            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .transaction_builder(fixture_network_id())
             .payload_hash_bytes();
         let signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
             .expect("sign exact payload hash");
@@ -18598,7 +18607,7 @@ mod asset_transfer_request_tests {
         let authority_keypair = fixture_keypair(0x43);
         let now_ms = current_time_millis();
         let (request, transaction_hash) =
-            signed_fixture_request(&authority_keypair, now_ms, 60_000);
+            signed_fixture_request(&authority_keypair, *state.network_id_ref(), now_ms, 60_000);
 
         let first = submit_asset_transfer_request(
             Arc::clone(&chain_id),
@@ -18656,8 +18665,12 @@ mod asset_transfer_request_tests {
     async fn concurrent_exact_replays_converge_on_one_queue_entry() {
         let (state, queue, chain_id, telemetry) = submission_components();
         let authority_keypair = fixture_keypair(0x46);
-        let (request, transaction_hash) =
-            signed_fixture_request(&authority_keypair, current_time_millis(), 60_000);
+        let (request, transaction_hash) = signed_fixture_request(
+            &authority_keypair,
+            *state.network_id_ref(),
+            current_time_millis(),
+            60_000,
+        );
         let expected_transaction_hash_hex = hex::encode(transaction_hash.as_ref());
 
         let first = submit_asset_transfer_request(
@@ -18704,6 +18717,7 @@ mod asset_transfer_request_tests {
         let creation_time_ms = now_ms.saturating_sub(ASSET_TRANSFER_MAX_TTL_MS + 1);
         let (request, transaction_hash) = signed_fixture_request(
             &fixture_keypair(0x44),
+            *state.network_id_ref(),
             creation_time_ms,
             ASSET_TRANSFER_MAX_TTL_MS,
         );
@@ -18730,6 +18744,7 @@ mod asset_transfer_request_tests {
 
         let (unknown_request, unknown_hash) = signed_fixture_request(
             &fixture_keypair(0x45),
+            *state.network_id_ref(),
             creation_time_ms,
             ASSET_TRANSFER_MAX_TTL_MS,
         );
@@ -18836,7 +18851,7 @@ async fn submit_contract_call_request(
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
-        (*chain_id).clone(),
+        *state.network_id_ref(),
         authority.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -18986,7 +19001,6 @@ fn queued_pipeline_status_response(
         iroha_torii_shared::PipelineTransactionStatus {
             kind: "Queued".to_owned(),
             block_height: None,
-            rejection_reason: None,
         },
         "local".to_owned(),
         "queue".to_owned(),
@@ -19030,10 +19044,10 @@ fn validate_sccp_creation_time(creation_time_ms: Option<u64>) -> Result<()> {
 
 #[cfg(feature = "app_api")]
 fn validate_sccp_taira_chain_id(chain_id: &ChainId) -> Result<()> {
-    if chain_id.to_string() != iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1 {
+    if chain_id.to_string() != iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1 {
         return Err(conversion_error(format!(
             "SCCP submit endpoints require the exact public Taira chain id `{}`",
-            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+            iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
         )));
     }
     Ok(())
@@ -19182,16 +19196,16 @@ fn validate_sccp_transaction_metadata(metadata: &Metadata) -> Result<()> {
 
 #[cfg(feature = "app_api")]
 fn exact_sccp_transaction_builder(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     authority: &AccountId,
     creation_time_ms: u64,
     expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
     payload: &iroha_data_model::transaction::signed::TransactionPayload,
     canonical_payload_bytes: &[u8],
 ) -> Result<TransactionBuilder> {
-    if &payload.chain != chain_id {
+    if payload.domain != TransactionDomain::Network(*network_id) {
         return Err(conversion_error(
-            "prepared SCCP transaction payload targets the wrong chain".to_owned(),
+            "prepared SCCP transaction payload targets the wrong network".to_owned(),
         ));
     }
     if payload.authority != *authority {
@@ -19241,16 +19255,11 @@ fn exact_sccp_transaction_builder(
 
     // The fixed default TTL and absent nonce were validated above. Rehydrate every remaining
     // signature-bound field from the decoded payload and require byte identity before signing.
-    let mut builder = TransactionBuilder::new(
-        payload.chain.clone(),
-        payload.authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    );
-    builder.set_creation_time(Duration::from_millis(payload.creation_time_ms));
-    let builder = builder
-        .with_executable(payload.instructions.clone())
-        .with_fee_payment_intent(payload.fee_payment.clone())
-        .with_metadata(payload.metadata.clone());
+    let builder = TransactionBuilder::from_payload(payload.clone()).map_err(|error| {
+        conversion_error(format!(
+            "prepared SCCP transaction payload is not signable: {error}"
+        ))
+    })?;
     if builder.encode_payload() != canonical_payload_bytes {
         return Err(sccp_internal_error(
             "decoded SCCP TransactionPayload could not be reconstructed byte-identically"
@@ -19262,8 +19271,7 @@ fn exact_sccp_transaction_builder(
 
 #[cfg(feature = "app_api")]
 fn build_exact_sccp_signed_transaction(
-    _state: &CoreState,
-    chain_id: &ChainId,
+    state: &CoreState,
     authority: &AccountId,
     creation_time_ms: u64,
     expected_bridge_proof: &iroha_data_model::bridge::BridgeProof,
@@ -19273,7 +19281,7 @@ fn build_exact_sccp_signed_transaction(
 ) -> Result<SignedTransaction> {
     let (payload, payload_bytes) = decode_sccp_transaction_payload_b64(transaction_payload_b64)?;
     let builder = exact_sccp_transaction_builder(
-        chain_id,
+        state.network_id_ref(),
         authority,
         creation_time_ms,
         expected_bridge_proof,
@@ -19735,7 +19743,6 @@ fn prepare_bridge_proof_submit(
         let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
         let tx = build_exact_sccp_signed_transaction(
             state.as_ref(),
-            chain_id.as_ref(),
             &authority,
             creation_time_ms,
             &bridge_proof,
@@ -19776,8 +19783,11 @@ fn prepare_bridge_proof_submit(
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
         let instruction: dm::InstructionBox =
             dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
-        let mut builder =
-            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into(), fee_payment);
+        let mut builder = dm::TransactionBuilder::new(
+            *state.network_id_ref(),
+            authority.clone().into(),
+            fee_payment,
+        );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         let builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(vec![
             instruction,
@@ -19986,7 +19996,6 @@ fn prepare_bridge_message_submit(
         let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
         let tx = build_exact_sccp_signed_transaction(
             state.as_ref(),
-            chain_id.as_ref(),
             &authority,
             creation_time_ms,
             &bridge_proof,
@@ -20005,7 +20014,6 @@ fn prepare_bridge_message_submit(
             ));
         }
         let routing_plan = scaffold_transaction_routing_plan(
-            chain_id.as_ref(),
             queue.as_ref(),
             state.as_ref(),
             &authority,
@@ -20039,8 +20047,11 @@ fn prepare_bridge_message_submit(
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
         let instruction: dm::InstructionBox =
             dm::SubmitBridgeProof::new(bridge_proof.clone()).into();
-        let mut builder =
-            dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into(), fee_payment);
+        let mut builder = dm::TransactionBuilder::new(
+            *state.network_id_ref(),
+            authority.clone().into(),
+            fee_payment,
+        );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
         let builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(vec![
             instruction,
@@ -22151,7 +22162,6 @@ fn build_multisig_propose_metadata_with_validation_fee(
 
 #[cfg(feature = "app_api")]
 fn scaffold_transaction_routing_plan(
-    chain_id: &ChainId,
     queue: &Queue,
     state: &CoreState,
     routing_authority: &AccountId,
@@ -22162,7 +22172,7 @@ fn scaffold_transaction_routing_plan(
     context: &'static str,
 ) -> Result<RoutingPlan> {
     let mut builder = TransactionBuilder::new(
-        chain_id.clone(),
+        *state.network_id_ref(),
         routing_authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -22188,7 +22198,6 @@ fn scaffold_transaction_routing_plan(
 
 #[cfg(feature = "app_api")]
 fn multisig_immediate_execution_routing_plan(
-    chain_id: &ChainId,
     queue: &Queue,
     state: &CoreState,
     routing_authority: &AccountId,
@@ -22199,7 +22208,6 @@ fn multisig_immediate_execution_routing_plan(
     context: &'static str,
 ) -> Result<RoutingPlan> {
     scaffold_transaction_routing_plan(
-        chain_id,
         queue,
         state,
         routing_authority,
@@ -28350,7 +28358,6 @@ seiyaku BytesPayloadNormalizeTest {
         let (queue, mut event_receiver) = build_paynet_routing_queue();
         let fee_payment = dm::FeePaymentIntent::authority(Vec::new(), None);
         let direct_plan = multisig_immediate_execution_routing_plan(
-            chain_id.as_ref(),
             queue.as_ref(),
             state.as_ref(),
             &signer_account_id,
@@ -28377,7 +28384,7 @@ seiyaku BytesPayloadNormalizeTest {
             proposal_hash,
         )));
         let mut builder = dm::TransactionBuilder::new(
-            chain_id.as_ref().clone(),
+            *state.network_id_ref(),
             signer_account_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -28490,7 +28497,7 @@ seiyaku BytesPayloadNormalizeTest {
         let state = build_state(world);
         let fee_payment = dm::FeePaymentIntent::authority(Vec::new(), None);
         let mut builder = dm::TransactionBuilder::new(
-            chain_id.as_ref().clone(),
+            *state.network_id_ref(),
             signer_one_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -28553,9 +28560,6 @@ seiyaku BytesPayloadNormalizeTest {
         let state = build_state(world);
         install_paynet_routing_state(state.as_ref());
         let (queue, _event_receiver) = build_paynet_routing_queue();
-        let chain_id: ChainId = "multisig-contract-immediate-route-test"
-            .parse()
-            .expect("chain id");
         let paynet_dataspace_id = DataSpaceId::new(10);
         let paynet_lane_id = LaneId::new(2);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
@@ -28567,7 +28571,6 @@ seiyaku BytesPayloadNormalizeTest {
         .expect("contract address");
 
         let plan = multisig_immediate_execution_routing_plan(
-            &chain_id,
             queue.as_ref(),
             state.as_ref(),
             &signer_account_id,
@@ -28943,7 +28946,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     }
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
-        (*chain_id).clone(),
+        *state.network_id_ref(),
         signer_account_id.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -29005,7 +29008,6 @@ pub async fn handle_post_contract_call_multisig_propose(
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
         let routing_plan = if will_execute {
             Some(multisig_immediate_execution_routing_plan(
-                chain_id.as_ref(),
                 queue.as_ref(),
                 state.as_ref(),
                 &signer_account_id,
@@ -29131,7 +29133,7 @@ pub async fn handle_post_contract_call_multisig_approve(
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
-        (*chain_id).clone(),
+        *state.network_id_ref(),
         signer_account_id.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -29295,7 +29297,7 @@ pub async fn handle_post_multisig_cancel(
         let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), cancel_hash);
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
         let mut builder = dm::TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             signer_account_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -29312,7 +29314,7 @@ pub async fn handle_post_multisig_cancel(
             MultisigPropose::new(multisig_account_id.clone(), cancel_instructions, None);
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
         let mut builder = dm::TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             signer_account_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -29514,7 +29516,7 @@ pub async fn handle_post_multisig_propose(
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
-        (*chain_id).clone(),
+        *state.network_id_ref(),
         signer_account_id.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -29588,7 +29590,6 @@ pub async fn handle_post_multisig_propose(
             let tx_hash_hex = hex::encode(tx.hash().as_ref());
             let routing_plan = if will_execute {
                 Some(multisig_immediate_execution_routing_plan(
-                    chain_id.as_ref(),
                     queue.as_ref(),
                     state.as_ref(),
                     &signer_account_id,
@@ -29706,7 +29707,7 @@ pub async fn handle_post_multisig_approve(
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
-        (*chain_id).clone(),
+        *state.network_id_ref(),
         signer_account_id.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -30217,7 +30218,7 @@ async fn execute_account_recovery_mutation(
         resolve_account_recovery_alias(state.as_ref(), &selector.account_alias)?;
     let creation_time_ms = auth.creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = TransactionBuilder::new(
-        (*chain_id).clone(),
+        *state.network_id_ref(),
         auth.signer_account_id.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -31682,7 +31683,7 @@ mod vk_record_input_tests {
 /// POST /v1/zk/vk/register — prepare `RegisterVerifyingKey` for local signing.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_register(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ZkVkRegisterDto>,
@@ -31712,7 +31713,7 @@ pub async fn handle_post_vk_register(
     };
     let builder = quote_app_api_transaction_builder(
         dm::TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             req.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -31727,7 +31728,7 @@ pub async fn handle_post_vk_register(
 /// POST /v1/zk/vk/update — prepare `UpdateVerifyingKey` for local signing.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_update(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ZkVkUpdateDto>,
@@ -31757,7 +31758,7 @@ pub async fn handle_post_vk_update(
     };
     let builder = quote_app_api_transaction_builder(
         dm::TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             req.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -34289,7 +34290,7 @@ pub struct RecordPorVerdictResponseDto {
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_alias_set(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<SetContractAliasDto>,
@@ -34320,7 +34321,7 @@ pub async fn handle_post_contract_alias_set(
     };
     let builder = quote_app_api_transaction_builder(
         dm::TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -34351,7 +34352,7 @@ pub async fn handle_post_sorafs_register_manifest(
     telemetry: MaybeTelemetry,
     transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
-    let register = validate_sorafs_pin_register_transaction(chain_id.as_ref(), &transaction)?;
+    let register = validate_sorafs_pin_register_transaction(state.network_id_ref(), &transaction)?;
     let manifest_constraints =
         manifest_pin_policy_constraints_from_config(&state.gov.sorafs_pin_policy);
     let (_, manifest_digest_bytes) =
@@ -34396,15 +34397,15 @@ const SORAFS_CAPACITY_DECLARATION_DECODE_LIMITS: norito::core::DecodeLimits =
 
 #[cfg(feature = "app_api")]
 fn validate_sorafs_capacity_declaration_transaction<'a>(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     transaction: &'a SignedTransaction,
 ) -> Result<&'a iroha_data_model::isi::sorafs::RegisterCapacityDeclaration> {
     let register = validate_single_signed_instruction::<
         iroha_data_model::isi::sorafs::RegisterCapacityDeclaration,
     >(
-        chain_id,
+        network_id,
         transaction,
-        "sorafs_capacity_declaration_transaction_chain_mismatch",
+        "sorafs_capacity_declaration_transaction_network_mismatch",
         "sorafs_capacity_declaration_transaction_signature_invalid",
         "sorafs_capacity_declaration_transaction_executable_invalid",
         "sorafs_capacity_declaration_transaction_instruction_count_invalid",
@@ -34479,15 +34480,15 @@ fn validate_sorafs_capacity_declaration_transaction<'a>(
 
 #[cfg(feature = "app_api")]
 fn validate_sorafs_capacity_telemetry_transaction<'a>(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     transaction: &'a SignedTransaction,
 ) -> Result<&'a iroha_data_model::isi::sorafs::RecordCapacityTelemetry> {
     let submit = validate_single_signed_instruction::<
         iroha_data_model::isi::sorafs::RecordCapacityTelemetry,
     >(
-        chain_id,
+        network_id,
         transaction,
-        "sorafs_capacity_telemetry_transaction_chain_mismatch",
+        "sorafs_capacity_telemetry_transaction_network_mismatch",
         "sorafs_capacity_telemetry_transaction_signature_invalid",
         "sorafs_capacity_telemetry_transaction_executable_invalid",
         "sorafs_capacity_telemetry_transaction_instruction_count_invalid",
@@ -34553,7 +34554,7 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
     let register =
-        validate_sorafs_capacity_declaration_transaction(chain_id.as_ref(), &transaction)?;
+        validate_sorafs_capacity_declaration_transaction(state.network_id_ref(), &transaction)?;
     ensure_sorafs_quota_authority_registered(state.as_ref(), &transaction)?;
     let quota_subject = sorafs_transaction_quota_subject(&transaction);
     let record = &register.record;
@@ -34597,7 +34598,8 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
     sorafs_limits: Arc<SorafsQuotaEnforcer>,
     transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
-    let submit = validate_sorafs_capacity_telemetry_transaction(chain_id.as_ref(), &transaction)?;
+    let submit =
+        validate_sorafs_capacity_telemetry_transaction(state.network_id_ref(), &transaction)?;
     ensure_sorafs_quota_authority_registered(state.as_ref(), &transaction)?;
     let quota_subject = sorafs_transaction_quota_subject(&transaction);
     let record = submit.record;
@@ -35174,9 +35176,9 @@ const SORAFS_PIN_ALIAS_PROOF_MAX_BYTES: usize = 1024 * 1024;
 
 #[cfg(feature = "app_api")]
 fn validate_single_signed_instruction<'a, T: 'static>(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     transaction: &'a SignedTransaction,
-    chain_code: &'static str,
+    network_code: &'static str,
     signature_code: &'static str,
     executable_code: &'static str,
     instruction_count_code: &'static str,
@@ -35184,10 +35186,10 @@ fn validate_single_signed_instruction<'a, T: 'static>(
     route_description: &str,
     instruction_name: &str,
 ) -> Result<&'a T> {
-    if transaction.chain() != chain_id {
+    if transaction.network_id() != Some(network_id) {
         return Err(sorafs_pin_validation_error(
-            chain_code,
-            format!("signed transaction chain does not match this Torii for {route_description}"),
+            network_code,
+            format!("signed transaction network does not match this Torii for {route_description}"),
         ));
     }
     transaction.verify_signature().map_err(|error| {
@@ -35220,14 +35222,14 @@ fn validate_single_signed_instruction<'a, T: 'static>(
 
 #[cfg(feature = "app_api")]
 fn validate_sorafs_pin_register_transaction<'a>(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     transaction: &'a SignedTransaction,
 ) -> Result<&'a iroha_data_model::isi::sorafs::RegisterPinManifest> {
     let register =
         validate_single_signed_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>(
-            chain_id,
+            network_id,
             transaction,
-            "sorafs_pin_transaction_chain_mismatch",
+            "sorafs_pin_transaction_network_mismatch",
             "sorafs_pin_transaction_signature_invalid",
             "sorafs_pin_transaction_executable_invalid",
             "sorafs_pin_transaction_instruction_count_invalid",
@@ -35555,6 +35557,12 @@ mod sorafs_pin_tests {
         checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
     }
 
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
     fn default_manifest() -> ManifestV1 {
         use sorafs_manifest::{ManifestBuilder, PinPolicy};
         let mut manifest = ManifestBuilder::new()
@@ -35597,19 +35605,18 @@ mod sorafs_pin_tests {
     ) -> iroha_data_model::isi::sorafs::RegisterPinManifest {
         iroha_data_model::isi::sorafs::RegisterPinManifest::new(
             manifest.encode().expect("encode canonical manifest"),
-            5,
             None,
             None,
         )
     }
 
     fn transaction_from_instructions(
-        chain_id: &dm::ChainId,
+        network_id: NetworkId,
         instructions: impl IntoIterator<Item = dm::InstructionBox>,
     ) -> SignedTransaction {
         let key_pair = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
         dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             dm::AccountId::new(key_pair.public_key().clone()).into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -35618,11 +35625,11 @@ mod sorafs_pin_tests {
     }
 
     fn transaction_from_manifest(
-        chain_id: &dm::ChainId,
+        network_id: NetworkId,
         manifest: &ManifestV1,
     ) -> SignedTransaction {
         transaction_from_instructions(
-            chain_id,
+            network_id,
             [dm::InstructionBox::from(instruction_from_manifest(
                 manifest,
             ))],
@@ -35771,7 +35778,7 @@ mod sorafs_pin_tests {
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
-        let transaction = transaction_from_manifest(chain_id.as_ref(), &manifest);
+        let transaction = transaction_from_manifest(*state.network_id_ref(), &manifest);
         let expected_tx_hash = hex::encode(transaction.hash().as_ref());
 
         let resp = handle_post_sorafs_register_manifest(
@@ -35821,11 +35828,10 @@ mod sorafs_pin_tests {
         };
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
         let transaction = transaction_from_instructions(
-            chain_id.as_ref(),
+            *state.network_id_ref(),
             [dm::InstructionBox::from(
                 iroha_data_model::isi::sorafs::RegisterPinManifest::new(
                     legacy_manifest_bytes,
-                    5,
                     None,
                     None,
                 ),
@@ -35855,9 +35861,9 @@ mod sorafs_pin_tests {
     async fn register_manifest_handler_rejects_empty_manifest_payload_before_decode() {
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
         let transaction = transaction_from_instructions(
-            chain_id.as_ref(),
+            *state.network_id_ref(),
             [dm::InstructionBox::from(
-                iroha_data_model::isi::sorafs::RegisterPinManifest::new(Vec::new(), 5, None, None),
+                iroha_data_model::isi::sorafs::RegisterPinManifest::new(Vec::new(), None, None),
             )],
         );
 
@@ -35890,7 +35896,7 @@ mod sorafs_pin_tests {
         let (chain_id, queue, state, telemetry) = handler_context(|state| {
             state.gov.sorafs_pin_policy.require_council_signatures = true;
         });
-        let transaction = transaction_from_manifest(chain_id.as_ref(), &manifest);
+        let transaction = transaction_from_manifest(*state.network_id_ref(), &manifest);
 
         let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
@@ -35930,18 +35936,17 @@ mod sorafs_pin_tests {
 
     #[test]
     fn register_manifest_rejects_zero_successor_digest() {
-        let chain_id: dm::ChainId = "chain".parse().expect("chain id");
+        let network_id = test_network_id(0x51);
         let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
             default_manifest().encode().expect("manifest"),
-            5,
             None,
             Some(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
                 [0; 32],
             )),
         );
         let transaction =
-            transaction_from_instructions(&chain_id, [dm::InstructionBox::from(instruction)]);
-        let err = validate_sorafs_pin_register_transaction(&chain_id, &transaction)
+            transaction_from_instructions(network_id, [dm::InstructionBox::from(instruction)]);
+        let err = validate_sorafs_pin_register_transaction(&network_id, &transaction)
             .expect_err("zero successor digest must fail closed");
         assert_eq!(
             app_validation_error(err).0,
@@ -35994,13 +35999,13 @@ mod sorafs_pin_tests {
 
     #[test]
     fn register_manifest_requires_one_signed_native_instruction() {
-        let chain_id: dm::ChainId = "chain".parse().expect("chain id");
+        let network_id = test_network_id(0x52);
         let register = instruction_from_manifest(&default_manifest());
 
-        let empty = transaction_from_instructions(&chain_id, []);
+        let empty = transaction_from_instructions(network_id, []);
         assert_eq!(
             app_validation_error(
-                validate_sorafs_pin_register_transaction(&chain_id, &empty)
+                validate_sorafs_pin_register_transaction(&network_id, &empty)
                     .expect_err("empty instruction list must fail")
             )
             .0,
@@ -36008,7 +36013,7 @@ mod sorafs_pin_tests {
         );
 
         let two = transaction_from_instructions(
-            &chain_id,
+            network_id,
             [
                 dm::InstructionBox::from(register.clone()),
                 dm::InstructionBox::from(register),
@@ -36016,7 +36021,7 @@ mod sorafs_pin_tests {
         );
         assert_eq!(
             app_validation_error(
-                validate_sorafs_pin_register_transaction(&chain_id, &two)
+                validate_sorafs_pin_register_transaction(&network_id, &two)
                     .expect_err("two instructions must fail")
             )
             .0,
@@ -36024,7 +36029,7 @@ mod sorafs_pin_tests {
         );
 
         let wrong = transaction_from_instructions(
-            &chain_id,
+            network_id,
             [dm::InstructionBox::from(dm::Log::new(
                 dm::Level::INFO,
                 "not a pin registration".to_owned(),
@@ -36032,7 +36037,7 @@ mod sorafs_pin_tests {
         );
         assert_eq!(
             app_validation_error(
-                validate_sorafs_pin_register_transaction(&chain_id, &wrong)
+                validate_sorafs_pin_register_transaction(&network_id, &wrong)
                     .expect_err("wrong instruction must fail")
             )
             .0,
@@ -36041,17 +36046,17 @@ mod sorafs_pin_tests {
     }
 
     #[test]
-    fn register_manifest_requires_matching_chain_and_valid_signature() {
-        let chain_id: dm::ChainId = "chain".parse().expect("chain id");
-        let other_chain: dm::ChainId = "other".parse().expect("chain id");
-        let transaction = transaction_from_manifest(&chain_id, &default_manifest());
+    fn register_manifest_requires_matching_network_and_valid_signature() {
+        let network_id = test_network_id(0x53);
+        let other_network_id = test_network_id(0x54);
+        let transaction = transaction_from_manifest(network_id, &default_manifest());
         assert_eq!(
             app_validation_error(
-                validate_sorafs_pin_register_transaction(&other_chain, &transaction)
-                    .expect_err("chain mismatch must fail")
+                validate_sorafs_pin_register_transaction(&other_network_id, &transaction)
+                    .expect_err("network mismatch must fail")
             )
             .0,
-            "sorafs_pin_transaction_chain_mismatch"
+            "sorafs_pin_transaction_network_mismatch"
         );
 
         let other_key = checked_pin_keypair(0x79, "tampered pin authority");
@@ -36059,7 +36064,7 @@ mod sorafs_pin_tests {
             transaction.with_authority(dm::AccountId::new(other_key.public_key().clone()));
         assert_eq!(
             app_validation_error(
-                validate_sorafs_pin_register_transaction(&chain_id, &tampered)
+                validate_sorafs_pin_register_transaction(&network_id, &tampered)
                     .expect_err("invalid signature must fail")
             )
             .0,
@@ -36078,11 +36083,10 @@ mod sorafs_pin_tests {
         let manifest = default_manifest();
         let proof_bytes = b"alias-proof";
         let transaction = transaction_from_instructions(
-            chain_id.as_ref(),
+            *state.network_id_ref(),
             [dm::InstructionBox::from(
                 iroha_data_model::isi::sorafs::RegisterPinManifest::new(
                     manifest.encode().expect("manifest"),
-                    5,
                     Some(
                         iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
                             namespace: "sora".into(),
@@ -36166,6 +36170,12 @@ mod sorafs_capacity_tests {
         checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
     }
 
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
     fn sample_capacity_declaration() -> CapacityDeclarationV1 {
         CapacityDeclarationV1 {
             version: 1,
@@ -36229,13 +36239,13 @@ mod sorafs_capacity_tests {
     }
 
     fn signed_capacity_transaction(
-        chain_id: &ChainId,
+        network_id: NetworkId,
         authority_key: &iroha_crypto::KeyPair,
         signing_key: &iroha_crypto::KeyPair,
         instructions: impl IntoIterator<Item = dm::InstructionBox>,
     ) -> SignedTransaction {
         dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             dm::AccountId::new(authority_key.public_key().clone()).into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -36244,12 +36254,12 @@ mod sorafs_capacity_tests {
     }
 
     fn signed_capacity_declaration_transaction(
-        chain_id: &ChainId,
+        network_id: NetworkId,
         key_pair: &iroha_crypto::KeyPair,
         record: CapacityDeclarationRecord,
     ) -> SignedTransaction {
         signed_capacity_transaction(
-            chain_id,
+            network_id,
             key_pair,
             key_pair,
             [dm::InstructionBox::from(
@@ -36259,12 +36269,12 @@ mod sorafs_capacity_tests {
     }
 
     fn signed_capacity_telemetry_transaction(
-        chain_id: &ChainId,
+        network_id: NetworkId,
         key_pair: &iroha_crypto::KeyPair,
         record: CapacityTelemetryRecord,
     ) -> SignedTransaction {
         signed_capacity_transaction(
-            chain_id,
+            network_id,
             key_pair,
             key_pair,
             [dm::InstructionBox::from(
@@ -36505,7 +36515,7 @@ mod sorafs_capacity_tests {
         let authority = dm::AccountId::new_multisig(policy);
 
         let tx = dm::TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             authority.into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -36549,7 +36559,7 @@ mod sorafs_capacity_tests {
         let (state, queue, chain_id, telemetry) = test_state_components();
         let kp = checked_capacity_keypair(0x91, "derive capacity declaration fixture key");
         let transaction = signed_capacity_declaration_transaction(
-            chain_id.as_ref(),
+            *state.network_id_ref(),
             &kp,
             sample_capacity_declaration_record(),
         );
@@ -36600,31 +36610,32 @@ mod sorafs_capacity_tests {
     }
 
     #[test]
-    fn capacity_declaration_signed_envelope_rejects_chain_signature_and_instruction_substitution() {
-        let chain_id = ChainId::from("chain");
-        let wrong_chain = ChainId::from("other-chain");
+    fn capacity_declaration_signed_envelope_rejects_network_signature_and_instruction_substitution()
+    {
+        let network_id = test_network_id(0x61);
+        let wrong_network_id = test_network_id(0x62);
         let authority =
             checked_capacity_keypair(0xA1, "derive capacity envelope authority fixture");
         let attacker = checked_capacity_keypair(0xA2, "derive capacity envelope attacker fixture");
 
-        let wrong_chain_transaction = signed_capacity_declaration_transaction(
-            &wrong_chain,
+        let wrong_network_transaction = signed_capacity_declaration_transaction(
+            wrong_network_id,
             &authority,
             sample_capacity_declaration_record(),
         );
         assert_eq!(
             capacity_validation_code(
                 validate_sorafs_capacity_declaration_transaction(
-                    &chain_id,
-                    &wrong_chain_transaction
+                    &network_id,
+                    &wrong_network_transaction
                 )
-                .expect_err("wrong-chain envelope must fail closed")
+                .expect_err("wrong-network envelope must fail closed")
             ),
-            "sorafs_capacity_declaration_transaction_chain_mismatch"
+            "sorafs_capacity_declaration_transaction_network_mismatch"
         );
 
         let forged_transaction = signed_capacity_transaction(
-            &chain_id,
+            network_id,
             &authority,
             &attacker,
             [dm::InstructionBox::from(
@@ -36635,24 +36646,24 @@ mod sorafs_capacity_tests {
         );
         assert_eq!(
             capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&chain_id, &forged_transaction)
+                validate_sorafs_capacity_declaration_transaction(&network_id, &forged_transaction)
                     .expect_err("signature from a different authority must fail closed")
             ),
             "sorafs_capacity_declaration_transaction_signature_invalid"
         );
 
         let no_instructions =
-            signed_capacity_transaction(&chain_id, &authority, &authority, std::iter::empty());
+            signed_capacity_transaction(network_id, &authority, &authority, std::iter::empty());
         assert_eq!(
             capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&chain_id, &no_instructions)
+                validate_sorafs_capacity_declaration_transaction(&network_id, &no_instructions)
                     .expect_err("zero instructions must fail closed")
             ),
             "sorafs_capacity_declaration_transaction_instruction_count_invalid"
         );
 
         let multiple = signed_capacity_transaction(
-            &chain_id,
+            network_id,
             &authority,
             &authority,
             [
@@ -36666,14 +36677,14 @@ mod sorafs_capacity_tests {
         );
         assert_eq!(
             capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&chain_id, &multiple)
+                validate_sorafs_capacity_declaration_transaction(&network_id, &multiple)
                     .expect_err("multiple instructions must fail closed")
             ),
             "sorafs_capacity_declaration_transaction_instruction_count_invalid"
         );
 
         let wrong_instruction = signed_capacity_transaction(
-            &chain_id,
+            network_id,
             &authority,
             &authority,
             [dm::InstructionBox::from(dm::Log::new(
@@ -36683,7 +36694,7 @@ mod sorafs_capacity_tests {
         );
         assert_eq!(
             capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&chain_id, &wrong_instruction)
+                validate_sorafs_capacity_declaration_transaction(&network_id, &wrong_instruction)
                     .expect_err("substituted instruction must fail closed")
             ),
             "sorafs_capacity_declaration_transaction_instruction_invalid"
@@ -36692,21 +36703,21 @@ mod sorafs_capacity_tests {
 
     #[test]
     fn capacity_quota_subject_is_bound_to_transaction_authority() {
-        let chain_id = ChainId::from("chain");
+        let network_id = test_network_id(0x63);
         let authority = checked_capacity_keypair(0xB1, "derive capacity quota authority fixture");
         let other = checked_capacity_keypair(0xB2, "derive alternate quota authority fixture");
         let declaration = signed_capacity_declaration_transaction(
-            &chain_id,
+            network_id,
             &authority,
             sample_capacity_declaration_record(),
         );
         let telemetry = signed_capacity_telemetry_transaction(
-            &chain_id,
+            network_id,
             &authority,
             sample_capacity_telemetry_record(),
         );
         let other_declaration = signed_capacity_declaration_transaction(
-            &chain_id,
+            network_id,
             &other,
             sample_capacity_declaration_record(),
         );
@@ -36724,14 +36735,14 @@ mod sorafs_capacity_tests {
 
     #[test]
     fn capacity_declaration_rejects_noncanonical_bounded_and_mismatched_records() {
-        let chain_id = ChainId::from("chain");
+        let network_id = test_network_id(0x64);
         let key_pair = checked_capacity_keypair(0xA3, "derive capacity record validation fixture");
 
         let mut trailing = sample_capacity_declaration_record();
         trailing.declaration.push(0);
-        let transaction = signed_capacity_declaration_transaction(&chain_id, &key_pair, trailing);
+        let transaction = signed_capacity_declaration_transaction(network_id, &key_pair, trailing);
         let code = capacity_validation_code(
-            validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+            validate_sorafs_capacity_declaration_transaction(&network_id, &transaction)
                 .expect_err("trailing payload data must fail closed"),
         );
         assert!(
@@ -36745,10 +36756,10 @@ mod sorafs_capacity_tests {
 
         let mut oversized = sample_capacity_declaration_record();
         oversized.declaration = vec![0xA5; SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES + 1];
-        let transaction = signed_capacity_declaration_transaction(&chain_id, &key_pair, oversized);
+        let transaction = signed_capacity_declaration_transaction(network_id, &key_pair, oversized);
         assert_eq!(
             capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+                validate_sorafs_capacity_declaration_transaction(&network_id, &transaction)
                     .expect_err("oversized payload must fail before decode")
             ),
             "sorafs_capacity_declaration_payload_size_invalid"
@@ -36757,10 +36768,10 @@ mod sorafs_capacity_tests {
         let mut provider_mismatch = sample_capacity_declaration_record();
         provider_mismatch.provider_id = ProviderId::new([0xFE; 32]);
         let transaction =
-            signed_capacity_declaration_transaction(&chain_id, &key_pair, provider_mismatch);
+            signed_capacity_declaration_transaction(network_id, &key_pair, provider_mismatch);
         assert_eq!(
             capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+                validate_sorafs_capacity_declaration_transaction(&network_id, &transaction)
                     .expect_err("provider summary mismatch must fail closed")
             ),
             "sorafs_capacity_declaration_record_mismatch"
@@ -36769,10 +36780,10 @@ mod sorafs_capacity_tests {
         let mut capacity_mismatch = sample_capacity_declaration_record();
         capacity_mismatch.committed_capacity_gib += 1;
         let transaction =
-            signed_capacity_declaration_transaction(&chain_id, &key_pair, capacity_mismatch);
+            signed_capacity_declaration_transaction(network_id, &key_pair, capacity_mismatch);
         assert_eq!(
             capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+                validate_sorafs_capacity_declaration_transaction(&network_id, &transaction)
                     .expect_err("capacity summary mismatch must fail closed")
             ),
             "sorafs_capacity_declaration_record_mismatch"
@@ -36787,7 +36798,7 @@ mod sorafs_capacity_tests {
         let provider_hex = hex::encode([0x11; 32]);
         let kp = checked_capacity_keypair(0x95, "derive capacity telemetry fixture key");
         let transaction = signed_capacity_telemetry_transaction(
-            chain_id.as_ref(),
+            *state.network_id_ref(),
             &kp,
             sample_capacity_telemetry_record(),
         );
@@ -36826,7 +36837,7 @@ mod sorafs_capacity_tests {
         let (state, queue, chain_id, telemetry) = test_state_components();
         let key_pair = checked_capacity_keypair(0x97, "derive capacity replay fixture key");
         let transaction = signed_capacity_telemetry_transaction(
-            chain_id.as_ref(),
+            *state.network_id_ref(),
             &key_pair,
             sample_capacity_telemetry_record(),
         );
@@ -36843,7 +36854,7 @@ mod sorafs_capacity_tests {
         .await
         .expect("first submission must be queued");
 
-        validate_sorafs_capacity_telemetry_transaction(chain_id.as_ref(), &transaction)
+        validate_sorafs_capacity_telemetry_transaction(state.network_id_ref(), &transaction)
             .expect("the signed transaction remains structurally valid");
         assert!(
             handle_post_sorafs_record_capacity_telemetry(
@@ -36862,7 +36873,7 @@ mod sorafs_capacity_tests {
 
     #[test]
     fn capacity_telemetry_rejects_invalid_accounting_and_replay_nonce() {
-        let chain_id = ChainId::from("chain");
+        let network_id = test_network_id(0x65);
         let kp = checked_capacity_keypair(0x96, "derive invalid capacity telemetry fixture key");
 
         let mut invalid_records = Vec::new();
@@ -36889,10 +36900,10 @@ mod sorafs_capacity_tests {
         invalid_records.push(invalid);
 
         for record in invalid_records {
-            let transaction = signed_capacity_telemetry_transaction(&chain_id, &kp, record);
+            let transaction = signed_capacity_telemetry_transaction(network_id, &kp, record);
             assert_eq!(
                 capacity_validation_code(
-                    validate_sorafs_capacity_telemetry_transaction(&chain_id, &transaction)
+                    validate_sorafs_capacity_telemetry_transaction(&network_id, &transaction)
                         .expect_err("invalid capacity accounting must fail closed")
                 ),
                 "sorafs_capacity_telemetry_record_invalid"
@@ -36902,10 +36913,10 @@ mod sorafs_capacity_tests {
         for invalid_nonce in [0, 119, 121] {
             let mut record = sample_capacity_telemetry_record();
             record.nonce = invalid_nonce;
-            let transaction = signed_capacity_telemetry_transaction(&chain_id, &kp, record);
+            let transaction = signed_capacity_telemetry_transaction(network_id, &kp, record);
             assert_eq!(
                 capacity_validation_code(
-                    validate_sorafs_capacity_telemetry_transaction(&chain_id, &transaction)
+                    validate_sorafs_capacity_telemetry_transaction(&network_id, &transaction)
                         .expect_err("invalid capacity telemetry nonce must fail closed")
                 ),
                 "sorafs_capacity_telemetry_nonce_invalid"
@@ -43760,9 +43771,12 @@ mod tx_query_filter_tests {
         metadata: dm::Metadata,
         fee_payment: dm::FeePaymentIntent,
     ) -> iroha_data_model::query::CommittedTransaction {
-        let chain: dm::ChainId = "test-chain".parse().unwrap();
         // Build External signed tx with explicit creation time using the provided authority/key.
-        let mut builder = dm::TransactionBuilder::new(chain, authority.clone(), fee_payment);
+        let mut builder = dm::TransactionBuilder::new(
+            routing_test_network_id(0x71),
+            authority.clone(),
+            fee_payment,
+        );
         builder.set_creation_time(core::time::Duration::from_millis(created_ms));
         builder = builder.with_metadata(metadata);
         builder = builder.with_executable(dm::Executable::Instructions(ConstVec::from(Vec::new())));
@@ -43878,7 +43892,7 @@ mod tx_query_filter_tests {
         legacy_metadata.insert("gas_limit".parse().unwrap(), Json::new(1_u64));
         assert!(
             dm::TransactionBuilder::new(
-                "test-chain".parse().unwrap(),
+                routing_test_network_id(0x72),
                 authority,
                 dm::FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(1)),
             )
@@ -43895,9 +43909,8 @@ mod tx_query_filter_tests {
         created_ms: u64,
         instructions: Vec<dm::InstructionBox>,
     ) -> iroha_data_model::query::CommittedTransaction {
-        let chain: dm::ChainId = "test-chain".parse().unwrap();
         let mut builder = dm::TransactionBuilder::new(
-            chain,
+            routing_test_network_id(0x73),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -45118,7 +45131,6 @@ mod explorer_lookup_tests {
             query,
         ));
 
-        let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
         let (authority, authority_key) =
             checked_explorer_lookup_account(0x20, "derive explorer lookup authority fixture key");
         let mut hashes = Vec::new();
@@ -45127,8 +45139,7 @@ mod explorer_lookup_tests {
             let gas_limit = executable
                 .requires_transaction_gas_limit()
                 .then(|| NonZeroU64::new(10_000).expect("non-zero test gas limit"));
-            let mut builder = dm::TransactionBuilder::new(
-                chain.clone(),
+            let mut builder = dm::TransactionBuilder::new_genesis(
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit),
             );
@@ -45179,13 +45190,11 @@ mod explorer_lookup_tests {
             query,
         ));
 
-        let chain: dm::ChainId = "test-chain".parse().expect("valid chain id");
         let (authority, authority_key) = checked_explorer_lookup_account(
             0x22,
             "derive Kura-only explorer authority fixture key",
         );
-        let mut builder = dm::TransactionBuilder::new(
-            chain,
+        let mut builder = dm::TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -50155,13 +50164,13 @@ mod transaction_ingress_overload_tests {
     use super::*;
 
     fn signed_log_transaction(
-        chain_id: &ChainId,
+        network_id: NetworkId,
         key_pair: &KeyPair,
         label: &str,
     ) -> SignedTransaction {
         let authority = AccountId::new(key_pair.public_key().clone());
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -50231,7 +50240,7 @@ mod transaction_ingress_overload_tests {
         let chain_id: Arc<ChainId> = Arc::new("overload-chain".parse().expect("valid chain id"));
         let first_key_pair =
             checked_transaction_ingress_keypair(0x9A, "derive first ingress fixture signer key");
-        let first = signed_log_transaction(&chain_id, &first_key_pair, "first");
+        let first = signed_log_transaction(*state.network_id_ref(), &first_key_pair, "first");
         handle_transaction(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
@@ -50245,7 +50254,7 @@ mod transaction_ingress_overload_tests {
 
         let second_key_pair =
             checked_transaction_ingress_keypair(0x9B, "derive second ingress fixture signer key");
-        let second = signed_log_transaction(&chain_id, &second_key_pair, "second");
+        let second = signed_log_transaction(*state.network_id_ref(), &second_key_pair, "second");
         handle_transaction(
             Arc::clone(&chain_id),
             Arc::clone(&queue),
@@ -51119,7 +51128,7 @@ mod validation_fee_torii_ingress_tests {
             Metadata::default()
         };
         TransactionBuilder::new(
-            state.chain_id.clone(),
+            *state.network_id_ref(),
             user.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -51331,7 +51340,7 @@ mod validation_fee_torii_ingress_tests {
         };
         let signed = |instructions: Vec<InstructionBox>, coordinate| {
             TransactionBuilder::new(
-                state.chain_id.clone(),
+                *state.network_id_ref(),
                 user.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -51614,7 +51623,7 @@ mod lane_admission_metrics_tests {
         let account_id = AccountId::new(key_pair.public_key().clone());
         let instruction = Log::new(Level::INFO, "ingress-metric".to_string());
         let tx = TransactionBuilder::new(
-            chain_id.as_ref().clone(),
+            *state.network_id_ref(),
             account_id,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -51891,7 +51900,7 @@ mod hot_path_load_profile_tests {
         for index in 0..TX_WARMUP_SAMPLES {
             let instruction = Log::new(Level::INFO, format!("torii-load-profile-warmup-{index}"));
             let tx = TransactionBuilder::new(
-                chain_id.as_ref().clone(),
+                *tx_state.network_id_ref(),
                 tx_authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -51913,7 +51922,7 @@ mod hot_path_load_profile_tests {
             .map(|index| {
                 let instruction = Log::new(Level::INFO, format!("torii-load-profile-{index}"));
                 TransactionBuilder::new(
-                    chain_id.as_ref().clone(),
+                    *tx_state.network_id_ref(),
                     tx_authority.clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -59931,7 +59940,6 @@ fn normalize_account_onboarding_request(
                 | "CanDelegateAccountAliasResolution"
                 | "CanManageFeeSponsorProgram"
                 | "CanEnrollFeeSponsorProgram"
-                | "CanWithdrawFeeSponsorProgram"
         ) {
             return Err(onboarding_invalid_request(
                 "scoped permissions cannot be requested as unscoped onboarding additions",
@@ -60600,7 +60608,7 @@ pub async fn handle_v1_accounts_onboard_apply(
         return Ok((StatusCode::OK, response));
     }
     let mut builder = TransactionBuilder::new(
-        app.chain_id.as_ref().clone(),
+        *app.state.network_id_ref(),
         signer.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -60761,7 +60769,7 @@ pub async fn handle_v1_accounts_faucet(
     )));
 
     let mut builder = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         faucet.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -62075,7 +62083,7 @@ pub async fn handle_v1_space_directory_manifests(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_publish(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     crate::NoritoJson(payload): crate::NoritoJson<SpaceDirectoryManifestPublishDto>,
@@ -62102,7 +62110,7 @@ pub async fn handle_post_space_directory_manifest_publish(
     let isi = PublishSpaceDirectoryManifest { manifest };
     let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             authority.into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -62120,7 +62128,7 @@ pub async fn handle_post_space_directory_manifest_publish(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_revoke(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     crate::NoritoJson(payload): crate::NoritoJson<SpaceDirectoryManifestRevokeDto>,
@@ -62147,7 +62155,7 @@ pub async fn handle_post_space_directory_manifest_revoke(
     };
     let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             authority.into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -66220,14 +66228,14 @@ mod explorer_asset_definition_econometrics_tests {
             .try_into()
             .unwrap_or(u64::MAX);
 
-        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let network_id = *state.network_id_ref();
         let asset_alice = dm::AssetId::new(def_id.clone(), alice_id.clone().into());
         let asset_bob = dm::AssetId::new(def_id.clone(), bob_id.clone().into());
 
         // Issuance within 1h/24h/7d: mint 100 to Alice.
         let mint_ms = now_ms.saturating_sub(50 * 60 * 1000);
         let mut txb_mint = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             exec_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -66244,7 +66252,7 @@ mod explorer_asset_definition_econometrics_tests {
         // Velocity: one transfer 2h ago (outside 1h, inside 24h/7d).
         let transfer_ms = now_ms.saturating_sub(2 * 60 * 60 * 1000);
         let mut txb_transfer = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -66275,7 +66283,7 @@ mod explorer_asset_definition_econometrics_tests {
         );
         let batch = dm::TransferAssetBatch::new(vec![entry_a, entry_b]);
         let mut txb_batch = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -66288,7 +66296,7 @@ mod explorer_asset_definition_econometrics_tests {
         // Issuance within 30d series but outside 7d: burn 5 from Bob.
         let burn_ms = now_ms.saturating_sub(10 * 24 * 60 * 60 * 1000);
         let mut txb_burn = dm::TransactionBuilder::new(
-            chain_id,
+            network_id,
             bob_id.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -70187,7 +70195,7 @@ fn build_usage_trigger(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_plan(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<SubscriptionPlanCreateDto>,
@@ -70221,7 +70229,7 @@ pub async fn handle_post_v1_subscription_plan(
 
     let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -71025,7 +71033,7 @@ pub async fn handle_post_v1_subscription_charge_now(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_usage(
-    chain_id: Arc<ChainId>,
+    _chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     subscription_id: NftId,
@@ -71048,7 +71056,7 @@ pub async fn handle_post_v1_subscription_usage(
     let instruction = ExecuteTrigger::new(trigger_id).with_args(usage_args);
     let builder = quote_app_api_transaction_builder(
         TransactionBuilder::new(
-            (*chain_id).clone(),
+            *state.network_id_ref(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -75816,7 +75824,23 @@ pub async fn handle_status(
         ));
     }
 
-    let mut status = Status::from(telemetry.metrics().await);
+    // Keep the Kura-derived total and semantic non-empty counters on the same
+    // classified frontier before replacing total height with the authoritative
+    // applied-state height below. A lazy snapshot can otherwise transiently
+    // publish `blocks = N` with `blocks_non_empty = N - 1` for a valid
+    // NPoS-effects-only block and falsely report an empty block.
+    let metrics =
+        telemetry
+            .metrics_fresh_checked()
+            .await
+            .map_err(|error| Error::AppServiceUnavailable {
+                code: "status_metrics_unavailable",
+                message: format!(
+                    "status metrics could not reach a fresh classified frontier: {error}"
+                ),
+            })?;
+    let mut status = Status::from(metrics);
+    ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
     normalize_status_block_visibility(&mut status, authoritative_block_height);
     if !nexus_enabled {
         status.strip_nexus();
@@ -75882,6 +75906,26 @@ pub async fn handle_status(
 }
 
 #[cfg(feature = "telemetry")]
+fn ensure_status_metrics_match_authoritative_height(
+    status: &Status,
+    authoritative_block_height: Option<u64>,
+) -> std::result::Result<(), Error> {
+    let Some(authoritative_block_height) = authoritative_block_height else {
+        return Ok(());
+    };
+    if status.blocks != authoritative_block_height {
+        return Err(Error::AppServiceUnavailable {
+            code: "status_metrics_stale",
+            message: format!(
+                "status metrics classified height {} while applied state is at height {authoritative_block_height}; retry",
+                status.blocks
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "telemetry")]
 /// Anchor the public chain-height field to applied state.
 ///
 /// The Prometheus block counter is populated by a lazy Kura scan and can trail
@@ -75904,7 +75948,41 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
 mod status_block_visibility_tests {
     use iroha_telemetry::metrics::SumeragiConsensusStatus;
 
-    use super::{Status, normalize_status_block_visibility};
+    use super::{
+        Error, Status, ensure_status_metrics_match_authoritative_height,
+        normalize_status_block_visibility,
+    };
+
+    #[test]
+    fn stale_classified_height_is_retriable_instead_of_publishing_a_false_empty_gap() {
+        let status = Status {
+            blocks: 2,
+            blocks_non_empty: 2,
+            ..Status::default()
+        };
+
+        let error = ensure_status_metrics_match_authoritative_height(&status, Some(3))
+            .expect_err("an authoritative height ahead of classification must be retriable");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "status_metrics_stale",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn matching_classified_and_authoritative_heights_are_publishable() {
+        let status = Status {
+            blocks: 3,
+            blocks_non_empty: 3,
+            ..Status::default()
+        };
+
+        ensure_status_metrics_match_authoritative_height(&status, Some(3))
+            .expect("a single classified frontier is publishable");
+    }
 
     #[test]
     fn authoritative_state_height_replaces_lagging_and_leading_counters() {

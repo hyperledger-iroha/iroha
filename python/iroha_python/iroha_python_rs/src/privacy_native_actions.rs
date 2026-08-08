@@ -74,13 +74,13 @@ use iroha_core::{
     },
     privacy_state::derive_privacy_pgc_account_state_root_v1,
 };
-use iroha_crypto::{Hash, PrivateKey, PublicKey};
+use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetDefinitionId},
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
     nexus::DataSpaceId,
-    prelude::{AccountId, ChainId},
+    prelude::{AccountId, ChainId, NetworkId},
     privacy::{
         AnonymousPgcKOutOfNStatementV1, BootleLanternAttributeValueV1,
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
@@ -292,6 +292,8 @@ pub fn privacy_native_action_capability_for_protocol_v1(
 /// Exact signature-bound transaction fields for one direct native action.
 #[derive(Clone)]
 pub struct PrivacyActionTransactionContextV1 {
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Chain selected by the signed transaction and every native transcript.
     pub chain_id: ChainId,
     /// Exact direct single-key authority.
@@ -312,6 +314,7 @@ impl fmt::Debug for PrivacyActionTransactionContextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PrivacyActionTransactionContextV1")
+            .field("network_id", &self.network_id)
             .field("chain_id", &self.chain_id)
             .field("authority", &self.authority)
             .field("creation_time", &self.creation_time)
@@ -923,7 +926,7 @@ fn transaction_payload(
     envelope: Option<PrivacyProofEnvelopeV1>,
 ) -> Result<TransactionPayload, PrivacyNativeActionErrorV1> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -1094,6 +1097,14 @@ fn require_genesis(canonical_genesis_hash: [u8; 32]) -> Result<(), PrivacyNative
     Ok(())
 }
 
+pub(crate) fn network_id_from_genesis_hash_bytes(canonical_genesis_hash: [u8; 32]) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            canonical_genesis_hash,
+        )),
+    )
+}
+
 fn validate_action_preflight(
     context: &PrivacyActionTransactionContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1101,6 +1112,9 @@ fn validate_action_preflight(
 ) -> Result<(), PrivacyNativeActionErrorV1> {
     require_genesis(canonical_genesis_hash)?;
     validate_context(context)?;
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(PrivacyNativeActionErrorV1::at("transaction-network-id"));
+    }
     validate_signing_authority(&context.authority, private_key)
 }
 
@@ -1140,6 +1154,7 @@ pub fn build_signed_zk_ace_authorization_action_v1(
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = ZkAcePrivacyActionTransactionContextV1 {
+        network_id: context.network_id,
         chain_id: context.chain_id,
         authority: context.authority,
         creation_time: context.creation_time,
@@ -1171,6 +1186,7 @@ pub fn build_signed_jindo_polynomial_evaluation_action_v1(
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = JindoPrivacyActionTransactionContextV1 {
+        network_id: context.network_id,
         chain_id: context.chain_id,
         authority: context.authority,
         creation_time: context.creation_time,
@@ -1201,6 +1217,7 @@ pub fn build_signed_vega_credential_presentation_action_v1(
 ) -> Result<SignedPrivacyActionV1, PrivacyNativeActionErrorV1> {
     validate_action_preflight(&context, canonical_genesis_hash, private_key)?;
     let native_context = VegaPrivacyActionTransactionContextV1 {
+        network_id: context.network_id,
         chain_id: context.chain_id,
         authority: context.authority,
         creation_time: context.creation_time,
@@ -1273,9 +1290,14 @@ fn validate_zk_x509_action_statement_v1(
 /// sign or submit a proof.
 pub fn prepare_zk_x509_identity_presentation_action_intent_v1(
     context: &PrivacyActionTransactionContextV1,
+    canonical_genesis_hash: [u8; 32],
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyNativeActionErrorV1> {
+    require_genesis(canonical_genesis_hash)?;
     validate_context(context)?;
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(PrivacyNativeActionErrorV1::at("transaction-network-id"));
+    }
     let profile = zk_x509_release_candidate_profile_material_v1()
         .map_err(|_| PrivacyNativeActionErrorV1::at("zk-x509-release-candidate-profile"))?;
     validate_zk_x509_action_statement_v1(context, profile, statement, false)?;
@@ -1502,6 +1524,7 @@ fn zk_ams_transaction_context(
     context: &PrivacyActionTransactionContextV1,
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
+        network_id: context.network_id,
         chain_id: context.chain_id.clone(),
         authority: context.authority.clone(),
         creation_time: context.creation_time,
@@ -2766,6 +2789,7 @@ mod tests {
     fn action_context() -> PrivacyActionTransactionContextV1 {
         let private_key = signing_key();
         PrivacyActionTransactionContextV1 {
+            network_id: network_id_from_genesis_hash_bytes([1; 32]),
             chain_id: ChainId::from("privacy-native-actions-test-v1"),
             authority: AccountId::new(PublicKey::from(private_key)),
             creation_time: Duration::from_millis(1_800_000_000_123),
@@ -3138,6 +3162,13 @@ mod tests {
         );
 
         assert_eq!(
+            validate_action_preflight(&context, [2; 32], &foreign_signing_key())
+                .expect_err("foreign transaction network must fail before authority inspection")
+                .stage(),
+            "transaction-network-id"
+        );
+
+        assert_eq!(
             validate_action_preflight(&context, [1; 32], &foreign_signing_key())
                 .expect_err("foreign authority key must fail before proving")
                 .stage(),
@@ -3198,13 +3229,29 @@ mod tests {
 
     #[test]
     fn x509_two_stage_candidate_action_is_exact_and_production_signing_fails_closed() {
-        let context = action_context();
         let genesis = [0xA5; 32];
+        let mut context = action_context();
+        context.network_id = network_id_from_genesis_hash_bytes(genesis);
         let candidate_profile = zk_x509_release_candidate_profile_material_v1()
             .expect("deterministic X509 release-candidate profile material");
         let mut statement = x509_draft_statement(&context);
-        let intent = prepare_zk_x509_identity_presentation_action_intent_v1(&context, &statement)
-            .expect("draft statement yields one intent");
+        assert_eq!(
+            prepare_zk_x509_identity_presentation_action_intent_v1(&context, [0; 32], &statement,)
+                .expect_err("reserved genesis must fail unsigned preparation")
+                .stage(),
+            "canonical-genesis-hash"
+        );
+        assert_eq!(
+            prepare_zk_x509_identity_presentation_action_intent_v1(
+                &context, [0xA6; 32], &statement,
+            )
+            .expect_err("foreign transaction network must fail unsigned preparation")
+            .stage(),
+            "transaction-network-id"
+        );
+        let intent =
+            prepare_zk_x509_identity_presentation_action_intent_v1(&context, genesis, &statement)
+                .expect("draft statement yields one intent");
         assert_ne!(intent.as_bytes(), &[0; 32]);
         statement.context.transaction_intent_digest = intent;
         let proof = x509_test_proof(&statement, genesis);
@@ -3269,9 +3316,13 @@ mod tests {
 
         let mut already_bound = statement.clone();
         assert_eq!(
-            prepare_zk_x509_identity_presentation_action_intent_v1(&context, &already_bound)
-                .expect_err("prepare accepts only a zero-intent draft")
-                .stage(),
+            prepare_zk_x509_identity_presentation_action_intent_v1(
+                &context,
+                genesis,
+                &already_bound,
+            )
+            .expect_err("prepare accepts only a zero-intent draft")
+            .stage(),
             "zk-x509-intent-state"
         );
         already_bound.context.transaction_intent_digest =

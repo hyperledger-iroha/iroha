@@ -26,6 +26,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 import org.hyperledger.iroha.android.util.HashLiteral;
@@ -36,7 +37,7 @@ final class TransactionPayloadFixtures {
       Collections.unmodifiableList(
           Arrays.asList(
               "name",
-              "chain",
+              "network_id",
               "authority",
               "creation_time_ms",
               "time_to_live_ms",
@@ -49,7 +50,7 @@ final class TransactionPayloadFixtures {
   private static final List<String> PAYLOAD_FIELDS =
       Collections.unmodifiableList(
           Arrays.asList(
-              "chain",
+              "network_id",
               "authority",
               "creation_time_ms",
               "time_to_live_ms",
@@ -118,7 +119,7 @@ final class TransactionPayloadFixtures {
 
   static final class Fixture {
     private final String name;
-    private final String chain;
+    private final NetworkId networkId;
     private final String authority;
     private final long creationTimeMs;
     private final Optional<Long> timeToLiveMs;
@@ -128,7 +129,7 @@ final class TransactionPayloadFixtures {
 
     private Fixture(
         final String name,
-        final String chain,
+        final NetworkId networkId,
         final String authority,
         final long creationTimeMs,
         final Optional<Long> timeToLiveMs,
@@ -136,7 +137,7 @@ final class TransactionPayloadFixtures {
         final Map<String, Object> payload,
         final String payloadBase64) {
       this.name = name;
-      this.chain = chain;
+      this.networkId = networkId;
       this.authority = authority;
       this.creationTimeMs = creationTimeMs;
       this.timeToLiveMs = timeToLiveMs;
@@ -154,7 +155,8 @@ final class TransactionPayloadFixtures {
       requireExactFields(map, FIXTURE_FIELDS, name, "top-level");
       final Map<String, Object> payload = asMap(map.get("payload"), "payload", name);
       requireExactFields(payload, PAYLOAD_FIELDS, name, "payload");
-      final String chain = asString(map.get("chain"), name + ".chain");
+      final NetworkId networkId =
+          requireNetworkId(map.get("network_id"), name + ".network_id");
       final String authority = asString(map.get("authority"), name + ".authority");
       final long creationTimeMs =
           asNumber(map.get("creation_time_ms"), name + ".creation_time_ms").longValue();
@@ -170,7 +172,8 @@ final class TransactionPayloadFixtures {
       asString(map.get("payload_hash"), name + ".payload_hash");
       asString(map.get("signed_hash"), name + ".signed_hash");
 
-      final String payloadChain = asString(payload.get("chain"), name + ".payload.chain");
+      final NetworkId payloadNetworkId =
+          requireNetworkId(payload.get("network_id"), name + ".payload.network_id");
       final String payloadAuthority =
           asString(payload.get("authority"), name + ".payload.authority");
       final long payloadCreationTimeMs =
@@ -181,7 +184,7 @@ final class TransactionPayloadFixtures {
               payload, "time_to_live_ms", name + ".payload.time_to_live_ms");
       final Optional<Long> payloadNonce =
           optionalLong(payload.get("nonce"), name + ".payload.nonce");
-      if (!chain.equals(payloadChain)
+      if (!networkId.equals(payloadNetworkId)
           || !authority.equals(payloadAuthority)
           || creationTimeMs != payloadCreationTimeMs
           || timeToLiveMs != payloadTimeToLiveMs
@@ -191,7 +194,7 @@ final class TransactionPayloadFixtures {
       }
       return new Fixture(
           name,
-          chain,
+          networkId,
           authority,
           creationTimeMs,
           Optional.of(timeToLiveMs),
@@ -204,8 +207,8 @@ final class TransactionPayloadFixtures {
       return name;
     }
 
-    String chain() {
-      return chain;
+    NetworkId networkId() {
+      return networkId;
     }
 
     String authority() {
@@ -232,7 +235,9 @@ final class TransactionPayloadFixtures {
       final TransactionPayload.Builder builder =
           TransactionPayload.builder()
               .setFeePayment(parseFeePayment(payload.get("fee_payment"), name))
-              .setChainId(asString(payload.get("chain"), "chain"))
+              .setNetworkId(
+                  requireNetworkId(
+                      payload.get("network_id"), name + ".payload.network_id"))
               .setAuthority(asString(payload.get("authority"), "authority"))
               .setCreationTimeMs(
                   asNumber(payload.get("creation_time_ms"), "creation_time_ms").longValue());
@@ -507,6 +512,15 @@ final class TransactionPayloadFixtures {
       throw new IllegalStateException("Expected string for " + field);
     }
     return (String) value;
+  }
+
+  private static NetworkId requireNetworkId(final Object value, final String field) {
+    final String networkId = asString(value, field);
+    try {
+      return NetworkId.parse(networkId);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalStateException(field + " must be a canonical network hash identity", ex);
+    }
   }
 
   private static Number asNumber(final Object value, final String field) {

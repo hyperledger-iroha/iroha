@@ -3,7 +3,7 @@
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
-/// Deployment-injected supervised private Musubi publication service.
+/// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
@@ -1381,7 +1381,8 @@ pub struct Iroha {
 /// authenticated Governance DAG publication/readback/head updates, sealed
 /// monotonic Governance DAG checkpoints, externally sealed reputation journal
 /// checkpoints, the Soracloud mutation/provenance signer, and the authenticated
-/// Hugging Face credential provider are the
+/// Hugging Face credential provider, plus the reserved Musubi provider-
+/// attestation clock, approval signer, and authenticated inventory, are the
 /// reference-node boundaries for
 /// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
 /// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
@@ -1506,6 +1507,12 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
     soracloud_hf_inference_credential_provider:
         Option<Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
+    sorafs_musubi_provider_attestation_clock_seal:
+        Option<Arc<dyn sorafs_node::MusubiProviderAttestationClockSealV1>>,
+    sorafs_musubi_provider_attestation_approval_signer:
+        Option<Arc<dyn sorafs_node::MusubiProviderAttestationSignerV1>>,
+    sorafs_musubi_provider_attestation_inventory:
+        Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryRuntimeV1>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1569,6 +1576,11 @@ impl IrohaRuntimeDeps {
             && self.sorafs_por_finalized_replay_archive.is_none()
             && self.soracloud_runtime_mutation_signer.is_none()
             && self.soracloud_hf_inference_credential_provider.is_none()
+            && self.sorafs_musubi_provider_attestation_clock_seal.is_none()
+            && self
+                .sorafs_musubi_provider_attestation_approval_signer
+                .is_none()
+            && self.sorafs_musubi_provider_attestation_inventory.is_none()
     }
 
     /// Attach the deployment-owned Bootle/Lantern issuer and authentication registry.
@@ -2195,6 +2207,39 @@ impl IrohaRuntimeDeps {
         archive: Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>,
     ) -> Self {
         self.sorafs_por_finalized_replay_archive = Some(archive);
+        self
+    }
+
+    /// Attach the rollback-resistant monotonic clock seal reserved for the
+    /// supervised Musubi provider-attestation journal.
+    #[must_use]
+    pub fn with_sorafs_musubi_provider_attestation_clock_seal(
+        mut self,
+        seal: Arc<dyn sorafs_node::MusubiProviderAttestationClockSealV1>,
+    ) -> Self {
+        self.sorafs_musubi_provider_attestation_clock_seal = Some(seal);
+        self
+    }
+
+    /// Attach the approval-only HSM/KMS or threshold signer reserved for the
+    /// supervised Musubi provider-attestation journal.
+    #[must_use]
+    pub fn with_sorafs_musubi_provider_attestation_approval_signer(
+        mut self,
+        signer: Arc<dyn sorafs_node::MusubiProviderAttestationSignerV1>,
+    ) -> Self {
+        self.sorafs_musubi_provider_attestation_approval_signer = Some(signer);
+        self
+    }
+
+    /// Attach the authenticated coordinator inventory reserved for the
+    /// supervised Musubi provider-attestation journal.
+    #[must_use]
+    pub fn with_sorafs_musubi_provider_attestation_inventory(
+        mut self,
+        inventory: Arc<dyn sorafs_node::MusubiProviderAttestationInventoryRuntimeV1>,
+    ) -> Self {
+        self.sorafs_musubi_provider_attestation_inventory = Some(inventory);
         self
     }
 }
@@ -5818,6 +5863,7 @@ impl NetworkRelayShared {
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
+            | QueuePlanAdmissionPublication(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
@@ -7089,9 +7135,11 @@ mod network_relay_tests {
         BlockMessage::V2(ConsensusMessageV2::new(
             ConsensusMessageV2Payload::CommitCertificateRequest(CommitCertificateRequest {
                 protocol_version: PROTOCOL_VERSION,
-                chain_id: "00000000-0000-0000-0000-000000000000"
-                    .parse()
-                    .expect("valid chain id"),
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"irohad-v2-context-genesis",
+                    )),
+                ),
                 context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                     b"irohad-v2-context",
                 ))),
@@ -7978,12 +8026,12 @@ fn snapshot_failure_allows_empty_state_fallback(
 
 fn preflight_empty_state_snapshot_fallback(
     kura: &Kura,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     configured_lane_catalog: &iroha_data_model::nexus::LaneCatalog,
 ) -> ReportResult<(), StartError> {
     State::preflight_configured_primary_geometry_replay(
         kura,
-        chain_id,
+        network_id,
         configured_lane_catalog,
     )
     .map_err(|error| Report::new(error).change_context(StartError::InitKura))
@@ -8000,7 +8048,7 @@ fn snapshot_read_error_is_recoverable_for_bootstrap(
 ) -> bool {
     match error {
         TryReadSnapshotError::IO(_, _)
-        | TryReadSnapshotError::ChainIdMismatch { .. }
+        | TryReadSnapshotError::NetworkIdMismatch { .. }
         | TryReadSnapshotError::ZkConfigInstall(_) => false,
         TryReadSnapshotError::MismatchedHeight { .. } => hard_fork_snapshot_bootstrap,
         _ => true,
@@ -8209,9 +8257,9 @@ mod snapshot_read_error_tests {
         ));
 
         assert!(!snapshot_read_error_is_recoverable(
-            &TryReadSnapshotError::ChainIdMismatch {
-                expected: ChainId::from("expected-chain"),
-                actual: ChainId::from("actual-chain"),
+            &TryReadSnapshotError::NetworkIdMismatch {
+                expected: NetworkId::from_genesis_hash(dummy_block_hash(1)),
+                actual: NetworkId::from_genesis_hash(dummy_block_hash(2)),
             }
         ));
 
@@ -8374,7 +8422,7 @@ mod snapshot_read_error_tests {
         let kura = Kura::blank_kura_for_testing();
         let error = preflight_empty_state_snapshot_fallback(
             kura.as_ref(),
-            &ChainId::from("fallback-preflight-test"),
+            &NetworkId::from_genesis_hash(dummy_block_hash(0x33)),
             &iroha_data_model::nexus::LaneCatalog::default(),
         )
         .expect_err("missing authenticated geometry baseline must reject empty-state fallback");
@@ -8871,6 +8919,22 @@ fn validate_provider_ingest_archive_presence(
     }
 }
 
+fn validate_provider_attestation_journal_activation(
+    journal_configured: bool,
+) -> Result<(), &'static str> {
+    // TODO: Replace this gate with the supervised capture child only after its
+    // scanner is sealed to the concrete finalized archive and the local store
+    // initialization, durable time, approval-signer, and authenticated
+    // inventory boundaries are activation-qualified.
+    if journal_configured {
+        Err(
+            "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it",
+        )
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_sorafs_native_signer_role_presence(
     role: &'static str,
     required: bool,
@@ -9020,8 +9084,8 @@ impl Iroha {
     /// handoffs, and all hedging/billing query, verification, HSM,
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
-    /// closed. A private Musubi publication runner is likewise available only
-    /// through an explicitly injected late-bound factory and joins this node's supervisor.
+    /// closed. A private Musubi publication runner is likewise assembled only
+    /// by an explicitly injected late-bound factory and joins this node's supervisor.
     /// The reputation queue submitter is a separately injected deployment
     /// boundary. The Torii proxy bridge signer remains a separate native node
     /// role. Any configured signed Governance DAG producer requires a sealed
@@ -9052,6 +9116,15 @@ impl Iroha {
         ),
         StartError,
     > {
+        validate_provider_attestation_journal_activation(
+            config
+                .torii
+                .sorafs_storage
+                .provider_ingest_runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.provider_attestation_journal.is_some()),
+        )
+        .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         validate_sorafs_native_signer_provider_presence(&config, &runtime_deps).map_err(
             |error| {
                 Report::new(StartError::StartTorii).attach(format!(
@@ -9236,8 +9309,9 @@ impl Iroha {
                 block_count,
                 config.snapshot.merkle_chunk_size_bytes,
                 config.snapshot.max_payload_bytes,
+                config.snapshot.resources,
                 verification_key,
-                &config.common.chain,
+                &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                 &config.zk,
                 &config.snapshot.bootstrap,
                 #[cfg(feature = "telemetry")]
@@ -9265,7 +9339,7 @@ impl Iroha {
             Err(TryReadSnapshotError::NotFound) if !provisional_imported_prefix => {
                 preflight_empty_state_snapshot_fallback(
                     kura.as_ref(),
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     &config.nexus.configured_lane_catalog,
                 )?;
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
@@ -9282,11 +9356,12 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::try_new_with_chain(
+                State::try_new_with_chain_and_network_id(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     config.common.chain.clone(),
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -9304,7 +9379,7 @@ impl Iroha {
                 );
                 preflight_empty_state_snapshot_fallback(
                     kura.as_ref(),
-                    &config.common.chain,
+                    &NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     &config.nexus.configured_lane_catalog,
                 )?;
                 iroha_logger::warn!(
@@ -9323,11 +9398,12 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::try_new_with_chain(
+                State::try_new_with_chain_and_network_id(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     config.common.chain.clone(),
+                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
                     #[cfg(feature = "telemetry")]
                     state_telemetry.clone(),
                 )
@@ -9341,7 +9417,14 @@ impl Iroha {
         {
             kura.attach_telemetry(state.telemetry.clone());
         }
-        // Thread chain id into state for VRF prehash binding.
+        let expected_network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
+        if state.network_id != expected_network_id {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "restored state network id {} differs from genesis.expected_hash-derived id {}",
+                state.network_id, expected_network_id
+            )));
+        }
+        // Thread the display/configuration label into state for legacy VRF prehash binding.
         state.chain_id = config.common.chain.clone();
         install_configured_kagemusha_release_catalog(&mut state, &config)
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -9454,7 +9537,7 @@ impl Iroha {
                         ))
                     })?;
                     let context = &artifact.height_context;
-                    if context.chain_id != config.common.chain
+                    if context.network_id != expected_network_id
                         || context.height != 1
                         || context.mode != signed_consensus_mode
                         || context.da_layout != signed_v2_genesis_context.da_layout
@@ -9808,7 +9891,6 @@ impl Iroha {
             } else {
                 consensus_caps_from_genesis(
                         effective_genesis.expect("normal startup has signed genesis metadata"),
-                        &config.common.chain,
                         &config_caps,
                         &config.sumeragi,
                     )
@@ -9941,7 +10023,7 @@ impl Iroha {
         let (network, child) = IrohaNetwork::start_with_crypto_and_initial_authorities(
             p2p_identity_keys,
             config.network.clone(),
-            config.common.chain.clone(),
+            expected_network_id,
             Some(consensus_caps.clone()),
             Some(confidential_caps),
             Some(crypto_caps),
@@ -9972,17 +10054,12 @@ impl Iroha {
                 );
             } else {
                 let (fresh_mode_tag, _fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
-                    consensus_caps_from_genesis(
-                        genesis_block,
-                        &config.common.chain,
-                        &config_caps,
-                        &config.sumeragi,
-                    )
-                    .ok_or_else(|| {
-                        Report::new(StartError::InitKura).attach(
+                    consensus_caps_from_genesis(genesis_block, &config_caps, &config.sumeragi)
+                        .ok_or_else(|| {
+                            Report::new(StartError::InitKura).attach(
                         "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
                     )
-                    })?;
+                        })?;
                 if fresh_block_cadence_ms != signed_block_cadence_ms {
                     return Err(Report::new(StartError::InitKura).attach(
                         "fresh signed genesis cadence differs from the handshake opened for bootstrap",
@@ -10005,11 +10082,9 @@ impl Iroha {
                     ));
                 }
                 let genesis_account = AccountId::new(effective_genesis_public_key.clone());
-                if let Err(err) = iroha_core::validate_genesis_block(
-                    &genesis_block.0,
-                    &genesis_account,
-                    &config.common.chain,
-                ) {
+                if let Err(err) =
+                    iroha_core::validate_genesis_block(&genesis_block.0, &genesis_account)
+                {
                     let err_display = err.to_string();
                     iroha_logger::error!(
                         error = %err,
@@ -10967,7 +11042,6 @@ impl Iroha {
             .map_err(Report::new)
             .change_context(StartError::StartTorii)?;
 
-        let chain_id = Arc::new(config.common.chain.clone());
         let sorafs_provider_ingest_runtime = if let Some(provider_ingest_config) =
             sorafs_provider_ingest_config
         {
@@ -11234,7 +11308,6 @@ impl Iroha {
                 config.nexus.relay_worker.clone(),
                 nexus_fee_relay_worker::NexusFeeRelayWorkerContext {
                     storage_root: relay_worker_storage_root,
-                    chain_id: Arc::clone(&chain_id),
                     queue: Arc::clone(&queue),
                     state: Arc::clone(&state),
                     sumeragi: sumeragi.clone(),
@@ -11281,7 +11354,6 @@ impl Iroha {
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
             let runtime_mutation_sink = Arc::new(
                 QueuedSoracloudRuntimeMutationSink::new(
-                    Arc::clone(&chain_id),
                     Arc::clone(&queue),
                     Arc::clone(&state),
                     signer,
@@ -14853,12 +14925,13 @@ pub fn run_with_runtime_provider_registry(
 
 /// Run the standard CLI launcher with a deployment-owned private Musubi publication factory.
 ///
-/// The caller supplies a one-shot factory which receives exact daemon-owned finalized-state,
+/// The caller supplies a one-shot factory which receives the exact daemon-owned finalized-state,
 /// transaction-queue, and SoraFS handles only after trusted startup replay. The factory must
 /// assemble the complete private HTTPS runner, including its durable clock and journal, receipt
-/// signer, and admitted SoraFS backends. The launcher never exposes the private routes through
-/// Torii or reads service credentials from argv or node configuration. An unexpected
-/// private-runner exit is fatal to the same supervisor that owns the node.
+/// signer, and admitted SoraFS backends. The launcher transfers that opaque factory into the
+/// daemon supervisor without requiring an unrelated runtime-provider registry. It never exposes
+/// the private routes through Torii or reads service credentials from argv or node configuration.
+/// An unexpected private-runner exit is fatal to the same supervisor that owns the node.
 ///
 /// # Errors
 ///
@@ -14877,12 +14950,12 @@ pub fn run_with_musubi_publication(
 /// Run the standard CLI launcher with deployment-owned runtime providers and a private Musubi
 /// publication factory.
 ///
-/// The one-shot factory receives exact daemon-owned finalized-state, transaction-queue, and
+/// The one-shot factory receives the exact daemon-owned finalized-state, transaction-queue, and
 /// SoraFS handles only after trusted startup replay. It must assemble the complete private HTTPS
-/// runner and retain every credential inside deployment-owned adapters. The launcher never
-/// exposes the private routes through Torii or reads service credentials from argv or node
-/// configuration. An unexpected private-runner exit is fatal to the same supervisor that owns
-/// the node.
+/// runner and retain every credential inside deployment-owned adapters. The launcher only
+/// transfers that opaque factory into the daemon supervisor; it never exposes the private routes
+/// through Torii or reads service credentials from argv or node configuration. An unexpected
+/// private-runner exit is fatal to the same supervisor that owns the node.
 ///
 /// # Errors
 ///
@@ -16024,7 +16097,7 @@ fn validate_config_for_check(
     validate_config_offline(config).change_context(MainError::Config)?;
     if build_kagemusha_qualification_seal && genesis.is_none() {
         return Err(Report::new(MainError::Config).attach(
-            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full offline genesis validation",
+            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full Kagemusha release and genesis validation",
         ));
     }
 
@@ -16073,7 +16146,7 @@ fn validate_config_for_check(
     }
 
     let genesis_account = AccountId::new(embedded_key);
-    iroha_core::validate_genesis_block(&genesis.0, &genesis_account, &config.common.chain)
+    iroha_core::validate_genesis_block(&genesis.0, &genesis_account)
         .map_err(Report::new)
         .change_context(MainError::Config)?;
 
@@ -16081,17 +16154,12 @@ fn validate_config_for_check(
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
     let config_caps =
         build_consensus_config_caps(&config.nexus, None, None).change_context(MainError::Config)?;
-    let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms) = consensus_caps_from_genesis(
-        genesis,
-        &config.common.chain,
-        &config_caps,
-        &config.sumeragi,
-    )
-    .ok_or_else(|| {
-        Report::new(MainError::Config).attach(
-            "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
-        )
-    })?;
+    let (mode_tag, _bls_domain, consensus_caps, block_cadence_ms) =
+        consensus_caps_from_genesis(genesis, &config_caps, &config.sumeragi).ok_or_else(|| {
+            Report::new(MainError::Config).attach(
+                "local genesis does not contain one valid canonical Sumeragi v2 handshake context",
+            )
+        })?;
     verify_genesis_metadata(
         genesis,
         config,
@@ -16288,11 +16356,12 @@ fn validate_genesis_execution_offline(
         &genesis.0,
         &config.nexus.dataspace_catalog,
     );
-    let mut state = State::try_new_with_chain(
+    let mut state = State::try_new_with_chain_and_network_id(
         world,
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         config.common.chain.clone(),
+        NetworkId::from_genesis_hash(config.genesis.expected_hash),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
     )
@@ -16310,7 +16379,7 @@ fn validate_genesis_execution_offline(
     let frozen_lane_manifests =
         freeze_lane_manifests_for_startup_replay(&replay_nexus).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
-                "lane manifest registry is not ready for offline genesis validation: {error}"
+                "lane manifest registry is not ready for Kagemusha release and genesis validation: {error}"
             ))
         })?;
     state.install_lane_manifests(&frozen_lane_manifests);
@@ -16470,7 +16539,6 @@ fn build_consensus_config_caps(
 
 fn consensus_caps_from_genesis(
     genesis: &GenesisBlock,
-    chain_id: &ChainId,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
 ) -> Option<(String, String, iroha_p2p::ConsensusHandshakeCaps, u64)> {
@@ -16515,7 +16583,7 @@ fn consensus_caps_from_genesis(
     params.sumeragi.block_cadence_ms = entry.block_cadence_ms;
 
     let (mode_tag, consensus_params, computed_fingerprint) =
-        consensus_entry_caps(chain_id, entry, &params).ok()?;
+        consensus_entry_caps(entry, &params).ok()?;
     if entry.consensus_fingerprint.into_bytes() != computed_fingerprint {
         return None;
     }
@@ -16600,7 +16668,6 @@ fn signed_v2_genesis_context_metadata(
 }
 
 fn consensus_entry_caps(
-    chain_id: &ChainId,
     entry: &ConsensusHandshakeMeta,
     params: &iroha_data_model::parameter::Parameters,
 ) -> EyreResult<(
@@ -16628,8 +16695,7 @@ fn consensus_entry_caps(
         )
         .map_err(|error| eyre::eyre!(error))?;
 
-    let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
-        chain_id,
+    let fingerprint = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
         &consensus_params,
     )
     .map_err(|error| eyre::eyre!(error))?;
@@ -16648,7 +16714,6 @@ fn compute_consensus_handshake_caps(
     iroha_core::sumeragi::consensus::compute_consensus_handshake_caps_from_world(
         world,
         height,
-        &config.common,
         &config.sumeragi,
         config_caps,
         frozen_mode,
@@ -16809,8 +16874,7 @@ fn verify_genesis_metadata(
             matched_meta.sumeragi_v2,
         )
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
-    let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params(
-        &config.common.chain,
+    let computed_fp = iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint(
         &consensus_params,
     )
     .map_err(|error| Report::new(MainError::Config).attach(error))?;
@@ -17529,6 +17593,32 @@ mod tests {
     }
 
     #[test]
+    fn provider_attestation_journal_remains_fail_closed_until_activation_is_qualified() {
+        assert!(validate_provider_attestation_journal_activation(false).is_ok());
+        assert_eq!(
+            validate_provider_attestation_journal_activation(true),
+            Err(
+                "SoraFS provider-attestation journal capture is not yet activation-qualified; the concrete finalized-archive scanner, bounded store initialization, rollback-resistant time, approval signer, and authenticated inventory must be wired before enabling it"
+            )
+        );
+
+        let startup = include_str!("main.rs")
+            .split_once("pub(crate) async fn start_with_runtime_deps")
+            .expect("runtime-dependency startup entry")
+            .1;
+        let activation_gate = startup
+            .find("validate_provider_attestation_journal_activation")
+            .expect("provider-attestation activation gate");
+        let supervisor = startup
+            .find("let mut supervisor = Supervisor::new()")
+            .expect("supervisor construction");
+        assert!(
+            activation_gate < supervisor,
+            "an unqualified capture request must fail before any supervised child starts"
+        );
+    }
+
+    #[test]
     fn provider_ingest_archive_is_qualified_and_installed_before_runtime_startup() {
         let source = include_str!("main.rs");
         let preparation = source
@@ -17803,7 +17893,7 @@ mod tests {
         );
         assert!(
             compact_source.contains("run_main(build_line,Some(registry),Some(factory))"),
-            "the combined custom launcher must inject both deployment-owned dependencies"
+            "the combined custom launcher must inject both deployment-owned dependencies and the late-bound publication factory"
         );
 
         let startup_source = compact_source
@@ -20623,8 +20713,7 @@ mod tests {
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 
-            let tx = TransactionBuilder::new(
-                chain_id.clone(),
+            let tx = TransactionBuilder::new_genesis(
                 genesis_account_id.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -20857,13 +20946,9 @@ mod tests {
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("default consensus config caps");
-            let (_, _, _, cadence_ms) = consensus_caps_from_genesis(
-                &genesis,
-                &config.common.chain,
-                &config_caps,
-                &config.sumeragi,
-            )
-            .expect("canonical genesis consensus metadata");
+            let (_, _, _, cadence_ms) =
+                consensus_caps_from_genesis(&genesis, &config_caps, &config.sumeragi)
+                    .expect("canonical genesis consensus metadata");
             OfflineSemanticGenesisFixture {
                 config,
                 genesis,
@@ -21004,9 +21089,9 @@ mod tests {
         fn qualification_seal_check_requires_local_genesis() {
             let config = sample_config();
 
-            let error = validate_config_for_check(&config, None, true)
-                .err()
-                .expect("seal publication must wait for full offline genesis validation");
+            let error = validate_config_for_check(&config, None, true).err().expect(
+                "seal publication must wait for full Kagemusha release and genesis validation",
+            );
             let rendered = format!("{error:?}");
             assert!(
                 rendered.contains("requires locally available genesis"),
@@ -21172,13 +21257,9 @@ mod tests {
 
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
-            let (mode_tag, _bls_domain, consensus_caps, _) = consensus_caps_from_genesis(
-                &permissioned_genesis,
-                &chain,
-                &config_caps,
-                &config.sumeragi,
-            )
-            .expect("permissioned signed genesis must produce canonical v2 caps");
+            let (mode_tag, _bls_domain, consensus_caps, _) =
+                consensus_caps_from_genesis(&permissioned_genesis, &config_caps, &config.sumeragi)
+                    .expect("permissioned signed genesis must produce canonical v2 caps");
 
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err =
@@ -21389,10 +21470,7 @@ mod tests {
             table
         }
 
-        fn config_test_args(
-            config_path: PathBuf,
-            genesis_manifest_json: Option<PathBuf>,
-        ) -> Args {
+        fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
             Args {
                 config: Some(config_path),
                 genesis_manifest_json,
@@ -21451,8 +21529,7 @@ mod tests {
             let config_path = dir.path().join("config.toml");
             std::fs::write(&config_path, raw.as_bytes())?;
             let mut args = config_test_args(config_path, None);
-            args.startup.config_blake3 =
-                Some(blake3::hash(raw.as_bytes()).to_hex().to_string());
+            args.startup.config_blake3 = Some(blake3::hash(raw.as_bytes()).to_hex().to_string());
 
             let error = read_config_and_genesis(&args)
                 .expect_err("integrity-bound config must not resolve external extends");
@@ -21500,7 +21577,7 @@ mod tests {
 
             let (config, _genesis) =
                 read_config_and_genesis(&config_test_args(config_path.clone(), None))
-            .map_err(|report| eyre::eyre!("{report:?}"))?;
+                    .map_err(|report| eyre::eyre!("{report:?}"))?;
 
             Ok((config, dir, config_path))
         }

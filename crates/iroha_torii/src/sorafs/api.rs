@@ -65,7 +65,7 @@ use iroha_data_model::events::data::sorafs::SorafsOrderbookLedgerEvent;
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::{AccountId, ParsedAccountId},
     asset::AssetDefinitionId,
     block::BlockHeader,
@@ -94,8 +94,8 @@ use iroha_data_model::{
             FindSorafsOrderbookChannelById, FindSorafsOrderbookChannels, FindSorafsOrderbookEvents,
             FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceipts,
             FindSorafsOrderbookStatus, FindSorafsOrderbookTrades, FindSorafsPinManifest,
-            FindSorafsProofOutcome, FindSorafsRepairEvents, FindSorafsRepairStatus,
-            FindSorafsRepairTask, FindSorafsRepairTasks,
+            FindSorafsPinManifests, FindSorafsProofOutcome, FindSorafsRepairEvents,
+            FindSorafsRepairStatus, FindSorafsRepairTask, FindSorafsRepairTasks,
         },
     },
     role::RoleId,
@@ -123,8 +123,9 @@ use iroha_data_model::{
             OrderbookTradePageV1,
         },
         pin_registry::{
-            ManifestDigest, PinManifestFinalizedCursorV1, PinManifestRecord, PinStatus,
-            ReplicationOrderStatus,
+            ManifestDigest, PIN_MANIFEST_QUERY_MAX_ITEMS_V1, PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1,
+            PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1, PinManifestFinalizedCursorV1, PinManifestRecord,
+            PinStatus, PinStatusKindV1, ReplicationOrderStatus,
         },
         proof_ledger::{
             PdpOutcomeStatusV1, PotrOutcomeStatusV1, ProofOutcomeFinalizedCursorV1,
@@ -894,6 +895,7 @@ impl<'a> SoraFsRepairTransactionHandoff<'a> {
         let finalized_cursor = current_sorafs_repair_finalized_cursor(self.state)
             .ok_or_else(|| "finalized repair cursor is unavailable".to_owned())?;
         let context = sorafs_node::repair_transaction_forwarder::RepairTransactionContextV1 {
+            network_id: *self.state.state.network_id_ref(),
             chain_id: (*self.state.chain_id).clone(),
             finalized_cursor,
         };
@@ -2575,8 +2577,11 @@ const REPUTATION_COMMITTED_POLL_INTERVAL: Duration = Duration::from_millis(250);
 #[derive(Debug, Default)]
 struct PinListQuery {
     limit: Option<u32>,
-    offset: Option<u32>,
-    status: Option<String>,
+    max_bytes: Option<u32>,
+    after_digest_hex: Option<String>,
+    expected_finalized_height: Option<u64>,
+    expected_finalized_block_hash_hex: Option<String>,
+    status: Option<PinStatusKindV1>,
 }
 
 #[derive(Debug, Default)]
@@ -2723,17 +2728,158 @@ struct CapacityStateReadbackQuery {
 
 impl PinListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        if let Some(raw) = raw {
+            if raw.contains('%') {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "percent-encoded finalized SoraFS pin-list query spellings are not accepted",
+                )));
+            }
+            if !raw.is_empty() && raw.split('&').any(str::is_empty) {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "empty finalized SoraFS pin-list query segments are not accepted",
+                )));
+            }
+        }
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            "offset" => parse_u32_field(&mut query.offset, "offset", value),
-            "status" => {
-                query.status = Some(value.to_owned());
+            "limit" => {
+                if query.limit.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate limit",
+                    )));
+                }
+                let limit = parse_canonical_nonzero_u32_query(value, "limit")?;
+                if limit > PIN_MANIFEST_QUERY_MAX_ITEMS_V1 {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        format!("limit must be 1..={PIN_MANIFEST_QUERY_MAX_ITEMS_V1}"),
+                    )));
+                }
+                query.limit = Some(limit);
                 Ok(())
             }
-            _ => Ok(()),
+            "max_bytes" => {
+                if query.max_bytes.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate max_bytes",
+                    )));
+                }
+                let max_bytes = parse_canonical_nonzero_u32_query(value, "max_bytes")?;
+                if !(PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1..=PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1)
+                    .contains(&max_bytes)
+                {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "max_bytes must be {PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1}..={PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1}"
+                        ),
+                    )));
+                }
+                query.max_bytes = Some(max_bytes);
+                Ok(())
+            }
+            "after_digest_hex" => {
+                if query.after_digest_hex.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate after_digest_hex",
+                    )));
+                }
+                let digest = parse_canonical_hex_fixed::<32>(value, "after_digest_hex").map_err(
+                    |error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)),
+                )?;
+                if digest == [0; 32] {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "after_digest_hex must be non-zero",
+                    )));
+                }
+                query.after_digest_hex = Some(value.to_owned());
+                Ok(())
+            }
+            "expected_finalized_height" => {
+                if query.expected_finalized_height.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate expected_finalized_height",
+                    )));
+                }
+                query.expected_finalized_height = Some(parse_canonical_nonzero_u64_query(
+                    value,
+                    "expected_finalized_height",
+                )?);
+                Ok(())
+            }
+            "expected_finalized_block_hash_hex" => {
+                if query.expected_finalized_block_hash_hex.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate expected_finalized_block_hash_hex",
+                    )));
+                }
+                let block_hash =
+                    parse_canonical_hex_fixed::<32>(value, "expected_finalized_block_hash_hex")
+                        .map_err(|error| {
+                            ResponseError::from(json_error(StatusCode::BAD_REQUEST, error))
+                        })?;
+                if block_hash == [0; 32] {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "expected_finalized_block_hash_hex must be non-zero",
+                    )));
+                }
+                query.expected_finalized_block_hash_hex = Some(value.to_owned());
+                Ok(())
+            }
+            "status" => {
+                if query.status.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate status",
+                    )));
+                }
+                query.status = Some(match value {
+                    "pending" => PinStatusKindV1::Pending,
+                    "approved" => PinStatusKindV1::Approved,
+                    "retired" => PinStatusKindV1::Retired,
+                    _ => {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "status must be pending, approved, or retired",
+                        )));
+                    }
+                });
+                Ok(())
+            }
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown finalized SoraFS pin-list query parameter `{key}`"),
+            ))),
         })?;
+        query
+            .expected_finalized_cursor()
+            .map_err(ResponseError::from)?;
         Ok(query)
+    }
+
+    fn expected_finalized_cursor(&self) -> Result<Option<PinManifestFinalizedCursorV1>, Response> {
+        PinManifestReadbackQuery {
+            expected_finalized_height: self.expected_finalized_height,
+            expected_finalized_block_hash_hex: self.expected_finalized_block_hash_hex.clone(),
+        }
+        .expected_finalized_cursor()
+    }
+
+    fn after_digest(&self) -> Option<ManifestDigest> {
+        self.after_digest_hex.as_deref().map(|value| {
+            let digest = parse_canonical_hex_fixed::<32>(value, "after_digest_hex")
+                .expect("validated pin-list cursor remains canonical");
+            ManifestDigest::new(digest)
+        })
     }
 }
 
@@ -3870,6 +4016,46 @@ fn parse_u32_field(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult
     )
 }
 
+fn parse_canonical_nonzero_u32_query(raw: &str, name: &str) -> ApiResult<u32> {
+    if !raw
+        .as_bytes()
+        .first()
+        .is_some_and(|first| matches!(*first, b'1'..=b'9'))
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} must be a canonical non-zero unsigned integer"),
+        )));
+    }
+    raw.parse::<u32>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} exceeds the supported range"),
+        ))
+    })
+}
+
+fn parse_canonical_nonzero_u64_query(raw: &str, name: &str) -> ApiResult<u64> {
+    if !raw
+        .as_bytes()
+        .first()
+        .is_some_and(|first| matches!(*first, b'1'..=b'9'))
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} must be a canonical non-zero unsigned integer"),
+        )));
+    }
+    raw.parse::<u64>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} exceeds the supported range"),
+        ))
+    })
+}
+
 fn ensure_percent_sequences(segment: &str, context: &str) -> Result<(), ResponseError> {
     let bytes = segment.as_bytes();
     let mut index = 0;
@@ -3924,13 +4110,6 @@ fn walk_query_params(
         }
     }
     Ok(())
-}
-
-#[derive(Copy, Clone)]
-enum PinStatusFilter {
-    Pending,
-    Approved,
-    Retired,
 }
 
 #[derive(Copy, Clone)]
@@ -10477,6 +10656,7 @@ fn validate_governance_dag_indexed_path(
     Ok(())
 }
 
+#[derive(Debug)]
 struct AppealFinanceReportPublishSummary {
     outcomes: Map,
     latest_published_at_unix: Option<u64>,
@@ -12047,7 +12227,7 @@ fn validate_moderation_signed_transaction(
     transaction: &SignedTransaction,
     route: ModerationCommandRouteV1,
 ) -> Result<(), Response> {
-    if transaction.chain() != state.chain_id.as_ref() {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
             "SoraFS moderation transaction chain does not match this peer",
@@ -14928,6 +15108,7 @@ async fn submit_appeal_finance_deposit_settlement_step(
         )
     })?;
     let context = AppealFinanceTransactionContextV1 {
+        network_id: *state.state.network_id_ref(),
         chain_id: (*state.chain_id).clone(),
         finalized_cursor,
         expected_record: Some(record.clone()),
@@ -15364,10 +15545,19 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 continue;
             }
         };
+        if request.network_id != *state.state.network_id_ref()
+            || request.chain_id != *state.chain_id
+        {
+            scan.deferred = scan.deferred.saturating_add(1);
+            warn!(
+                "durable SoraFS appeal-finance delivery belongs to another network or business chain"
+            );
+            continue;
+        }
         let signed_transaction = delivery
             .signed_transaction_bytes
             .as_deref()
-            .and_then(decode_appeal_finance_signed_transaction);
+            .and_then(|bytes| decode_appeal_finance_signed_transaction(bytes, &request.network_id));
         let transaction_hash = signed_transaction.as_ref().map(SignedTransaction::hash);
         let Some((finalized_cursor, record, transaction_outcome)) =
             observe_appeal_finance_finalized_state(
@@ -15681,6 +15871,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     submitter,
                     delivery.operation_id,
                     &bytes,
+                    &request.network_id,
                     finalized_cursor,
                 )
                 .await
@@ -15733,6 +15924,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     submitter,
                     delivery.operation_id,
                     bytes,
+                    &request.network_id,
                     finalized_cursor,
                 )
                 .await
@@ -16001,11 +16193,14 @@ async fn sign_sorafs_appeal_finance_delivery(
     signer: &crate::SoraFsAppealFinanceQualifiedSignerV1,
     request: &sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionSigningRequestV1,
 ) -> Option<Vec<u8>> {
-    if AccountId::new(signer.public_key().clone()) != request.authority {
+    if AccountId::new(signer.public_key().clone()) != request.authority
+        || request.network_id != *state.state.network_id_ref()
+        || request.chain_id != *state.chain_id
+    {
         return None;
     }
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id,
         request.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -16028,7 +16223,10 @@ async fn sign_sorafs_appeal_finance_delivery(
     norito::to_bytes(&transaction).ok()
 }
 
-fn decode_appeal_finance_signed_transaction(bytes: &[u8]) -> Option<SignedTransaction> {
+fn decode_appeal_finance_signed_transaction(
+    bytes: &[u8],
+    expected_network_id: &NetworkId,
+) -> Option<SignedTransaction> {
     let max_bytes = sorafs_node::appeal_finance_transaction_forwarder::
         APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1;
     if bytes.is_empty() || bytes.len() > max_bytes {
@@ -16044,7 +16242,8 @@ fn decode_appeal_finance_signed_transaction(bytes: &[u8]) -> Option<SignedTransa
     );
     let transaction =
         norito::decode_from_bytes_with_limits::<SignedTransaction>(bytes, limits).ok()?;
-    (transaction.verify_signature().is_ok()
+    (transaction.network_id() == Some(expected_network_id)
+        && transaction.verify_signature().is_ok()
         && norito::to_bytes(&transaction).ok().as_deref() == Some(bytes))
     .then_some(transaction)
 }
@@ -16054,13 +16253,18 @@ async fn submit_sorafs_appeal_finance_delivery(
     submitter: &crate::SoraFsAppealSettlementSubmitter,
     operation_id: [u8; 32],
     transaction_bytes: &[u8],
+    expected_network_id: &NetworkId,
     finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
 ) -> AppealFinanceDeliverySubmitOutcomeV1 {
-    let Some(transaction) = decode_appeal_finance_signed_transaction(transaction_bytes) else {
+    if expected_network_id != state.state.network_id_ref() {
+        return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
+    }
+    let Some(transaction) =
+        decode_appeal_finance_signed_transaction(transaction_bytes, expected_network_id)
+    else {
         return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
     };
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,
@@ -16449,7 +16653,7 @@ fn publish_finalized_appeal_finance_receipt(
     let Some(transaction) = delivery
         .signed_transaction_bytes
         .as_deref()
-        .and_then(decode_appeal_finance_signed_transaction)
+        .and_then(|bytes| decode_appeal_finance_signed_transaction(bytes, &request.network_id))
     else {
         return false;
     };
@@ -16537,6 +16741,7 @@ fn enqueue_appeal_finance_followup(
                 record.remaining_amount.clone(),
             )),
             &AppealFinanceTransactionContextV1 {
+                network_id: request.network_id,
                 chain_id: request.chain_id.clone(),
                 finalized_cursor,
                 expected_record: Some(record.clone()),
@@ -16886,7 +17091,7 @@ async fn sign_sorafs_proof_outcome_delivery(
 ) -> Option<SignedTransaction> {
     let expected_authority = signer.authority();
     let mut builder = TransactionBuilder::new(
-        (*state.chain_id).clone(),
+        *state.state.network_id_ref(),
         expected_authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -16923,7 +17128,7 @@ mod native_signer_returned_transaction_tests {
 
     fn fixture_payload(authority: AccountId) -> TransactionPayload {
         TransactionBuilder::new(
-            ChainId::from("native-signer-return-validation"),
+            crate::signed_query_test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -16982,7 +17187,6 @@ async fn submit_sorafs_proof_outcome_delivery(
     transaction: SignedTransaction,
 ) -> bool {
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,
@@ -17721,6 +17925,7 @@ mod repair_transaction_forwarder_tests {
         let instruction = SubmitSorafsRepairTask::new([0x66; 32], report_payload.clone());
         let request = RepairTransactionSigningRequestV1 {
             operation_id: [0x67; 32],
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from("repair-forwarder-test"),
             authority: authority.clone(),
             operation: RepairOperationV1::Submit(instruction),
@@ -17760,6 +17965,7 @@ mod repair_transaction_forwarder_tests {
         );
         let request = RepairTransactionSigningRequestV1 {
             operation_id: [0x6B; 32],
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from("repair-forwarder-test"),
             authority: authority.clone(),
             operation: RepairOperationV1::Action(instruction.clone()),
@@ -17812,6 +18018,7 @@ mod repair_transaction_forwarder_tests {
         );
         let request = RepairTransactionSigningRequestV1 {
             operation_id: [0x70; 32],
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from("repair-forwarder-test"),
             authority: authority.clone(),
             operation: RepairOperationV1::Appeal(instruction.clone()),
@@ -18228,6 +18435,7 @@ async fn enqueue_sorafs_finalized_native_repair_work(
         None
     };
     let transaction_context = RepairTransactionContextV1 {
+        network_id: *state.state.network_id_ref(),
         chain_id: (*state.chain_id).clone(),
         finalized_cursor: page.finalized_cursor,
     };
@@ -18457,7 +18665,9 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
         scan.scanned = scan.scanned.saturating_add(1);
-        if delivery.chain_id != *state.chain_id {
+        if delivery.network_id != *state.state.network_id_ref()
+            || delivery.chain_id != *state.chain_id
+        {
             if let Some(finalized_cursor) = current_sorafs_repair_finalized_cursor(state) {
                 match state
                     .sorafs_node
@@ -18471,7 +18681,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
             } else {
                 scan.deferred = scan.deferred.saturating_add(1);
             }
-            warn!("native SoraFS repair transaction belongs to another chain");
+            warn!("native SoraFS repair transaction belongs to another network or business chain");
             continue;
         }
         let request = match state
@@ -18480,6 +18690,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
         {
             Ok(request)
                 if request.operation_id == delivery.operation_id
+                    && request.network_id == delivery.network_id
                     && request.chain_id == delivery.chain_id
                     && request.authority == delivery.authority =>
             {
@@ -18501,7 +18712,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                 continue;
             };
             let Some(transaction) =
-                decode_sorafs_repair_signed_transaction(transaction_bytes, &delivery.chain_id)
+                decode_sorafs_repair_signed_transaction(transaction_bytes, &request.network_id)
             else {
                 scan.deferred = scan.deferred.saturating_add(1);
                 warn!("durable native SoraFS repair transaction bytes failed validation");
@@ -18662,9 +18873,10 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                     scan.deferred = scan.deferred.saturating_add(1);
                     continue;
                 };
-                let Some(transaction) =
-                    decode_sorafs_repair_signed_transaction(&transaction_bytes, &delivery.chain_id)
-                else {
+                let Some(transaction) = decode_sorafs_repair_signed_transaction(
+                    &transaction_bytes,
+                    &request.network_id,
+                ) else {
                     scan.deferred = scan.deferred.saturating_add(1);
                     warn!("durable native SoraFS repair transaction bytes failed validation");
                     continue;
@@ -18781,11 +18993,14 @@ async fn sign_sorafs_repair_transaction(
     signer: Arc<dyn crate::SoraFsRepairTransactionSigner>,
     request: &sorafs_node::repair_transaction_forwarder::RepairTransactionSigningRequestV1,
 ) -> Option<(SignedTransaction, Vec<u8>)> {
-    if signer.authority() != request.authority || request.chain_id != *state.chain_id {
+    if signer.authority() != request.authority
+        || request.network_id != *state.state.network_id_ref()
+        || request.chain_id != *state.chain_id
+    {
         return None;
     }
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id,
         request.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -18811,7 +19026,7 @@ async fn sign_sorafs_repair_transaction(
 
 fn decode_sorafs_repair_signed_transaction(
     bytes: &[u8],
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
 ) -> Option<SignedTransaction> {
     let max_bytes =
         sorafs_node::repair_transaction_forwarder::REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1;
@@ -18832,7 +19047,7 @@ fn decode_sorafs_repair_signed_transaction(
         norito::decode_from_bytes_with_limits::<SignedTransaction>(bytes, limits).ok()?;
     if norito::to_bytes(&transaction).ok()?.as_slice() != bytes
         || transaction.verify_signature().is_err()
-        || transaction.chain() != expected_chain_id
+        || transaction.network_id() != Some(expected_network_id)
     {
         return None;
     }
@@ -18845,11 +19060,10 @@ async fn submit_sorafs_repair_transaction(
     transaction_bytes: Vec<u8>,
     transaction: SignedTransaction,
 ) -> bool {
-    if transaction.chain() != state.chain_id.as_ref() {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
         return false;
     }
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,
@@ -19283,6 +19497,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit(
     let signing_request =
         sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionSigningRequestV1 {
             operation_id: [0; 32],
+            network_id: *state.state.network_id_ref(),
             chain_id: (*state.chain_id).clone(),
             authority: deposit.expected.payer_account.clone(),
             operation: operation.clone(),
@@ -19353,6 +19568,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit(
     }
     let context =
         sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionContextV1 {
+            network_id: *state.state.network_id_ref(),
             chain_id: (*state.chain_id).clone(),
             finalized_cursor,
             expected_record: None,
@@ -25332,10 +25548,6 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     accept: Option<ExtractAccept>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs pin registry API is not enabled on this node");
-    }
-
     let query = match PinListQuery::parse(raw_query.as_deref()) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
@@ -25346,114 +25558,35 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
         Err(err) => return err.into_response(),
     };
 
-    let (attestation, snapshot) = match pin_snapshot_with_attestation(&state) {
-        Ok(snapshot) => snapshot,
-        Err(err) => return err.into_response(),
+    let expected_finalized_cursor = match query.expected_finalized_cursor() {
+        Ok(cursor) => cursor,
+        Err(response) => return response,
+    };
+    let page = match FindSorafsPinManifests::new(
+        expected_finalized_cursor,
+        query.status,
+        query.after_digest(),
+        query.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32),
+        query
+            .max_bytes
+            .unwrap_or(PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1),
+    )
+    .execute(&state.state.query_view())
+    {
+        Ok(page) => page,
+        Err(error) => return pin_manifest_query_error_response(error),
     };
 
-    let status_filter = match query.status.as_deref() {
-        Some(value) => match parse_pin_status_filter(value) {
-            Some(filter) => Some(filter),
-            None => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "invalid status filter `{value}`; expected pending, approved, or retired"
-                    ),
-                );
-            }
-        },
-        None => None,
-    };
-
-    let mut manifests: Vec<&RegistryManifest> = snapshot.manifests.iter().collect();
-    if let Some(filter) = status_filter {
-        manifests.retain(|manifest| filter.matches(manifest.status_label()));
-    }
-    let policy = &state.sorafs_alias_cache_policy;
-    let enforcement = state.sorafs_alias_enforcement;
-    let now_secs = crate::sorafs::unix_now_secs();
-
-    let total = manifests.len();
-    let limit = normalize_limit(query.limit);
-    let offset = normalize_offset(query.offset, total);
-    let end = offset.saturating_add(limit).min(total);
-
-    let page = &manifests[offset..end];
-    let mut manifests_json = Vec::with_capacity(page.len());
-    for manifest in page {
-        let mut value = match manifest.to_json() {
-            Ok(value) => value,
-            Err(err) => {
-                error!(?err, "failed to serialize pin registry manifests");
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to serialize pin registry manifests",
-                );
-            }
-        };
-        if let Value::Object(mut map) = value {
-            let lineage = snapshot.lineage_for(manifest.digest_hex());
-            map.insert("lineage".into(), lineage_to_json(&lineage));
-            if let Some(alias) = snapshot.alias_by_manifest_digest(manifest.digest_hex()) {
-                let governance = manifest.governance_summary();
-                match prepare_alias_presentation(
-                    alias,
-                    &lineage,
-                    &governance,
-                    policy,
-                    enforcement,
-                    &state.telemetry,
-                    now_secs,
-                ) {
-                    Ok(presentation) => {
-                        map.insert(
-                            "cache_evaluation".into(),
-                            build_cache_evaluation_json(
-                                &presentation.evaluation,
-                                &presentation.decision,
-                                policy,
-                            ),
-                        );
-                    }
-                    Err(err) => return err.into_response(),
-                }
-            }
-            value = Value::Object(map);
-        }
-        manifests_json.push(value);
-    }
-
-    let response = json_object(vec![
-        json_entry("attestation", attestation),
-        json_entry("total_count", total as u64),
-        json_entry("returned_count", manifests_json.len() as u64),
-        json_entry("offset", offset as u64),
-        json_entry("limit", limit as u64),
-        json_entry("manifests", Value::Array(manifests_json)),
-    ]);
-    match format {
-        crate::utils::ResponseFormat::Json => {
-            crate::utils::respond_value_with_format(response, format)
-        }
+    let mut response = match format {
+        crate::utils::ResponseFormat::Json => (StatusCode::OK, JsonBody(page)).into_response(),
         crate::utils::ResponseFormat::Norito => {
-            let json_text = match json::to_string(&response) {
-                Ok(value) => value,
-                Err(err) => {
-                    error!(?err, "failed to serialize pin registry response");
-                    return json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to serialize pin registry response",
-                    );
-                }
-            };
-            let bytes = match norito::to_bytes(&json_text) {
+            let bytes = match norito::to_bytes(&page) {
                 Ok(bytes) => bytes,
                 Err(err) => {
-                    error!(?err, "failed to encode pin registry Norito response");
+                    error!(?err, "failed to encode finalized pin-manifest page");
                     return json_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to encode pin registry response",
+                        "failed to encode finalized pin-manifest page",
                     );
                 }
             };
@@ -25463,7 +25596,12 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
                 .body(Body::from(bytes))
                 .expect("build pin registry Norito response")
         }
-    }
+    };
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -32774,6 +32912,57 @@ mod app_api_tests {
     }
 
     #[test]
+    fn pin_list_query_is_finalized_keyset_and_strictly_bounded() {
+        let block_hash = "11".repeat(32);
+        let after_digest = "22".repeat(32);
+        let raw = format!(
+            "expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&limit=25&max_bytes=16384&after_digest_hex={after_digest}&status=approved"
+        );
+        let query = PinListQuery::parse(Some(&raw)).expect("canonical finalized pin page query");
+        assert_eq!(query.limit, Some(25));
+        assert_eq!(query.max_bytes, Some(16 * 1024));
+        assert_eq!(query.status, Some(PinStatusKindV1::Approved));
+        assert_eq!(query.after_digest(), Some(ManifestDigest::new([0x22; 32])));
+        assert_eq!(
+            query.expected_finalized_cursor().expect("build cursor"),
+            Some(PinManifestFinalizedCursorV1 {
+                height: 7,
+                block_hash: [0x11; 32],
+            })
+        );
+
+        for invalid in [
+            "offset=1".to_owned(),
+            "limit=0".to_owned(),
+            "limit=01".to_owned(),
+            format!("limit={}", PIN_MANIFEST_QUERY_MAX_ITEMS_V1 + 1),
+            "limit=1&limit=2".to_owned(),
+            format!("max_bytes={}", PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1 - 1),
+            format!("max_bytes={}", PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1 + 1),
+            "status=Approved".to_owned(),
+            "status=approved&status=pending".to_owned(),
+            "sta%74us=approved".to_owned(),
+            "after_digest_hex=00".to_owned(),
+            format!("after_digest_hex={}", "00".repeat(32)),
+            format!("after_digest_hex={}", after_digest.to_ascii_uppercase()),
+            "expected_finalized_height=7".to_owned(),
+            format!("expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=07&expected_finalized_block_hash_hex={block_hash}"),
+            "&limit=1".to_owned(),
+            "limit=1&".to_owned(),
+            "limit=1&&max_bytes=1024".to_owned(),
+        ] {
+            let error = PinListQuery::parse(Some(&invalid))
+                .expect_err("legacy or noncanonical pin-list query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn pin_manifest_readback_query_requires_one_complete_canonical_cursor() {
         let block_hash = "11".repeat(32);
         let query = PinManifestReadbackQuery::parse(Some(&format!(
@@ -33325,25 +33514,6 @@ fn limit_governance_readback_values(mut entries: Vec<Value>, limit: usize) -> (V
 fn normalize_offset(offset: Option<u32>, total: usize) -> usize {
     let requested = offset.unwrap_or(0);
     requested.min(total as u32) as usize
-}
-
-impl PinStatusFilter {
-    fn matches(self, status: &str) -> bool {
-        match self {
-            PinStatusFilter::Pending => status.eq_ignore_ascii_case("pending"),
-            PinStatusFilter::Approved => status.eq_ignore_ascii_case("approved"),
-            PinStatusFilter::Retired => status.eq_ignore_ascii_case("retired"),
-        }
-    }
-}
-
-fn parse_pin_status_filter(value: &str) -> Option<PinStatusFilter> {
-    match value.to_ascii_lowercase().as_str() {
-        "pending" => Some(PinStatusFilter::Pending),
-        "approved" => Some(PinStatusFilter::Approved),
-        "retired" => Some(PinStatusFilter::Retired),
-        _ => None,
-    }
 }
 
 impl ReplicationStatusFilter {
@@ -34545,12 +34715,14 @@ mod advert_tests {
     use blake3;
     use ed25519_dalek::{Signer, SigningKey};
     use http_body_util::BodyExt;
-    use iroha_config::parameters::actual::SorafsTokenConfig;
+    use iroha_config::parameters::actual::{
+        SorafsGovernanceDagService, SorafsGovernanceDagServiceView, SorafsTokenConfig,
+    };
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,
-        state::{State, World},
+        state::{State as CoreState, World},
     };
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature as IrohaSignature, SignatureOf,
@@ -34590,7 +34762,8 @@ mod advert_tests {
             },
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
-                PinFeePayment, PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus,
+                PinFeePayment, PinManifestPageV1, PinManifestRecord,
+                PinPolicy as RegistryPinPolicy, PinResourceUsage, PinStatus,
                 ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
                 ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord,
                 ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
@@ -34601,6 +34774,7 @@ mod advert_tests {
                 ProofOutcomeSignerPolicyV1,
             },
         },
+        state_path::StatePath,
     };
     use iroha_executor_data_model::permission::sorafs::CanManageSorafsProofOutcomePolicy;
     use iroha_primitives::json::Json;
@@ -35042,7 +35216,7 @@ mod advert_tests {
         body: Bytes,
     ) -> Response {
         let Some(boundary) = headers
-            .get(CONTENT_TYPE)
+            .get(header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("multipart/form-data; boundary="))
         else {
@@ -41429,6 +41603,7 @@ mod advert_tests {
         expected_record.evidence_hashes = expected.evidence_hashes.clone();
         let mut request = AppealFinanceTransactionSigningRequestV1 {
             operation_id: [0xA1; 32],
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from("appeal-finance-policy-rotation-test"),
             authority: auth.provider.account.clone(),
             operation,
@@ -42128,8 +42303,6 @@ mod advert_tests {
             expected.escrow_id.as_hash().to_string(),
         );
         let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
-        let authority_reader = Arc::clone(&app);
-
         let response =
             post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
 
@@ -42274,6 +42447,7 @@ mod advert_tests {
             expected.escrow_id.as_hash().to_string(),
         );
         let body = appeal_finance_deposit_settle_body(confirmation, "frivolous");
+        let authority_reader = Arc::clone(&app);
 
         let response =
             post_appeal_finance_deposit_submit_settlement(app, &auth.provider, body).await;
@@ -43884,7 +44058,7 @@ mod advert_tests {
         instruction: InstructionBox,
     ) -> SignedTransaction {
         let mut builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             signer.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -43897,7 +44071,7 @@ mod advert_tests {
     }
 
     #[test]
-    fn moderation_command_contract_requires_exact_chain_signature_route_and_one_instruction() {
+    fn moderation_command_contract_requires_exact_network_signature_route_and_one_instruction() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let assignment: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
             "case-route-1".to_owned(),
@@ -43922,7 +44096,7 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let mut multiple_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -43940,15 +44114,17 @@ mod advert_tests {
         .expect_err("multiple moderation instructions must fail before ingress");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let mut wrong_chain_builder = TransactionBuilder::new(
-            ChainId::from("wrong-moderation-chain"),
+        let mut wrong_network_builder = TransactionBuilder::new(
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xFE; Hash::LENGTH]),
+            )),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        wrong_chain_builder.set_ttl(Duration::from_millis(
+        wrong_network_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
-        let wrong_chain = wrong_chain_builder
+        let wrong_network = wrong_network_builder
             .with_instructions([AcceptSorafsModerationJurorAssignment::new(
                 "case-route-1".to_owned(),
                 "round-1".to_owned(),
@@ -43957,10 +44133,10 @@ mod advert_tests {
             .sign(auth.provider.keypair.private_key());
         let response = validate_moderation_signed_transaction(
             &app,
-            &wrong_chain,
+            &wrong_network,
             ModerationCommandRouteV1::AcceptAssignment,
         )
-        .expect_err("cross-chain moderation transaction must fail before ingress");
+        .expect_err("cross-network moderation transaction must fail before ingress");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let substituted = transaction
@@ -43982,7 +44158,7 @@ mod advert_tests {
             )
         };
         let mut wrong_ttl_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -44001,7 +44177,7 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let mut nonce_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -44026,7 +44202,7 @@ mod advert_tests {
             Json::new("assignment".to_owned()),
         );
         let mut metadata_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -44178,7 +44354,7 @@ mod advert_tests {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let report: InstructionBox = SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]).into();
         let multiple = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -44198,7 +44374,7 @@ mod advert_tests {
         )
         .into();
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -44217,7 +44393,7 @@ mod advert_tests {
         let instruction: InstructionBox =
             SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -44240,7 +44416,7 @@ mod advert_tests {
         let payload =
             vec![0xA5; sorafs_manifest::orderbook::ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1];
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -44267,7 +44443,7 @@ mod advert_tests {
         let instruction: InstructionBox =
             SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -47975,7 +48151,7 @@ mod advert_tests {
     }
 
     fn seed_registry_manifest_for_gateway(
-        state: &State,
+        state: &CoreState,
         manifest: &ManifestV1,
         provider_id: [u8; 32],
     ) {
@@ -48059,10 +48235,10 @@ mod advert_tests {
         block.commit().expect("commit registry seed block");
     }
 
-    fn make_state() -> State {
+    fn make_state() -> CoreState {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        State::new_for_testing(World::new(), kura, query)
+        CoreState::new_for_testing(World::new(), kura, query)
     }
 
     fn default_block_header() -> BlockHeader {
@@ -49677,10 +49853,10 @@ mod advert_tests {
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect body");
-        assert!(
-            !body_bytes.is_empty(),
-            "Norito response body should not be empty"
-        );
+        let page: PinManifestPageV1 = norito::decode_from_bytes(&body_bytes)
+            .expect("decode the typed finalized pin-manifest page");
+        assert!(page.manifests.is_empty());
+        assert!(!page.has_more);
     }
 
     #[tokio::test]
@@ -49708,7 +49884,26 @@ mod advert_tests {
             Metadata::default(),
         );
         manifest_record.approve(7, None);
-        tx.world_mut_for_testing()
+        let global_usage_key = StatePath::from_str("sorafs_pin_accounting_v1/global")
+            .expect("static global usage key");
+        let status_key = StatePath::from_str(&format!(
+            "sorafs_pin_accounting_v1/status/approved/{}",
+            hex::encode(manifest_digest.as_bytes())
+        ))
+        .expect("static status-index prefix plus digest");
+        let global_usage = to_bytes(&PinResourceUsage {
+            manifest_count: 1,
+            content_bytes: content_length,
+        })
+        .expect("encode canonical pin usage");
+        let world = tx.world_mut_for_testing();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(global_usage_key, global_usage);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(status_key, Vec::new());
+        world
             .pin_manifests_mut_for_testing()
             .insert(manifest_digest.clone(), manifest_record);
         tx.apply();
@@ -49755,10 +49950,59 @@ mod advert_tests {
         .await;
         assert_eq!(anchored.status(), StatusCode::OK);
 
+        let list_query = format!(
+            "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}&status=approved",
+            finalized.finalized_cursor.height,
+            hex::encode(finalized.finalized_cursor.block_hash),
+            PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
+        );
+        let list = handle_get_sorafs_pin_registry(
+            State(app.clone()),
+            axum::extract::RawQuery(Some(list_query.clone())),
+            None,
+        )
+        .await;
+        assert_eq!(list.status(), StatusCode::OK);
+        assert_eq!(
+            list.headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store, max-age=0")
+        );
+        let list_body = body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .expect("collect bounded pin page");
+        let page: PinManifestPageV1 =
+            norito::json::from_slice(&list_body).expect("decode bounded pin page");
+        assert_eq!(page.finalized_cursor, finalized.finalized_cursor);
+        assert_eq!(page.charged_usage.manifest_count, 1);
+        assert_eq!(page.charged_usage.content_bytes, content_length);
+        assert_eq!(page.manifests.len(), 1);
+        assert_eq!(page.manifests[0].digest, manifest_digest);
+        assert!(!page.has_more);
+
+        let exhausted = handle_get_sorafs_pin_registry(
+            State(app.clone()),
+            axum::extract::RawQuery(Some(format!(
+                "{list_query}&after_digest_hex={}",
+                hex::encode(manifest_digest.as_bytes())
+            ))),
+            None,
+        )
+        .await;
+        assert_eq!(exhausted.status(), StatusCode::OK);
+        let exhausted_body = body::to_bytes(exhausted.into_body(), usize::MAX)
+            .await
+            .expect("collect exhausted pin page");
+        let exhausted_page: PinManifestPageV1 =
+            norito::json::from_slice(&exhausted_body).expect("decode exhausted pin page");
+        assert!(exhausted_page.manifests.is_empty());
+        assert!(!exhausted_page.has_more);
+
         let mut stale_block_hash = finalized.finalized_cursor.block_hash;
         stale_block_hash[0] ^= 0xFF;
         let stale = handle_get_sorafs_pin_manifest(
-            State(app),
+            State(app.clone()),
             Path(hex::encode(manifest_digest.as_bytes())),
             axum::extract::RawQuery(Some(format!(
                 "expected_finalized_height={}&expected_finalized_block_hash_hex={}",
@@ -49769,6 +50013,19 @@ mod advert_tests {
         )
         .await;
         assert_eq!(stale.status(), StatusCode::CONFLICT);
+
+        let stale_list = handle_get_sorafs_pin_registry(
+            State(app),
+            axum::extract::RawQuery(Some(format!(
+                "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}",
+                finalized.finalized_cursor.height,
+                hex::encode(stale_block_hash),
+                PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
+            ))),
+            None,
+        )
+        .await;
+        assert_eq!(stale_list.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

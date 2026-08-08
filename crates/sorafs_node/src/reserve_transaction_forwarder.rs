@@ -13,7 +13,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     isi::{
         InstructionBox,
@@ -140,7 +140,9 @@ pub enum ReserveTransactionProjectionV1 {
 /// identified by `finalized_cursor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReserveTransactionContextV1 {
-    /// Exact active chain identity for signing and signed-ingress validation.
+    /// Exact genesis-hash-derived domain for signing and signed-ingress validation.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact active governance-authenticated policy record.
     pub policy_record: ReserveAuthorityPolicyRecordV1,
@@ -333,7 +335,9 @@ impl From<ReserveOperationV1> for InstructionBox {
 pub struct ReserveTransactionSigningRequestV1 {
     /// Stable semantic operation identity.
     pub operation_id: [u8; 32],
-    /// Exact active chain identity.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact governed or provider transaction authority.
     pub authority: AccountId,
@@ -413,7 +417,9 @@ pub struct ReserveTransactionPendingV1 {
     pub operation_id: [u8; 32],
     /// Native operation kind.
     pub kind: ReserveTransactionKindV1,
-    /// Exact active chain identity.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact transaction authority.
     pub authority: AccountId,
@@ -502,6 +508,7 @@ pub fn validate_reserve_reconciliation_material_v1(
 ) -> Result<(), ReserveTransactionForwarderError> {
     validate_reserve_pending_delivery_v1(delivery)?;
     let prepared = PreparedReserveOperation::new_bounded(
+        retained.request.network_id,
         retained.request.chain_id.clone(),
         retained.request.authority.clone(),
         retained.policy_record.clone(),
@@ -511,6 +518,7 @@ pub fn validate_reserve_reconciliation_material_v1(
     )
     .map_err(|_| ReserveTransactionForwarderError::InvalidCheckpoint)?;
     if retained.request.operation_id != delivery.operation_id
+        || retained.request.network_id != delivery.network_id
         || retained.request.chain_id != delivery.chain_id
         || retained.request.authority != delivery.authority
         || retained.request.operation.kind() != delivery.kind
@@ -548,7 +556,9 @@ pub struct ReserveTransactionDeadLetterV1 {
     pub operation_id: [u8; 32],
     /// Native operation kind.
     pub kind: ReserveTransactionKindV1,
-    /// Exact active chain identity.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Exact policy digest.
     pub policy_digest: [u8; 32],
@@ -625,6 +635,7 @@ struct StoredPendingReserveTransactionV1 {
     identity_scope: StoredReserveIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     policy_record: ReserveAuthorityPolicyRecordV1,
@@ -643,6 +654,7 @@ impl StoredPendingReserveTransactionV1 {
             sequence: self.sequence,
             operation_id: self.operation_id,
             kind: self.operation.kind(),
+            network_id: self.network_id,
             chain_id: self.chain_id.clone(),
             authority: self.authority.clone(),
             policy_digest: self.policy_record.policy_digest,
@@ -723,6 +735,7 @@ struct StoredDeadReserveTransactionV1 {
     identity_scope: StoredReserveIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     policy_record: ReserveAuthorityPolicyRecordV1,
@@ -915,6 +928,7 @@ impl ReserveTransactionForwarder {
             identity_scope: prepared.identity_scope,
             identity_digest: prepared.identity_digest,
             semantic_digest: prepared.semantic_digest,
+            network_id: prepared.network_id,
             chain_id: prepared.chain_id,
             authority: prepared.authority,
             policy_record: prepared.policy_record,
@@ -1003,6 +1017,7 @@ impl ReserveTransactionForwarder {
             .map(|entry| ReserveTransactionDeadLetterV1 {
                 operation_id: entry.operation_id,
                 kind: entry.operation.kind(),
+                network_id: entry.network_id,
                 chain_id: entry.chain_id.clone(),
                 policy_digest: entry.policy_record.policy_digest,
                 policy_revision: entry.policy_record.policy.revision,
@@ -1051,6 +1066,7 @@ impl ReserveTransactionForwarder {
         claim_for_signing(entry, self.policy.max_attempts)?;
         let request = ReserveTransactionSigningRequestV1 {
             operation_id: entry.operation_id,
+            network_id: entry.network_id,
             chain_id: entry.chain_id.clone(),
             authority: entry.authority.clone(),
             operation: entry.operation.clone(),
@@ -1077,6 +1093,7 @@ impl ReserveTransactionForwarder {
         if prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || prepared.authority != entry.authority
             || prepared.policy_record != entry.policy_record
@@ -1335,6 +1352,7 @@ impl ReserveTransactionForwarder {
                 identity_scope: entry.identity_scope,
                 identity_digest: entry.identity_digest,
                 semantic_digest: entry.semantic_digest,
+                network_id: entry.network_id,
                 chain_id: entry.chain_id,
                 authority: entry.authority,
                 policy_record: entry.policy_record,
@@ -1393,6 +1411,7 @@ struct PreparedReserveOperation {
     identity_scope: StoredReserveIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     policy_record: ReserveAuthorityPolicyRecordV1,
@@ -1413,6 +1432,7 @@ impl PreparedReserveOperation {
         )?
         .clone();
         Self::new_bounded(
+            context.network_id,
             context.chain_id.clone(),
             authority,
             context.policy_record.clone(),
@@ -1423,6 +1443,7 @@ impl PreparedReserveOperation {
     }
 
     fn new(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         policy_record: ReserveAuthorityPolicyRecordV1,
@@ -1440,6 +1461,7 @@ impl PreparedReserveOperation {
             return Err(ReserveTransactionForwarderError::InvalidReserveOperation);
         }
         let semantic_digest = semantic_digest(
+            &network_id,
             &chain_id,
             &authority,
             &policy_record,
@@ -1450,6 +1472,7 @@ impl PreparedReserveOperation {
             identity_scope,
             identity_digest,
             semantic_digest,
+            network_id,
             chain_id,
             authority,
             policy_record,
@@ -1459,6 +1482,7 @@ impl PreparedReserveOperation {
     }
 
     fn new_bounded(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         policy_record: ReserveAuthorityPolicyRecordV1,
@@ -1466,7 +1490,16 @@ impl PreparedReserveOperation {
         operation: ReserveOperationV1,
         max_transaction_bytes: usize,
     ) -> Result<Self, ReserveTransactionForwarderError> {
-        let prepared = Self::new(chain_id, authority, policy_record, projection, operation)?;
+        let prepared = Self::new(
+            network_id,
+            chain_id,
+            authority,
+            policy_record,
+            projection,
+            operation,
+        )?;
+        let network_id_bytes = norito::to_bytes(&prepared.network_id)
+            .map_err(ReserveTransactionForwarderError::CanonicalEncoding)?;
         let chain_id_bytes = norito::to_bytes(&prepared.chain_id)
             .map_err(ReserveTransactionForwarderError::CanonicalEncoding)?;
         let authority_bytes = norito::to_bytes(&prepared.authority)
@@ -1477,9 +1510,10 @@ impl PreparedReserveOperation {
             .map_err(ReserveTransactionForwarderError::CanonicalEncoding)?;
         let operation_bytes = norito::to_bytes(&prepared.operation)
             .map_err(ReserveTransactionForwarderError::CanonicalEncoding)?;
-        if chain_id_bytes
+        if network_id_bytes
             .len()
-            .checked_add(authority_bytes.len())
+            .checked_add(chain_id_bytes.len())
+            .and_then(|length| length.checked_add(authority_bytes.len()))
             .and_then(|length| length.checked_add(policy_bytes.len()))
             .and_then(|length| length.checked_add(projection_bytes.len()))
             .and_then(|length| length.checked_add(operation_bytes.len()))
@@ -1515,8 +1549,8 @@ impl PreparedReserveOperation {
         {
             return Err(ReserveTransactionForwarderError::InvalidSignedTransaction);
         }
-        if transaction.chain() != &context.chain_id {
-            return Err(ReserveTransactionForwarderError::ChainIdMismatch);
+        if transaction.network_id() != Some(&context.network_id) {
+            return Err(ReserveTransactionForwarderError::NetworkIdMismatch);
         }
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(ReserveTransactionForwarderError::InvalidSignedTransaction);
@@ -1526,6 +1560,7 @@ impl PreparedReserveOperation {
         }
         let operation = decode_native_operation(&instructions[0])?;
         Self::new_bounded(
+            context.network_id,
             context.chain_id.clone(),
             transaction.authority().clone(),
             context.policy_record.clone(),
@@ -1961,6 +1996,7 @@ fn revision_identity_digest(
 }
 
 fn semantic_digest(
+    network_id: &NetworkId,
     chain_id: &ChainId,
     authority: &AccountId,
     policy_record: &ReserveAuthorityPolicyRecordV1,
@@ -1976,6 +2012,7 @@ fn semantic_digest(
         norito::to_bytes(operation).map_err(ReserveTransactionForwarderError::CanonicalEncoding)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(SEMANTIC_DIGEST_DOMAIN_V1);
+    hasher.update(network_id.as_bytes());
     update_length_prefixed(&mut hasher, chain_id.as_str().as_bytes())?;
     update_length_prefixed(&mut hasher, authority.as_bytes())?;
     update_length_prefixed(&mut hasher, &policy)?;
@@ -2110,6 +2147,7 @@ fn context_for_stored_entry(
     entry: &StoredPendingReserveTransactionV1,
 ) -> Result<ReserveTransactionContextV1, ReserveTransactionForwarderError> {
     let context = ReserveTransactionContextV1 {
+        network_id: entry.network_id,
         chain_id: entry.chain_id.clone(),
         policy_record: entry.policy_record.clone(),
         projection: entry.projection.clone(),
@@ -2125,6 +2163,7 @@ fn reconciliation_material(
     ReserveTransactionReconciliationV1 {
         request: ReserveTransactionSigningRequestV1 {
             operation_id: entry.operation_id,
+            network_id: entry.network_id,
             chain_id: entry.chain_id.clone(),
             authority: entry.authority.clone(),
             operation: entry.operation.clone(),
@@ -2173,6 +2212,7 @@ fn validate_checkpoint(
     let mut previous_sequence = 0_u64;
     for entry in &checkpoint.pending {
         let prepared = PreparedReserveOperation::new_bounded(
+            entry.network_id,
             entry.chain_id.clone(),
             entry.authority.clone(),
             entry.policy_record.clone(),
@@ -2190,6 +2230,7 @@ fn validate_checkpoint(
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || operation_id(&prepared) != entry.operation_id
             || !validate_reserve_delivery(entry, policy.max_attempts)
@@ -2210,6 +2251,7 @@ fn validate_checkpoint(
             if decoded.identity_scope != entry.identity_scope
                 || decoded.identity_digest != entry.identity_digest
                 || decoded.semantic_digest != entry.semantic_digest
+                || decoded.network_id != entry.network_id
                 || decoded.chain_id != entry.chain_id
                 || decoded.authority != entry.authority
                 || decoded.policy_record != entry.policy_record
@@ -2240,6 +2282,7 @@ fn validate_checkpoint(
     }
     for entry in &checkpoint.dead_letters {
         let prepared = PreparedReserveOperation::new_bounded(
+            entry.network_id,
             entry.chain_id.clone(),
             entry.authority.clone(),
             entry.policy_record.clone(),
@@ -2256,6 +2299,7 @@ fn validate_checkpoint(
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || operation_id(&prepared) != entry.operation_id
             || !identities.insert((entry.identity_scope, entry.identity_digest))
@@ -2270,6 +2314,7 @@ fn validate_checkpoint(
                 identity_scope: entry.identity_scope,
                 identity_digest: entry.identity_digest,
                 semantic_digest: entry.semantic_digest,
+                network_id: entry.network_id,
                 chain_id: entry.chain_id.clone(),
                 authority: entry.authority.clone(),
                 policy_record: entry.policy_record.clone(),
@@ -2292,6 +2337,7 @@ fn validate_checkpoint(
             if decoded.identity_scope != entry.identity_scope
                 || decoded.identity_digest != entry.identity_digest
                 || decoded.semantic_digest != entry.semantic_digest
+                || decoded.network_id != entry.network_id
                 || decoded.chain_id != entry.chain_id
                 || decoded.authority != entry.authority
                 || decoded.policy_record != entry.policy_record
@@ -2416,9 +2462,9 @@ pub enum ReserveTransactionForwarderError {
     /// Signed bytes are malformed, noncanonical, unsigned, or have the wrong executable.
     #[error("signed reserve transaction is invalid")]
     InvalidSignedTransaction,
-    /// Signed transaction belongs to a different chain.
-    #[error("signed reserve transaction chain id does not match the active chain")]
-    ChainIdMismatch,
+    /// Signed transaction belongs to a different exact network.
+    #[error("signed reserve transaction network id does not match the active network")]
+    NetworkIdMismatch,
     /// Native reserve operation violates a first-release bound.
     #[error("native reserve operation is invalid")]
     InvalidReserveOperation,
@@ -2526,10 +2572,11 @@ impl From<CheckpointStoreError> for ReserveTransactionForwarderError {
 mod tests {
     use std::{fs, sync::Arc, thread, time::Duration};
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         asset::AssetDefinitionId,
+        block::BlockHeader,
         domain::DomainId,
         isi::{InstructionBox, Log},
         sorafs::{
@@ -2575,6 +2622,16 @@ mod tests {
             height,
             block_hash: [hash_byte; 32],
         }
+    }
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; 32]),
+        ))
+    }
+
+    fn test_network_id() -> NetworkId {
+        network_id(0xA1)
     }
 
     fn policy_record(
@@ -2653,6 +2710,7 @@ mod tests {
         let policy_record = policy_record(operations, decision, 1, None);
         let account = provider_account(provider, policy_record.policy_digest, revision);
         ReserveTransactionContextV1 {
+            network_id: test_network_id(),
             chain_id: ChainId::from("reserve-transaction-forwarder-test"),
             policy_record,
             projection: ReserveTransactionProjectionV1::Provider { account },
@@ -2733,6 +2791,7 @@ mod tests {
         finalized_cursor: ReserveFinalizedCursorV1,
     ) -> ReserveTransactionContextV1 {
         ReserveTransactionContextV1 {
+            network_id: test_network_id(),
             chain_id: ChainId::from("reserve-transaction-forwarder-test"),
             policy_record: policy_record(operations, decision, 1, None),
             projection: ReserveTransactionProjectionV1::Registration {
@@ -2774,8 +2833,8 @@ mod tests {
         instructions: impl IntoIterator<Item = InstructionBox>,
         creation_time_ms: u64,
     ) -> Vec<u8> {
-        signed_bytes_on_chain(
-            ChainId::from("reserve-transaction-forwarder-test"),
+        signed_bytes_on_network(
+            test_network_id(),
             signer,
             authority,
             instructions,
@@ -2783,15 +2842,15 @@ mod tests {
         )
     }
 
-    fn signed_bytes_on_chain(
-        chain_id: ChainId,
+    fn signed_bytes_on_network(
+        network_id: NetworkId,
         signer: &KeyPair,
         authority: AccountId,
         instructions: impl IntoIterator<Item = InstructionBox>,
         creation_time_ms: u64,
     ) -> Vec<u8> {
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3096,8 +3155,8 @@ mod tests {
             ));
         }
 
-        let wrong_chain = signed_bytes_on_chain(
-            ChainId::from("foreign-reserve-chain"),
+        let wrong_network = signed_bytes_on_network(
+            network_id(0xF1),
             &operations,
             account(&operations),
             [operation.clone().into()],
@@ -3106,8 +3165,8 @@ mod tests {
         assert!(matches!(
             ReserveTransactionForwarder::in_memory(forwarder_policy())
                 .unwrap()
-                .enqueue_signed_transaction(&wrong_chain, &context),
-            Err(ReserveTransactionForwarderError::ChainIdMismatch)
+                .enqueue_signed_transaction(&wrong_network, &context),
+            Err(ReserveTransactionForwarderError::NetworkIdMismatch)
         ));
 
         let multiple = signed_bytes(

@@ -10,6 +10,11 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
  *
  * <p>The interface is intentionally expressed in terms of {@link TransportRequest} and {@link
  * TransportResponse} to avoid leaking JVM-specific HTTP client types into Android binaries.
+ * Implementations must inspect {@link TransportRequest#replayPolicy()}. A {@code ONE_SHOT} request
+ * permits one underlying network dispatch only: redirects, authentication follow-ups, connection
+ * retries, and application retries are forbidden even when no response was received. The original
+ * failure must be surfaced so the caller can reconcile by transaction hash or create a freshly
+ * signed request.
  */
 public interface HttpTransportExecutor extends TransportExecutor {
 

@@ -30,6 +30,7 @@ import {
   buildMultisigContractCallProposeRequest,
   buildMultisigProposeRequest,
   canonicalRequestSignatureMessage,
+  NetworkId,
   noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
   signEd25519,
@@ -60,9 +61,11 @@ import {
 
 const BASE_URL = "https://localhost:8080";
 const GOVERNANCE_PROPOSAL_ID = "ab".repeat(32);
-const VK_SIGNING_CHAIN_ID = "vk-test";
+const VK_SIGNING_NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
-  VK_SIGNING_CHAIN_ID,
+  VK_SIGNING_NETWORK_ID,
 );
 const IVM_ARTIFACT_MAX_BASE64_LENGTH =
   Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
@@ -184,44 +187,22 @@ function authoritativePipelineStatus(
   {
     resolvedFrom = ["Applied", "Rejected", "Expired"].includes(kind) ? "state" : "queue",
     blockHeight = kind === "Applied" ? 1 : undefined,
-    rejectionReason = undefined,
   } = {},
 ) {
   const status = {
     kind,
     ...(blockHeight === undefined ? {} : { block_height: blockHeight }),
-    ...(rejectionReason === undefined ? {} : { rejection_reason: rejectionReason }),
-  };
-  const contentStatus = {
-    ...status,
-    content:
-      blockHeight === undefined && rejectionReason === undefined
-        ? null
-        : {
-            ...(blockHeight === undefined ? {} : { block_height: blockHeight }),
-            ...(rejectionReason === undefined ? {} : { rejection_reason: rejectionReason }),
-          },
   };
   return {
     hash,
     status,
-    summary: kind,
-    diagnostics: [],
     scope: "global",
     resolved_from: resolvedFrom,
-    routes: [],
-    kind: "Transaction",
-    content: {
-      hash,
-      status: contentStatus,
-    },
   };
 }
 
 function authoritativePipelineStatusResponse(hash, kind, options = {}) {
-  const { routes: _routes, kind: _envelopeKind, content: _content, ...response } =
-    authoritativePipelineStatus(hash, kind, options);
-  return response;
+  return authoritativePipelineStatus(hash, kind, options);
 }
 
 function noncanonicalStandardBase64PadBitAlias(encoded) {
@@ -480,6 +461,16 @@ function canonicalReadOptions(options = {}) {
       accountId: CANONICAL_AUTH_ALIAS,
       privateKey: Buffer.alloc(32, 0x0c),
     },
+  };
+}
+
+function ivmProveOptions(options = {}) {
+  return {
+    canonicalAuth: {
+      accountId: SAMPLE_ACCOUNT_ID,
+      privateKey: Buffer.alloc(32, 0x0d),
+    },
+    ...options,
   };
 }
 
@@ -1508,14 +1499,14 @@ function verifyingKeyTransactionPayload(
   request,
   operation,
   {
-    chainId = VK_SIGNING_CHAIN_ID,
+    networkId = VK_SIGNING_NETWORK_ID,
     authority = request.authority,
     recordOverrides = {},
   } = {},
 ) {
   return buildBrowserVerifyingKeyTransactionPayload(
     {
-      chainId,
+      networkId,
       authority,
       instructions: [
         verifyingKeyInstructionForRequest(
@@ -2829,7 +2820,7 @@ test("verifying key mutation helpers enforce the unsigned-draft response contrac
   );
 });
 
-test("verifying key drafts are bound to chain, authority, operation, count, and full record", async () => {
+test("verifying key drafts are bound to NetworkId, authority, operation, count, and full record", async () => {
   const request = normalizedVerifyingKeyRequest();
   const canonical = verifyingKeyTransactionPayload(request, "register");
   const cases = [
@@ -2844,11 +2835,11 @@ test("verifying key drafts are bound to chain, authority, operation, count, and 
       /must contain exactly one instruction/,
     ],
     [
-      "wrong chain",
+      "wrong network",
       verifyingKeyTransactionPayload(request, "register", {
-        chainId: "other-chain",
+        networkId: NetworkId.fromBytes(Uint8Array.from({ length: 32 }, () => 0xff)),
       }),
-      /changed the configured chain ID/,
+      /changed the configured NetworkId/,
     ],
     [
       "wrong authority",
@@ -2888,7 +2879,7 @@ test("verifying key drafts are bound to chain, authority, operation, count, and 
   }
 });
 
-test("verifying key local-signing APIs fail closed without immutable chain context", async () => {
+test("verifying key local-signing APIs fail closed without immutable NetworkId context", async () => {
   let fetchCount = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -2906,38 +2897,42 @@ test("verifying key local-signing APIs fail closed without immutable chain conte
   );
   assert.equal(fetchCount, 0);
 
-  assert.throws(
-    () =>
-      new ToriiClient(BASE_URL, {
-        chainId: VK_SIGNING_CHAIN_ID,
-        fetchImpl: async () => {
-          fetchCount += 1;
-          return createVerifyingKeyDraftResponse();
-        },
-      }),
-    /options\.chainId is not supported; use a LocalSigningContext/,
-  );
+  for (const field of ["chain", "chainId", "chain_id", "networkId"]) {
+    assert.throws(
+      () =>
+        new ToriiClient(BASE_URL, {
+          [field]: field === "networkId" ? VK_SIGNING_NETWORK_ID : "vk-test",
+          fetchImpl: async () => {
+            fetchCount += 1;
+            return createVerifyingKeyDraftResponse();
+          },
+        }),
+      new RegExp(`options\\.${field} is not supported; use a LocalSigningContext`, "u"),
+      field,
+    );
+  }
   assert.equal(fetchCount, 0);
 });
 
 test("verifying key LocalSigningContext is canonical and immutable", () => {
-  const context = new LocalSigningContext("vk-test");
-  assert.equal(context.chainId, "vk-test");
+  const context = new LocalSigningContext(VK_SIGNING_NETWORK_ID);
+  assert.equal(context.networkId, VK_SIGNING_NETWORK_ID);
   assert.equal(Object.isFrozen(context), true);
   assert.throws(
     () => {
-      context.chainId = "other-chain";
+      context.networkId = NetworkId.fromBytes(
+        Uint8Array.from({ length: 32 }, () => 0xff),
+      );
     },
     TypeError,
   );
-  assert.throws(
-    () => new LocalSigningContext(" vk-test"),
-    /must not contain surrounding whitespace/,
-  );
+  for (const invalid of ["vk-test", VK_SIGNING_NETWORK_ID.toBytes(), {}]) {
+    assert.throws(() => new LocalSigningContext(invalid), /must be a NetworkId/);
+  }
   assert.throws(
     () =>
       new ToriiClient(BASE_URL, {
-        localSigningContext: { chainId: "vk-test" },
+        localSigningContext: { networkId: VK_SIGNING_NETWORK_ID },
       }),
     /must be a LocalSigningContext/,
   );
@@ -4099,6 +4094,7 @@ test("registerSorafsPinManifest posts only a versioned signed transaction", asyn
 
   assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/pin/register`);
   assert.equal(captured?.init?.method, "POST");
+  assert.equal(captured?.init?.redirect, "error");
   assert.equal(captured?.init?.headers["Content-Type"], "application/x-norito");
   assert.equal(captured?.init?.headers.Accept, "application/json");
   assert.deepEqual(captured?.init?.body, Buffer.from([1, ...signedTransaction]));
@@ -5633,6 +5629,7 @@ test("SoraFS orderbook helpers use finalized native pages and transaction ingres
     const call = calls.at(-1);
     assert.equal(call.url, `${BASE_URL}${path}`);
     assert.equal(call.init.method, "POST");
+    assert.equal(call.init.redirect, "error");
     assert.deepEqual(Buffer.from(call.init.body), Buffer.from([1, 0xde, 0xad]));
     assert.equal(call.init.headers["Content-Type"], "application/x-norito");
     assert.equal(call.init.headers.Accept, "application/x-norito, application/json");
@@ -9482,6 +9479,7 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
     }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
     assert.equal(init.method, "POST");
+    assert.equal(init.redirect, "error");
     assert.equal(init.headers["Content-Type"], "application/x-norito");
     assert.equal(init.headers.Accept, "application/json");
     assert.ok(Buffer.isBuffer(init.body));
@@ -9789,11 +9787,12 @@ test("submitTransactionBatch requires a canonical accepted-count admission heade
 test("submitTransactionBatch never retries a lost POST response", async () => {
   let batchPosts = 0;
   const lostResponse = new TypeError("socket closed after request bytes were sent");
-  const fetchImpl = async (url) => {
+  const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createBatchCapabilitiesResponse();
     }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    assert.equal(init.redirect, "error");
     batchPosts += 1;
     throw lostResponse;
   };
@@ -9819,11 +9818,12 @@ test("submitTransactionBatch never retries a lost POST response", async () => {
 
 test("submitTransactionBatch never retries retryable HTTP statuses", async () => {
   let batchPosts = 0;
-  const fetchImpl = async (url) => {
+  const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createBatchCapabilitiesResponse();
     }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    assert.equal(init.redirect, "error");
     batchPosts += 1;
     return createResponse({ status: 503, textBody: "temporarily unavailable" });
   };
@@ -9838,6 +9838,35 @@ test("submitTransactionBatch never retries retryable HTTP statuses", async () =>
   await assert.rejects(
     () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
     (error) => error instanceof ToriiHttpError && error.status === 503,
+  );
+  assert.equal(batchPosts, 1);
+});
+
+test("submitTransactionBatch rejects 308 without redirecting or retrying", async () => {
+  let batchPosts = 0;
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createBatchCapabilitiesResponse();
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    assert.equal(init.redirect, "error");
+    batchPosts += 1;
+    return createResponse({
+      status: 308,
+      headers: { location: "https://redirect.example/replayed-batch" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    maxRetries: 9,
+    retryMethods: ["POST"],
+    retryStatuses: [308],
+    __nativeBinding: {},
+  });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    (error) => error instanceof ToriiHttpError && error.status === 308,
   );
   assert.equal(batchPosts, 1);
 });
@@ -9893,158 +9922,124 @@ test("submitTransaction deframes NRT0 payloads before posting versioned pipeline
   assert.deepEqual(response, { ok: true });
 });
 
-test("submitTransaction retries transient failures via pipeline profile", async () => {
+test("submitTransaction never retries a retryable HTTP status", async () => {
   const payload = new Uint8Array([0xaa]);
   let attempts = 0;
   const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          abi_version: 1,
-          data_model_version: 4,
-          crypto: {
-            sm: {
-              enabled: false,
-              default_hash: "sha2_256",
-              allowed_signing: ["ed25519"],
-              sm2_distid_default: "",
-              openssl_preview: false,
-              acceleration: {
-                scalar: true,
-                neon_sm3: false,
-                neon_sm4: false,
-                policy: "scalar-only",
-              },
-            },
-            curves: {
-              registry_version: 1,
-              allowed_curve_ids: [1],
-            },
-          },
-        },
-        headers: { "content-type": "application/json" },
-      });
+      return createBatchCapabilitiesResponse();
     }
     attempts += 1;
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
-    if (attempts === 1) {
-      return createResponse({ status: 503, jsonData: { error: "busy" } });
-    }
-    return createResponse({
-      status: 202,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
+    assert.equal(init.redirect, "error");
+    return createResponse({ status: 503, jsonData: { error: "busy" } });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
-  const response = await client.submitTransaction(payload);
-  assert.deepEqual(response, { ok: true });
-  assert.equal(attempts, 2);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    maxRetries: 9,
+    retryMethods: ["POST"],
+    retryStatuses: [503],
+  });
+  await assert.rejects(
+    () => client.submitTransaction(payload),
+    (error) => error instanceof ToriiHttpError && error.status === 503,
+  );
+  assert.equal(attempts, 1);
 });
 
-test("submitTransaction retries broken pipe failures via pipeline profile", async () => {
+test("submitTransaction never retries a network failure after dispatch", async () => {
   const payload = new Uint8Array([0xab]);
   let attempts = 0;
+  const networkError = Object.assign(new TypeError("write EPIPE"), {
+    code: "EPIPE",
+  });
   const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          abi_version: 1,
-          data_model_version: 4,
-          crypto: {
-            sm: {
-              enabled: false,
-              default_hash: "sha2_256",
-              allowed_signing: ["ed25519"],
-              sm2_distid_default: "",
-              openssl_preview: false,
-              acceleration: {
-                scalar: true,
-                neon_sm3: false,
-                neon_sm4: false,
-                policy: "scalar-only",
-              },
-            },
-            curves: {
-              registry_version: 1,
-              allowed_curve_ids: [1],
-            },
-          },
-        },
-        headers: { "content-type": "application/json" },
-      });
+      return createBatchCapabilitiesResponse();
     }
     attempts += 1;
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
-    if (attempts === 1) {
-      throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    }
-    return createResponse({
-      status: 202,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
+    assert.equal(init.redirect, "error");
+    throw networkError;
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
-  const response = await client.submitTransaction(payload);
-  assert.deepEqual(response, { ok: true });
-  assert.equal(attempts, 2);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    maxRetries: 9,
+    retryMethods: ["POST"],
+  });
+  await assert.rejects(
+    () => client.submitTransaction(payload),
+    (error) => error === networkError,
+  );
+  assert.equal(attempts, 1);
 });
 
-test("submitTransaction retries broken pipe failures without an explicit error code", async () => {
-  const payload = new Uint8Array([0xac]);
-  let attempts = 0;
+test("submitTransaction may retry safe capability preflight before one-shot dispatch", async () => {
+  let capabilityAttempts = 0;
+  let submissionAttempts = 0;
   const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          abi_version: 1,
-          data_model_version: 4,
-          crypto: {
-            sm: {
-              enabled: false,
-              default_hash: "sha2_256",
-              allowed_signing: ["ed25519"],
-              sm2_distid_default: "",
-              openssl_preview: false,
-              acceleration: {
-                scalar: true,
-                neon_sm3: false,
-                neon_sm4: false,
-                policy: "scalar-only",
-              },
-            },
-            curves: {
-              registry_version: 1,
-              allowed_curve_ids: [1],
-            },
-          },
-        },
-        headers: { "content-type": "application/json" },
-      });
+      capabilityAttempts += 1;
+      if (capabilityAttempts === 1) {
+        return createResponse({ status: 503, jsonData: { error: "busy" } });
+      }
+      return createBatchCapabilitiesResponse();
     }
-    attempts += 1;
+    submissionAttempts += 1;
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
-    assert.equal(init.method, "POST");
-    if (attempts === 1) {
-      throw new Error("write EPIPE");
-    }
+    assert.equal(init.redirect, "error");
     return createResponse({
       status: 202,
       jsonData: { ok: true },
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
-  const response = await client.submitTransaction(payload);
-  assert.deepEqual(response, { ok: true });
-  assert.equal(attempts, 2);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    maxRetries: 2,
+    backoffInitialMs: 0,
+  });
+
+  assert.deepEqual(
+    await client.submitTransaction(Uint8Array.of(0xad)),
+    { ok: true },
+  );
+  assert.equal(capabilityAttempts, 2);
+  assert.equal(submissionAttempts, 1);
 });
+
+for (const redirectStatus of [307, 308]) {
+  test(`submitTransaction rejects ${redirectStatus} without redirecting or retrying`, async () => {
+    let attempts = 0;
+    const fetchImpl = async (url, init) => {
+      if (url === `${BASE_URL}/v1/node/capabilities`) {
+        return createBatchCapabilitiesResponse();
+      }
+      attempts += 1;
+      assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+      assert.equal(init.method, "POST");
+      assert.equal(init.redirect, "error");
+      return createResponse({
+        status: redirectStatus,
+        headers: { location: "https://redirect.example/replayed" },
+      });
+    };
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl,
+      maxRetries: 9,
+      retryMethods: ["POST"],
+      retryStatuses: [redirectStatus],
+    });
+
+    await assert.rejects(
+      () => client.submitTransaction(Uint8Array.of(0xac)),
+      (error) => error instanceof ToriiHttpError && error.status === redirectStatus,
+    );
+    assert.equal(attempts, 1);
+  });
+}
 
 test("submitTransaction rejects unavailable pipeline submit", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
@@ -10503,19 +10498,13 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
     );
     return createResponse({
       status: 200,
-      jsonData: {
-        kind: "Transaction",
-        content: { hash: hashParam, status: { kind: "Committed", content: null } },
-      },
+      jsonData: authoritativePipelineStatusResponse(hashParam, "Committed"),
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getTransactionStatus(hashParam);
-  assert.deepEqual(result, {
-    kind: "Transaction",
-    content: { hash: hashParam, status: { kind: "Committed", content: null } },
-  });
+  assert.deepEqual(result, authoritativePipelineStatusResponse(hashParam, "Committed"));
   const explicitUndefinedResult = await client.getTransactionStatus(hashParam, {
     scope: undefined,
   });
@@ -10529,13 +10518,7 @@ test("getTransactionStatus rejects a status envelope for a different transaction
     fetchImpl: async () =>
       createResponse({
         status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: {
-            hash: returnedHash,
-            status: { kind: "Applied", content: null },
-          },
-        },
+        jsonData: authoritativePipelineStatusResponse(returnedHash, "Applied"),
         headers: { "content-type": "application/json" },
       }),
   });
@@ -10546,19 +10529,16 @@ test("getTransactionStatus rejects a status envelope for a different transaction
   );
 });
 
-test("getTransactionStatus rejects conflicting top-level and canonical status fields", async () => {
+test("getTransactionStatus rejects retired diagnostic fields", async () => {
   const requestedHash = "ce".repeat(32);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
         status: 200,
         jsonData: {
-          kind: "Transaction",
-          status: { kind: "Applied" },
-          content: {
-            hash: requestedHash,
-            status: { kind: "Pending", content: null },
-          },
+          ...authoritativePipelineStatusResponse(requestedHash, "Rejected"),
+          status: { kind: "Rejected", rejection_reason: "secret" },
+          diagnostics: [{ message: "secret" }],
         },
         headers: { "content-type": "application/json" },
       }),
@@ -10566,7 +10546,7 @@ test("getTransactionStatus rejects conflicting top-level and canonical status fi
 
   await assert.rejects(
     () => client.getTransactionStatus(requestedHash),
-    /must not include top-level status/,
+    /diagnostics/,
   );
 });
 
@@ -10600,22 +10580,7 @@ test("getTransactionStatus normalizes typed pipeline status responses", async ()
     status: {
       kind: "Applied",
       block_height: 7,
-      content: {
-        block_height: 7,
-      },
     },
-    kind: "Transaction",
-    content: {
-      hash: hashHex,
-      status: {
-        kind: "Applied",
-        block_height: 7,
-        content: {
-          block_height: 7,
-        },
-      },
-    },
-    routes: [],
   });
 });
 
@@ -10743,17 +10708,16 @@ test("getTransactionStatus validates scope option", async () => {
       }
       return createResponse({
         status: 200,
-        jsonData: {
-          kind: "Transaction",
-          content: { hash, status: { kind: "Committed", content: null } },
-        },
+        jsonData: authoritativePipelineStatusResponse(hash, "Committed", {
+          resolvedFrom: "cache",
+        }),
         headers: { "content-type": "application/json" },
       });
     };
     const client = new ToriiClient(BASE_URL, { fetchImpl, maxRetries: 0 });
     const result = await client.getTransactionStatus(hash);
     assert.equal(attempts, 2);
-    assert.equal(result?.content?.status?.kind, "Committed");
+    assert.equal(result?.status?.kind, "Committed");
   });
 
 test("getTransactionStatus returns null when Torii responds without a body", async () => {
@@ -10986,14 +10950,18 @@ test("getTransactionStatus rejects on malformed payloads", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: { kind: "Transaction", content: { status: { kind: "Approved" } } },
+      jsonData: {
+        status: { kind: "Approved" },
+        scope: "global",
+        resolved_from: "queue",
+      },
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(client.getTransactionStatus(hashHex), /content\.hash/);
+  await assert.rejects(client.getTransactionStatus(hashHex), /\.hash/);
 });
 
-test("getTransactionStatusTyped normalises pipeline payload", async () => {
+test("getTransactionStatusTyped rejects retired status envelopes", async () => {
   const hashHex = "cd".repeat(32);
   const payload = {
     kind: "Transaction",
@@ -11010,14 +10978,10 @@ test("getTransactionStatusTyped normalises pipeline payload", async () => {
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getTransactionStatusTyped(hashHex);
-  assert.ok(result, "typed payload should be returned");
-  assert.equal(result?.kind, "Transaction");
-  assert.equal(result?.hashHex, hashHex);
-  assert.equal(result?.authority, FIXTURE_ALICE_ID);
-  assert.equal(result?.status?.kind, "Committed");
-  assert.deepEqual(result?.status?.content, { receipt: "ok" });
-  assert.deepEqual(result?.raw.kind, "Transaction");
+  await assert.rejects(
+    () => client.getTransactionStatusTyped(hashHex),
+    /kind|content/,
+  );
 });
 
 test("getTransactionStatusTyped normalises typed pipeline status responses", async () => {
@@ -11039,18 +11003,17 @@ test("getTransactionStatusTyped normalises typed pipeline status responses", asy
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getTransactionStatusTyped(hashHex);
   assert.ok(result, "typed payload should be returned");
-  assert.equal(result?.kind, "Transaction");
-  assert.equal(result?.hashHex, hashHex);
-  assert.equal(result?.authority, null);
+  assert.equal(result?.hash, hashHex);
   assert.equal(result?.status?.kind, "Applied");
-  assert.deepEqual(result?.status?.content, { block_height: 11 });
-  assert.deepEqual(result?.raw.status, {
-    kind: "Applied",
-    block_height: 11,
-    content: {
-      block_height: 11,
-    },
-  });
+  assert.equal(result?.status?.block_height, 11);
+  assert.equal(result?.scope, "global");
+  assert.equal(result?.resolved_from, "state");
+  assert.deepEqual(Object.keys(result ?? {}).sort(), [
+    "hash",
+    "resolved_from",
+    "scope",
+    "status",
+  ]);
 });
 
 test("getTransactionStatusTyped returns null for empty payload", async () => {
@@ -11715,12 +11678,10 @@ test("waitForTransactionStatus always requests global status", async () => {
 test("waitForTransactionStatusTyped normalises payload", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   const txHash = "11".repeat(32);
-  client.waitForTransactionStatus = async () => ({
-    kind: "Transaction",
-    content: { hash: txHash, status: { kind: "Committed" } },
-  });
+  client.waitForTransactionStatus = async () =>
+    authoritativePipelineStatus(txHash, "Committed");
   const typed = await client.waitForTransactionStatusTyped(txHash, { intervalMs: 0 });
-  assert.equal(typed?.hashHex, txHash);
+  assert.equal(typed?.hash, txHash);
   assert.equal(typed?.status?.kind, "Committed");
 });
 
@@ -11766,20 +11727,20 @@ test("waitForTransactionStatus rejects on failure status", async () => {
   );
 });
 
-test("waitForTransactionStatus surfaces rejection reason on failure status", async () => {
+test("waitForTransactionStatus does not surface retired rejection details", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   const rejectionHash = "23".repeat(32);
   const rejectionReason = "build_claim_missing";
   client.getTransactionStatus = async () =>
-    authoritativePipelineStatus(rejectionHash, "Rejected", { rejectionReason });
+    authoritativePipelineStatus(rejectionHash, "Rejected");
 
   await assert.rejects(
     () => client.waitForTransactionStatus(rejectionHash, { intervalMs: 0, maxAttempts: 1 }),
     (error) =>
       error instanceof TransactionStatusError
       && error.status === "Rejected"
-      && error.rejectionReason === rejectionReason
-      && String(error.message).includes(`rejection_reason=${rejectionReason}`),
+      && !("rejectionReason" in error)
+      && !String(error.message).includes(rejectionReason),
   );
 });
 
@@ -11911,14 +11872,13 @@ test("submitTransactionAndWaitTyped normalises the final payload", async () => {
   });
   const typedHash = "66".repeat(32);
   const pipelineStatus = {
-    kind: "Transaction",
-    content: { hash: typedHash, status: { kind: "Approved" } },
+    ...authoritativePipelineStatus(typedHash, "Approved"),
   };
   client.submitTransactionAndWait = async () => pipelineStatus;
   const typed = await client.submitTransactionAndWaitTyped(Buffer.from([0]), {
     hashHex: typedHash,
   });
-  assert.equal(typed?.hashHex, typedHash);
+  assert.equal(typed?.hash, typedHash);
   assert.equal(typed?.status?.kind, "Approved");
 });
 
@@ -24004,9 +23964,7 @@ test("prepareContractCall rejects a submitted response", async () => {
         tx_hash_hex: txHash,
         pipeline_status: {
           hash: txHash,
-          status: { kind: "Rejected", block_height: 12, rejection_reason: "missing permission" },
-          summary: "Rejected: missing permission",
-          diagnostics: [],
+          status: { kind: "Rejected", block_height: 12 },
           scope: "local",
           resolved_from: "state",
         },
@@ -25158,7 +25116,7 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
   assert.deepEqual(derived, { proved });
   const completed = await client.proveIvmAndWait(
     { ...proofRequest, proved: derived.proved },
-    { intervalMs: 0, timeoutMs: 1000 },
+    ivmProveOptions({ intervalMs: 0, timeoutMs: 1000 }),
   );
   assert.equal(statusReads, 2);
   assert.equal(completed.status, "done");
@@ -25176,6 +25134,66 @@ test("IVM proved contract helpers simulate, derive, prove, and poll authoritativ
     JSON.stringify(proofRequest.metadata),
   );
   assert.equal(Object.hasOwn(proveBody, "proved"), false);
+  const proofCalls = calls.slice(2);
+  assert.equal(proofCalls.length, 3);
+  for (const call of proofCalls) {
+    assert.equal(call.init.redirect, "error");
+    assert.equal(
+      Buffer.from(call.init.headers["X-Iroha-Account"], "latin1").toString("utf8"),
+      SAMPLE_ACCOUNT_ID,
+    );
+    assert.ok(call.init.headers["X-Iroha-Signature"]);
+    assert.ok(call.init.headers["X-Iroha-Nonce"]);
+  }
+  assert.equal(
+    new Set(proofCalls.map((call) => call.init.headers["X-Iroha-Nonce"])).size,
+    proofCalls.length,
+    "each proof-job operation must use a fresh one-shot nonce",
+  );
+});
+
+test("IVM proof-job controls require owner-bound canonical authentication", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("unauthenticated proof-job request must not fetch");
+    },
+  });
+  const jobId = "ab".repeat(16);
+  const request = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {},
+    bytecode: "Y29kZQ==",
+  };
+
+  await assert.rejects(
+    () => client.startIvmProve(request),
+    /canonicalAuth is required/,
+  );
+  await assert.rejects(
+    () =>
+      client.startIvmProve(
+        request,
+        ivmProveOptions({
+          canonicalAuth: {
+            accountId: CANONICAL_AUTH_ALIAS,
+            privateKey: Buffer.alloc(32, 0x0e),
+          },
+        }),
+      ),
+    /must equal the exact payload authority/,
+  );
+  await assert.rejects(
+    () => client.getIvmProveJob(jobId),
+    /canonicalAuth is required/,
+  );
+  await assert.rejects(
+    () => client.cancelIvmProveJob(jobId),
+    /canonicalAuth is required/,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("IVM response endpoints enforce declared caps before reads and forward signals", async () => {
@@ -25212,17 +25230,24 @@ test("IVM response endpoints enforce declared caps before reads and forward sign
       invoke: (client) =>
         client.startIvmProve(executionRequest, {
           signal: controller.signal,
+          ...ivmProveOptions(),
         }),
     },
     {
       name: "prove status",
       invoke: (client) =>
-        client.getIvmProveJob(jobId, { signal: controller.signal }),
+        client.getIvmProveJob(
+          jobId,
+          ivmProveOptions({ signal: controller.signal }),
+        ),
     },
     {
       name: "prove cancellation",
       invoke: (client) =>
-        client.cancelIvmProveJob(jobId, { signal: controller.signal }),
+        client.cancelIvmProveJob(
+          jobId,
+          ivmProveOptions({ signal: controller.signal }),
+        ),
     },
   ];
 
@@ -25305,7 +25330,11 @@ test("IVM derive and prove requests reject oversized or noncanonical bytecode be
         },
       });
       await assert.rejects(
-        () => client[method]({ ...executionRequest, bytecode }),
+        () =>
+          client[method](
+            { ...executionRequest, bytecode },
+            method === "startIvmProve" ? ivmProveOptions() : undefined,
+          ),
         expected,
       );
       assert.equal(fetchCalls, 0, `${method} must validate before fetch`);
@@ -25351,7 +25380,11 @@ test("IVM proof requests enforce the aggregate Torii body limit before fetch", a
       },
     });
     await assert.rejects(
-      () => client[method](request),
+      () =>
+        client[method](
+          request,
+          method === "startIvmProve" ? ivmProveOptions() : undefined,
+        ),
       /exceeds the 8388608-byte request limit/,
     );
     assert.equal(fetchCalls, 0, method);
@@ -25391,13 +25424,16 @@ test("proveIvmAndWait sends one maximum artifact without duplicating proved", as
       vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
     },
   });
-  await client.proveIvmAndWait({
-    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
-    authority: SAMPLE_ACCOUNT_ID,
-    metadata: {},
-    bytecode: maxBytecode,
-    proved,
-  });
+  await client.proveIvmAndWait(
+    {
+      vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+      authority: SAMPLE_ACCOUNT_ID,
+      metadata: {},
+      bytecode: maxBytecode,
+      proved,
+    },
+    ivmProveOptions(),
+  );
   assert.ok(Buffer.byteLength(postedBody, "utf8") <= 8 * 1024 * 1024);
   const posted = JSON.parse(postedBody);
   assert.equal(posted.bytecode, maxBytecode);
@@ -25430,13 +25466,16 @@ test("proveIvmAndWait rejects a completed payload that differs from local proved
   client.cancelIvmProveJob = async () => ({ job_id: jobId });
   await assert.rejects(
     () =>
-      client.proveIvmAndWait({
-        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
-        authority: SAMPLE_ACCOUNT_ID,
-        metadata: {},
-        bytecode: proved.bytecode,
-        proved,
-      }),
+      client.proveIvmAndWait(
+        {
+          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+          authority: SAMPLE_ACCOUNT_ID,
+          metadata: {},
+          bytecode: proved.bytecode,
+          proved,
+        },
+        ivmProveOptions(),
+      ),
     /differs from the locally derived payload/,
   );
 });
@@ -25594,7 +25633,7 @@ test("IVM derive and proof status responses cap and canonicalize proved bytecode
       }),
   });
   await assert.rejects(
-    () => statusClient.getIvmProveJob(jobId),
+    () => statusClient.getIvmProveJob(jobId, ivmProveOptions()),
     /canonical standard base64/,
   );
 });
@@ -25720,7 +25759,7 @@ test("IVM proved DTOs and proof-job states are exact and internally consistent",
           headers: { "content-type": "application/json" },
         }),
     });
-    const normalized = await client.getIvmProveJob(jobId);
+    const normalized = await client.getIvmProveJob(jobId, ivmProveOptions());
     assert.equal(normalized.status, jsonData.status);
     assert.equal(normalized.error, jsonData.error ?? null);
     assert.deepEqual(normalized.proved, jsonData.proved ?? null);
@@ -25785,7 +25824,10 @@ test("IVM proved DTOs and proof-job states are exact and internally consistent",
           headers: { "content-type": "application/json" },
         }),
     });
-    await assert.rejects(() => client.getIvmProveJob(jobId), expected);
+    await assert.rejects(
+      () => client.getIvmProveJob(jobId, ivmProveOptions()),
+      expected,
+    );
   }
 
   for (const proved of [
@@ -25828,7 +25870,7 @@ test("IVM proof jobs bind returned ids and provided proved bytecode", async () =
       }),
   });
   await assert.rejects(
-    () => client.getIvmProveJob(requestedJobId),
+    () => client.getIvmProveJob(requestedJobId, ivmProveOptions()),
     /returned a different job id/,
   );
 
@@ -25841,18 +25883,21 @@ test("IVM proof jobs bind returned ids and provided proved bytecode", async () =
   });
   await assert.rejects(
     () =>
-      startClient.startIvmProve({
-        vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
-        authority: SAMPLE_ACCOUNT_ID,
-        metadata: {},
-        bytecode: "Y29kZQ==",
-        proved: {
-          bytecode: "YXR0YWNrZXI=",
-          overlay: [],
-          events_commitment: "01".repeat(32),
-          gas_policy_commitment: "02".repeat(32),
+      startClient.startIvmProve(
+        {
+          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+          authority: SAMPLE_ACCOUNT_ID,
+          metadata: {},
+          bytecode: "Y29kZQ==",
+          proved: {
+            bytecode: "YXR0YWNrZXI=",
+            overlay: [],
+            events_commitment: "01".repeat(32),
+            gas_policy_commitment: "02".repeat(32),
+          },
         },
-      }),
+        ivmProveOptions(),
+      ),
     /proved\.bytecode must exactly match .*\.bytecode/,
   );
   assert.equal(fetchCalls, 0);
@@ -25892,7 +25937,7 @@ test("IVM proof job attachments enforce structural hashes and rolling wire compa
           headers: { "content-type": "application/json" },
         }),
     });
-    const result = await client.getIvmProveJob(jobId);
+    const result = await client.getIvmProveJob(jobId, ivmProveOptions());
     assert.deepEqual(result.attachment.proof, {
       backend: "halo2/ipa",
       bytes_b64: "AQID",
@@ -25981,7 +26026,10 @@ test("IVM proof job attachments enforce structural hashes and rolling wire compa
       proved,
       attachment,
     });
-    await assert.rejects(() => client.getIvmProveJob(jobId), expected);
+    await assert.rejects(
+      () => client.getIvmProveJob(jobId, ivmProveOptions()),
+      expected,
+    );
   }
   assert.equal(accessorCalls, 0);
 });
@@ -26044,11 +26092,15 @@ test("proveIvmAndWait validates polling options before creating a proof job", as
     },
   });
   await assert.rejects(
-    () => client.proveIvmAndWait({}, { intervalMs: -1 }),
+    () => client.proveIvmAndWait({}, ivmProveOptions({ intervalMs: -1 })),
     /intervalMs.*non-negative/i,
   );
   await assert.rejects(
-    () => client.proveIvmAndWait({}, { timeoutMs: Number.NaN }),
+    () =>
+      client.proveIvmAndWait(
+        {},
+        ivmProveOptions({ timeoutMs: Number.NaN }),
+      ),
     /timeoutMs.*integer/i,
   );
   assert.equal(requests, 0);
@@ -26081,11 +26133,13 @@ test("proveIvmAndWait best-effort cancels a job when polling fails", async () =>
   client.cancelIvmProveJob = async (actualJobId, options) => {
     cancelCalls += 1;
     assert.equal(actualJobId, jobId);
-    assert.deepEqual(options, undefined);
+    assert.deepEqual(options, {
+      canonicalAuth: ivmProveOptions().canonicalAuth,
+    });
     return { job_id: jobId };
   };
   await assert.rejects(
-    () => client.proveIvmAndWait(request, { timeoutMs: 0 }),
+    () => client.proveIvmAndWait(request, ivmProveOptions({ timeoutMs: 0 })),
     /synthetic timeout/,
   );
   assert.equal(startCalls, 1);
@@ -26096,7 +26150,7 @@ test("proveIvmAndWait best-effort cancels a job when polling fails", async () =>
     throw new Error("synthetic cancellation failure");
   };
   await assert.rejects(
-    () => client.proveIvmAndWait(request, { timeoutMs: 0 }),
+    () => client.proveIvmAndWait(request, ivmProveOptions({ timeoutMs: 0 })),
     /synthetic timeout/,
   );
 });
@@ -26114,9 +26168,12 @@ test("cancelIvmProveJob sends DELETE and rejects a mismatched response id", asyn
       });
     },
   });
-  assert.deepEqual(await client.cancelIvmProveJob(jobId.toUpperCase()), {
-    job_id: jobId,
-  });
+  assert.deepEqual(
+    await client.cancelIvmProveJob(jobId.toUpperCase(), ivmProveOptions()),
+    {
+      job_id: jobId,
+    },
+  );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].init.method, "DELETE");
   assert.ok(calls[0].url.endsWith(`/v1/zk/ivm/prove/${jobId}`));
@@ -26130,7 +26187,7 @@ test("cancelIvmProveJob sends DELETE and rejects a mismatched response id", asyn
       }),
   });
   await assert.rejects(
-    () => mismatched.cancelIvmProveJob(jobId),
+    () => mismatched.cancelIvmProveJob(jobId, ivmProveOptions()),
     /returned a different job id/,
   );
 });
@@ -26149,7 +26206,11 @@ test("waitForIvmProveJob fails closed when a done job omits proof material", asy
       }),
   });
   await assert.rejects(
-    () => client.waitForIvmProveJob(jobId, { intervalMs: 0 }),
+    () =>
+      client.waitForIvmProveJob(
+        jobId,
+        ivmProveOptions({ intervalMs: 0 }),
+      ),
     /must contain exactly|requires proved payload and attachment/,
   );
 });

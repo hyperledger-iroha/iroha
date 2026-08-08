@@ -4685,6 +4685,13 @@ ExactDecisionRequestClockPrefixFairAction(snapshot) ==
     snapshot.node,
     ExactDecisionRequestClockPrefixFairOwner(snapshot))
 
+ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+    kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner) ==
+  /\ ExactDecisionRequestClockPrefixResolvedAtRank(
+       kind, snapshot, node, qc, ownerOrdinal, rank)
+  /\ fairOwner \in AsyncCausalEpisodeFairOwnerKinds
+  /\ ExactDecisionRequestClockPrefixFairOwner(snapshot) = fairOwner
+
 (***************************************************************************
 Generic seam 1: a rigid source-record prefix cannot replenish.  Successor
 replacement consumes the precharged causal weight, Serve retries retain the
@@ -4775,6 +4782,118 @@ BY CandidateProducerContinuationSuccessorBatchAndReservationConsumeFrozenWeight,
        AsyncRetransmitLifecycleOrdinal,
        AsyncRetransmitLifecyclePhysicalCut,
        AsyncAllVars, SetLessThan, OpToRel
+
+(***************************************************************************
+The source transition installs a same-generation transient service marker or
+a restart-durable terminal-discard tombstone independently of adequate-leader
+convergence.  These local theorems repeat only the
+initialization/preservation bridge needed by the fixed-GST rank episode;
+they do not import the adequate-leader module.  The restart bridge is stated
+separately so pre-GST reconstruction cannot be mistaken for rank progress.
+***************************************************************************)
+
+THEOREM ExactDecisionAsyncInitEstablishesCandidateTombstones ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncCandidateServiceLifecycleInvariant
+BY AsyncInitEstablishesLeaderWireContinuationSharedOrdinalNoCollision,
+   Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateProducerSemanticHandoffCoverageInvariant,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncInitialCandidateLifecycleAdmissions,
+       AsyncCandidateLifecycleAdmission,
+       AsyncCandidateProducerContinuationScheduledExclusionInvariant,
+       AsyncCandidateProducerContinuationBlocks,
+       AsyncCandidateProducerContinuations,
+       AsyncControlServiceStateTypeInvariant,
+       AsyncCandidateServiceTombstones,
+       AsyncCandidateServiceRecordsFor,
+       AsyncCandidateServiceRecordsForIdentity,
+       QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates,
+       SequenceSet
+
+THEOREM ExactDecisionAsyncNextPreservesCandidateTombstones ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceLifecycleInvariant
+  /\ AsyncNext
+  => AsyncCandidateServiceLifecycleInvariant'
+BY AsyncNextPreservesControlServiceStateTypeInvariant,
+   AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision,
+   AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
+   AsyncNextPreservesCandidateProducerContinuationScheduledExclusion,
+   AsyncCandidateServicesThisStepIsSingleton,
+   AsyncCandidateSuccessfulServiceInstallsTransientMarker,
+   AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateIoCompletionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   AsyncCandidateDiscardIsNotSemanticService,
+   AsyncCandidateTerminalRetirementsThisStepIsSingleton,
+   AsyncCandidateDiscardInstallsTerminalTombstone,
+   AsyncCandidateDiscardRetiresLogicalLifecycle,
+   AsyncCandidateTransientMarkerCoalescesFreshCandidate,
+   AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateSameHeightRestartPreservesTombstone,
+   AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction,
+   IsaT(600)
+   DEF AsyncCandidateServiceLifecycleInvariant,
+       AsyncStrongTypeInvariant,
+       AsyncProgressOwnershipInvariant,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
+       DrainFairIngressSelected, AdmitCausalHead,
+       AdmitProducerCompletion, ServiceIoWorkerWork,
+       FifoRuntimeStep, DeferredDrainStep,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       FreshCandidateSequence, CandidateAdmissionCoalesced,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
+       FreshRestartCandidateSequence,
+       CandidateScheduled, CandidateScheduledAfter
+
+THEOREM ExactDecisionAsyncSpecAlwaysCandidateTombstones ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []AsyncCandidateServiceLifecycleInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext)
+         PROVE []AsyncCandidateServiceLifecycleInvariant
+    <2>1. AsyncInitAt(initialContext)
+             => AsyncCandidateServiceLifecycleInvariant
+      BY ExactDecisionAsyncInitEstablishesCandidateTombstones
+    <2>2. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant)
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+    <2>3. /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ AsyncCandidateServiceLifecycleInvariant
+           /\ [AsyncNext]_AsyncAllVars
+          => AsyncCandidateServiceLifecycleInvariant'
+      BY ExactDecisionAsyncNextPreservesCandidateTombstones, Isa
+         DEF AsyncAllVars, AsyncProducerVars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, PTL
+         DEF AsyncSpecAt
+  <1> QED BY <1>1
 
 (***************************************************************************
 Generic seam 2: an unresolved producer continuation is a separate fair,
@@ -4882,17 +5001,14 @@ BY ExactDecisionRequestClockPrefixStepIsDescentOrFrame,
        AsyncAllVars
 
 THEOREM ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness ==
-  \A initialContext, snapshot:
-    (/\ snapshot.node \in AsyncVotersAt(initialContext)
-     /\ ExactDecisionRequestClockPrefixFairOwner(snapshot)
-          \in AsyncCausalEpisodeFairOwnerKinds)
-      => (AsyncSpecAt(initialContext)
-            => WF_AsyncAllVars(
-                 ExactDecisionRequestClockPrefixFairAction(snapshot)))
+  \A initialContext:
+    \A node \in AsyncVotersAt(initialContext):
+      \A fairOwner \in AsyncCausalEpisodeFairOwnerKinds:
+    AsyncSpecAt(initialContext)
+      => WF_AsyncAllVars(
+           AsyncCausalEpisodeFairAction(node, fairOwner))
 BY Isa, PTL
-   DEF ExactDecisionRequestClockPrefixFairAction,
-       ExactDecisionRequestClockPrefixFairOwner,
-       AsyncCausalEpisodeFairOwnerKinds,
+   DEF AsyncCausalEpisodeFairOwnerKinds,
        AsyncCausalEpisodeFairAction,
        AsyncSpecAt, AsyncFairnessAt
 
@@ -4931,6 +5047,131 @@ BY AsyncFrozenServeSourceCannotResurrectAtGst,
        AsyncFrozenServeSourceOwned,
        AsyncAllVars
 
+THEOREM ExactDecisionRequestClockPrefixResolvedFrozenOwnerStepIsSafe ==
+  \A kind \in ExactDecisionRequestClockPrefixKinds:
+    \A snapshot, node, qc, ownerOrdinal:
+      \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+        \A fairOwner \in AsyncCausalEpisodeFairOwnerKinds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+    /\ ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+         kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ ExactDecisionRequestClockPrefixRankGoal(
+              kind, snapshot, node, qc, ownerOrdinal, rank)'
+         \/ ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+              kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner)'
+BY ExactDecisionRequestClockPrefixStepIsDescentOrFrame,
+   ExactDecisionRequestClockPrefixResolvedOwnerConsumesRankCell,
+   ExactDecisionRequestClockPrefixResolvedFairOwnerIsStable,
+   AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion,
+   IsaT(3600)
+   DEF ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank,
+       ExactDecisionRequestClockPrefixResolvedAtRank,
+       ExactDecisionRequestClockPrefixFairAction,
+       AsyncCausalEpisodeFairOwnerKinds,
+       AsyncCausalEpisodeFairAction,
+       AsyncAllVars
+
+THEOREM AsyncSpecClosesExactDecisionRequestClockPrefixFrozenOwnerRankStep ==
+  \A initialContext:
+    \A kind \in ExactDecisionRequestClockPrefixKinds:
+      \A snapshot, qc, ownerOrdinal:
+        \A node \in AsyncVotersAt(initialContext):
+          \A rank \in ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+            \A fairOwner \in AsyncCausalEpisodeFairOwnerKinds:
+    AsyncSpecAt(initialContext)
+      => (ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+            kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner)
+            ~> ExactDecisionRequestClockPrefixRankGoal(
+                 kind, snapshot, node, qc, ownerOrdinal, rank))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW kind \in ExactDecisionRequestClockPrefixKinds,
+                NEW snapshot, NEW qc, NEW ownerOrdinal,
+                NEW node \in AsyncVotersAt(initialContext),
+                NEW rank \in
+                  ExactDecisionRequestRuntimeFrozenPrefixCarrier,
+                NEW fairOwner \in AsyncCausalEpisodeFairOwnerKinds,
+                AsyncSpecAt(initialContext)
+         PROVE ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+                 kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner)
+                 ~>
+               ExactDecisionRequestClockPrefixRankGoal(
+                 kind, snapshot, node, qc, ownerOrdinal, rank)
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant
+              /\ AsyncCandidateServiceLifecycleInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant)
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant,
+         ExactDecisionAsyncSpecAlwaysCandidateTombstones,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+         PTL
+    <2>2. [](ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+                kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner)
+              /\ ~ExactDecisionRequestClockPrefixRankGoal(
+                   kind, snapshot, node, qc, ownerOrdinal, rank)
+             => ENABLED
+                  <<AsyncCausalEpisodeFairAction(
+                      node, fairOwner)>>_AsyncAllVars)
+      BY <2>1,
+         ExactDecisionRequestClockPrefixResolvedOwnerIsEnabled,
+         PTL, IsaT(900)
+         DEF ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank,
+             ExactDecisionRequestClockPrefixResolvedAtRank,
+             ExactDecisionRequestClockPrefixAtRank,
+             ExactDecisionRequestRuntimePrefixSnapshotActive,
+             ExactDecisionRequestClockPrefixFairAction
+    <2>3. (ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+                kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner)
+              /\ ~ExactDecisionRequestClockPrefixRankGoal(
+                   kind, snapshot, node, qc, ownerOrdinal, rank)
+              /\ <<AsyncCausalEpisodeFairAction(
+                       node, fairOwner)>>_AsyncAllVars
+             => ExactDecisionRequestClockPrefixRankGoal(
+                  kind, snapshot, node, qc, ownerOrdinal, rank)')
+      BY ExactDecisionRequestClockPrefixResolvedOwnerConsumesRankCell,
+         PTL, IsaT(900)
+         DEF ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank,
+             ExactDecisionRequestClockPrefixResolvedAtRank,
+             ExactDecisionRequestClockPrefixAtRank,
+             ExactDecisionRequestRuntimePrefixSnapshotActive,
+             ExactDecisionRequestClockPrefixFairAction
+    <2>4. (ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+                kind, snapshot, node, qc, ownerOrdinal, rank, fairOwner)
+              /\ ~ExactDecisionRequestClockPrefixRankGoal(
+                   kind, snapshot, node, qc, ownerOrdinal, rank)
+              /\ [AsyncNext]_AsyncAllVars
+             => \/ ExactDecisionRequestClockPrefixRankGoal(
+                     kind, snapshot, node, qc, ownerOrdinal, rank)'
+                \/ ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+                     kind, snapshot, node, qc,
+                     ownerOrdinal, rank, fairOwner)')
+      BY <2>1,
+         ExactDecisionRequestClockPrefixResolvedFrozenOwnerStepIsSafe,
+         PTL
+    <2>5. WF_AsyncAllVars(
+             AsyncCausalEpisodeFairAction(node, fairOwner))
+      BY <1>1,
+         ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness,
+         Isa
+         DEF ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank,
+             ExactDecisionRequestClockPrefixResolvedAtRank,
+             ExactDecisionRequestClockPrefixAtRank,
+             ExactDecisionRequestClockPrefixResidual,
+             ExactDecisionRequestClockPrefixFairOwner,
+             ExactDecisionRequestRuntimePrefixSnapshotActive
+    <2>6. [][AsyncNext]_AsyncAllVars
+      BY <1>1 DEF AsyncSpecAt
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, PTL
+  <1> QED BY <1>1
+
 (***************************************************************************
 Generic seam 3: after continuation resolution, the concrete Runner/I/O owner
 is stable in an equal rank cell and its reviewed weak fairness closes that
@@ -4954,20 +5195,54 @@ THEOREM AsyncSpecClosesExactDecisionRequestClockPrefixResolvedRankStep ==
   \A initialContext:
     ExactDecisionRequestClockPrefixResolvedRankStepProperty(
       AsyncSpecAt(initialContext), initialContext)
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   ExactDecisionAsyncSpecAlwaysCandidateTombstones,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   ExactDecisionRequestClockPrefixStepIsDescentOrFrame,
-   ExactDecisionRequestClockPrefixResolvedOwnerIsEnabled,
-   ExactDecisionRequestClockPrefixResolvedOwnerConsumesRankCell,
-   ExactDecisionRequestClockPrefixFairOwnerUsesExistingFairness,
-   ExactDecisionRequestClockPrefixResolvedFairOwnerIsStable,
-   WF1, PTL, IsaT(1800)
-   DEF ExactDecisionRequestClockPrefixResolvedRankStepProperty,
-       ExactDecisionRequestClockPrefixResolvedAtRank,
-       ExactDecisionRequestClockPrefixRankGoal
+PROOF
+  <1>1. ASSUME NEW initialContext, AsyncSpecAt(initialContext)
+         PROVE \A kind \in ExactDecisionRequestClockPrefixKinds:
+                 \A snapshot, qc, ownerOrdinal:
+                   \A node \in AsyncVotersAt(initialContext):
+                     \A rank \in
+                       ExactDecisionRequestRuntimeFrozenPrefixCarrier:
+                 ExactDecisionRequestClockPrefixResolvedAtRank(
+                   kind, snapshot, node, qc, ownerOrdinal, rank)
+                   ~> ExactDecisionRequestClockPrefixRankGoal(
+                        kind, snapshot, node, qc, ownerOrdinal, rank)
+    <2>1. ASSUME NEW kind \in ExactDecisionRequestClockPrefixKinds,
+                  NEW snapshot, NEW qc, NEW ownerOrdinal,
+                  NEW node \in AsyncVotersAt(initialContext),
+                  NEW rank \in
+                    ExactDecisionRequestRuntimeFrozenPrefixCarrier
+           PROVE ExactDecisionRequestClockPrefixResolvedAtRank(
+                   kind, snapshot, node, qc, ownerOrdinal, rank)
+                   ~> ExactDecisionRequestClockPrefixRankGoal(
+                        kind, snapshot, node, qc, ownerOrdinal, rank)
+      <3>1. [](ExactDecisionRequestClockPrefixResolvedAtRank(
+                  kind, snapshot, node, qc, ownerOrdinal, rank)
+                => \/ ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+                        kind, snapshot, node, qc, ownerOrdinal,
+                        rank, "Runner")
+                   \/ ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+                        kind, snapshot, node, qc, ownerOrdinal,
+                        rank, "IoWorker"))
+        BY Isa
+           DEF ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank,
+               ExactDecisionRequestClockPrefixFairOwner,
+               AsyncCausalEpisodeFairOwnerKinds
+      <3>2. ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+               kind, snapshot, node, qc, ownerOrdinal, rank, "Runner")
+               ~> ExactDecisionRequestClockPrefixRankGoal(
+                    kind, snapshot, node, qc, ownerOrdinal, rank)
+        BY <1>1,
+           AsyncSpecClosesExactDecisionRequestClockPrefixFrozenOwnerRankStep
+      <3>3. ExactDecisionRequestClockPrefixResolvedFrozenOwnerAtRank(
+               kind, snapshot, node, qc, ownerOrdinal, rank, "IoWorker")
+               ~> ExactDecisionRequestClockPrefixRankGoal(
+                    kind, snapshot, node, qc, ownerOrdinal, rank)
+        BY <1>1,
+           AsyncSpecClosesExactDecisionRequestClockPrefixFrozenOwnerRankStep
+      <3> QED BY <3>1, <3>2, <3>3, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+       DEF ExactDecisionRequestClockPrefixResolvedRankStepProperty
 
 ExactDecisionRequestClockPrefixRankStepProperty(
     specification, initialContext) ==
@@ -5183,6 +5458,121 @@ BY ExactDecisionSendingRetransmitPublishesExactAlias,
        DirectRetransmitStep, DeferredRetransmitStep,
        AsyncAllVars, SetLessThan, OpToRel
 
+ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+    snapshot, node, qc, distance) ==
+  /\ ExactDecisionRequestClockAcquisitionAtDistance(node, qc, distance)
+  /\ ExactDecisionRequestRuntimePrefixSnapshotActive(snapshot, node)
+  /\ ExactDecisionRequestRuntimeFrozenPrefixDrained(snapshot)
+
+THEOREM ExactDecisionRequestClockAcquisitionDrainedStepIsSafe ==
+  \A snapshot, node, qc, distance:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ FinalProgressWitnessClosureInvariant
+    /\ ExactDecisionFanoutRetentionInvariant
+    /\ ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+         snapshot, node, qc, distance)
+    /\ [AsyncNext]_AsyncAllVars
+      => \/ ExactDecisionRequestClockAcquisitionProgress(
+              node, qc, distance)'
+         \/ ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+              snapshot, node, qc, distance)'
+BY ExactDecisionRequestDrainedElapsedFairRunAcquiresOrDescends,
+   ExactDecisionRequestPeriodicEpisodeCannotResurrectDrainedOrdinal,
+   LocalAdmissionStrictlyDecreasesRuntimeReach,
+   IngressDrainStrictlyDecreasesRuntimeReach,
+   AsyncVoterRuntimeReadyHasNoNonRunnerContinuationInsertion,
+   ExactDecisionBodyHoldingAliasPersistsOrFrontier,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   AsyncNextPreservesExactDecisionFanoutRetention,
+   IsaT(3600)
+   DEF ExactDecisionRequestClockAcquisitionDrainedAtSnapshot,
+       ExactDecisionRequestClockAcquisitionProgress,
+       ExactDecisionRequestClockAcquisitionAtDistance,
+       ExactDecisionRequestClockElapsedResidual,
+       ExactDecisionRequestRetransmitArmedResidual,
+       ExactDecisionRequestPacketEmissionGoal,
+       ExactDecisionRequestRuntimePrefixSnapshotActive,
+       ExactDecisionRequestRuntimeFrozenPrefixDrained,
+       RuntimeReachRank,
+       AsyncNext, AsyncAllVars, SetLessThan, OpToRel
+
+THEOREM FairExactDecisionRequestClockAcquisitionDrainedSnapshotStep ==
+  \A initialContext:
+    \A snapshot, qc, distance:
+      \A node \in AsyncVotersAt(initialContext):
+    AsyncSpecAt(initialContext)
+      => (ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+            snapshot, node, qc, distance)
+            ~> ExactDecisionRequestClockAcquisitionProgress(
+                 node, qc, distance))
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW snapshot, NEW qc, NEW distance,
+                NEW node \in AsyncVotersAt(initialContext),
+                AsyncSpecAt(initialContext)
+         PROVE ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+                 snapshot, node, qc, distance)
+                 ~>
+               ExactDecisionRequestClockAcquisitionProgress(
+                 node, qc, distance)
+    <2>1. [](/\ AsyncStrongTypeInvariant
+              /\ AsyncProgressOwnershipInvariant
+              /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+              /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+              /\ DecisionFrontierUniquenessInvariant
+              /\ DecisionTimeoutFrontierInvariant
+              /\ FinalProgressWitnessClosureInvariant
+              /\ ExactDecisionFanoutRetentionInvariant)
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant,
+         AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+         AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+         DecisionFrontierUniquenessInvariantFromAsyncSpec,
+         DecisionTimeoutFrontierInvariantFromAsyncSpec,
+         FinalProgressWitnessClosureInvariantObligation,
+         AsyncSpecAlwaysRetainsExactDecisionFanout, PTL
+    <2>2. [](ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+                snapshot, node, qc, distance)
+              /\ ~ExactDecisionRequestClockAcquisitionProgress(
+                   node, qc, distance)
+             => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars)
+      BY <2>1,
+         ExactDecisionRequestDrainedElapsedPrefixEnablesFairRunner,
+         PTL
+         DEF ExactDecisionRequestClockAcquisitionDrainedAtSnapshot
+    <2>3. (ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+                snapshot, node, qc, distance)
+              /\ ~ExactDecisionRequestClockAcquisitionProgress(
+                   node, qc, distance)
+              /\ <<PostGstRunNode(node)>>_AsyncAllVars
+             => ExactDecisionRequestClockAcquisitionProgress(
+                  node, qc, distance)')
+      BY ExactDecisionRequestDrainedElapsedFairRunAcquiresOrDescends,
+         PTL, IsaT(900)
+         DEF ExactDecisionRequestClockAcquisitionDrainedAtSnapshot,
+             AsyncAllVars
+    <2>4. (ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+                snapshot, node, qc, distance)
+              /\ ~ExactDecisionRequestClockAcquisitionProgress(
+                   node, qc, distance)
+              /\ [AsyncNext]_AsyncAllVars
+             => \/ ExactDecisionRequestClockAcquisitionProgress(
+                     node, qc, distance)'
+                \/ ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+                     snapshot, node, qc, distance)')
+      BY <2>1,
+         ExactDecisionRequestClockAcquisitionDrainedStepIsSafe,
+         PTL
+    <2>5. WF_AsyncAllVars(PostGstRunNode(node))
+      BY <1>1 DEF AsyncSpecAt, AsyncFairnessAt
+    <2>6. [][AsyncNext]_AsyncAllVars
+      BY <1>1 DEF AsyncSpecAt
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, PTL
+  <1> QED BY <1>1
+
 THEOREM FairExactDecisionRequestClockAcquisitionDistanceStep ==
   \A initialContext, node, qc:
     \A distance \in Nat:
@@ -5191,27 +5581,59 @@ THEOREM FairExactDecisionRequestClockAcquisitionDistanceStep ==
             node, qc, distance)
             ~> ExactDecisionRequestClockAcquisitionProgress(
                  node, qc, distance))
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   ExactDecisionAsyncSpecAlwaysCandidateTombstones,
-   DecisionFrontierUniquenessInvariantFromAsyncSpec,
-   DecisionTimeoutFrontierInvariantFromAsyncSpec,
-   FinalProgressWitnessClosureInvariantObligation,
-   AsyncSpecAlwaysRetainsExactDecisionFanout,
-   AsyncSpecAlwaysUsesFixedResponsiveVoters,
-   ExactDecisionRequestElapsedCellHasRigidPrefixSnapshot,
-   AsyncSpecClosesExactDecisionRequestClockPrefix,
-   ExactDecisionRequestDrainedElapsedPrefixEnablesFairRunner,
-   ExactDecisionRequestDrainedElapsedFairRunAcquiresOrDescends,
-   WF1, PTL, IsaT(1800)
-   DEF ExactDecisionRequestClockPrefixClosureProperty,
-       ExactDecisionRequestClockPrefixResidual,
-       ExactDecisionRequestClockPrefixEndpoint,
-       ExactDecisionRequestClockAcquisitionAtDistance,
-       ExactDecisionRequestClockAcquisitionProgress,
-       AsyncSpecAt, AsyncFairnessAt
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW node, NEW qc,
+                NEW distance \in Nat, AsyncSpecAt(initialContext)
+         PROVE ExactDecisionRequestClockAcquisitionAtDistance(
+                 node, qc, distance)
+                 ~>
+               ExactDecisionRequestClockAcquisitionProgress(
+                 node, qc, distance)
+    <2>1. CASE node \in AsyncVotersAt(initialContext)
+      <3>1. ExactDecisionRequestClockAcquisitionAtDistance(
+               node, qc, distance)
+               ~>
+             (\/ ExactDecisionRequestClockAcquisitionProgress(
+                    node, qc, distance)
+              \/ \E snapshot:
+                   ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+                     snapshot, node, qc, distance))
+        BY <1>1, <2>1,
+           AsyncSpecAlwaysStrongTypeInvariant,
+           ExactDecisionAsyncSpecAlwaysCandidateTombstones,
+           ExactDecisionRequestElapsedCellHasRigidPrefixSnapshot,
+           AsyncSpecClosesExactDecisionRequestClockPrefix,
+           PTL, IsaT(1800)
+           DEF ExactDecisionRequestClockPrefixClosureProperty,
+               ExactDecisionRequestClockPrefixResidual,
+               ExactDecisionRequestClockPrefixEndpoint,
+               ExactDecisionRequestClockAcquisitionDrainedAtSnapshot,
+               ExactDecisionRequestClockAcquisitionAtDistance,
+               ExactDecisionRequestClockAcquisitionProgress
+      <3>2. \A snapshot:
+               ExactDecisionRequestClockAcquisitionDrainedAtSnapshot(
+                 snapshot, node, qc, distance)
+                 ~>
+               ExactDecisionRequestClockAcquisitionProgress(
+                 node, qc, distance)
+        BY <1>1, <2>1,
+           FairExactDecisionRequestClockAcquisitionDrainedSnapshotStep
+      <3> QED BY <3>1, <3>2, PTL, IsaT(900)
+    <2>2. CASE node \notin AsyncVotersAt(initialContext)
+      <3>1. []~ExactDecisionRequestClockAcquisitionAtDistance(
+                   node, qc, distance)
+        BY <1>1, <2>2,
+           AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncSpecAlwaysUsesFixedResponsiveVoters,
+           PTL, IsaT(900)
+           DEF ExactDecisionRequestClockAcquisitionAtDistance,
+               ExactDecisionRequestClockElapsedResidual,
+               ExactDecisionRequestPacketEmissionResidual,
+               ExactDecisionActiveRequestOwner,
+               ExactDecisionServiceSource
+      <3> QED BY <3>1, PTL
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
 
 THEOREM FairExactDecisionRequestClockElapsedAcquiresOwner ==
   \A initialContext, node, qc:
@@ -5501,27 +5923,85 @@ THEOREM FairExactDecisionRequestRuntimeRankStep ==
               snapshot, node, qc, ownerOrdinal, rank)
               ~> ExactDecisionRequestOwnedRuntimeRankProgress(
                    snapshot, node, qc, ownerOrdinal, rank))
-BY AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncSpecAlwaysProgressOwnershipInvariant,
-   AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
-   AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
-   DecisionFrontierUniquenessInvariantFromAsyncSpec,
-   DecisionTimeoutFrontierInvariantFromAsyncSpec,
-   ResponsiveRecoveryValidationClearedInvariantObligation,
-   FinalProgressWitnessClosureInvariantObligation,
-   AsyncSpecAlwaysRetainsExactDecisionFanout,
-   AsyncSpecAlwaysUsesFixedResponsiveVoters,
-   ExactDecisionRequestRuntimeBlockedStepIsSafe,
-   ExactDecisionRequestRuntimeOwnerEnablesFairRunNode,
-   ExactDecisionRequestSameNodeRunConsumesRuntimePrefix,
-   WF1, PTL, IsaT(1800)
-   DEF ExactDecisionRequestOwnedRuntimeAtRank,
-       ExactDecisionRequestOwnedRuntimeRankProgress,
-       ExactDecisionRequestOwnedRetransmitEpisode,
-       ExactDecisionRequestPacketEmissionResidual,
-       ExactDecisionActiveRequestOwner,
-       ExactDecisionServiceSource,
-       AsyncSpecAt, AsyncFairnessAt
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW snapshot, NEW node, NEW qc,
+                NEW ownerOrdinal,
+                NEW rank \in ExactDecisionRequestOwnedRuntimeCarrier,
+                AsyncSpecAt(initialContext)
+         PROVE ExactDecisionRequestOwnedRuntimeAtRank(
+                 snapshot, node, qc, ownerOrdinal, rank)
+                 ~>
+               ExactDecisionRequestOwnedRuntimeRankProgress(
+                 snapshot, node, qc, ownerOrdinal, rank)
+    <2>1. CASE node \in AsyncVotersAt(initialContext)
+      <3>1. [](/\ AsyncStrongTypeInvariant
+                /\ AsyncProgressOwnershipInvariant
+                /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+                /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
+                /\ DecisionFrontierUniquenessInvariant
+                /\ DecisionTimeoutFrontierInvariant
+                /\ ResponsiveRecoveryValidationClearedInvariant
+                /\ FinalProgressWitnessClosureInvariant
+                /\ ExactDecisionFanoutRetentionInvariant)
+        BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncSpecAlwaysProgressOwnershipInvariant,
+           AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage,
+           AsyncSpecAlwaysCandidateProducerContinuationLocalReplayCapacity,
+           DecisionFrontierUniquenessInvariantFromAsyncSpec,
+           DecisionTimeoutFrontierInvariantFromAsyncSpec,
+           ResponsiveRecoveryValidationClearedInvariantObligation,
+           FinalProgressWitnessClosureInvariantObligation,
+           AsyncSpecAlwaysRetainsExactDecisionFanout, PTL
+      <3>2. [](ExactDecisionRequestOwnedRuntimeAtRank(
+                  snapshot, node, qc, ownerOrdinal, rank)
+                /\ ~ExactDecisionRequestOwnedRuntimeRankProgress(
+                     snapshot, node, qc, ownerOrdinal, rank)
+               => ENABLED <<PostGstRunNode(node)>>_AsyncAllVars)
+        BY <3>1,
+           ExactDecisionRequestRuntimeOwnerEnablesFairRunNode,
+           PTL
+      <3>3. (ExactDecisionRequestOwnedRuntimeAtRank(
+                  snapshot, node, qc, ownerOrdinal, rank)
+                /\ ~ExactDecisionRequestOwnedRuntimeRankProgress(
+                     snapshot, node, qc, ownerOrdinal, rank)
+                /\ <<PostGstRunNode(node)>>_AsyncAllVars
+               => ExactDecisionRequestOwnedRuntimeRankProgress(
+                    snapshot, node, qc, ownerOrdinal, rank)')
+        BY ExactDecisionRequestSameNodeRunConsumesRuntimePrefix,
+           PTL, IsaT(900)
+           DEF AsyncAllVars
+      <3>4. (ExactDecisionRequestOwnedRuntimeAtRank(
+                  snapshot, node, qc, ownerOrdinal, rank)
+                /\ ~ExactDecisionRequestOwnedRuntimeRankProgress(
+                     snapshot, node, qc, ownerOrdinal, rank)
+                /\ [AsyncNext]_AsyncAllVars
+               => \/ ExactDecisionRequestOwnedRuntimeRankProgress(
+                       snapshot, node, qc, ownerOrdinal, rank)'
+                  \/ ExactDecisionRequestOwnedRuntimeAtRank(
+                       snapshot, node, qc, ownerOrdinal, rank)')
+        BY <3>1,
+           ExactDecisionRequestRuntimeBlockedStepIsSafe,
+           PTL
+      <3>5. WF_AsyncAllVars(PostGstRunNode(node))
+        BY <1>1, <2>1 DEF AsyncSpecAt, AsyncFairnessAt
+      <3>6. [][AsyncNext]_AsyncAllVars
+        BY <1>1 DEF AsyncSpecAt
+      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, PTL
+    <2>2. CASE node \notin AsyncVotersAt(initialContext)
+      <3>1. []~ExactDecisionRequestOwnedRuntimeAtRank(
+                   snapshot, node, qc, ownerOrdinal, rank)
+        BY <1>1, <2>2,
+           AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncSpecAlwaysUsesFixedResponsiveVoters,
+           PTL, IsaT(900)
+           DEF ExactDecisionRequestOwnedRuntimeAtRank,
+               ExactDecisionRequestOwnedRetransmitEpisode,
+               ExactDecisionRequestPacketEmissionResidual,
+               ExactDecisionActiveRequestOwner,
+               ExactDecisionServiceSource
+      <3> QED BY <3>1, PTL
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
 
 THEOREM FairExactDecisionRequestRuntimeRankConverges ==
   \A initialContext, snapshot, node, qc, ownerOrdinal:
@@ -8256,6 +8736,7 @@ THEOREM ExactDecisionRequestIngressOrdinalRejectsLaterPriorityBypass ==
        /\ identity =
             AsyncServeEarliestIngressLifecycleOwnerIdentity(archive)
        /\ item.kind \notin AsyncReplyRequestKinds
+       /\ ~AsyncCertifiedFenceEscapeItem(item)
        /\ index >
             AsyncServeIngressAdmissionPredecessorCounts(
               archive, identity)[source]
@@ -8330,6 +8811,7 @@ THEOREM AsyncServeIngressFrozenPrefixCutoffRejectsPostCutoff ==
        /\ index >
             AsyncServeIngressAdmissionPredecessorCounts(
               archive, identity)[source]
+       /\ ~AsyncCertifiedFenceEscapeItem(item)
        /\ \/ item.kind \notin AsyncReplyRequestKinds
           \/ AsyncServeLogicalRequestIdentity(archive, item) # identity
        => ~AsyncServeIngressIndexMayPrecedeAdmittedTarget(
@@ -9088,7 +9570,7 @@ ExactDecisionRequestLifecycleConcreteActionOriginProperty(specification) ==
                       <<ExactDecisionRequestLifecycleSelectedConcreteFairAction(
                           archive, request)>>_AsyncAllVars)
   /\ specification
-       => [](\A node, qc, archive, request:
+       => [][(\A node, qc, archive, request:
               \A rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
                  budget \in Nat:
               /\ ExactDecisionRequestLifecycleAtRankAndBudget(
@@ -9104,9 +9586,9 @@ ExactDecisionRequestLifecycleConcreteActionOriginProperty(specification) ==
                          archive, request)'
                          =
                        ExactDecisionRequestLifecycleConcreteFairOwner(
-                         archive, request))
+                         archive, request))]_AsyncAllVars
   /\ specification
-       => [](\A node, qc, archive, request:
+       => [][(\A node, qc, archive, request:
               \A rank \in ExactDecisionRequestLifecycleIngressRankCarrier,
                  budget \in Nat:
               /\ ExactDecisionRequestLifecycleAtRankAndBudget(
@@ -9118,13 +9600,13 @@ ExactDecisionRequestLifecycleConcreteActionOriginProperty(specification) ==
               /\ <<ExactDecisionRequestLifecycleSelectedConcreteFairAction(
                      archive, request)>>_AsyncAllVars
               => ExactDecisionRequestLifecycleRankCellOutcome(
-                   node, qc, archive, request, rank, budget)')
+                   node, qc, archive, request, rank, budget)')]_AsyncAllVars
 
 ExactDecisionRequestLifecycleRankDescentProperty(specification) ==
   /\ specification
-       => [](\A node, qc, archive, request:
+       => [][(\A node, qc, archive, request:
               ExactDecisionRequestLifecycleStepClassification(
-                node, qc, archive, request))
+                node, qc, archive, request))]_AsyncAllVars
   /\ ExactDecisionRequestLifecycleConcreteActionOriginProperty(specification)
 
 (***************************************************************************
@@ -10623,9 +11105,10 @@ ExactDecisionTargetNeutralLeaderWireCausalRoots ==
           /\ AsyncLeaderWireLifecycleActive(owned)}}
 
 ExactDecisionTargetNeutralDurableReplayCausalRoots ==
-  {ExactDecisionTargetNeutralCausalRoot(node, origin):
-     node \in Responsive,
-     origin \in AsyncCandidateLifecycleDurableReplayOriginsForNode(node)}
+  UNION
+    {{ExactDecisionTargetNeutralCausalRoot(node, origin):
+        origin \in AsyncCandidateLifecycleDurableReplayOriginsForNode(node)}:
+      node \in Responsive}
 
 ExactDecisionTargetNeutralTimeoutReservationCausalRoots ==
   {ExactDecisionTargetNeutralCausalRoot(
@@ -10819,11 +11302,12 @@ ExactDecisionTargetNeutralLiveCandidateIdentitySet ==
           scheduledCandidate.node \in Responsive}}
 
 ExactDecisionTargetNeutralLiveServeIdentitySet ==
-  {ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
-     node \in Responsive,
-     job \in
-       {serveJob \in SequenceSet(asyncIoQueues[node]):
-          serveJob.class = "Serve"}}
+  UNION
+    {{ExactDecisionTargetNeutralServeOwnerIdentity(node, job):
+        job \in
+          {serveJob \in SequenceSet(asyncIoQueues[node]):
+             serveJob.class = "Serve"}}:
+      node \in Responsive}
 
 ExactDecisionTargetNeutralRetainedServeLifecycleRecords ==
   {record \in asyncServeAdmissions \cup asyncServeTombstones:
@@ -10969,11 +11453,12 @@ ExactDecisionTargetNeutralCausalCandidatesForSnapshot(snapshot, node) ==
 
 ExactDecisionTargetNeutralExactCandidateOccurrenceTokensForSnapshot(
     snapshot, node) ==
-  {<<candidate, token>>:
-     candidate \in
-       ExactDecisionTargetNeutralCausalCandidatesForSnapshot(snapshot, node),
-     token
-       \in 1..AsyncCausalExactRemainingOccurrenceBudget(candidate.kind)}
+  UNION
+    {{<<candidate, token>>:
+        token
+          \in 1..AsyncCausalExactRemainingOccurrenceBudget(candidate.kind)}:
+      candidate \in
+        ExactDecisionTargetNeutralCausalCandidatesForSnapshot(snapshot, node)}
 
 ExactDecisionTargetNeutralExactCandidateOccurrenceBudgetForSnapshot(
     snapshot, node) ==
@@ -11052,15 +11537,16 @@ ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot(
     [] OTHER -> 0
 
 ExactDecisionTargetNeutralLeaderWireStageTokensForSnapshot(snapshot, node) ==
-  {<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
-     token>>:
-     record
-       \in ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
-            snapshot, node),
-     token
-       \in
-         1..ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot(
-              snapshot, node, record)}
+  (UNION
+     {{<<"LeaderWireBarrier", AsyncLeaderWirePotentialOwnerIdentity(record),
+        token>>:
+        token
+          \in
+            1..ExactDecisionTargetNeutralLeaderWireRemainingStageForSnapshot(
+                 snapshot, node, record)}:
+       record
+         \in ExactDecisionTargetNeutralFrozenActiveLeaderWireRecordsForSnapshot(
+              snapshot, node)})
     \cup
   {<<"OrdinaryIngressBarrier", carrier.carrierIdentity, 1>>:
      carrier \in
@@ -11107,12 +11593,13 @@ ExactDecisionTargetNeutralFrozenDormantLocalReplayCandidatesForSnapshot(
 
 ExactDecisionTargetNeutralFrozenContinuationStatusTokensForSnapshot(
     snapshot, node) ==
-  {<<"Continuation", record.identity, token>>:
-     record \in
-       ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot(
-         snapshot, node),
-     token
-       \in 1..AsyncCandidateProducerContinuationStatusRank(record.status)}
+  UNION
+    {{<<"Continuation", record.identity, token>>:
+        token
+          \in 1..AsyncCandidateProducerContinuationStatusRank(record.status)}:
+      record \in
+        ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot(
+          snapshot, node)}
 
 ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot(
     snapshot, node) ==
@@ -11129,13 +11616,14 @@ ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot(
 
 ExactDecisionTargetNeutralProoflessCandidateTokensForSnapshot(
     snapshot, node) ==
-  {<<"Candidate", candidate, token>>:
-     candidate
-       \in ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot(
-            snapshot, node),
-     token
-       \in
-         1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}
+  UNION
+    {{<<"Candidate", candidate, token>>:
+        token
+          \in
+            1..AsyncCandidateProducerContinuationCausalWeight(candidate.kind)}:
+      candidate
+        \in ExactDecisionTargetNeutralProoflessCandidateOwnersForSnapshot(
+             snapshot, node)}
 
 ExactDecisionTargetNeutralProoflessContinuationTokensForSnapshot(
     snapshot, node) ==
@@ -11621,118 +12109,6 @@ ExactDecisionTargetNeutralProducerEpisodeOwnedBy(
        ExactDecisionTargetNeutralSelectedFairOwner(
          initialContext, snapshot, mode, node, qc, archive,
          request, response, packet, clockValue, sourceRank, budget)
-
-(***************************************************************************
-The source transition installs a same-generation transient service marker or
-a restart-durable terminal-discard tombstone independently of adequate-leader
-convergence.  These local theorems repeat only the
-initialization/preservation bridge needed by the fixed-GST rank episode;
-they do not import the adequate-leader module.  The restart bridge is stated
-separately so pre-GST reconstruction cannot be mistaken for rank progress.
-***************************************************************************)
-
-THEOREM ExactDecisionAsyncInitEstablishesCandidateTombstones ==
-  \A initialContext:
-    AsyncInitAt(initialContext)
-      => AsyncCandidateServiceLifecycleInvariant
-BY AsyncInitEstablishesLeaderWireContinuationSharedOrdinalNoCollision,
-   Isa
-   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
-       AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
-       AsyncCandidateServiceLifecycleInvariant,
-       AsyncCandidateProducerSemanticHandoffCoverageInvariant,
-       AsyncCandidateLifecycleAdmissions,
-       AsyncInitialCandidateLifecycleAdmissions,
-       AsyncCandidateLifecycleAdmission,
-       AsyncCandidateProducerContinuationScheduledExclusionInvariant,
-       AsyncCandidateProducerContinuationBlocks,
-       AsyncCandidateProducerContinuations,
-       AsyncControlServiceStateTypeInvariant,
-       AsyncCandidateServiceTombstones,
-       AsyncCandidateServiceRecordsFor,
-       AsyncCandidateServiceRecordsForIdentity,
-       QueuedCandidates, DeferredCandidates,
-       CausalCandidates, TrackedWorkCandidates,
-       SequenceSet
-
-THEOREM ExactDecisionAsyncNextPreservesCandidateTombstones ==
-  /\ AsyncStrongTypeInvariant
-  /\ AsyncProgressOwnershipInvariant
-  /\ AsyncCandidateServiceLifecycleInvariant
-  /\ AsyncNext
-  => AsyncCandidateServiceLifecycleInvariant'
-BY AsyncNextPreservesControlServiceStateTypeInvariant,
-   AsyncNextPreservesLeaderWireContinuationSharedOrdinalNoCollision,
-   AsyncControlServiceTransitionPreservesSemanticHandoffCoverage,
-   AsyncNextPreservesCandidateProducerContinuationScheduledExclusion,
-   AsyncCandidateServicesThisStepIsSingleton,
-   AsyncCandidateSuccessfulServiceInstallsTransientMarker,
-   AsyncCandidateCausalAdmissionTransfersSameOwner,
-   AsyncCandidateIoCompletionTransfersSameOwner,
-   AsyncCandidateProducerCompletionTransfersSameOwner,
-   AsyncCandidateBusyDeferralTransfersSameOwner,
-   AsyncCandidateDeferredHandoffRetainsSameOwner,
-   AsyncCandidateDiscardIsNotSemanticService,
-   AsyncCandidateTerminalRetirementsThisStepIsSingleton,
-   AsyncCandidateDiscardInstallsTerminalTombstone,
-   AsyncCandidateDiscardRetiresLogicalLifecycle,
-   AsyncCandidateTransientMarkerCoalescesFreshCandidate,
-   AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
-   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
-   AsyncCandidateSameHeightRestartPreservesTombstone,
-   AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction,
-   IsaT(600)
-   DEF AsyncCandidateServiceLifecycleInvariant,
-       AsyncStrongTypeInvariant,
-       AsyncProgressOwnershipInvariant,
-       AsyncNext, AsyncNonCrashStep,
-       AsyncRunnerStep, AsyncNonRunnerStep,
-       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
-       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
-       SerializedRuntimeStep,
-       SerializedRuntimePrecedesServeIngressStep,
-       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
-       DrainFairIngressSelected, AdmitCausalHead,
-       AdmitProducerCompletion, ServiceIoWorkerWork,
-       FifoRuntimeStep, DeferredDrainStep,
-       AsyncCandidateTerminalRetirementsThisStep,
-       AsyncCandidateTerminalDiscardsThisStep,
-       AsyncCandidateTerminallyDiscardedThisStep,
-       AppendCausalSuccessors, FreshCommandSuccessors,
-       FreshCandidateSequence, CandidateAdmissionCoalesced,
-       AdmitIngressPacket, AdmitHiddenPacket,
-       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
-       DriveResponsiveReplayHead, FinishResponsiveReplay,
-       PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
-       FreshRestartCandidateSequence,
-       CandidateScheduled, CandidateScheduledAfter
-
-THEOREM ExactDecisionAsyncSpecAlwaysCandidateTombstones ==
-  \A initialContext:
-    AsyncSpecAt(initialContext)
-      => []AsyncCandidateServiceLifecycleInvariant
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                AsyncSpecAt(initialContext)
-         PROVE []AsyncCandidateServiceLifecycleInvariant
-    <2>1. AsyncInitAt(initialContext)
-             => AsyncCandidateServiceLifecycleInvariant
-      BY ExactDecisionAsyncInitEstablishesCandidateTombstones
-    <2>2. [](/\ AsyncStrongTypeInvariant
-              /\ AsyncProgressOwnershipInvariant)
-      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
-         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
-    <2>3. /\ AsyncStrongTypeInvariant
-           /\ AsyncProgressOwnershipInvariant
-           /\ AsyncCandidateServiceLifecycleInvariant
-           /\ [AsyncNext]_AsyncAllVars
-          => AsyncCandidateServiceLifecycleInvariant'
-      BY ExactDecisionAsyncNextPreservesCandidateTombstones, Isa
-         DEF AsyncAllVars, AsyncProducerVars
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, PTL
-         DEF AsyncSpecAt
-  <1> QED BY <1>1
 
 THEOREM ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst ==
   \A candidate \in AsyncCandidateSet:
@@ -12434,30 +12810,30 @@ BY Isa
 
 THEOREM ExactDecisionTargetNeutralPostCutContinuationCannotEnterFrozenPrefix ==
   \A snapshot:
-    \A node \in Responsive,
-       record \in
-         AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
-    /\ snapshot.physicalCuts \in [Responsive -> Nat]
-    /\ record.sourcePhysicalOrdinal >= snapshot.physicalCuts[node]
-      => record
-           \notin
-             ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot(
-               snapshot, node)
+    \A node \in Responsive:
+      \A record \in
+           AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
+        /\ snapshot.physicalCuts \in [Responsive -> Nat]
+        /\ record.sourcePhysicalOrdinal >= snapshot.physicalCuts[node]
+          => record
+               \notin
+                 ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot(
+                   snapshot, node)
 BY Isa
    DEF ExactDecisionTargetNeutralFrozenContinuationRecordsForSnapshot
 
 THEOREM ExactDecisionTargetNeutralPostCutServeCannotEnterFrozenPrefix ==
   \A snapshot:
-    \A node \in Responsive,
-       identity \in AsyncCausalEpisodeServeIngressIdentities(
-                     node, snapshot.schedulerCuts[node]):
-    /\ snapshot.physicalCuts \in [Responsive -> Nat]
-    /\ AsyncServeIngressAdmissionOrdinal(node, identity)
-         >= snapshot.physicalCuts[node]
-      => identity
-           \notin
-             ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot(
-               snapshot, node)
+    \A node \in Responsive:
+      \A identity \in AsyncCausalEpisodeServeIngressIdentities(
+                       node, snapshot.schedulerCuts[node]):
+        /\ snapshot.physicalCuts \in [Responsive -> Nat]
+        /\ AsyncServeIngressAdmissionOrdinal(node, identity)
+             >= snapshot.physicalCuts[node]
+          => identity
+               \notin
+                 ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot(
+                   snapshot, node)
 BY Isa
    DEF ExactDecisionTargetNeutralServeIngressIdentitiesForSnapshot
 
@@ -14520,7 +14896,7 @@ PROOF
              ExactDecisionTargetNeutralServeOwnerIdentity,
              AsyncIoServeJobIdentity,
              AsyncServeLogicalRequestIdentities
-    <2>5. [](/\ ExactDecisionTargetNeutralResidual(
+    <2>5. [][(/\ ExactDecisionTargetNeutralResidual(
                   mode, node, qc, archive, request, response, packet)
               /\ ~ExactDecisionTargetNeutralGoal(
                    mode, node, qc, archive, request, response, packet)
@@ -14531,7 +14907,7 @@ PROOF
                 \/ /\ ExactDecisionTargetNeutralResidual(
                         mode, node, qc, archive,
                         request, response, packet)'
-                   /\ asyncNow' = asyncNow)
+                   /\ asyncNow' = asyncNow)]_AsyncAllVars
       BY <1>1, <2>1,
          ExactDecisionTargetNeutralDueHeadStepLeavesClockOrGoals, PTL
     <2> QED BY <2>2, <2>3, <2>4, <2>5, PTL

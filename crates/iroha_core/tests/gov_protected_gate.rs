@@ -105,6 +105,7 @@ fn protected_namespace_requires_enacted_proposal() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query, chain.clone());
+    let network_id = *state.network_id_ref();
     state.install_lane_manifests(&std::sync::Arc::new(LaneManifestRegistry::from_config(
         &iroha_data_model::nexus::LaneCatalog::default(),
         &GovernanceCatalog::default(),
@@ -158,14 +159,10 @@ seiyaku ProtectedGate {
         "contract_entrypoint".parse().unwrap(),
         iroha_primitives::json::Json::new("ready"),
     );
-    let tx = TransactionBuilder::new(
-        chain.clone(),
-        authority.clone(),
-        fee_payment_with_gas_limit(),
-    )
-    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
-    .with_metadata(md)
-    .sign(&sk);
+    let tx = TransactionBuilder::new(network_id, authority.clone(), fee_payment_with_gas_limit())
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
+        .with_metadata(md)
+        .sign(&sk);
 
     let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
@@ -274,7 +271,7 @@ seiyaku ProtectedGate {
     // Retry with same tx; should accept now
     let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut block4 = state.block(header4);
-    let tx2 = TransactionBuilder::new(chain, authority, fee_payment_with_gas_limit())
+    let tx2 = TransactionBuilder::new(network_id, authority, fee_payment_with_gas_limit())
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .with_metadata({
             let mut md = iroha_data_model::metadata::Metadata::default();

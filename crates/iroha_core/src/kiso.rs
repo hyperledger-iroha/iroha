@@ -1040,6 +1040,10 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
                 zk_ivm_prove_job_max_retained_bytes:
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+                zk_ivm_prove_job_max_entries_per_owner:
+                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
+                zk_ivm_prove_job_max_retained_bytes_per_owner:
+                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER,
                 transaction_ingress:
                     iroha_config::parameters::actual::TransactionIngress::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
@@ -1274,6 +1278,7 @@ mod tests {
                     iroha_config::parameters::defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
                 max_payload_bytes:
                     iroha_config::parameters::defaults::snapshot::MAX_PAYLOAD_BYTES,
+                resources: Default::default(),
                 verification_public_key: None,
                 signing_private_key: None,
                 bootstrap: iroha_config::parameters::user::SnapshotBootstrapPolicy::default(),

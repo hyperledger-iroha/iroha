@@ -1319,7 +1319,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
 
     // Derive the proved payload by executing the IVM program once.
     let tx = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
@@ -1389,7 +1389,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         .expect("one attachment is a valid bounded proof list");
 
     let tx_proved = TransactionBuilder::new(
-        state.chain_id.clone(),
+        *state.network_id_ref(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
@@ -1926,7 +1926,7 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     let halo2_nullifier = derive_ballot_nullifier_for_test(
         "gov:ballot:v1",
-        &state.chain_id,
+        state.network_id_ref(),
         &halo2_election_id,
         &halo2_commit,
     );
@@ -2020,7 +2020,7 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     );
     let stark_nullifier = derive_ballot_nullifier_for_test(
         "gov:ballot:v1",
-        &state.chain_id,
+        state.network_id_ref(),
         &stark_election_id,
         &stark_commit,
     );

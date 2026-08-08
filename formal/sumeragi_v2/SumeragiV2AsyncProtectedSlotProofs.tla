@@ -1858,6 +1858,7 @@ BY AppendedQueuePreservesProgressCommitSourcesUnderFrontier,
 THEOREM RemoveNextNodeCommandPreservesQueuedProgressCommitHistory ==
   \A target \in ValidatorIds:
     /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
     /\ QueuedProgressCommitHistoryInvariant
     /\ TypeInvariant
     /\ TypeInvariant'

@@ -642,7 +642,8 @@ mod tests {
                 proposal_id: "bb".repeat(32),
             },
         ] {
-            build_finalize_body(&args).expect_err("invalid finalization ids must fail locally");
+            let _error =
+                build_finalize_body(&args).expect_err("invalid finalization ids must fail locally");
         }
     }
 

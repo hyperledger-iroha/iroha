@@ -6,7 +6,7 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_data_model::{ChainId, prelude::Peer};
+use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{NetworkHandle, network::message::*};
 use iroha_primitives::addr::socket_addr;
@@ -86,7 +86,7 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr, rate: Option<u32>, burst: Optio
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn low_priority_posts_are_throttled() {
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let a1 = socket_addr!(127.0.0.1:12_036);

@@ -2582,8 +2582,8 @@ async fn axt_proof_cache_debug_reports_snapshot() {
         policy: iroha_data_model::nexus::AxtPolicyEntry {
             manifest_root,
             target_lane: LaneId::new(2),
-            min_handle_era: 10,
-            min_sub_nonce: 11,
+            active_handle_era: 10,
+            next_handle_counter: 11,
             current_slot: 5,
         },
     }];
@@ -2656,9 +2656,9 @@ fn axt_reject_query_response_carries_headers() {
         dataspace: Some(DataSpaceId::new(7)),
         lane: Some(LaneId::new(3)),
         snapshot_version: Some(77),
-        detail: "handle era below policy minimum".to_owned(),
-        next_min_handle_era: Some(5),
-        next_min_sub_nonce: Some(2),
+        detail: "handle era differs from the exact active policy era".to_owned(),
+        active_handle_era: Some(5),
+        next_handle_counter: Some(2),
     };
     let response = Error::Query(ValidationFail::AxtReject(ctx)).into_response();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -2695,13 +2695,13 @@ fn axt_reject_query_response_carries_headers() {
     );
     assert_eq!(
         headers
-            .get("x-iroha-axt-next-handle-era")
+            .get("x-iroha-axt-active-handle-era")
             .and_then(|v| v.to_str().ok()),
         Some("5")
     );
     assert_eq!(
         headers
-            .get("x-iroha-axt-next-sub-nonce")
+            .get("x-iroha-axt-next-handle-counter")
             .and_then(|v| v.to_str().ok()),
         Some("2")
     );

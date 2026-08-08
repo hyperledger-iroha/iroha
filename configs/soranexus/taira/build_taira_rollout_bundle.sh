@@ -18,6 +18,8 @@ PRIVACY_BOOTSTRAP_PLAN_TEMPLATE="${SCRIPT_DIR}/privacy_bootstrap_plan.json"
 PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE="${SCRIPT_DIR}/config.toml"
 PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE="${SCRIPT_DIR}/genesis.json"
 PRIVACY_BOOTSTRAP_VALIDATOR="${SCRIPT_DIR}/validate_privacy_bootstrap.py"
+PRIVACY_ROLLOUT_PLAN="${SCRIPT_DIR}/privacy_rollout_plan_v1.json"
+PRIVACY_ROLLOUT_VALIDATOR="${REPO_ROOT}/scripts/taira_privacy_rollout_contract.py"
 TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR="${TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR:-}"
 PRIVACY_BOOTSTRAP_PLAN="$PRIVACY_BOOTSTRAP_PLAN_TEMPLATE"
 PRIVACY_BOOTSTRAP_CONFIG="$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE"
@@ -611,6 +613,8 @@ release_inputs=(
   "$PRIVACY_BOOTSTRAP_CONFIG"
   "$PRIVACY_BOOTSTRAP_GENESIS"
   "$PRIVACY_BOOTSTRAP_VALIDATOR"
+  "$PRIVACY_ROLLOUT_PLAN"
+  "$PRIVACY_ROLLOUT_VALIDATOR"
   "$PRIVACY_EXACT12_MATRIX"
   "$PRIVACY_EXPECTATIONS_NORITO"
   "$PRIVACY_EXPECTATIONS_JSON"
@@ -646,6 +650,8 @@ if [[ "$PROFILE" == "release" ]]; then
 fi
 python3 "$PRIVACY_BOOTSTRAP_VALIDATOR" \
   "${privacy_bootstrap_validator_args[@]}"
+python3 -I -S "$PRIVACY_ROLLOUT_VALIDATOR" verify-plan \
+  --plan "$PRIVACY_ROLLOUT_PLAN"
 
 workspace_source_manifest_sha256="$(compute_workspace_source_manifest)"
 require_canonical_sha256 "pre-build workspace source manifest" "$workspace_source_manifest_sha256"
@@ -921,6 +927,7 @@ cp -R "${REPO_ROOT}/configs/soranexus/taira" "${bundle_dir}/configs/soranexus/"
 cp "${REPO_ROOT}/scripts/render_taira_validator_bundle.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/render_taira_edge_nginx_conf.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
+cp "$PRIVACY_ROLLOUT_VALIDATOR" "${bundle_dir}/scripts/"
 cp "$TAIRA_RELEASE_AUTHORITY_SCRIPT" "${bundle_dir}/scripts/"
 cp "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" "${bundle_dir}/scripts/"
 cp "$validator_lock_path" "${bundle_dir}/provenance/Cargo.lock"
@@ -960,6 +967,9 @@ if [[ "$PROFILE" == "release" ]]; then
     --genesis "${bundled_taira_dir}/genesis.json" \
     --matrix "$PRIVACY_EXACT12_MATRIX" \
     --broker-public "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"
+  cmp "$PRIVACY_ROLLOUT_PLAN" "${bundled_taira_dir}/privacy_rollout_plan_v1.json"
+  python3 -I -S "${bundle_dir}/scripts/taira_privacy_rollout_contract.py" verify-plan \
+    --plan "${bundled_taira_dir}/privacy_rollout_plan_v1.json"
 
   privacy_bootstrap_plan_sha256="$(
     sha256_file "${bundle_dir}/${privacy_bootstrap_plan_relative_path}"
@@ -1377,6 +1387,7 @@ payload = {
         "scripts/render_taira_validator_bundle.py",
         "scripts/render_taira_edge_nginx_conf.py",
         "scripts/taira_faucet_canary.py",
+        "scripts/taira_privacy_rollout_contract.py",
         "scripts/taira_release_authority.py",
         "scripts/release_artifact_contract.py",
         "provenance/Cargo.lock",

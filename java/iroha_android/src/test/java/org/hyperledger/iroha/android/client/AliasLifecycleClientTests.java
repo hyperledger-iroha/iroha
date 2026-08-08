@@ -37,6 +37,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.junit.Test;
 
 /** HTTP parity tests for safe alias lifecycle, typed reads, and sponsored onboarding. */
@@ -72,7 +73,7 @@ public final class AliasLifecycleClientTests {
         new AliasLifecycleTransactionPlanBodyV1(
             1,
             authority,
-            "test-chain",
+            TestNetworkIds.canonical(),
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             new AliasLifecycleOperationV1.RenewLease(renewal),
             AliasLifecyclePlanDispositionV1.APPLY,

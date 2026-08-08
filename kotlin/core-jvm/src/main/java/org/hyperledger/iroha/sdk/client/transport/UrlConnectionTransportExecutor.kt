@@ -144,7 +144,15 @@ class UrlConnectionTransportExecutor(
                 connection.addRequestProperty(name, value)
             }
         }
-        val hasBody = request.body.isNotEmpty() && !request.method.equals("GET", ignoreCase = true)
+        val body = request.body
+        val hasBody = body.isNotEmpty() && !request.method.equals("GET", ignoreCase = true)
+        if (request.replayPolicy == RequestReplayPolicy.ONE_SHOT) {
+            // Avoid stale pooled connections, the main source of transparent URLConnection
+            // replays. Fixed-length streaming disables URLConnection's internal body retry path.
+            connection.useCaches = false
+            connection.setRequestProperty("Connection", "close")
+            if (hasBody) connection.setFixedLengthStreamingMode(body.size)
+        }
         connection.doOutput = hasBody
         return connection
     }
@@ -154,9 +162,10 @@ class UrlConnectionTransportExecutor(
         const val DEFAULT_MAXIMUM_RESPONSE_BYTES: Long = 64L * 1024L * 1024L
 
         private fun writeRequestBody(request: TransportRequest, connection: HttpURLConnection) {
-            val hasBody = request.body.isNotEmpty() && !request.method.equals("GET", ignoreCase = true)
+            val body = request.body
+            val hasBody = body.isNotEmpty() && !request.method.equals("GET", ignoreCase = true)
             if (!hasBody) return
-            connection.outputStream.write(request.body)
+            connection.outputStream.write(body)
         }
 
         private fun readBody(

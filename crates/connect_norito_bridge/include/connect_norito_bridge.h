@@ -240,9 +240,8 @@ int32_t connect_norito_decode_ciphertext_frame(
 #define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS 2
 
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV4`.
-// ABI21 callers must require `proof_backend_available`; this build reports
-// false until authenticated V4 artifacts and every external evidence gate are
-// complete.
+// ABI21 callers must require `proof_backend_available`; the production bridge
+// reports true after an authenticated V4 artifact release is installed.
 int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
     uint8_t** out_capabilities_ptr,
     unsigned long* out_capabilities_len);
@@ -255,8 +254,8 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
 // a parallel JSON projection or generation label. Returns 0 only after the
 // manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
 // exact anchor path all verify. Recursive init performs this same verification
-// inside its native boundary. This standalone symbol remains unavailable until
-// the authenticated release-envelope trust root is wired.
+// inside its native boundary. The standalone symbol is active in the ABI-21
+// production bridge and does not treat a content address as a trust root.
 int32_t connect_norito_kagemusha_topup_finality_verify_v4(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,
@@ -1457,7 +1456,8 @@ int32_t connect_norito_encode_confidential_encrypted_payload(
 //   0  success
 //  -1  null pointer provided for input/output
 //  -2  invalid UTF-8 in input strings
-//  -3  chain_id parse failure
+//  -3  network_id parse failure (requires one exact canonical checksummed
+//      `hash:<64 uppercase hex>#<CRC16>` genesis-hash literal)
 //  -4  authority account id parse failure
 //  -5  asset definition id parse failure
 //  -6  destination account id parse failure
@@ -1469,7 +1469,7 @@ int32_t connect_norito_encode_confidential_encrypted_payload(
 // -31  invalid nonce (zero when present)
 // -34  missing or invalid typed fee-payment JSON
 int32_t connect_norito_encode_transfer_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1485,7 +1485,7 @@ int32_t connect_norito_encode_transfer_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_transfer_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1509,7 +1509,7 @@ int32_t connect_norito_encode_transfer_instruction_box(
     uint8_t** out_instruction_ptr, unsigned long* out_instruction_len);
 
 int32_t connect_norito_encode_register_zk_asset_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1523,7 +1523,7 @@ int32_t connect_norito_encode_register_zk_asset_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_register_zk_asset_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1538,7 +1538,7 @@ int32_t connect_norito_encode_register_zk_asset_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_multisig_register_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1551,7 +1551,7 @@ int32_t connect_norito_encode_multisig_register_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_multisig_register_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1565,7 +1565,7 @@ int32_t connect_norito_encode_multisig_register_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_claim_identifier_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1578,7 +1578,7 @@ int32_t connect_norito_encode_claim_identifier_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_claim_identifier_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1592,7 +1592,7 @@ int32_t connect_norito_encode_claim_identifier_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_set_key_value_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1607,7 +1607,7 @@ int32_t connect_norito_encode_set_key_value_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_set_key_value_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1623,7 +1623,7 @@ int32_t connect_norito_encode_set_key_value_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_remove_key_value_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1637,7 +1637,7 @@ int32_t connect_norito_encode_remove_key_value_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_remove_key_value_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1652,7 +1652,7 @@ int32_t connect_norito_encode_remove_key_value_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_propose_deploy_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1669,7 +1669,7 @@ int32_t connect_norito_encode_governance_propose_deploy_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1687,7 +1687,7 @@ int32_t connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_cast_plain_ballot_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1703,7 +1703,7 @@ int32_t connect_norito_encode_governance_cast_plain_ballot_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_cast_plain_ballot_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1720,7 +1720,7 @@ int32_t connect_norito_encode_governance_cast_plain_ballot_signed_transaction_al
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1734,7 +1734,7 @@ int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1749,7 +1749,7 @@ int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_enact_referendum_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1763,7 +1763,7 @@ int32_t connect_norito_encode_governance_enact_referendum_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_enact_referendum_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1778,7 +1778,7 @@ int32_t connect_norito_encode_governance_enact_referendum_signed_transaction_alg
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1791,7 +1791,7 @@ int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1805,7 +1805,7 @@ int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction_
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_persist_council_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1818,7 +1818,7 @@ int32_t connect_norito_encode_governance_persist_council_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_governance_persist_council_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1832,7 +1832,7 @@ int32_t connect_norito_encode_governance_persist_council_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_mint_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1848,7 +1848,7 @@ int32_t connect_norito_encode_mint_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_mint_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1865,7 +1865,7 @@ int32_t connect_norito_encode_mint_signed_transaction_alg(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_burn_signed_transaction(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
@@ -1881,7 +1881,7 @@ int32_t connect_norito_encode_burn_signed_transaction(
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
 int32_t connect_norito_encode_burn_signed_transaction_alg(
-    const char* chain_id, unsigned long chain_len,
+    const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,

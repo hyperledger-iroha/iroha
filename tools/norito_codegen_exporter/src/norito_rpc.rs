@@ -15,7 +15,6 @@ use std::{
     io::{Read, Write},
     num::NonZeroU32,
     path::{Component, Path, PathBuf},
-    str::FromStr,
     time::Duration,
 };
 
@@ -25,7 +24,7 @@ use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     isi::{Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload},
     metadata::Metadata,
@@ -610,7 +609,7 @@ struct RawPayloadFixture {
     name: String,
     payload: RawPayload,
     payload_json: Value,
-    chain_hint: String,
+    network_id_hint: String,
     authority_hint: String,
     creation_time_ms_hint: u64,
     ttl_ms_hint: u64,
@@ -619,7 +618,7 @@ struct RawPayloadFixture {
 
 #[derive(Clone)]
 struct RawPayload {
-    chain: String,
+    network_id: String,
     authority: String,
     creation_time_ms: u64,
     executable: RawExecutable,
@@ -669,7 +668,7 @@ struct Fixture {
 }
 
 struct PayloadSummary {
-    chain: String,
+    network_id: String,
     authority: String,
     creation_time_ms: u64,
     ttl_ms: u64,
@@ -687,12 +686,12 @@ struct WireInstructionPayload {
 
 impl RawPayloadFixture {
     fn generate_fixture(&self, keypair: &KeyPair) -> Result<Fixture> {
-        if self.chain_hint != self.payload.chain {
+        if self.network_id_hint != self.payload.network_id {
             bail!(
-                "fixture '{}' chain mismatch: expected {}, got {}",
+                "fixture '{}' network_id mismatch: expected {}, got {}",
                 self.name,
-                self.chain_hint,
-                self.payload.chain
+                self.network_id_hint,
+                self.payload.network_id
             );
         }
         if self.authority_hint != self.payload.authority {
@@ -729,10 +728,12 @@ impl RawPayloadFixture {
             );
         }
 
-        let builder = self
-            .payload
-            .to_builder()
-            .with_context(|| format!("failed to build Norito RPC fixture '{}'", self.name))?;
+        let builder = self.payload.to_builder().map_err(|err| {
+            eyre!(
+                "failed to build Norito RPC fixture '{}': {err:#}",
+                self.name
+            )
+        })?;
         let signed = builder.try_sign(keypair.private_key()).map_err(|err| {
             eyre!(
                 "failed to sign Norito RPC transaction fixture '{}': {err}",
@@ -773,7 +774,10 @@ impl RawPayloadFixture {
             payload_bytes,
             signed_bytes,
             summary: PayloadSummary {
-                chain: self.payload.chain.clone(),
+                network_id: payload_value
+                    .network_id()
+                    .expect("ordinary fixture transaction has an exact network identity")
+                    .to_string(),
                 authority: payload_value.authority().to_string(),
                 creation_time_ms: self.payload.creation_time_ms,
                 ttl_ms: actual_ttl_ms,
@@ -789,12 +793,11 @@ impl RawPayloadFixture {
 
 impl RawPayload {
     fn to_builder(&self) -> Result<TransactionBuilder> {
-        let chain_id = ChainId::from_str(&self.chain)
-            .with_context(|| format!("invalid canonical chain id '{}'", self.chain))?;
+        let network_id = parse_network_id(&self.network_id)?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
 
-        let mut builder = TransactionBuilder::new(chain_id, authority, self.fee_payment.clone());
+        let mut builder = TransactionBuilder::new(network_id, authority, self.fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         builder.set_ttl(Duration::from_millis(self.ttl_ms));
         if let Some(nonce) = self.nonce {
@@ -850,7 +853,7 @@ impl Fixture {
         FixtureEntry {
             name: self.name.clone(),
             authority: self.summary.authority.clone(),
-            chain: self.summary.chain.clone(),
+            network_id: self.summary.network_id.clone(),
             creation_time_ms: self.summary.creation_time_ms,
             encoded_file: format!("{}.norito", self.name),
             encoded_len: self.payload_bytes.len() as u64,
@@ -890,7 +893,7 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let name = expect_string(obj, "name")?.to_owned();
     const FIELDS: &[&str] = &[
         "name",
-        "chain",
+        "network_id",
         "authority",
         "creation_time_ms",
         "time_to_live_ms",
@@ -918,7 +921,7 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
     let payload = parse_payload(payload_value)
         .with_context(|| format!("invalid payload for fixture '{name}'"))?;
 
-    let chain_hint = expect_string(obj, "chain")?.to_owned();
+    let network_id_hint = expect_string(obj, "network_id")?.to_owned();
     let authority_hint = expect_string(obj, "authority")?.to_owned();
     let creation_time_ms_hint = expect_u64(obj, "creation_time_ms")?;
     let ttl_ms_hint = expect_nonzero_u64(obj, "time_to_live_ms")
@@ -930,7 +933,7 @@ fn parse_payload_fixture(value: &Value) -> Result<RawPayloadFixture> {
         name,
         payload,
         payload_json,
-        chain_hint,
+        network_id_hint,
         authority_hint,
         creation_time_ms_hint,
         ttl_ms_hint,
@@ -945,7 +948,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     require_exact_fields(
         obj,
         &[
-            "chain",
+            "network_id",
             "authority",
             "creation_time_ms",
             "executable",
@@ -956,7 +959,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
         ],
         "payload",
     )?;
-    let chain = expect_string(obj, "chain")?.to_owned();
+    let network_id = expect_string(obj, "network_id")?.to_owned();
     let authority = expect_string(obj, "authority")?.to_owned();
     let creation_time_ms = expect_u64(obj, "creation_time_ms")?;
     let executable_value = obj
@@ -986,7 +989,7 @@ fn parse_payload(value: &Value) -> Result<RawPayload> {
     )?;
 
     Ok(RawPayload {
-        chain,
+        network_id,
         authority,
         creation_time_ms,
         executable,
@@ -1146,6 +1149,18 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
     Ok(account)
 }
 
+fn parse_network_id(value: &str) -> Result<NetworkId> {
+    let encoded = Value::String(value.to_owned());
+    let network_id = json::from_value::<NetworkId>(encoded.clone())
+        .with_context(|| format!("invalid canonical network id '{value}'"))?;
+    let canonical = json::to_value(&network_id)
+        .context("failed to render the canonical network id JSON literal")?;
+    if canonical != encoded {
+        bail!("network id '{value}' must use its exact canonical hash encoding");
+    }
+    Ok(network_id)
+}
+
 fn optional_u32_value(value: Option<u32>) -> Value {
     match value {
         Some(v) => Value::Number(Number::U64(v as u64)),
@@ -1172,8 +1187,8 @@ fn build_payload_fixtures_json(
         let mut entry = Map::new();
         entry.insert("name".to_owned(), Value::String(fixture.name.clone()));
         entry.insert(
-            "chain".to_owned(),
-            Value::String(fixture.summary.chain.clone()),
+            "network_id".to_owned(),
+            Value::String(fixture.summary.network_id.clone()),
         );
         entry.insert(
             "authority".to_owned(),
@@ -2457,7 +2472,7 @@ fn validate_manifest_shape(value: &Value) -> Result<()> {
     const ENTRY_FIELDS: &[&str] = &[
         "name",
         "authority",
-        "chain",
+        "network_id",
         "creation_time_ms",
         "encoded_file",
         "encoded_len",
@@ -2487,7 +2502,7 @@ fn validate_manifest_shape(value: &Value) -> Result<()> {
 struct FixtureEntry {
     name: String,
     authority: String,
-    chain: String,
+    network_id: String,
     creation_time_ms: u64,
     encoded_file: String,
     encoded_len: u64,
@@ -2557,6 +2572,14 @@ impl FixtureEntry {
                 self.name
             );
         }
+        let expected_network_id = parse_network_id(&self.network_id)
+            .with_context(|| format!("fixture '{}' has invalid network_id", self.name))?;
+        let actual_network_id = signed.network_id().copied().ok_or_else(|| {
+            eyre!(
+                "fixture '{}' signed payload uses the genesis-only transaction domain",
+                self.name
+            )
+        })?;
 
         let actual_creation_time_ms =
             u64::try_from(signed.creation_time().as_millis()).map_err(|_| {
@@ -2577,9 +2600,8 @@ impl FixtureEntry {
             })?;
         let actual_nonce = signed.nonce().map(NonZeroU32::get);
         let actual_authority = signed.authority().to_string();
-        let actual_chain = signed.chain().to_string();
-        if actual_authority != self.authority
-            || actual_chain != self.chain
+        if actual_network_id != expected_network_id
+            || actual_authority != self.authority
             || actual_creation_time_ms != self.creation_time_ms
             || actual_ttl_ms != Some(self.time_to_live_ms)
             || actual_nonce != self.nonce
@@ -2739,6 +2761,9 @@ mod tests {
 
     use super::*;
 
+    const TEST_NETWORK_ID: &str =
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+
     fn sample_manifest() -> Manifest {
         Manifest {
             fixtures: vec![fixture("alpha"), fixture("beta"), fixture("gamma")],
@@ -2749,7 +2774,7 @@ mod tests {
         FixtureEntry {
             name: name.to_string(),
             authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53".into(),
-            chain: "00000001".into(),
+            network_id: TEST_NETWORK_ID.into(),
             creation_time_ms: 1_735_000_000_000,
             encoded_file: format!("{name}.norito"),
             encoded_len: 1,
@@ -2789,6 +2814,19 @@ mod tests {
         let error = validate_manifest_shape(&missing_nonce)
             .expect_err("manifest nonce must be present even when null");
         assert!(error.to_string().contains("missing required field 'nonce'"));
+
+        let mut legacy_chain = canonical.clone();
+        legacy_chain
+            .as_object_mut()
+            .and_then(|root| root.get_mut("fixtures"))
+            .and_then(Value::as_array_mut)
+            .and_then(|fixtures| fixtures.first_mut())
+            .and_then(Value::as_object_mut)
+            .expect("first manifest entry")
+            .insert("chain".to_owned(), Value::String("legacy".to_owned()));
+        let error = validate_manifest_shape(&legacy_chain)
+            .expect_err("the legacy manifest chain field must fail closed");
+        assert!(error.to_string().contains("unknown field 'chain'"));
 
         let mut unknown_entry = canonical;
         unknown_entry
@@ -2885,7 +2923,7 @@ mod tests {
     fn signed_hash_uses_compact_external_entrypoint_domain() {
         let keypair = signing_keypair().expect("fixture signing key");
         let signed = TransactionBuilder::new(
-            ChainId::from("fixture-hash-domain"),
+            parse_network_id(TEST_NETWORK_ID).expect("fixture network id"),
             AccountId::new(keypair.public_key().clone()),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3390,7 +3428,7 @@ mod tests {
         let raw = RawPayloadFixture {
             name: "checked-signing".to_string(),
             payload: RawPayload {
-                chain: "00000001".to_string(),
+                network_id: TEST_NETWORK_ID.to_string(),
                 authority: account_id.to_string(),
                 creation_time_ms: 1_735_000_000_000,
                 executable: RawExecutable::Instructions(Vec::new()),
@@ -3400,7 +3438,7 @@ mod tests {
                 metadata: Vec::new(),
             },
             payload_json: Value::Null,
-            chain_hint: "00000001".to_owned(),
+            network_id_hint: TEST_NETWORK_ID.to_owned(),
             authority_hint: account_id.to_string(),
             creation_time_ms_hint: 1_735_000_000_000,
             ttl_ms_hint: 60_000,
@@ -3420,9 +3458,9 @@ mod tests {
     }
 
     #[test]
-    fn raw_payload_rejects_invalid_chain_id() {
+    fn raw_payload_rejects_invalid_network_id() {
         let payload = RawPayload {
-            chain: String::new(),
+            network_id: String::new(),
             authority: String::new(),
             creation_time_ms: 0,
             executable: RawExecutable::Instructions(Vec::new()),
@@ -3435,11 +3473,33 @@ mod tests {
         let error = payload
             .to_builder()
             .err()
-            .expect("an empty chain id must be rejected");
+            .expect("an empty network id must be rejected");
         assert!(
-            error.to_string().contains("invalid canonical chain id ''"),
-            "unexpected chain id error: {error}"
+            error
+                .to_string()
+                .contains("invalid canonical network id ''"),
+            "unexpected network id error: {error}"
         );
+    }
+
+    #[test]
+    fn network_id_parser_requires_exact_canonical_hash_encoding() {
+        let parsed = parse_network_id(TEST_NETWORK_ID).expect("canonical network id");
+        assert_eq!(
+            json::to_value(&parsed).expect("render canonical network id"),
+            Value::String(TEST_NETWORK_ID.to_owned())
+        );
+
+        for rejected in [
+            TEST_NETWORK_ID.to_ascii_lowercase(),
+            TEST_NETWORK_ID[5..69].to_owned(),
+            TEST_NETWORK_ID.replace("#A2F0", "#0000"),
+        ] {
+            assert!(
+                parse_network_id(&rejected).is_err(),
+                "non-canonical network id '{rejected}' must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -3504,11 +3564,22 @@ mod tests {
         assert!(error.to_string().contains("unknown field 'legacy_hint'"));
 
         let mut missing_top_level = entry.clone();
-        missing_top_level.remove("chain");
+        missing_top_level.remove("network_id");
         let Err(error) = parse_payload_fixture(&Value::Object(missing_top_level)) else {
             panic!("missing top-level identity fields must fail closed");
         };
-        assert!(error.to_string().contains("missing required field 'chain'"));
+        assert!(
+            error
+                .to_string()
+                .contains("missing required field 'network_id'")
+        );
+
+        let mut legacy_top_level = entry.clone();
+        legacy_top_level.insert("chain".to_owned(), Value::String("legacy".to_owned()));
+        let Err(error) = parse_payload_fixture(&Value::Object(legacy_top_level)) else {
+            panic!("the legacy top-level chain field must fail closed");
+        };
+        assert!(error.to_string().contains("unknown field 'chain'"));
 
         let mut unknown_payload = entry
             .get("payload")
@@ -3524,6 +3595,17 @@ mod tests {
                 .to_string()
                 .contains("unknown field 'legacy_metadata'")
         );
+
+        let mut legacy_payload = entry
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("nested payload object")
+            .clone();
+        legacy_payload.insert("chain".to_owned(), Value::String("legacy".to_owned()));
+        let Err(error) = parse_payload(&Value::Object(legacy_payload)) else {
+            panic!("the legacy payload chain field must fail closed");
+        };
+        assert!(error.to_string().contains("unknown field 'chain'"));
 
         let mut missing_payload = entry
             .get("payload")

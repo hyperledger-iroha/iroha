@@ -2205,8 +2205,12 @@ PY
           fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
         fi
       done
+      local kagemusha_symbols
+      kagemusha_symbols="$(
+        grep -E '^_?connect_norito_kagemusha_' <<<"$symbols" || true
+      )"
       if ! run_isolated_checker_python - \
-        "$symbols" -- "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+        "$kagemusha_symbols" -- "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 import sys
 
 separator = sys.argv.index("--")

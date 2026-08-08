@@ -18,7 +18,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::{AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
     isi::{Burn, InstructionBox, Mint, Transfer},
@@ -37,6 +37,8 @@ const DEFAULT_OUT_DIR: &str = "IrohaSwift/Fixtures";
 const DEFAULT_MANIFEST_NAME: &str = "swift_parity_manifest.json";
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
+const CANONICAL_DEV_NETWORK_ID: &str =
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
 const EXPECTED_FIXTURE_NAMES: [&str; 3] = [
     "swift_burn_asset_basic",
     "swift_mint_asset_basic",
@@ -65,7 +67,7 @@ struct PayloadFileEntry {
 #[derive(Debug, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PayloadSpec {
-    chain: String,
+    network_id: NetworkId,
     authority: String,
     creation_time_ms: u64,
     executable: ExecutableSpec,
@@ -176,6 +178,11 @@ fn parse_canonical_account(raw: &str, label: &str) -> Result<AccountId, String> 
     Ok(account)
 }
 
+fn canonical_dev_network_id() -> NetworkId {
+    json::from_value(Value::String(CANONICAL_DEV_NETWORK_ID.to_owned()))
+        .expect("the canonical Iroha3 dev network identity must remain valid")
+}
+
 impl FeePaymentSpec {
     fn to_intent(&self) -> Result<FeePaymentIntent, String> {
         if self.payer != "authority" {
@@ -193,16 +200,17 @@ impl FeePaymentSpec {
 
 impl PayloadSpec {
     fn to_builder(&self) -> Result<TransactionBuilder, String> {
-        let chain_id: ChainId = self
-            .chain
-            .parse()
-            .map_err(|_| format!("invalid chain id '{}'", self.chain))?;
-        if chain_id.to_string() != self.chain {
-            return Err(format!("noncanonical chain id '{}'", self.chain));
+        if self.network_id != canonical_dev_network_id() {
+            return Err(format!(
+                "network_id must be the canonical Iroha3 dev genesis identity '{CANONICAL_DEV_NETWORK_ID}'"
+            ));
         }
         let authority = parse_canonical_account(&self.authority, "authority")?;
-        let mut builder =
-            TransactionBuilder::new(chain_id, authority.clone(), self.fee_payment.to_intent()?);
+        let mut builder = TransactionBuilder::new(
+            self.network_id,
+            authority.clone(),
+            self.fee_payment.to_intent()?,
+        );
         builder.set_creation_time(Duration::from_millis(self.creation_time_ms));
         if self.time_to_live_ms == 0 {
             return Err("time_to_live_ms must be > 0".to_owned());
@@ -1339,6 +1347,8 @@ fn run_with_options(fixtures_path: &Path, options: &Options) -> Result<(), Strin
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::Hash;
+
     use super::*;
     use iroha_data_model::{DomainId, transaction::Executable};
     use norito::json::Number;
@@ -1384,7 +1394,7 @@ mod tests {
 
     fn payload_spec(authority: &AccountId, destination: &AccountId) -> PayloadSpec {
         PayloadSpec {
-            chain: "00000042".into(),
+            network_id: canonical_dev_network_id(),
             authority: account_literal(authority),
             creation_time_ms: 123,
             executable: ExecutableSpec {
@@ -1537,6 +1547,54 @@ mod tests {
         assert_eq!(
             entries[0].payload.to_builder().err().as_deref(),
             Some("time_to_live_ms must be > 0")
+        );
+    }
+
+    #[test]
+    fn source_schema_requires_canonical_network_id_and_rejects_chain() {
+        let mut missing = source_document();
+        first_payload(&mut missing).remove("network_id");
+        assert!(decode_document(missing).is_err());
+
+        let mut null = source_document();
+        first_payload(&mut null).insert("network_id".into(), Value::Null);
+        assert!(decode_document(null).is_err());
+
+        let mut legacy = source_document();
+        first_payload(&mut legacy).remove("network_id");
+        first_payload(&mut legacy).insert("chain".into(), Value::String("00000042".into()));
+        assert!(decode_document(legacy).is_err());
+
+        let mut aliased = source_document();
+        first_payload(&mut aliased).insert("chain".into(), Value::String("00000042".into()));
+        assert!(decode_document(aliased).is_err());
+
+        let mut label = source_document();
+        first_payload(&mut label).insert("network_id".into(), Value::String("00000042".into()));
+        assert!(decode_document(label).is_err());
+
+        let mut noncanonical = source_document();
+        first_payload(&mut noncanonical).insert(
+            "network_id".into(),
+            Value::String(CANONICAL_DEV_NETWORK_ID.to_ascii_lowercase()),
+        );
+        assert!(decode_document(noncanonical).is_err());
+    }
+
+    #[test]
+    fn payload_builder_rejects_a_different_canonical_network_identity() {
+        let keypair = KeyPair::try_from_seed(vec![0xCF; 32], Algorithm::Ed25519)
+            .expect("seeded fixture key should derive");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let mut payload = payload_spec(&authority, &authority);
+        payload.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0xAB; Hash::LENGTH]),
+        ));
+        assert_eq!(
+            payload.to_builder().err().as_deref(),
+            Some(
+                "network_id must be the canonical Iroha3 dev genesis identity 'hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0'"
+            )
         );
     }
 

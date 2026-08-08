@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 
 /**
@@ -61,25 +62,32 @@ public final class VerifyingKeyTransactionDraft {
 
   static VerifyingKeyTransactionDraft parseRegister(
       final byte[] bytes,
-      final String expectedChainId,
+      final NetworkId expectedNetworkId,
       final Map<String, Object> request) {
     return parse(
-        bytes, expectedChainId, request, VerifyingKeyDraftBinding.Operation.REGISTER);
+        bytes,
+        expectedNetworkId,
+        request,
+        VerifyingKeyDraftBinding.Operation.REGISTER);
   }
 
   static VerifyingKeyTransactionDraft parseUpdate(
       final byte[] bytes,
-      final String expectedChainId,
+      final NetworkId expectedNetworkId,
       final Map<String, Object> request) {
     return parse(
-        bytes, expectedChainId, request, VerifyingKeyDraftBinding.Operation.UPDATE);
+        bytes,
+        expectedNetworkId,
+        request,
+        VerifyingKeyDraftBinding.Operation.UPDATE);
   }
 
   private static VerifyingKeyTransactionDraft parse(
       final byte[] bytes,
-      final String expectedChainId,
+      final NetworkId expectedNetworkId,
       final Map<String, Object> request,
       final VerifyingKeyDraftBinding.Operation operation) {
+    Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
     final Map<String, Object> value = parseObject(bytes);
     for (final String field : value.keySet()) {
       if (!FIELDS.contains(field)) {
@@ -122,7 +130,7 @@ public final class VerifyingKeyTransactionDraft {
           "transaction_payload_b64 must contain one canonical transaction payload", ex);
     }
     VerifyingKeyDraftBinding.validate(
-        transactionPayload, expectedChainId, request, operation);
+        transactionPayload, expectedNetworkId, request, operation);
     if (!Arrays.equals(signingMessage, IrohaHash.prehash(transactionPayload))) {
       throw new IllegalArgumentException(
           "signing_message_b64 must be the exact transaction-payload prehash");

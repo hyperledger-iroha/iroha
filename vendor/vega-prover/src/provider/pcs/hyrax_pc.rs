@@ -924,123 +924,137 @@ mod tests {
     // short commitment inconsistent with the opening fails the binding check.
     #[test]
     fn hyrax_direct_opening_rejects_malformed_commitment_rows() {
-        let width = 32;
-        let num_vars = 6; // n = 64 -> num_rows = 2
-        let n = 1usize << num_vars;
-        let (ck, vk_ee) = <E as Engine>::PCS::setup(b"test_direct", n, width);
-        let poly = sample_poly(n);
-        let point = sample_point(num_vars);
-        let blind = <E as Engine>::PCS::blind(&ck, n);
-        let comm = <E as Engine>::PCS::commit(&ck, &poly, &blind, false).unwrap();
+        crate::iroha_rng::with_deterministic_test_seed(0x20, || {
+            let width = 32;
+            let num_vars = 6; // n = 64 -> num_rows = 2
+            let n = 1usize << num_vars;
+            let (ck, vk_ee) = <E as Engine>::PCS::setup(b"test_direct", n, width);
+            let poly = sample_poly(n);
+            let point = sample_point(num_vars);
+            let blind = <E as Engine>::PCS::blind(&ck, n);
+            let comm = <E as Engine>::PCS::commit(&ck, &poly, &blind, false).unwrap();
 
-        let (v, cb) = <E as Engine>::PCS::prove_direct(&ck, &poly, &blind, &point).unwrap();
+            let (v, cb) = <E as Engine>::PCS::prove_direct(&ck, &poly, &blind, &point).unwrap();
 
-        // Well-formed commitment opens successfully.
-        assert!(<E as Engine>::PCS::verify_direct(&vk_ee, &comm, &v, &cb, &point).is_ok());
+            // Well-formed commitment opens successfully.
+            assert!(<E as Engine>::PCS::verify_direct(&vk_ee, &comm, &v, &cb, &point).is_ok());
 
-        // Extra row.
-        let mut comm_extra = comm.clone();
-        comm_extra.comm.push(comm.comm[0]);
-        assert!(<E as Engine>::PCS::verify_direct(&vk_ee, &comm_extra, &v, &cb, &point).is_err());
+            // Extra row.
+            let mut comm_extra = comm.clone();
+            comm_extra.comm.push(comm.comm[0]);
+            assert!(
+                <E as Engine>::PCS::verify_direct(&vk_ee, &comm_extra, &v, &cb, &point).is_err()
+            );
 
-        // Missing row.
-        let mut comm_short = comm.clone();
-        comm_short.comm.pop();
-        assert!(<E as Engine>::PCS::verify_direct(&vk_ee, &comm_short, &v, &cb, &point).is_err());
+            // Missing row.
+            let mut comm_short = comm.clone();
+            comm_short.comm.pop();
+            assert!(
+                <E as Engine>::PCS::verify_direct(&vk_ee, &comm_short, &v, &cb, &point).is_err()
+            );
 
-        // Empty commitment.
-        let comm_empty = HyraxCommitment::<E> { comm: vec![] };
-        assert!(<E as Engine>::PCS::verify_direct(&vk_ee, &comm_empty, &v, &cb, &point).is_err());
+            // Empty commitment.
+            let comm_empty = HyraxCommitment::<E> { comm: vec![] };
+            assert!(
+                <E as Engine>::PCS::verify_direct(&vk_ee, &comm_empty, &v, &cb, &point).is_err()
+            );
+        });
     }
 
     // The single-row case (num_vars_rows == 0) must reject an empty commitment.
     #[test]
     fn hyrax_direct_opening_rejects_empty_single_row_commitment() {
-        let width = 32;
-        let num_vars = 4; // n = 16 -> num_rows = 1
-        let n = 1usize << num_vars;
-        let (ck, vk_ee) = <E as Engine>::PCS::setup(b"test_direct_single", n, width);
-        let poly = sample_poly(n);
-        let point = sample_point(num_vars);
-        let blind = <E as Engine>::PCS::blind(&ck, n);
+        crate::iroha_rng::with_deterministic_test_seed(0x21, || {
+            let width = 32;
+            let num_vars = 4; // n = 16 -> num_rows = 1
+            let n = 1usize << num_vars;
+            let (ck, vk_ee) = <E as Engine>::PCS::setup(b"test_direct_single", n, width);
+            let poly = sample_poly(n);
+            let point = sample_point(num_vars);
+            let blind = <E as Engine>::PCS::blind(&ck, n);
 
-        let (v, cb) = <E as Engine>::PCS::prove_direct(&ck, &poly, &blind, &point).unwrap();
-        let comm_empty = HyraxCommitment::<E> { comm: vec![] };
-        assert!(<E as Engine>::PCS::verify_direct(&vk_ee, &comm_empty, &v, &cb, &point).is_err());
+            let (v, cb) = <E as Engine>::PCS::prove_direct(&ck, &poly, &blind, &point).unwrap();
+            let comm_empty = HyraxCommitment::<E> { comm: vec![] };
+            assert!(
+                <E as Engine>::PCS::verify_direct(&vk_ee, &comm_empty, &v, &cb, &point).is_err()
+            );
+        });
     }
 
     // The standard evaluation-opening boundary rejects a polynomial commitment too small
     // to open at the point, and an empty evaluation commitment.
     #[test]
     fn hyrax_opening_rejects_undersized_commitments() {
-        let width = 32;
-        let num_vars = 6; // n = 64 -> num_rows = 2
-        let n = 1usize << num_vars;
-        let (ck, vk_ee) = <E as Engine>::PCS::setup(b"test_open", n, width);
-        let (ck_s, _) = <E as Engine>::PCS::setup(b"ck_s", 1, 1);
-        let poly = sample_poly(n);
-        let point = sample_point(num_vars);
-        let blind = <E as Engine>::PCS::blind(&ck, n);
-        let comm = <E as Engine>::PCS::commit(&ck, &poly, &blind, false).unwrap();
+        crate::iroha_rng::with_deterministic_test_seed(0x22, || {
+            let width = 32;
+            let num_vars = 6; // n = 64 -> num_rows = 2
+            let n = 1usize << num_vars;
+            let (ck, vk_ee) = <E as Engine>::PCS::setup(b"test_open", n, width);
+            let (ck_s, _) = <E as Engine>::PCS::setup(b"ck_s", 1, 1);
+            let poly = sample_poly(n);
+            let point = sample_point(num_vars);
+            let blind = <E as Engine>::PCS::blind(&ck, n);
+            let comm = <E as Engine>::PCS::commit(&ck, &poly, &blind, false).unwrap();
 
-        // Exact evaluation certified by the opening.
-        let (v, cb) = <E as Engine>::PCS::prove_direct(&ck, &poly, &blind, &point).unwrap();
-        let eval = <E as Engine>::PCS::verify_direct(&vk_ee, &comm, &v, &cb, &point).unwrap();
-        let blind_eval = <E as Engine>::PCS::blind(&ck_s, 1);
-        let comm_eval = <E as Engine>::PCS::commit(&ck_s, &[eval], &blind_eval, false).unwrap();
+            // Exact evaluation certified by the opening.
+            let (v, cb) = <E as Engine>::PCS::prove_direct(&ck, &poly, &blind, &point).unwrap();
+            let eval = <E as Engine>::PCS::verify_direct(&vk_ee, &comm, &v, &cb, &point).unwrap();
+            let blind_eval = <E as Engine>::PCS::blind(&ck_s, 1);
+            let comm_eval = <E as Engine>::PCS::commit(&ck_s, &[eval], &blind_eval, false).unwrap();
 
-        let mut tp = <E as Engine>::TE::new(b"open");
-        let arg = <E as Engine>::PCS::prove(
-            &ck,
-            &ck_s,
-            &mut tp,
-            &comm,
-            &poly,
-            &blind,
-            &point,
-            &comm_eval,
-            &blind_eval,
-        )
-        .unwrap();
-
-        // Well-formed commitment verifies.
-        let mut tv = <E as Engine>::TE::new(b"open");
-        assert!(
-            <E as Engine>::PCS::verify(&vk_ee, &ck_s, &mut tv, &comm, &point, &comm_eval, &arg)
-                .is_ok()
-        );
-
-        // Polynomial commitment too small to open at the point.
-        let mut comm_short = comm.clone();
-        comm_short.comm.pop();
-        let mut tv = <E as Engine>::TE::new(b"open");
-        assert!(
-            <E as Engine>::PCS::verify(
-                &vk_ee,
+            let mut tp = <E as Engine>::TE::new(b"open");
+            let arg = <E as Engine>::PCS::prove(
+                &ck,
                 &ck_s,
-                &mut tv,
-                &comm_short,
+                &mut tp,
+                &comm,
+                &poly,
+                &blind,
                 &point,
                 &comm_eval,
-                &arg
+                &blind_eval,
             )
-            .is_err()
-        );
+            .unwrap();
 
-        // Empty evaluation commitment.
-        let comm_eval_empty = HyraxCommitment::<E> { comm: vec![] };
-        let mut tv = <E as Engine>::TE::new(b"open");
-        assert!(
-            <E as Engine>::PCS::verify(
-                &vk_ee,
-                &ck_s,
-                &mut tv,
-                &comm,
-                &point,
-                &comm_eval_empty,
-                &arg
-            )
-            .is_err()
-        );
+            // Well-formed commitment verifies.
+            let mut tv = <E as Engine>::TE::new(b"open");
+            assert!(
+                <E as Engine>::PCS::verify(&vk_ee, &ck_s, &mut tv, &comm, &point, &comm_eval, &arg)
+                    .is_ok()
+            );
+
+            // Polynomial commitment too small to open at the point.
+            let mut comm_short = comm.clone();
+            comm_short.comm.pop();
+            let mut tv = <E as Engine>::TE::new(b"open");
+            assert!(
+                <E as Engine>::PCS::verify(
+                    &vk_ee,
+                    &ck_s,
+                    &mut tv,
+                    &comm_short,
+                    &point,
+                    &comm_eval,
+                    &arg
+                )
+                .is_err()
+            );
+
+            // Empty evaluation commitment.
+            let comm_eval_empty = HyraxCommitment::<E> { comm: vec![] };
+            let mut tv = <E as Engine>::TE::new(b"open");
+            assert!(
+                <E as Engine>::PCS::verify(
+                    &vk_ee,
+                    &ck_s,
+                    &mut tv,
+                    &comm,
+                    &point,
+                    &comm_eval_empty,
+                    &arg
+                )
+                .is_err()
+            );
+        });
     }
 }

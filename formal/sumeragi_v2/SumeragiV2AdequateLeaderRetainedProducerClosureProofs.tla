@@ -403,8 +403,8 @@ BY AdequateLeaderRetainedFrozenProducerOwnerUniverseIsPrimeInvariant, Isa
        AsyncProducerJournalMonotoneStep
 
 THEOREM AdequateLeaderConsumedProducerEpisodeCannotReenterRemainingRank ==
-  \A request \in AsyncProducerIngressRequests,
-     episode \in AsyncProducerIngressEpisodeUniverseFor(request):
+  \A request \in AsyncProducerIngressRequests:
+    \A episode \in AsyncProducerIngressEpisodeUniverseFor(request):
     episode \in asyncProducerConsumedEpisodes
       => episode \notin AsyncProducerRemainingIngressEpisodesFor(request)
 BY Isa
@@ -754,11 +754,11 @@ AdequateLeaderRetainedProducerNonDescentEpisodeStepProperty(specification) ==
           leaderContext \in ContextRecords,
           leader \in ValidatorIds,
           leaderView \in Views,
-          subject \in Subjects,
-          known \in
-            SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          budget \in Nat:
+          subject \in Subjects:
+         \A known \in
+           SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+             target, leaderContext, leader, leaderView, subject),
+           budget \in Nat:
          AdequateLeaderRetainedProducerEpisodeAtRank(
            request, node, cutoffOrdinal, sourceRank,
            target, leaderContext, leader, leaderView,
@@ -779,11 +779,11 @@ AdequateLeaderRetainedProducerNonDescentEpisodeClosureProperty(
           leaderContext \in ContextRecords,
           leader \in ValidatorIds,
           leaderView \in Views,
-          subject \in Subjects,
-          known \in
-            SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
-              target, leaderContext, leader, leaderView, subject),
-          budget \in Nat:
+          subject \in Subjects:
+         \A known \in
+           SUBSET AdequateLeaderRetainedFrozenProducerOwnerUniverse(
+             target, leaderContext, leader, leaderView, subject),
+           budget \in Nat:
          AdequateLeaderRetainedProducerEpisodeAtRank(
            request, node, cutoffOrdinal, sourceRank,
            target, leaderContext, leader, leaderView,

@@ -23,7 +23,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId, Encode as _,
+    ChainId, Encode as _, NetworkId,
     account::AccountId,
     block::{
         BlockHeader,
@@ -82,6 +82,7 @@ The expected-roster document is strict JSON:
   {
     \"schema_version\": 3,
     \"chain_id\": \"cbdc16\",
+    \"network_id\": \"<exact signed-genesis block-header hash>\",
     \"protocol_version\": 4,
     \"consensus_mode\": \"npos\",
     \"expected_node_key\": \"<this port's BLS public key>\",
@@ -135,6 +136,7 @@ enum ChallengeSource {
 struct ExpectedRosterDocument {
     schema_version: u8,
     chain_id: ChainId,
+    network_id: NetworkId,
     protocol_version: u16,
     consensus_mode: String,
     expected_node_key: String,
@@ -147,6 +149,7 @@ struct ExpectedRosterDocument {
 struct AttestedExpectedRosterDocument {
     schema_version: u8,
     chain_id: ChainId,
+    network_id: NetworkId,
     protocol_version: u16,
     consensus_mode: String,
     expected_node_key: String,
@@ -718,8 +721,8 @@ fn verify_attested_json_inputs(
     if attestation.body.challenge != challenge {
         return Err("attestation does not bind the exact caller challenge".to_owned());
     }
-    if attestation.body.chain_id != expectations.chain_id {
-        return Err("attestation chain id does not match expected-roster chain id".to_owned());
+    if attestation.body.network_id != expectations.network_id {
+        return Err("attestation network id does not match expected-roster network id".to_owned());
     }
     let expected_node =
         parse_expected_peer_key(&expectations.expected_node_key, "expected_node_key")?;
@@ -735,11 +738,14 @@ fn verify_attested_json_inputs(
         ));
     }
     let genesis_public_key = parse_expected_genesis_public_key(&expectations.genesis_public_key)?;
-    let genesis = decode_validate_signed_genesis(
-        signed_genesis,
-        &expectations.chain_id,
-        &genesis_public_key,
-    )?;
+    let genesis = decode_validate_signed_genesis(signed_genesis, &genesis_public_key)?;
+    let decoded_network_id = NetworkId::from_genesis_hash(genesis.block_hash);
+    if expectations.network_id != decoded_network_id {
+        return Err(format!(
+            "expected-roster network id {} does not match decoded signed genesis {}",
+            expectations.network_id, decoded_network_id
+        ));
+    }
     if attestation.body.genesis_block_hash != genesis.block_hash {
         return Err(format!(
             "attested genesis block hash {} does not match decoded signed genesis {}",
@@ -814,6 +820,7 @@ fn validate_attested_expectations(
     let legacy = ExpectedRosterDocument {
         schema_version: LEGACY_EXPECTATIONS_SCHEMA_VERSION,
         chain_id: expectations.chain_id.clone(),
+        network_id: expectations.network_id,
         protocol_version: expectations.protocol_version,
         consensus_mode: expectations.consensus_mode.clone(),
         expected_node_key: expectations.expected_node_key.clone(),
@@ -850,7 +857,6 @@ fn parse_expected_genesis_public_key(value: &str) -> Result<PublicKey, String> {
 
 fn decode_validate_signed_genesis(
     signed_genesis: &[u8],
-    expected_chain_id: &ChainId,
     genesis_public_key: &PublicKey,
 ) -> Result<ValidatedSignedGenesis, String> {
     iroha_genesis::init_instruction_registry();
@@ -863,7 +869,7 @@ fn decode_validate_signed_genesis(
         return Err("signed genesis is not in exact canonical framed encoding".to_owned());
     }
     let genesis_account = AccountId::new(genesis_public_key.clone());
-    validate_genesis_block(&block, &genesis_account, expected_chain_id)
+    validate_genesis_block(&block, &genesis_account)
         .map_err(|error| format!("signed genesis validation failed: {error}"))?;
     let proposal_wire_hash = block
         .canonical_proposal_wire_hash()
@@ -917,10 +923,10 @@ fn verify_genesis_finality_proof(
             "genesis finality proof does not use current protocol version {PROTOCOL_VERSION}"
         ));
     }
-    if artifact.height_context.chain_id.as_str() != PK2_CHAIN_ID
+    if artifact.height_context.network_id != expectations.network_id
         || artifact.height_context.mode != ConsensusMode::Npos
     {
-        return Err("genesis finality proof is not for the expected PK2 NPoS chain".to_owned());
+        return Err("genesis finality proof is not for the expected PK2 NPoS network".to_owned());
     }
     let expected_peers = parse_expected_validator_keys(&expectations.validator_keys)?;
     let actual_peers = artifact
@@ -938,9 +944,8 @@ fn verify_genesis_finality_proof(
     if artifact.height_context.quorum.min_signers != expectations.min_signers {
         return Err("genesis finality proof min_signers does not match expectations".to_owned());
     }
-    let expected_chain_id: ChainId = PK2_CHAIN_ID.into();
     let verification = FinalityProofVerificationConfig {
-        expected_chain_id: &expected_chain_id,
+        expected_network_id: &expectations.network_id,
         expected_height: Some(1),
         trusted_context_id: artifact.context_id(),
     };
@@ -1008,10 +1013,10 @@ fn verify_decoded(
     }
 
     let artifact = &proof.finality_artifact;
-    if artifact.height_context.chain_id.as_str() != PK2_CHAIN_ID {
+    if artifact.height_context.network_id != expectations.network_id {
         return Err(format!(
-            "proof chain id {} is not required PK2 chain {PK2_CHAIN_ID}",
-            artifact.height_context.chain_id
+            "proof network id {} does not match expected network {}",
+            artifact.height_context.network_id, expectations.network_id
         ));
     }
     if artifact.protocol_version != PROTOCOL_VERSION
@@ -1145,9 +1150,8 @@ fn verify_decoded(
                 .to_owned(),
         );
     }
-    let expected_chain_id: ChainId = PK2_CHAIN_ID.into();
     let verification = FinalityProofVerificationConfig {
-        expected_chain_id: &expected_chain_id,
+        expected_network_id: &expectations.network_id,
         expected_height: Some(status.last_committed_height),
         trusted_context_id,
     };
@@ -1344,8 +1348,7 @@ mod tests {
         let genesis_signer = KeyPair::try_random().expect("generate genesis signer");
         let genesis_public_key = genesis_signer.public_key().clone();
         let genesis_account = AccountId::new(genesis_public_key.clone());
-        let genesis_transaction = TransactionBuilder::new(
-            PK2_CHAIN_ID.into(),
+        let genesis_transaction = TransactionBuilder::new_genesis(
             genesis_account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1357,6 +1360,7 @@ mod tests {
             None,
         );
         let header = genesis_block.header();
+        let network_id = NetworkId::from_genesis_hash(header.hash());
         let genesis_payload_hash = genesis_block
             .canonical_proposal_wire_hash()
             .expect("genesis proposal wire hash");
@@ -1365,7 +1369,7 @@ mod tests {
             .expect("genesis executed wire hash");
         let signed_genesis = genesis_block.encode_wire().expect("signed genesis wire");
         let context = HeightContext {
-            chain_id: PK2_CHAIN_ID.into(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -1486,6 +1490,7 @@ mod tests {
         let expectations = ExpectedRosterDocument {
             schema_version: LEGACY_EXPECTATIONS_SCHEMA_VERSION,
             chain_id: PK2_CHAIN_ID.into(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             consensus_mode: "npos".to_owned(),
             expected_node_key: expected_node.to_string(),
@@ -1506,7 +1511,7 @@ mod tests {
         let body = BridgeFinalityAttestationBodyV1 {
             version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
             challenge,
-            chain_id: PK2_CHAIN_ID.into(),
+            network_id,
             node_id: expected_node,
             node_fingerprint: status.node_fingerprint,
             genesis_block_hash: proof.block_header.hash(),
@@ -1541,6 +1546,7 @@ mod tests {
         AttestedExpectedRosterDocument {
             schema_version: ATTESTED_EXPECTATIONS_SCHEMA_VERSION,
             chain_id: fixture.expectations.chain_id.clone(),
+            network_id: fixture.expectations.network_id,
             protocol_version: fixture.expectations.protocol_version,
             consensus_mode: fixture.expectations.consensus_mode.clone(),
             expected_node_key: fixture.expectations.expected_node_key.clone(),
@@ -1688,6 +1694,32 @@ mod tests {
             verify_attested_fixture(&fixture, &wrong_node, fixture.challenge)
                 .expect_err("reject another expected node")
                 .contains("node_id does not match")
+        );
+
+        let mut wrong_network = attested_expectations(&fixture);
+        wrong_network.network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"substituted PK2 expected network",
+            )));
+        assert!(
+            verify_attested_fixture(&fixture, &wrong_network, fixture.challenge)
+                .expect_err("reject another expected network")
+                .contains("attestation network id does not match")
+        );
+
+        let mut wrong_genesis_binding = self::fixture();
+        wrong_genesis_binding.attestation.body.network_id = wrong_network.network_id;
+        resign_attestation(&mut wrong_genesis_binding);
+        let mut wrong_genesis_expectations = attested_expectations(&wrong_genesis_binding);
+        wrong_genesis_expectations.network_id = wrong_network.network_id;
+        assert!(
+            verify_attested_fixture(
+                &wrong_genesis_binding,
+                &wrong_genesis_expectations,
+                wrong_genesis_binding.challenge,
+            )
+            .expect_err("reject a network identity not derived from the signed genesis")
+            .contains("does not match decoded signed genesis")
         );
 
         let mut wrong_build = self::fixture();

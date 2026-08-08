@@ -149,6 +149,17 @@ use crate::{
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
 type QueuePlanJournalRemoval = (HashOf<TransactionEntrypoint>, Hash, Hash);
 
+#[cfg(test)]
+fn queue_test_network_id() -> iroha_data_model::NetworkId {
+    // Match the exact genesis hash in `iroha_config/iroha_test_config.toml` so
+    // state-free queue fixtures remain in the same domain as `State::new`.
+    let mut genesis_hash = [0; Hash::LENGTH];
+    genesis_hash[Hash::LENGTH - 1] = 1;
+    iroha_data_model::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed(genesis_hash),
+    ))
+}
+
 fn compatibility_queue_hash(entrypoint_hash: HashOf<TransactionEntrypoint>) -> SignedTxHash {
     HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash))
 }
@@ -3723,8 +3734,7 @@ impl Queue {
             return Ok(LaneQueueReservationOutcome::AlreadyFinalized);
         };
         self.validate_live_reservation_against_queue(&record)?;
-        let restored_fifo =
-            self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
+        self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
         let transition = self
             .begin_durability_transition_locked([key.signed_transaction_hash])
             .map_err(|hash| LaneQueueReservationError::Conflict { hash })?;
@@ -3735,6 +3745,25 @@ impl Queue {
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self
+            .fifo_with_released_reservations_locked(core::slice::from_ref(&record))
+        {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish a durably released lane reservation against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         store.live_by_hash.remove(&key.signed_transaction_hash);
         self.replace_fifo_locked(&restored_fifo);
         self.reconcile_missing_reservation_payloads_locked(&mut store);
@@ -3815,7 +3844,7 @@ impl Queue {
             .iter()
             .map(|(_, record)| record.clone())
             .collect::<Vec<_>>();
-        let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;
+        self.fifo_with_released_reservations_locked(&released_records)?;
         let transition = self
             .begin_durability_transition_locked(
                 records.iter().map(|(key, _)| key.signed_transaction_hash),
@@ -3829,6 +3858,23 @@ impl Queue {
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self.fifo_with_released_reservations_locked(&released_records) {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish durably released lane reservations against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         for (key, _) in &records {
             store.live_by_hash.remove(&key.signed_transaction_hash);
         }
@@ -4332,7 +4378,7 @@ impl Queue {
         }
         let mut records = records;
         records.sort_by_key(|record| record.fifo_order.ordinal);
-        let restored_fifo = self.fifo_with_released_reservations_locked(&records)?;
+        self.fifo_with_released_reservations_locked(&records)?;
         let transition = self
             .begin_durability_transition_locked(
                 records
@@ -4347,6 +4393,23 @@ impl Queue {
 
         let queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
+        let restored_fifo = match self.fifo_with_released_reservations_locked(&records) {
+            Ok(fifo) => fifo,
+            Err(error) => {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "cannot publish durably pruned lane reservations against the current FIFO: {error}"
+                    ),
+                );
+                self.latch_lane_reservation_post_journal_publication_fault_locked(&error);
+                drop(store);
+                drop(transition);
+                drop(queue_guard);
+                self.publish_latched_lane_reservation_durability_fault(None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+        };
         for record in &records {
             store
                 .live_by_hash
@@ -4657,6 +4720,24 @@ impl Queue {
             );
         }
         true
+    }
+
+    /// Fail closed when an already durable reservation release cannot be published against the
+    /// current in-memory FIFO. The durable journal is authoritative, while retaining the live
+    /// in-memory owner is the restrictive state until restart replay completes the transition.
+    ///
+    /// The caller holds `push_remove_lock` and must publish backpressure only after releasing all
+    /// queue and reservation-store guards.
+    fn latch_lane_reservation_post_journal_publication_fault_locked(&self, error: &std::io::Error) {
+        if !self
+            .lane_reservation_durability_fault
+            .swap(true, Ordering::AcqRel)
+        {
+            iroha_logger::error!(
+                %error,
+                "lane queue reservation publication failed after a durable journal transition; disabling all transaction selection until restart recovery"
+            );
+        }
     }
 
     /// Execute one blocking reservation-journal transition without queue or owner-index locks.
@@ -5023,7 +5104,7 @@ impl Queue {
         }
         let (max_clock_drift, transaction_limits) = state.transaction_admission_limits();
         let crypto = state.crypto();
-        let chain_id = state.chain_id_ref().clone();
+        let network_id = *state.network_id_ref();
         let replay_observed_at = self.time_source.get_unix_time();
 
         for record in records {
@@ -5046,7 +5127,7 @@ impl Queue {
             })?;
             let accepted = AcceptedTransaction::accept_entrypoint_at_time(
                 record.entrypoint,
-                &chain_id,
+                &network_id,
                 max_clock_drift,
                 transaction_limits.clone(),
                 crypto.as_ref(),
@@ -9072,11 +9153,17 @@ impl Queue {
                 ) {
                     Ok(Some(existing)) => {
                         if let Some(binding) = expected_admission_binding {
-                            let exact_global_claim = existing.global_admission_identity
+                            // A client can lose the first Torii response and submit the same
+                            // signed transaction again. The new ingress request necessarily
+                            // samples a later enqueue timestamp, so its derived journal digest
+                            // differs even though its deterministic global identity, exact
+                            // transaction, route, and lifecycle context are unchanged. Once an
+                            // authority owns the durable claim, that original timestamp and
+                            // digest are canonical. Return them instead of treating the
+                            // byte-identical transaction retry as a conflicting admission.
+                            if existing.global_admission_identity
                                 == Some(binding.global_admission_identity())
-                                && existing.enqueue_timestamp_ms == binding.enqueue_timestamp_ms
-                                && existing.journal_record_digest == binding.journal_record_digest;
-                            if exact_global_claim {
+                            {
                                 return Ok(QueuePushOutcome {
                                     routing_decision: existing.routing_plan.coordinator_route(),
                                     routing_plan: existing.routing_plan,
@@ -9176,6 +9263,20 @@ impl Queue {
                         };
 
                         if let Some(binding) = expected_admission_binding {
+                            if existing.global_admission_identity
+                                == Some(binding.global_admission_identity())
+                            {
+                                return Ok(QueuePushOutcome {
+                                    routing_decision: existing.routing_plan.coordinator_route(),
+                                    routing_plan: existing.routing_plan,
+                                    entrypoint_hash: existing.entrypoint_hash,
+                                    signed_transaction_hash: existing.signed_transaction_hash,
+                                    enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
+                                    journal_record_digest: Some(existing.journal_record_digest),
+                                    admission_context: Some(existing.admission_context),
+                                    global_admission_identity: existing.global_admission_identity,
+                                });
+                            }
                             if existing.global_admission_identity.is_some() {
                                 return Err(Failure {
                                     tx: tx.into(),
@@ -10456,8 +10557,10 @@ impl Queue {
     /// Push a transaction using one ingress-authored global admission binding.
     ///
     /// Every authority persists byte-identical chain/request identity, context, timestamp, and
-    /// journal claim. Existing ownership is returned only when it matches the complete binding;
-    /// a same-entrypoint/different-binding retry fails closed.
+    /// journal claim. Existing ownership is returned for the same exact transaction, route, and
+    /// deterministic global identity; its first durable timestamp and digest remain canonical
+    /// when a later ingress retries after losing the response. A genuinely different global
+    /// identity or transaction binding fails closed.
     ///
     /// # Errors
     /// Fails before acknowledgement when the binding differs from the transaction, routing plan,
@@ -12141,7 +12244,26 @@ impl Queue {
         &self,
         records: &[LaneQueueReservationRecordV5],
     ) -> Result<Vec<SignedTxHash>, LaneQueueReservationError> {
-        let mut hashes = self.fifo_snapshot_locked();
+        let raw_hashes = self.fifo_snapshot_locked();
+        // Committed removals deliberately retain a physical FIFO cell behind an exact removal
+        // fence until a consumer rebuilds the queue. Such a terminal tombstone no longer has a
+        // FIFO ordinal because it no longer owns a transaction. Exclude only that exact state;
+        // every other incomplete ownership combination remains a fail-closed invariant error.
+        let mut hashes = Vec::with_capacity(raw_hashes.len().saturating_add(records.len()));
+        for hash in raw_hashes {
+            let removed = self.removed_hashes.contains_key(&hash);
+            let tracked = self.txs.contains_key(&hash);
+            let has_fifo_order = self.fifo_order_by_hash.contains_key(&hash);
+            match (removed, tracked, has_fifo_order) {
+                (true, false, false) => {}
+                (false, true, true) => hashes.push(hash),
+                _ => {
+                    return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                        "queued transaction {hash} has inconsistent FIFO ownership: removed={removed}, tracked={tracked}, fifo_order={has_fifo_order}"
+                    )));
+                }
+            }
+        }
         let mut members = hashes.iter().copied().collect::<HashSet<_>>();
         for record in records {
             record
@@ -12197,7 +12319,17 @@ impl Queue {
     /// Caller must hold `push_remove_lock`.
     fn replace_fifo_locked(&self, hashes: &[SignedTxHash]) {
         let mut age_ring = self.queued_age_ring.lock();
-        while self.tx_hashes.pop().is_some() {}
+        let retained = hashes.iter().copied().collect::<HashSet<_>>();
+        let mut drained_terminal_tombstones = Vec::new();
+        while let Some(hash) = self.tx_hashes.pop() {
+            if !retained.contains(&hash)
+                && self.removed_hashes.contains_key(&hash)
+                && !self.txs.contains_key(&hash)
+                && !self.fifo_order_by_hash.contains_key(&hash)
+            {
+                drained_terminal_tombstones.push(hash);
+            }
+        }
         self.clear_queued_age_index_locked(&mut age_ring);
         for hash in hashes.iter().copied() {
             self.tx_hashes
@@ -12208,6 +12340,11 @@ impl Queue {
                 .get(&hash)
                 .map_or(0, |entry| *entry.value());
             self.record_queued_age_locked(&mut age_ring, hash, enqueued_at_ms);
+        }
+        // Clear only fences whose exact terminal physical cells were removed by this atomic FIFO
+        // replacement. Unrelated non-FIFO removal fences continue to reject stale retries.
+        for hash in drained_terminal_tombstones {
+            self.removed_hashes.remove(&hash);
         }
     }
 
@@ -12245,14 +12382,13 @@ impl Queue {
         // missing transaction, or a tombstoned hash that is still tracked, remains a fail-closed
         // invariant violation below.
         let mut hashes = Vec::with_capacity(raw_hashes.len().saturating_add(1));
-        let mut drained_terminal_tombstones = Vec::new();
         for queued_hash in raw_hashes {
             let removed = self.removed_hashes.contains_key(&queued_hash);
             let tracked = self.txs.contains_key(&queued_hash);
             let has_fifo_order = self.fifo_order_by_hash.contains_key(&queued_hash);
             match (removed, tracked, has_fifo_order) {
-                (true, false, false) => drained_terminal_tombstones.push(queued_hash),
-                (false, true, _) => hashes.push(queued_hash),
+                (true, false, false) => {}
+                (false, true, true) => hashes.push(queued_hash),
                 _ => {
                     return Err(format!(
                         "queued transaction {queued_hash} has inconsistent FIFO ownership: removed={removed}, tracked={tracked}, fifo_order={has_fifo_order}"
@@ -12295,11 +12431,6 @@ impl Queue {
                 .map(|(_, queued_hash)| queued_hash)
                 .collect::<Vec<_>>(),
         );
-        // Clear only the removal fences whose physical FIFO entries were atomically drained.
-        // Non-FIFO fences can still protect concurrent guard/conflict reconciliation.
-        for drained_hash in drained_terminal_tombstones {
-            self.removed_hashes.remove(&drained_hash);
-        }
         self.removed_hashes.remove(&hash);
         Ok(())
     }
@@ -18654,6 +18785,131 @@ pub mod tests {
     }
 
     #[test]
+    fn strict_global_admission_retry_keeps_the_first_durable_binding_canonical() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-global-idempotent-retry-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        install_single_validator_topology_for_queue_test(&state, 0xBE);
+        seed_committed_height_for_queue_test(&state, 1);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_515));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install strict-global retry journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve strict-global retry route");
+        let original_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture original strict-global retry context");
+        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            tx.entrypoint(),
+            &plan,
+            original_context.clone(),
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build original strict-global binding");
+        let original = queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &original_binding,
+            )
+            .expect("persist original strict-global binding");
+        let original_journal_len = fs::metadata(&journal_path)
+            .expect("strict-global retry journal metadata")
+            .len();
+
+        let later_same_context_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            tx.entrypoint(),
+            &plan,
+            original_context,
+            original.enqueue_timestamp_ms.saturating_add(17),
+        )
+        .expect("build later same-context ingress binding");
+        assert_ne!(
+            later_same_context_binding.journal_record_digest,
+            original_binding.journal_record_digest,
+            "a later ingress timestamp must exercise the lost-response retry path"
+        );
+        let same_context_retry = queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &later_same_context_binding,
+            )
+            .expect("same transaction retry must recover original durable ownership");
+        assert_eq!(same_context_retry, original);
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("journal metadata after same-context retry")
+                .len(),
+            original_journal_len,
+            "same-context retry must not append or replace the canonical Put"
+        );
+
+        seed_committed_height_for_queue_test(&state, 3);
+        let current_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture height-advanced strict-global retry context");
+        let later_height_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            tx.entrypoint(),
+            &plan,
+            current_context,
+            original.enqueue_timestamp_ms.saturating_add(33),
+        )
+        .expect("build height-advanced ingress binding");
+        let height_advanced_retry = queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                tx,
+                &state,
+                plan,
+                &later_height_binding,
+            )
+            .expect("height-advanced retry must recover original durable ownership");
+        assert_eq!(height_advanced_retry, original);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(
+            crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                &height_advanced_retry
+            ),
+            Ok(original_binding),
+            "the first durable timestamp and digest must remain canonical"
+        );
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("journal metadata after height-advanced retry")
+                .len(),
+            original_journal_len,
+            "height-advanced retry must not append or replace the canonical Put"
+        );
+    }
+
+    #[test]
     fn strict_durable_claim_rollover_recovers_every_replacement_fault_boundary() {
         let cases = [
             (
@@ -18975,6 +19231,7 @@ pub mod tests {
         queue.removed_hashes.insert(non_fifo_marker, ());
         time_handle.advance(Duration::from_millis(1));
         let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
         let second_hash = second.hash();
         let second_plan = queue
             .route_plan_with_state(&second, &state)
@@ -20449,16 +20706,17 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install stateless-rejection journal");
         let (authority, keypair) = gen_account_in("wonderland");
-        let wrong_chain = ChainId::from("wrong-chain-for-queue-journal-replay");
+        let wrong_network_id =
+            crate::sumeragi::synthetic_network_id("wrong-network-for-queue-journal-replay");
         let signed = TransactionBuilder::new_with_time_source(
-            wrong_chain,
+            wrong_network_id,
             authority,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(vec![InstructionBox::from(Log::new(
             Level::INFO,
-            "wrong-chain journal fixture".into(),
+            "wrong-network journal fixture".into(),
         ))])
         .sign(keypair.private_key());
         let unchecked = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed));
@@ -20478,7 +20736,7 @@ pub mod tests {
                 None,
                 true,
             )
-            .expect("persist wrong-chain journal fixture");
+            .expect("persist wrong-network journal fixture");
         let original_len = fs::metadata(&journal_path)
             .expect("stateless-rejection journal metadata")
             .len();
@@ -20491,7 +20749,7 @@ pub mod tests {
             .expect("reopen stateless-rejection journal");
         let error = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("wrong-chain journal entrypoint must fail startup");
+            .expect_err("wrong-network journal entrypoint must fail startup");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(
             error
@@ -21929,13 +22187,13 @@ pub mod tests {
     #[test]
     fn proposal_gas_cost_fails_closed_and_charges_signed_runtime_limit() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let chain_id = ChainId::from("proposal-gas-accounting");
+        let network_id = queue_test_network_id();
         let (authority, keypair) = gen_account_in("wonderland");
         let build_unchecked = |executable: Executable,
                                gas_limit: Option<NonZeroU64>|
          -> AcceptedTransaction<'static> {
             let signed = TransactionBuilder::new_with_time_source(
-                chain_id.clone(),
+                network_id,
                 authority.clone(),
                 &time_source,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit),
@@ -22875,7 +23133,7 @@ pub mod tests {
             entrypoint,
             Arc::clone(&payload),
             entrypoint_hash,
-            &ChainId::from("00000000-0000-0000-0000-000000000000"),
+            state.network_id_ref(),
             Duration::from_millis(10),
             tx_limits,
             &crypto_cfg,
@@ -22988,10 +23246,10 @@ pub mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let chain_id = ChainId::from("sealed-queue-expiry");
+        let network_id = *state.network_id_ref();
         let (authority, keypair) = gen_account_in("wonderland");
         let inner_tx = TransactionBuilder::new_with_time_source(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -23004,13 +23262,13 @@ pub mod tests {
         let salt = [0xD4; 32];
         let reveal_deadline_height = 10;
         let commitment_hash = compute_sealed_transaction_commitment(
-            &chain_id,
+            &network_id,
             &inner_tx,
             salt,
             reveal_deadline_height,
         );
         let payload = SealedTransactionCommitmentPayload::new(
-            chain_id,
+            network_id,
             authority,
             commitment_hash,
             2,
@@ -23624,9 +23882,9 @@ pub mod tests {
         metadata: Metadata,
         attachments: Option<ProofAttachmentList>,
     ) -> AcceptedTransaction<'static> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let network_id = queue_test_network_id();
         let mut builder = TransactionBuilder::new_with_time_source(
-            chain_id.clone(),
+            network_id,
             account_id,
             time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -23649,7 +23907,7 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         AcceptedTransaction::accept_with_time_source(
             tx,
-            &chain_id,
+            &network_id,
             Duration::from_millis(10),
             tx_limits,
             &crypto_cfg,
@@ -23665,14 +23923,14 @@ pub mod tests {
         time_source: &TimeSource,
         max_cycles: u64,
     ) -> AcceptedTransaction<'static> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let network_id = queue_test_network_id();
         let program = minimal_ivm_program_with_max_cycles(1, max_cycles);
         let gas_limit = crate::smartcontracts::ivm::gas_limit_for_cycles(
             std::num::NonZeroU64::new(max_cycles)
                 .expect("queue IVM fixture requires a positive cycle limit"),
         );
         let tx = TransactionBuilder::new_with_time_source(
-            chain_id.clone(),
+            network_id,
             account_id,
             time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -23694,7 +23952,7 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         AcceptedTransaction::accept_with_time_source(
             tx,
-            &chain_id,
+            &network_id,
             Duration::from_millis(10),
             tx_limits,
             &crypto_cfg,
@@ -26459,12 +26717,12 @@ pub mod tests {
         ));
 
         let (account_id, key_pair) = gen_account_in("wonderland");
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let network_id = *state.network_id_ref();
         let domain_name = unique_test_domain_name("tagged");
         let unregister =
             Unregister::domain(DomainId::try_new(&domain_name, "test-dataspace-42").unwrap());
         let tx = TransactionBuilder::new_with_time_source(
-            chain_id.clone(),
+            network_id,
             account_id,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -26483,7 +26741,7 @@ pub mod tests {
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let tx = AcceptedTransaction::accept(
             tx,
-            &chain_id,
+            &network_id,
             Duration::from_secs(60),
             tx_limits,
             &crypto_cfg,
@@ -26818,7 +27076,7 @@ pub mod tests {
             nexus.fees.per_gas_unit_fee = Quantity::zero();
         }
 
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let network_id = *state.network_id_ref();
         let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
             vec![iroha_data_model::transaction::FeeChargeLimit::new(
                 iroha_data_model::transaction::FeeChargeKind::Nexus,
@@ -26828,7 +27086,7 @@ pub mod tests {
             None,
         );
         let signed = TransactionBuilder::new_with_time_source(
-            chain_id.clone(),
+            network_id,
             authority,
             &time_source,
             fee_payment,
@@ -26849,7 +27107,7 @@ pub mod tests {
         );
         let tx = AcceptedTransaction::accept_with_time_source(
             signed,
-            &chain_id,
+            &network_id,
             Duration::from_millis(10),
             tx_limits,
             &iroha_config::parameters::actual::Crypto::default(),
@@ -27054,10 +27312,12 @@ pub mod tests {
     async fn committing_popped_transaction_does_not_create_fifo_tombstone() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let transaction = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+        let state = Arc::new(state);
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let hash = transaction.as_ref().hash();
 
         queue
@@ -27855,13 +28115,12 @@ pub mod tests {
 
     #[tokio::test]
     async fn push_expired_tx_already_in_blockchain() {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
+        let network_id = *state.network_id_ref();
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
             let params = state_view.parameters();
@@ -27871,7 +28130,7 @@ pub mod tests {
 
         let ok_instruction = Log::new(iroha_logger::Level::INFO, "pass".into());
         let mut tx = TransactionBuilder::new_with_time_source(
-            chain_id.clone(),
+            network_id,
             alice_id,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -27883,7 +28142,7 @@ pub mod tests {
             let crypto_cfg = state.crypto();
             AcceptedTransaction::accept_with_time_source(
                 tx,
-                &chain_id,
+                &network_id,
                 max_clock_drift,
                 tx_limits,
                 &crypto_cfg,
@@ -28008,13 +28267,12 @@ pub mod tests {
     async fn custom_expired_transaction_is_rejected() {
         const TTL_MS: u64 = 200;
 
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-
         let max_txs_in_block = nonzero!(2_usize);
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let network_id = *state.network_id_ref();
         let (max_clock_drift, tx_limits) = {
             let state_view = state.world.view();
             let params = state_view.parameters();
@@ -28029,7 +28287,7 @@ pub mod tests {
         // unrelated to queue TTL behavior.
         let instructions = [Log::new(iroha_logger::Level::INFO, "ttl".into())];
         let mut tx = TransactionBuilder::new_with_time_source(
-            chain_id.clone(),
+            network_id,
             alice_id,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -28042,7 +28300,7 @@ pub mod tests {
             let crypto_cfg = state.crypto();
             AcceptedTransaction::accept_with_time_source(
                 tx,
-                &chain_id,
+                &network_id,
                 max_clock_drift,
                 tx_limits,
                 &crypto_cfg,

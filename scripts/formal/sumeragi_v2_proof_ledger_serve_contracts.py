@@ -1324,7 +1324,7 @@ _SERVICED_CANDIDATE_PRODUCTION_STRUCT_SHA256 = {
 }
 _SERVICED_CANDIDATE_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "e106642979361941b3819c18034c57a0bf506981bb6cf05b6ff472b22b3989d9"
+        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
     ),
 }
 _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
@@ -1595,8 +1595,8 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     "install_dormant_local_fifo_reservations": (
         "42c699bccbd2f051c8300cc714dab9b3f32c0268a37d95226f0ecb466dabc2b2"
     ),
-    "dormant_local_fifo_replacement": (
-        "349d197fc00128460c723ecb4cc4fc7b3253390d9847b61dac38e7157fb9af61"
+    "dormant_local_fifo_replacement_inner": (
+        "018584c25ed2c434bdeed8f66773cba47dee3fe637167a57f8b44e62032f92c4"
     ),
     "occupied_with_dormant_reservations": (
         "2a57306de4cfb2074082a0f67c34ffe9cb3d99ce2021c31256272d268a1bbe0e"
@@ -1605,33 +1605,48 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "fa6fbffb7201f69529caec900bafba3eb4f9433f00ec31289ca3e23e2363c7d4"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "8b34854604799e519f0e40d85bac7f72564ee67ae94c6731222f45af13bcc863"
+        "56da29380176de548e84bec7c703a14da8ce267a1a5e499d7a7971fda14db25c"
     ),
     "freeze_due_clock_owners": (
-        "f097b1ce583dcb9d94293366cab9828f648c376dd586f7af28635b003f92c855"
+        "72400e4f0322887b55caf39ccb20693960aaf607db8c5a36ec393014adef01cd"
     ),
     "minimum_active_lifecycle_ordinal": (
         "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
-        "204a88b77ef7853327a2313583c25ef32f9bdea705dd57e0fc7bbd17b30afa1a"
+        "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
+    ),
+    "minimum_runnable_lifecycle_ordinal": (
+        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
     "step": (
-        "82e349d880d8ff39c7438e8c06b301f5abcae332d25265285213a099b7ad8ce3"
+        "5054f687f343932ca8be815fc7690d0a0bb2e6490af8ad97ec5f7dacb0c36ac1"
+    ),
+    "finish_dispatched_step": (
+        "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
+    ),
+    "try_step_pacemaker_escape": (
+        "0e3ec4c7653e66a28e606fece27d17500419e87a47525d4b39a8aa53810614f2"
+    ),
+    "dispatch_one_pacemaker_progress": (
+        "1f8c56de61b568271a2d4aae7f403ad1ab6573b6b0165eeb53b1f234aa144b7e"
+    ),
+    "step_recovery": (
+        "6237cbe71023254491c5cfa8024f57bb71183da8dc8ed557a9b06776de33ceed"
     ),
     "dispatch_one_fence_dependency": (
-        "1109cb4b250d3115032fc5d5ed196182b53b9020ea4142f0f87e06b197731f00"
+        "c25a89ae60772980c7e4ea2eed0543b8e2d06c24e5f5753f6ca0e52b77ec4bcf"
     ),
     "dispatch_one_adapter_deferred": (
-        "20d4d698e8566e7df3ba96d0f6cc136ad87c05f10d95931b886aa174ae45b7b9"
+        "d87f6e86b65a0b37be7198f880ad2103a4e99c7eb72d2ad32b376865c40d45da"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "bfef5a8070c6c26f13509e97f0c744f856c68d454165657043195fe1b122b307"
+        "6bdba1ed5a4615529eaa95cf5adbf13377875898fcdf28cb88a83534945f6544"
     ),
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {

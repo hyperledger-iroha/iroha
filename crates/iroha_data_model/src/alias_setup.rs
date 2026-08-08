@@ -13,7 +13,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    ChainId,
+    NetworkId,
     account::{
         AccountId,
         rekey::{AccountAlias, AccountAliasDomain},
@@ -1080,8 +1080,8 @@ pub struct AliasTransactionPlanBodyV1 {
     pub version: u8,
     /// Transaction authority and lease payer.
     pub authority: AccountId,
-    /// Chain on which the plan was produced.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network on which the plan was produced.
+    pub network_id: NetworkId,
     /// World-state anchor used for classification.
     pub anchor: AliasPlanAnchorV1,
     /// Ordered resources in dependency order.
@@ -1160,8 +1160,8 @@ pub struct AliasLifecycleTransactionPlanBodyV1 {
     pub version: u8,
     /// Transaction authority and renewal payer.
     pub authority: AccountId,
-    /// Chain on which the plan was produced.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network on which the plan was produced.
+    pub network_id: NetworkId,
     /// World-state anchor used for classification.
     pub anchor: AliasPlanAnchorV1,
     /// Exact operation supplied by the signed planning request.
@@ -1237,11 +1237,29 @@ impl AliasLifecycleTransactionPlanV1 {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_primitives::numeric::Numeric;
 
     use super::*;
-    use crate::nexus::DataSpaceMetadata;
+    use crate::{ChainId, nexus::DataSpaceMetadata};
+
+    fn plan_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+            Hash::new([seed]),
+        ))
+    }
+
+    fn shared_plan_network_id() -> NetworkId {
+        let mut bytes = [0_u8; Hash::LENGTH];
+        hex::decode_to_slice(
+            "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149",
+            &mut bytes,
+        )
+        .expect("shared plan NetworkId hex");
+        NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(bytes),
+        ))
+    }
 
     #[derive(crate::DeriveJsonDeserialize)]
     struct SharedAliasSetupFixture {
@@ -1661,6 +1679,21 @@ mod tests {
                 hex::decode(&vector.canonical_body_norito_hex).expect("fixture Norito body hex");
             let hash = Hash::new_from_chunks(&[domain, body.as_slice()]);
             assert_eq!(hex::encode(hash.as_ref()), vector.canonical_plan_hash_hex);
+            match name {
+                "setup_account_alias_create" => {
+                    let decoded = AliasTransactionPlanBodyV1::decode(&mut body.as_slice())
+                        .expect("decode shared setup-plan body");
+                    assert_eq!(decoded.network_id, shared_plan_network_id());
+                    assert_eq!(decoded.encode(), body);
+                }
+                "renew_account_alias" => {
+                    let decoded = AliasLifecycleTransactionPlanBodyV1::decode(&mut body.as_slice())
+                        .expect("decode shared lifecycle-plan body");
+                    assert_eq!(decoded.network_id, shared_plan_network_id());
+                    assert_eq!(decoded.encode(), body);
+                }
+                _ => unreachable!("expected plan vector names are closed"),
+            }
         }
 
         let expected_frames = [
@@ -1803,7 +1836,7 @@ mod tests {
         let body = AliasTransactionPlanBodyV1 {
             version: AliasTransactionPlanBodyV1::VERSION,
             authority,
-            chain_id: ChainId::from("test-chain"),
+            network_id: plan_network_id(0xA1),
             anchor: AliasPlanAnchorV1 {
                 block_height: 9,
                 block_hash: Hash::new(b"anchor"),
@@ -1845,6 +1878,12 @@ mod tests {
         let json = norito::json::to_json(&plan).expect("JSON encode");
         let decoded: AliasTransactionPlanV1 = norito::json::from_str(&json).expect("JSON decode");
         assert_eq!(decoded, plan);
+        let legacy_json = json.replacen("\"network_id\":", "\"chain_id\":", 1);
+        assert_ne!(legacy_json, json, "plan JSON exposes the exact NetworkId");
+        assert!(
+            norito::json::from_str::<AliasTransactionPlanV1>(&legacy_json).is_err(),
+            "retired chain_id plan fields must fail closed"
+        );
 
         let mut tampered = plan;
         tampered.body.valid_until_ms += 1;
@@ -1901,7 +1940,7 @@ mod tests {
         let body = AliasLifecycleTransactionPlanBodyV1 {
             version: AliasLifecycleTransactionPlanBodyV1::VERSION,
             authority,
-            chain_id: ChainId::from("test-chain"),
+            network_id: plan_network_id(0xA2),
             anchor: AliasPlanAnchorV1 {
                 block_height: 10,
                 block_hash: Hash::new(b"lifecycle-anchor"),
@@ -1939,6 +1978,12 @@ mod tests {
         let decoded: AliasLifecycleTransactionPlanV1 =
             norito::json::from_str(&json).expect("JSON decode lifecycle plan");
         assert_eq!(decoded, plan);
+        let legacy_json = json.replacen("\"network_id\":", "\"chain_id\":", 1);
+        assert_ne!(legacy_json, json, "plan JSON exposes the exact NetworkId");
+        assert!(
+            norito::json::from_str::<AliasLifecycleTransactionPlanV1>(&legacy_json).is_err(),
+            "retired chain_id lifecycle-plan fields must fail closed"
+        );
 
         let mut tampered = plan;
         tampered.body.valid_until_ms += 1;

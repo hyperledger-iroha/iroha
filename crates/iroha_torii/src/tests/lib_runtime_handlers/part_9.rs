@@ -1659,12 +1659,12 @@
             Some(7)
         );
         assert_eq!(
-            hint.get("next_min_handle_era")
+            hint.get("active_handle_era")
                 .and_then(norito::json::Value::as_u64),
             Some(10)
         );
         assert_eq!(
-            hint.get("next_min_sub_nonce")
+            hint.get("next_handle_counter")
                 .and_then(norito::json::Value::as_u64),
             Some(2)
         );
@@ -2564,10 +2564,9 @@
             0x7f,
             "derive accept-transaction signature failure fixture key",
         );
-        let chain: ChainId = "chain".parse().unwrap();
         let authority = AccountId::of(kp.public_key().clone());
         let tx = TransactionBuilder::new(
-            chain,
+            signed_query_test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

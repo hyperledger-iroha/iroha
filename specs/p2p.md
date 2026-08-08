@@ -520,10 +520,11 @@ binding.
 The first release has two mandatory, non-interchangeable identity roles:
 
 - the application/consensus `PeerId` is a BLS-normal key;
-- the top-level `soranet_transport_public_key` and
-  `soranet_transport_private_key` settings form a distinct Ed25519 key used
-  only by the SoraNet relay handshake. Reusing the streaming identity is
-  rejected during configuration parsing.
+- the top-level `soranet_transport_public_key` plus exactly one of
+  `soranet_transport_private_key` or `soranet_transport_private_key_file`
+  forms a distinct Ed25519 key used only by the SoraNet relay handshake.
+  Production profiles use the bounded owner-held file form. Reusing the
+  streaming identity is rejected during configuration parsing.
 
 There is no v1/v2 compatibility list or classical fallback. Every direct TCP,
 TLS, QUIC, and externally supplied stream uses this exact v3 transcript before

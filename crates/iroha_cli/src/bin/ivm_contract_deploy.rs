@@ -481,7 +481,7 @@ struct NativeUploadTransactionPlan {
 }
 
 struct TransactionSigningContext<'a> {
-    chain_id: &'a ChainId,
+    network_id: NetworkId,
     authority: &'a AccountId,
     private_key: &'a PrivateKey,
     transaction_ttl: Option<Duration>,
@@ -495,7 +495,7 @@ impl TransactionSigningContext<'_> {
         instructions: impl IntoIterator<Item = InstructionBox>,
     ) -> Result<SignedTransaction> {
         let mut builder = TransactionBuilder::new(
-            self.chain_id.clone(),
+            self.network_id,
             self.authority.clone(),
             self.fee_payment.clone(),
         );
@@ -1477,7 +1477,7 @@ fn main() -> Result<()> {
     let tx_metadata =
         deployment_transaction_metadata(&contract_address, &args.gov_manifest_approvers)?;
     let signing = TransactionSigningContext {
-        chain_id: &client.chain,
+        network_id: client.network_id,
         authority: &authority,
         private_key: &private_key,
         transaction_ttl,

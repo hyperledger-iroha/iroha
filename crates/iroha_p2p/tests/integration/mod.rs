@@ -8,7 +8,14 @@ use std::{
 };
 
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::{NetworkId, block::BlockHeader};
 use iroha_p2p::P2pIdentityKeys;
+
+fn test_network_id(seed: &str) -> NetworkId {
+    NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+        iroha_crypto::Hash::new(seed.as_bytes()),
+    ))
+}
 
 /// Generate the only supported first-release node identity for P2P tests.
 fn random_node_key_pair() -> KeyPair {

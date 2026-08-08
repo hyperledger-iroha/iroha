@@ -323,7 +323,8 @@ public final class SignedTransactionHasherTests {
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
-            .setChainId(String.format("%08x", seed))
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(seed))
             .setAuthority(TestAccountIds.ed25519Authority(0x2C))
             .setCreationTimeMs(1_700_000_000_000L + seed)
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})

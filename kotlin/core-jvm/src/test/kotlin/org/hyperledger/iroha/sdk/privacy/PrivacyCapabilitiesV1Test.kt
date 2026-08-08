@@ -93,21 +93,27 @@ class PrivacyCapabilitiesV1Test {
     }
 
     @Test
-    fun configuredClientUsesExactJsonRouteAndFailsClosedOnMediaType() {
+    fun configuredClientUsesExactNoritoRouteAndRejectsLegacySnapshot() {
         val response = TransportResponse.builder()
             .setStatusCode(200)
             .setBody(unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8))
-            .addHeader("Content-Type", "application/json")
+            .addHeader("Content-Type", "application/x-norito")
             .build()
         val executor = OneResponseExecutor(response)
         val client = HttpClientTransport.withExecutor(
             executor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )
-        assertEquals(42L, client.getPrivacyCapabilities().join().committedHeight.longValueExact())
+        val legacy = assertFailsWith<CompletionException> {
+            client.getPrivacyCapabilities().join()
+        }
+        assertTrue(legacy.cause is RuntimeException)
         assertEquals("/v1/privacy/capabilities", executor.request.uri.rawPath)
-        assertEquals(listOf("application/json"), executor.request.headers["Accept"])
-        assertEquals(PrivacyCapabilitySnapshotJsonV1.MAX_RESPONSE_BYTES, executor.request.maximumResponseBytes)
+        assertEquals(listOf("application/x-norito"), executor.request.headers["Accept"])
+        assertEquals(
+            PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES.toLong(),
+            executor.request.maximumResponseBytes,
+        )
 
         val wrongMedia = response.let {
             TransportResponse.builder()
@@ -129,26 +135,30 @@ class PrivacyCapabilitiesV1Test {
     fun exactTransportRejectsHeaderAmbiguityLengthSmugglingAndHostileBodies() {
         val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
         val canonicalHeaders = mapOf(
-            "Content-Type" to listOf("application/json"),
+            "Content-Type" to listOf("application/x-norito"),
             "Content-Length" to listOf(body.size.toString()),
         )
-        val canonical = response(body = body, headers = canonicalHeaders)
-        assertEquals(42L, clientFor(canonical).getPrivacyCapabilities().join().committedHeight.longValueExact())
+        val legacy = assertFailsWith<CompletionException> {
+            clientFor(response(body = body, headers = canonicalHeaders))
+                .getPrivacyCapabilities()
+                .join()
+        }
+        assertTrue(legacy.cause is RuntimeException)
 
         val hostile = buildList {
             add(response(statusCode = 206, body = body, headers = canonicalHeaders))
             add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json; charset=utf-8"))))
-            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json", "application/json"))))
-            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json"), "Content-Length" to listOf(body.size.toString(), body.size.toString()))))
-            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json"), "Content-Length" to listOf((body.size + 1).toString()))))
+            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito", "application/x-norito"))))
+            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"), "Content-Length" to listOf(body.size.toString(), body.size.toString()))))
+            add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"), "Content-Length" to listOf((body.size + 1).toString()))))
             for (length in listOf("+${body.size}", "0${body.size}", "${body.size} ", "-1", "9".repeat(1_024))) {
-                add(response(body = body, headers = mapOf("Content-Type" to listOf("application/json"), "Content-Length" to listOf(length))))
+                add(response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"), "Content-Length" to listOf(length))))
             }
-            add(response(body = ByteArray(0), headers = mapOf("Content-Type" to listOf("application/json"))))
+            add(response(body = ByteArray(0), headers = mapOf("Content-Type" to listOf("application/x-norito"))))
             add(
                 response(
-                    body = ByteArray(PrivacyCapabilitySnapshotJsonV1.MAX_RESPONSE_BYTES.toInt() + 1) { 0x20 },
-                    headers = mapOf("Content-Type" to listOf("application/json")),
+                    body = ByteArray(PrivacyExact12CapabilityManifestV1.MAX_ARCHIVE_BYTES + 1) { 0x20 },
+                    headers = mapOf("Content-Type" to listOf("application/x-norito")),
                 ),
             )
         }
@@ -164,13 +174,13 @@ class PrivacyCapabilitiesV1Test {
     fun exactTransportRejectsCaseVariantDefaultAcceptBeforeDispatch() {
         val body = unavailableSnapshot("42").toByteArray(StandardCharsets.UTF_8)
         val executor = OneResponseExecutor(
-            response(body = body, headers = mapOf("Content-Type" to listOf("application/json"))),
+            response(body = body, headers = mapOf("Content-Type" to listOf("application/x-norito"))),
         )
         val client = HttpClientTransport.withExecutor(
             executor,
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://torii.example"))
-                .putDefaultHeader("aCcEpT", "application/json")
+                .putDefaultHeader("aCcEpT", "application/x-norito")
                 .build(),
         )
         assertFailsWith<IllegalArgumentException> {

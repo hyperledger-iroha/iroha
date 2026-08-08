@@ -6005,8 +6005,13 @@ impl Kura {
                     )
                 })?;
                 let source_id = signed_transaction.hash();
-                let chain_id_hash =
-                    Hash::new(signed_transaction.chain().clone().into_inner().as_bytes());
+                let network_id = signed_transaction.network_id().ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement native AMX transaction uses the genesis-only domain",
+                    )
+                })?;
+                let chain_id_hash = Hash::prehashed(*network_id.as_bytes());
                 if !crate::native_amx::receipt_shape_matches_coordinator_payload(
                     context.native_amx_receipt.as_ref(),
                     &plan,
@@ -13161,6 +13166,14 @@ mod tests {
     // This makes the net disk-reclamation assertion independent of small encoding-size changes.
     const GC_PAYLOAD_LEN: usize = 16 * 1024;
 
+    fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(label)
+        ))
+    }
+
     include!("lane_geometry/native_amx_retained_window_tests.rs");
 
     #[test]
@@ -14193,7 +14206,7 @@ mod tests {
         let height = block.header().height().get();
         assert_eq!(height, 1, "Native archive fixture uses one global block");
         let context = HeightContext {
-            chain_id: ChainId::from("native-amx-lane-archive-test"),
+            network_id: crate::sumeragi::synthetic_network_id("native-amx-lane-archive-test"),
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -14677,7 +14690,7 @@ mod tests {
         let dataspace_id = DataSpaceId::new(8);
         let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let transaction = TransactionBuilder::new(
-            ChainId::from("geometry-durability-merge"),
+            test_network_id(b"geometry-durability-merge"),
             (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -15122,7 +15135,7 @@ mod tests {
             .parse()
             .expect("geometry retirement chain id");
         let transaction = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(b"geometry-retirement-autonomous-genesis"),
             (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -16503,7 +16516,7 @@ mod tests {
             .parse()
             .expect("geometry retirement committed chain");
         let transaction = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(b"geometry-retirement-committed-genesis"),
             (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

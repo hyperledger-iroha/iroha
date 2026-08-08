@@ -22,20 +22,21 @@ use futures_util::{
 };
 use integration_tests::sandbox;
 use iroha::{
-    crypto::{Algorithm, KeyPair},
+    crypto::{Algorithm, HashOf, KeyPair},
     data_model::{
         Level,
         account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus::SumeragiDiagnosticsStatus,
+        block::{Header, consensus::SumeragiDiagnosticsStatus},
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
+        events::time::{ExecutionTime, TimeEventFilter},
         identifier::{
             IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
             IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
         },
         isi::{
-            Instruction, InstructionBox, Log, Mint, Register, SetParameter, Transfer,
+            Instruction, InstructionBox, Log, Mint, Register, SetKeyValue, SetParameter, Transfer,
             identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
             ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -48,11 +49,13 @@ use iroha::{
         },
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         peer::PeerId,
-        prelude::{FindAccountById, FindAssetById, Quantity},
+        prelude::{Action, FindAccountById, FindAssetById, Quantity, Repeats},
+        query::block::prelude::FindBlocks,
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
             RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
         },
+        trigger::Trigger,
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
@@ -65,6 +68,8 @@ use iroha_crypto::{
     ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
     try_bfv_programmed_public_parameters_with_program,
 };
+use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
+use iroha_primitives::json::Json;
 use iroha_test_network::{
     Network, NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
 };
@@ -80,6 +85,9 @@ use reqwest::Client as HttpClient;
 use tempfile::tempdir;
 use tokio::{sync::Mutex, task, time::sleep};
 use toml::{Table, Value as TomlValue};
+
+#[path = "sumeragi_localnet_smoke/idle_chain.rs"]
+mod idle_chain;
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -3770,155 +3778,13 @@ async fn run_realistic_30tps_localnet(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
 async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
-    init_instruction_registry();
-    let _guard = LOCALNET_SMOKE_GUARD
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .await;
+    idle_chain::run_permissioned_progress().await
+}
 
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_real_genesis_keypair()
-        .with_block_cadence(SMOKE_PIPELINE_TIME)
-        .with_genesis_instruction(SetParameter::new(Parameter::Block(
-            BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_permissioned_consensus()
-        .with_config_layer(|layer| {
-            layer
-                .write(["network", "transaction_gossip_period_ms"], 200_i64)
-                .write(
-                    ["network", "transaction_gossip_restricted_fallback"],
-                    "public_overlay",
-                )
-                .write(
-                    ["network", "transaction_gossip_restricted_public_payload"],
-                    "forward",
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
-                    2_000_i64,
-                )
-                .write(
-                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
-                    1_i64,
-                );
-        });
-
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(permissioned_localnet_produces_blocks_within_bound),
-    )
-    .await?
-    else {
-        ensure!(
-            !fail_on_sandbox_skip(),
-            "sandboxed skip surfaced and {} is enabled",
-            FAIL_ON_SANDBOX_SKIP_ENV
-        );
-        return Ok(());
-    };
-
-    let result: Result<()> = async {
-        wait_for_status_responses(&network, Duration::from_secs(30)).await?;
-        let baseline_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let baseline_height = baseline_statuses
-            .iter()
-            .map(|status| status.blocks)
-            .min()
-            .unwrap_or_default();
-        let warmup_height = baseline_height.saturating_add(1);
-        for peer in network.peers() {
-            let message = format!("localnet warmup block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!("failed to submit warmup log instruction to {}", peer.mnemonic())
-                })?;
-        }
-        wait_for_converged_height(&network, warmup_height, Duration::from_secs(45)).await?;
-        let warmup_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
-        let baseline_height = warmup_statuses
-            .iter()
-            .map(|status| status.blocks)
-            .min()
-            .unwrap_or_default();
-        let baseline_view_changes: Vec<u64> = warmup_statuses
-            .iter()
-            .map(|status| status.view_changes.into())
-            .collect();
-        let peer_count = network.peers().len();
-        let fault_tolerance = peer_count.saturating_sub(1) / 3;
-        let max_extra_view_changes = u64::try_from(fault_tolerance.saturating_add(2))
-            .unwrap_or(u64::MAX);
-
-        ensure!(!network.peers().is_empty(), "network must have at least one peer");
-        for peer in network.peers() {
-            let message = format!("localnet bounded block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!("failed to submit log instruction to {}", peer.mnemonic())
-                })?;
-        }
-
-        let target_height = baseline_height.saturating_add(1);
-        let start = Instant::now();
-        wait_for_converged_height(&network, target_height, Duration::from_secs(45)).await?;
-        let elapsed = start.elapsed();
-        ensure!(
-            elapsed <= Duration::from_secs(15),
-            "block production exceeded bound: elapsed={:?}",
-            elapsed
-        );
-
-        let after_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-        ensure!(
-            after_statuses
-                .iter()
-                .all(|status| status.blocks >= target_height),
-            "not all peers reached target height {target_height}: {after_statuses:?}"
-        );
-        for (idx, status) in after_statuses.iter().enumerate() {
-            let before = baseline_view_changes.get(idx).copied().unwrap_or_default();
-            ensure!(
-                u64::from(status.view_changes) <= before.saturating_add(max_extra_view_changes),
-                "peer {idx} experienced repeated view changes: before={before}, after={}, max_extra={max_extra_view_changes}",
-                status.view_changes,
-            );
-        }
-        let min_view_changes = after_statuses
-            .iter()
-            .map(|status| u64::from(status.view_changes))
-            .min()
-            .unwrap_or_default();
-        let max_view_changes = after_statuses
-            .iter()
-            .map(|status| u64::from(status.view_changes))
-            .max()
-            .unwrap_or_default();
-        ensure!(
-            max_view_changes.saturating_sub(min_view_changes) <= max_extra_view_changes,
-            "view_change counters diverged across peers: {after_statuses:?}"
-        );
-
-        network.shutdown().await;
-        Ok(())
-    }
-    .await;
-
-    if sandbox::handle_result(
-        result,
-        stringify!(permissioned_localnet_produces_blocks_within_bound),
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    Ok(())
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permissioned_idle_chain_advances_only_for_external_or_internal_work() -> Result<()> {
+    idle_chain::run().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -299,7 +299,8 @@ public final class NoritoRpcClientTests {
     try (SimpleHttpServer server = SimpleHttpServer.start("/rpc/codec", handler)) {
       final TransactionPayload payload =
           TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
-              .setChainId("00000001")
+              .setNetworkId(
+                  org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(1L))
               .setAuthority(aliceAuthority)
               .setInstructionBytes(new byte[] {0x01, 0x02})
               .build();

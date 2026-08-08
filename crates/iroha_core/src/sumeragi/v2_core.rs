@@ -42,7 +42,7 @@ pub(crate) use committee::{
 };
 pub(crate) use quorum::{Quorum, QuorumError};
 #[cfg(test)]
-pub(crate) use reducer::StepOutcome;
+pub(crate) use reducer::{EquivocationKind, StepOutcome};
 pub(crate) use reducer::{
     BodyState, DurableCommitReceipt, Effect, EquivocationEvidence, Event, IgnoreReason, Reducer,
     ReducerError, SignableMessage, StepDisposition,

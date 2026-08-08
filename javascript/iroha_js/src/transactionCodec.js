@@ -14,12 +14,12 @@ import {
   NumericV1,
   NumericV1Error,
 } from "./numericV1.js";
+import { networkIdBytes } from "./networkId.js";
 
 const COMPACT_LEN_FLAG = 0x02;
 const UINT16_MAX = 0xffffn;
 const UINT32_MAX = 0xffff_ffffn;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
-const MAX_CHAIN_ID_BYTES = 1024;
 const MAX_METADATA_JSON_BYTES = 64 * 1024;
 const MAX_METADATA_ENTRIES = 64;
 const MAX_METADATA_DEPTH = 32;
@@ -77,7 +77,7 @@ const CRC64_TABLE = (() => {
   return table;
 })();
 const TRANSFER_INPUT_FIELDS = new Set([
-  "chainId",
+  "networkId",
   "authority",
   "sourceAssetHoldingId",
   "sourceAssetId",
@@ -92,7 +92,7 @@ const TRANSFER_INPUT_FIELDS = new Set([
   "chainDiscriminant",
 ]);
 const INSTRUCTION_INPUT_FIELDS = new Set([
-  "chainId",
+  "networkId",
   "authority",
   "instructions",
   "metadata",
@@ -104,7 +104,7 @@ const INSTRUCTION_INPUT_FIELDS = new Set([
   "chainDiscriminant",
 ]);
 const EXECUTABLE_BATCH_INPUT_FIELDS = new Set([
-  "chainId",
+  "networkId",
   "authority",
   "entries",
   "metadata",
@@ -253,6 +253,17 @@ class Reader {
 
 function fail(code, message) {
   throw new BrowserTransactionCodecError(code, message);
+}
+
+function exactNetworkId(value, context = "networkId") {
+  try {
+    return Buffer.from(networkIdBytes(value, context));
+  } catch (error) {
+    fail(
+      "invalid_input",
+      error instanceof Error ? error.message : `${context} must be a NetworkId`,
+    );
+  }
 }
 
 function isPlainDataObject(value) {
@@ -903,8 +914,8 @@ function stringValue(value) {
   return field(Buffer.from(value, "utf8"));
 }
 
-function chainIdArchive(value) {
-  return struct([stringValue(value)]);
+function networkTransactionDomainArchive(value) {
+  return Buffer.concat([u32(0), field(Buffer.from(value))]);
 }
 
 function struct(fields) {
@@ -1100,9 +1111,7 @@ function transferInstructionArchive(source, quantity, destination) {
 
 function normalizeTransferInput(input, now) {
   input = snapshotAllowedFields(input, TRANSFER_INPUT_FIELDS, "transfer input");
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const networkId = exactNetworkId(input.networkId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1182,7 +1191,7 @@ function normalizeTransferInput(input, now) {
     nonZero: true,
   });
   return {
-    chainId,
+    networkId,
     authority,
     source,
     quantity,
@@ -1203,7 +1212,7 @@ function encodeTransferPayload(normalized) {
   );
   const executable = Buffer.concat([u32(0), field(vector([instruction]))]);
   const payload = struct([
-    chainIdArchive(normalized.chainId),
+    networkTransactionDomainArchive(normalized.networkId),
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
@@ -1225,9 +1234,7 @@ function normalizeInstructionTransactionInput(input, now) {
     INSTRUCTION_INPUT_FIELDS,
     "instruction transaction input",
   );
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const networkId = exactNetworkId(input.networkId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1280,7 +1287,7 @@ function normalizeInstructionTransactionInput(input, now) {
     nonZero: true,
   });
   return {
-    chainId,
+    networkId,
     authority,
     instructions,
     feePayment,
@@ -1297,7 +1304,7 @@ function encodeInstructionTransactionPayload(normalized) {
     field(vector(normalized.instructions)),
   ]);
   const payload = struct([
-    chainIdArchive(normalized.chainId),
+    networkTransactionDomainArchive(normalized.networkId),
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
@@ -1319,9 +1326,7 @@ function normalizeExecutableBatchTransactionInput(input, now) {
     EXECUTABLE_BATCH_INPUT_FIELDS,
     "executable batch input",
   );
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const networkId = exactNetworkId(input.networkId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1457,7 +1462,7 @@ function normalizeExecutableBatchTransactionInput(input, now) {
     nonZero: true,
   });
   return {
-    chainId,
+    networkId,
     authority,
     entries,
     feePayment,
@@ -1494,7 +1499,7 @@ function encodeExecutableBatchTransactionPayload(normalized) {
     field(vector(normalized.entries.map(executableBatchEntryArchive))),
   ]);
   const payload = struct([
-    chainIdArchive(normalized.chainId),
+    networkTransactionDomainArchive(normalized.networkId),
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
@@ -1584,15 +1589,27 @@ function validateStringArchive(payload, context, { maxBytes } = {}) {
   return decoded;
 }
 
-function validateChainIdArchive(payload, context) {
+function validateNetworkTransactionDomainArchive(payload, context) {
   const reader = new Reader(payload, context);
-  const chainId = validateStringArchive(
-    reader.readField("value"),
-    `${context}.value`,
-    { maxBytes: MAX_CHAIN_ID_BYTES },
-  );
+  const variant = reader.readU32("variant");
+  if (variant !== 0) {
+    fail(
+      "unsupported_payload",
+      `${context} must be TransactionDomain::Network`,
+    );
+  }
+  const networkId = reader.readField("networkId");
+  if (networkId.length !== 32 || (networkId[31] & 1) === 0) {
+    fail(
+      "malformed_payload",
+      `${context}.networkId must contain exactly 32 marked Iroha hash bytes`,
+    );
+  }
   reader.assertEof();
-  return chainId;
+  if (!networkTransactionDomainArchive(networkId).equals(payload)) {
+    fail("malformed_payload", `${context} is not canonical`);
+  }
+  return networkId;
 }
 
 function validateConstVecBytes(payload, context, expectedLength) {
@@ -2177,11 +2194,10 @@ function validateTransactionPayload(payload, authorityLiteral) {
       ? null
       : accountInfo(authorityLiteral, "signable.authority");
   const reader = new Reader(payload, "transaction payload");
-  const chainId = validateChainIdArchive(
-    reader.readField("chain"),
-    "transaction payload.chain",
+  validateNetworkTransactionDomainArchive(
+    reader.readField("domain"),
+    "transaction payload.domain",
   );
-  exactString(chainId, "transaction payload.chain", { maxBytes: MAX_CHAIN_ID_BYTES });
   const authorityArchive = reader.readField("authority");
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
@@ -2239,13 +2255,10 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
       ? null
       : accountInfo(authorityLiteral, "signable.authority");
   const reader = new Reader(payload, "transaction payload");
-  const chainId = validateChainIdArchive(
-    reader.readField("chain"),
-    "transaction payload.chain",
+  validateNetworkTransactionDomainArchive(
+    reader.readField("domain"),
+    "transaction payload.domain",
   );
-  exactString(chainId, "transaction payload.chain", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
   const authorityArchive = reader.readField("authority");
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
@@ -2314,13 +2327,13 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
  * Decode and bind one canonical unsigned verifying-key registry transaction.
  *
  * This is deliberately narrower than the general browser transaction decoder:
- * the payload must target the immutable chain and authority supplied by the
+ * the payload must target the immutable network and authority supplied by the
  * caller and contain exactly one requested registry instruction. The returned
  * instruction has already passed a byte-for-byte canonical Norito round trip.
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @param {{
- *   expectedChainId: string,
+ *   expectedNetworkId: import("./networkId.js").NetworkId,
  *   expectedAuthority: string,
  *   operation: "register" | "update",
  * }} constraints
@@ -2342,10 +2355,9 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
       `verifying-key transaction payload must contain 1..=${MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES} bytes`,
     );
   }
-  const expectedChainId = exactString(
-    constraints?.expectedChainId,
-    "verifying-key signing context.chainId",
-    { maxBytes: MAX_CHAIN_ID_BYTES },
+  const expectedNetworkId = exactNetworkId(
+    constraints?.expectedNetworkId,
+    "verifying-key signing context.networkId",
   );
   const expectedAuthority = accountInfo(
     constraints?.expectedAuthority,
@@ -2360,14 +2372,14 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   }
 
   const reader = new Reader(payload, "verifying-key transaction payload");
-  const chainId = validateChainIdArchive(
-    reader.readField("chain"),
-    "verifying-key transaction payload.chain",
+  const networkId = validateNetworkTransactionDomainArchive(
+    reader.readField("domain"),
+    "verifying-key transaction payload.domain",
   );
-  if (chainId !== expectedChainId) {
+  if (!networkId.equals(expectedNetworkId)) {
     fail(
-      "chain_mismatch",
-      "verifying-key transaction payload changed the configured chain ID",
+      "network_mismatch",
+      "verifying-key transaction payload changed the configured NetworkId",
     );
   }
   const authorityArchive = reader.readField("authority");
@@ -2578,7 +2590,7 @@ export function buildBrowserVerifyingKeyTransactionPayload(input, operation) {
   }
   const payload = encodeInstructionTransactionPayload(normalized);
   decodeCanonicalVerifyingKeyTransactionPayload(payload, {
-    expectedChainId: normalized.chainId,
+    expectedNetworkId: input.networkId,
     expectedAuthority: normalized.authority.literal,
     operation,
   });

@@ -161,6 +161,7 @@ url=""
 connect_timeout=""
 max_time=""
 headers=()
+accept_header=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -210,11 +211,22 @@ done
 
 for header in "${headers[@]+"${headers[@]}"}"; do
   header_name="$(printf '%s' "${header%%:*}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$header_name" == "accept" ]]; then
+    accept_header="${header#*:}"
+    accept_header="${accept_header# }"
+  fi
   if [[ "$header_name" == "x-iroha-api-version" ]]; then
     echo "rollout must not send the retired x-iroha-api-version header" >&2
     exit 92
   fi
 done
+
+if [[ "$url" == */health || "$url" == */readyz ]]; then
+  if [[ "$accept_header" != "text/plain" ]]; then
+    echo "ordinary health probes must request text/plain, saw ${accept_header:-<missing>}" >&2
+    exit 93
+  fi
+fi
 
 if [[ -n "${MOCK_STATE_DIR:-}" ]]; then
   printf '%s %s\n' "$connect_timeout" "$max_time" >> "${MOCK_STATE_DIR}/curl_timeouts"

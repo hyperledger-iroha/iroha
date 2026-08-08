@@ -24,7 +24,8 @@ use iroha_data_model::{
         register::RegisterBox,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         settlement::{
-            DvpIsi, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
+            DvpIsi, FundFxCorridorEscrow, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy,
+            SettleFxCorridor, SettlementInstructionBox,
         },
     },
     metadata::Metadata,
@@ -3034,9 +3035,21 @@ fn native_fee_asset_movement_wire_id(
             {
                 return Some(SettleFxCorridor::WIRE_ID);
             }
+            SettlementInstructionBox::FundFxCorridorEscrow(isi)
+                if isi.destination_asset_definition_id == *fee_asset_definition_id =>
+            {
+                return Some(FundFxCorridorEscrow::WIRE_ID);
+            }
+            SettlementInstructionBox::RefundFxCorridorEscrow(isi)
+                if isi.destination_asset_definition_id == *fee_asset_definition_id =>
+            {
+                return Some(RefundFxCorridorEscrow::WIRE_ID);
+            }
             SettlementInstructionBox::Dvp(_)
             | SettlementInstructionBox::Pvp(_)
             | SettlementInstructionBox::SetFxCorridorPolicy(_)
+            | SettlementInstructionBox::FundFxCorridorEscrow(_)
+            | SettlementInstructionBox::RefundFxCorridorEscrow(_)
             | SettlementInstructionBox::SettleFxCorridor(_) => {}
         }
     }
@@ -3761,6 +3774,12 @@ mod tests {
 
     fn fee_asset() -> AssetDefinitionId {
         asset_definition("fee_token")
+    }
+
+    fn validation_fee_test_network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7; 32])),
+        )
     }
 
     fn policy(treasury: &AccountId) -> ValidationFeePolicyV1 {
@@ -4698,9 +4717,8 @@ mod tests {
         metadata: Metadata,
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4711,9 +4729,8 @@ mod tests {
 
     fn contract_call_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4731,9 +4748,8 @@ mod tests {
 
     fn ivm_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4748,9 +4764,8 @@ mod tests {
         metadata: Metadata,
     ) -> SignedTransaction {
         let key_pair = key_pair(authority_seed);
-        let chain: ChainId = "generic-testnet".parse().expect("chain id");
         TransactionBuilder::new(
-            chain,
+            validation_fee_test_network_id(),
             AccountId::new(key_pair.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

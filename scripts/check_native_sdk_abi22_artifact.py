@@ -3,10 +3,12 @@
 
 This checker is intentionally host-only.  It authenticates the exact native
 artifact exercised by a Node, Python, C/JNI, or C# test lane, calls that
-artifact's ABI probe, verifies the required SoraFS entrypoints, and binds the
-result to one clean Git revision.  Apple and Android release packages continue
-to use ``check_mobile_sdk_artifacts.sh``, which additionally authenticates every
-cross-compiled slice and its transitive source seal.
+artifact's ABI probe, verifies its required entrypoints, enforces the exact
+privacy C export inventory for bridge-bearing lanes, and binds the result to
+the artifact bytes plus one canonical clean-source manifest. Apple and Android
+release packages continue to use ``check_mobile_sdk_artifacts.sh``, which
+additionally authenticates every cross-compiled slice and its transitive source
+seal.
 """
 
 from __future__ import annotations
@@ -17,21 +19,47 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn
+
+if __package__:
+    from .compute_workspace_source_manifest import workspace_source_manifest
+else:
+    from compute_workspace_source_manifest import workspace_source_manifest
 
 
 SCHEMA = "iroha.native-sdk-abi22-artifact.v1"
 REQUIRED_BRIDGE_ABI_VERSION = 22
 MAX_MANIFEST_BYTES = 64 * 1024
+MAX_SYMBOL_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_EXPORTED_SYMBOLS = 1_000_000
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 TARGET_RE = re.compile(r"[a-z0-9][a-z0-9._+-]{0,127}")
 SDK_VALUES = frozenset({"c-jni", "csharp", "node", "python"})
+EXACT_PRIVACY_C_EXPORT_SDKS = frozenset({"c-jni", "csharp"})
+
+APPROVED_PRIVACY_C_EXPORTS = (
+    "iroha_privacy_compiled_profile_catalog_v1",
+    "iroha_privacy_validate_compiled_profile_catalog_v1",
+    "iroha_privacy_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_fixture_bundle_v1",
+    "iroha_privacy_free_buffer",
+)
+STALE_PRIVACY_ABI_MARKER_RE = re.compile(
+    r"(?:abi[_-]?(?:21|23)|(?:^|_)v(?:21|23)(?:$|_))",
+    re.IGNORECASE,
+)
+DUMPBIN_EXPORT_RE = re.compile(
+    rb"^\s*\d+\s+[0-9a-f]+\s+[0-9a-f]+\s+(\S+)(?:\s+.*)?$",
+    re.IGNORECASE,
+)
 
 REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
@@ -115,6 +143,20 @@ def source_state(root: Path) -> tuple[str, bool]:
         ("status", "--porcelain=v1", "--untracked-files=all"),
     )
     return commit, not bool(status.strip())
+
+
+def workspace_source_manifest_sha256(root: Path) -> str:
+    """Compute the repository's canonical checkout source-manifest digest."""
+
+    try:
+        digest = workspace_source_manifest(root)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        raise ArtifactContractError(
+            "native artifact workspace source manifest could not be authenticated"
+        ) from error
+    if SHA256_RE.fullmatch(digest) is None or digest == "0" * 64:
+        fail("native artifact workspace source manifest SHA-256 is not canonical")
+    return digest
 
 
 def stable_artifact_identity(path: Path) -> tuple[str, int]:
@@ -245,6 +287,146 @@ def stable_bounded_file_bytes(
     if len(raw) != opened.st_size or len(raw) > maximum_bytes:
         fail(f"{label} changed size or exceeded its byte limit while it was read")
     return raw
+
+
+def _symbol_tool_commands(path: Path) -> tuple[tuple[str, tuple[str, ...], str], ...]:
+    rendered = str(path)
+    if sys.platform == "darwin":
+        return (
+            ("nm", ("-gUj", rendered), "macho-lines"),
+            (
+                "llvm-nm",
+                ("--defined-only", "--extern-only", "-j", rendered),
+                "macho-lines",
+            ),
+        )
+    if os.name == "nt":
+        return (
+            (
+                "llvm-nm",
+                ("--defined-only", "--extern-only", "-j", rendered),
+                "lines",
+            ),
+            ("dumpbin", ("/nologo", "/exports", rendered), "dumpbin"),
+        )
+    return (
+        ("nm", ("-D", "--defined-only", "-j", rendered), "lines"),
+        (
+            "llvm-nm",
+            ("--defined-only", "--extern-only", "-j", rendered),
+            "lines",
+        ),
+    )
+
+
+def _parse_symbol_tool_output(raw: bytes, output_format: str) -> tuple[str, ...]:
+    if len(raw) > MAX_SYMBOL_TOOL_OUTPUT_BYTES:
+        fail("native artifact exported-symbol inventory exceeds its byte limit")
+    symbols: list[str] = []
+    for line in raw.splitlines():
+        if output_format == "dumpbin":
+            match = DUMPBIN_EXPORT_RE.fullmatch(line)
+            if match is None:
+                continue
+            encoded = match.group(1)
+        else:
+            encoded = line.strip()
+            if not encoded:
+                continue
+            if output_format == "macho-lines" and encoded.startswith(b"_"):
+                encoded = encoded[1:]
+        try:
+            symbol = encoded.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise ArtifactContractError(
+                "native artifact exported-symbol inventory is not ASCII"
+            ) from error
+        symbols.append(symbol)
+        if len(symbols) > MAX_EXPORTED_SYMBOLS:
+            fail("native artifact exported-symbol inventory exceeds its entry limit")
+    return tuple(symbols)
+
+
+def inspect_exported_symbols(path: Path, *, required: bool) -> tuple[str, ...] | None:
+    """Read a native binary's export table with the host platform's tooling."""
+
+    failures: list[str] = []
+    for tool, arguments, output_format in _symbol_tool_commands(path):
+        executable = shutil.which(tool)
+        if executable is None:
+            continue
+        environment = os.environ.copy()
+        environment["LC_ALL"] = "C"
+        try:
+            result = subprocess.run(
+                [executable, *arguments],
+                check=False,
+                capture_output=True,
+                timeout=30,
+                env=environment,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            failures.append(f"{tool}: {error}")
+            continue
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()[:1024]
+            failures.append(f"{tool}: {detail or f'exit {result.returncode}'}")
+            continue
+        return _parse_symbol_tool_output(result.stdout, output_format)
+    if required:
+        detail = "; ".join(failures[:2])
+        fail(
+            "native bridge exported-symbol inventory could not be inspected"
+            + (f": {detail}" if detail else ": no supported symbol tool is available")
+        )
+    return None
+
+
+def validate_privacy_c_exports(
+    symbols: Sequence[str],
+    *,
+    require_exact: bool,
+) -> tuple[str, ...]:
+    """Reject duplicate, stale, or unexpected native privacy C exports."""
+
+    observed: list[str] = []
+    for symbol in symbols:
+        if type(symbol) is not str or not symbol or "\x00" in symbol:
+            fail("native artifact exported-symbol inventory is malformed")
+        lowered = symbol.lower()
+        if (
+            "privacy" in lowered or "connect_norito_bridge" in lowered
+        ) and STALE_PRIVACY_ABI_MARKER_RE.search(lowered):
+            fail(f"native artifact exports stale privacy/bridge ABI marker: {symbol}")
+        if symbol.startswith("iroha_privacy_"):
+            observed.append(symbol)
+        elif "iroha_privacy_" in symbol:
+            fail(f"native artifact exports decorated privacy C symbol variant: {symbol}")
+
+    duplicates = sorted(
+        symbol for symbol, count in Counter(observed).items() if count != 1
+    )
+    if duplicates:
+        fail(
+            "native artifact exports duplicate privacy C symbols: "
+            + ", ".join(duplicates)
+        )
+    unexpected = sorted(set(observed) - set(APPROVED_PRIVACY_C_EXPORTS))
+    if unexpected:
+        fail(
+            "native artifact exports unexpected privacy C symbols: "
+            + ", ".join(unexpected)
+        )
+    if require_exact:
+        missing = [
+            symbol for symbol in APPROVED_PRIVACY_C_EXPORTS if symbol not in observed
+        ]
+        if missing:
+            fail(
+                "native bridge artifact is missing approved privacy C symbols: "
+                + ", ".join(missing)
+            )
+    return tuple(symbol for symbol in APPROVED_PRIVACY_C_EXPORTS if symbol in observed)
 
 
 def probe_c_abi(path: Path, required_symbols: Sequence[str]) -> int:
@@ -395,6 +577,7 @@ def build_manifest(
     artifact_path: Path,
     source_root: Path,
     probe: Callable[[str, Path], int] = probe_artifact,
+    symbol_inventory: Callable[[Path], Sequence[str] | None] | None = None,
 ) -> dict[str, object]:
     """Authenticate one artifact and return its canonical evidence manifest."""
 
@@ -405,23 +588,45 @@ def build_manifest(
     commit_before, clean_before = source_state(source_root)
     if not clean_before:
         fail("native SDK artifacts must be built and tested from a clean source tree")
+    source_manifest_before = workspace_source_manifest_sha256(source_root)
     digest, size = stable_artifact_identity(artifact_path)
     version = probe(sdk, artifact_path)
     _require_exact_abi(version)
+    exact_privacy_exports = sdk in EXACT_PRIVACY_C_EXPORT_SDKS
+    if symbol_inventory is None:
+        symbols = inspect_exported_symbols(
+            artifact_path,
+            required=exact_privacy_exports,
+        )
+    else:
+        symbols = symbol_inventory(artifact_path)
+    privacy_exports_inspected = symbols is not None
+    privacy_exports = validate_privacy_c_exports(
+        () if symbols is None else symbols,
+        require_exact=exact_privacy_exports,
+    )
     digest_after, size_after = stable_artifact_identity(artifact_path)
     if (digest_after, size_after) != (digest, size):
         fail("native artifact changed while its ABI and exports were probed")
+    source_manifest_after = workspace_source_manifest_sha256(source_root)
     commit_after, clean_after = source_state(source_root)
-    if commit_after != commit_before or not clean_after:
+    if (
+        commit_after != commit_before
+        or not clean_after
+        or source_manifest_after != source_manifest_before
+    ):
         fail("native SDK source changed while artifact evidence was collected")
     return {
         "artifact_sha256": digest,
         "artifact_size": size,
         "bridge_abi_version": version,
+        "privacy_c_exports": list(privacy_exports),
+        "privacy_c_exports_inspected": privacy_exports_inspected,
         "required_symbols": list(REQUIRED_SYMBOLS[sdk]),
         "schema": SCHEMA,
         "sdk": sdk,
         "source_commit": commit_before,
+        "workspace_source_manifest_sha256": source_manifest_before,
         "source_tree_clean": True,
         "target": target,
     }
@@ -445,12 +650,15 @@ def validate_manifest(value: object) -> dict[str, object]:
         "artifact_sha256",
         "artifact_size",
         "bridge_abi_version",
+        "privacy_c_exports",
+        "privacy_c_exports_inspected",
         "required_symbols",
         "schema",
         "sdk",
         "source_commit",
         "source_tree_clean",
         "target",
+        "workspace_source_manifest_sha256",
     }
     if set(manifest) != expected_keys:
         fail("native artifact manifest field inventory is not exact")
@@ -471,6 +679,13 @@ def validate_manifest(value: object) -> dict[str, object]:
     commit = manifest["source_commit"]
     if type(commit) is not str or COMMIT_RE.fullmatch(commit) is None:
         fail("native artifact manifest source commit is not canonical")
+    source_manifest = manifest["workspace_source_manifest_sha256"]
+    if (
+        type(source_manifest) is not str
+        or SHA256_RE.fullmatch(source_manifest) is None
+        or source_manifest == "0" * 64
+    ):
+        fail("native artifact manifest source-manifest SHA-256 is not canonical")
     if manifest["source_tree_clean"] is not True:
         fail("native artifact manifest must attest a clean source tree")
     if manifest["schema"] != SCHEMA:
@@ -478,6 +693,20 @@ def validate_manifest(value: object) -> dict[str, object]:
     required = manifest["required_symbols"]
     if type(required) is not list or tuple(required) != REQUIRED_SYMBOLS[sdk]:
         fail("native artifact required-symbol inventory is not exact")
+    privacy_exports = manifest["privacy_c_exports"]
+    privacy_exports_inspected = manifest["privacy_c_exports_inspected"]
+    if type(privacy_exports_inspected) is not bool or type(privacy_exports) is not list:
+        fail("native artifact privacy C export evidence is malformed")
+    validated_privacy_exports = validate_privacy_c_exports(
+        privacy_exports,
+        require_exact=sdk in EXACT_PRIVACY_C_EXPORT_SDKS,
+    )
+    if tuple(privacy_exports) != validated_privacy_exports:
+        fail("native artifact privacy C export inventory is not canonical")
+    if sdk in EXACT_PRIVACY_C_EXPORT_SDKS and not privacy_exports_inspected:
+        fail("native bridge manifest must attest inspected privacy C exports")
+    if not privacy_exports_inspected and privacy_exports:
+        fail("uninspected native privacy C export evidence must be empty")
     return dict(manifest)
 
 
@@ -510,6 +739,7 @@ def verify_manifest(
     artifact_path: Path,
     source_root: Path,
     probe: Callable[[str, Path], int] = probe_artifact,
+    symbol_inventory: Callable[[Path], Sequence[str] | None] | None = None,
 ) -> None:
     """Re-authenticate source, artifact bytes, exports, and exact ABI."""
 
@@ -521,6 +751,9 @@ def verify_manifest(
         or expected["source_tree_clean"] is not True
     ):
         fail("native artifact manifest does not match the current clean source revision")
+    source_manifest_before = workspace_source_manifest_sha256(source_root)
+    if source_manifest_before != expected["workspace_source_manifest_sha256"]:
+        fail("native artifact manifest does not match the current source manifest")
     digest, size = stable_artifact_identity(artifact_path)
     if digest != expected["artifact_sha256"] or size != expected["artifact_size"]:
         fail("native artifact bytes do not match the evidence manifest")
@@ -528,11 +761,31 @@ def verify_manifest(
     _require_exact_abi(version)
     if version != expected["bridge_abi_version"]:
         fail("native artifact ABI probe does not match the evidence manifest")
+    sdk = str(expected["sdk"])
+    must_inspect = sdk in EXACT_PRIVACY_C_EXPORT_SDKS or bool(
+        expected["privacy_c_exports_inspected"]
+    )
+    if symbol_inventory is None:
+        symbols = inspect_exported_symbols(artifact_path, required=must_inspect)
+    else:
+        symbols = symbol_inventory(artifact_path)
+    privacy_exports = validate_privacy_c_exports(
+        () if symbols is None else symbols,
+        require_exact=sdk in EXACT_PRIVACY_C_EXPORT_SDKS,
+    )
+    if bool(expected["privacy_c_exports_inspected"]):
+        if symbols is None or list(privacy_exports) != expected["privacy_c_exports"]:
+            fail("native artifact privacy C exports do not match the evidence manifest")
     digest_after, size_after = stable_artifact_identity(artifact_path)
     if (digest_after, size_after) != (digest, size):
         fail("native artifact changed while its ABI and exports were verified")
+    source_manifest_after = workspace_source_manifest_sha256(source_root)
     commit_after, clean_after = source_state(source_root)
-    if commit_after != commit_before or not clean_after:
+    if (
+        commit_after != commit_before
+        or not clean_after
+        or source_manifest_after != source_manifest_before
+    ):
         fail("native SDK source changed while artifact evidence was verified")
 
 

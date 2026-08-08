@@ -2,8 +2,7 @@ namespace Hyperledger.Iroha.Transactions;
 
 public enum PipelineTransactionState
 {
-    Unknown = 0,
-    Queued,
+    Queued = 1,
     Approved,
     Committed,
     Applied,

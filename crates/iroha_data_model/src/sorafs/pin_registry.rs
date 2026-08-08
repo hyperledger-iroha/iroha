@@ -11,6 +11,12 @@ use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata, mu
 
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
+/// Hard maximum number of summaries in one finalized pin-manifest page.
+pub const PIN_MANIFEST_QUERY_MAX_ITEMS_V1: u32 = 256;
+/// Hard maximum canonical encoded size of one finalized pin-manifest page.
+pub const PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1: u32 = 256 * 1024;
+/// Smallest caller-selected byte budget accepted for a pin-manifest page.
+pub const PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1: u32 = 1024;
 
 /// Canonical binary `CIDv1` identifying the content DAG root of a manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
@@ -421,6 +427,135 @@ impl PinStatus {
     }
 }
 
+/// Closed lifecycle selector for bounded pin-manifest pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(tag = "status", content = "detail", rename_all = "snake_case")]
+pub enum PinStatusKindV1 {
+    /// Manifests awaiting threshold-governance approval.
+    Pending,
+    /// Approved manifests currently charged for replication.
+    Approved,
+    /// Retired manifests retained only as bounded lifecycle evidence.
+    Retired,
+}
+
+impl PinStatusKindV1 {
+    /// Return whether this selector accepts the supplied lifecycle state.
+    #[must_use]
+    pub const fn matches(self, status: &PinStatus) -> bool {
+        matches!(
+            (self, status),
+            (Self::Pending, PinStatus::Pending)
+                | (Self::Approved, PinStatus::Approved(_))
+                | (Self::Retired, PinStatus::Retired(_))
+        )
+    }
+}
+
+/// Consensus-maintained resource usage for a global or per-account pin scope.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct PinResourceUsage {
+    /// Number of live manifests charged to the scope.
+    pub manifest_count: u64,
+    /// Aggregate content bytes represented by those manifests.
+    pub content_bytes: u64,
+}
+
+impl PinResourceUsage {
+    /// Return usage after charging one manifest, or `None` on arithmetic overflow.
+    #[must_use]
+    pub const fn checked_charge(self, content_bytes: u64) -> Option<Self> {
+        let Some(manifest_count) = self.manifest_count.checked_add(1) else {
+            return None;
+        };
+        let Some(content_bytes) = self.content_bytes.checked_add(content_bytes) else {
+            return None;
+        };
+        Some(Self {
+            manifest_count,
+            content_bytes,
+        })
+    }
+
+    /// Return usage after releasing one manifest, or `None` on arithmetic underflow.
+    #[must_use]
+    pub const fn checked_release(self, content_bytes: u64) -> Option<Self> {
+        let Some(manifest_count) = self.manifest_count.checked_sub(1) else {
+            return None;
+        };
+        let Some(content_bytes) = self.content_bytes.checked_sub(content_bytes) else {
+            return None;
+        };
+        Some(Self {
+            manifest_count,
+            content_bytes,
+        })
+    }
+}
+
+/// Consensus-maintained bounded lineage summary for one pin manifest.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct PinLineageSummaryV1 {
+    /// Number of predecessor edges from this manifest to the lineage root.
+    pub depth: u32,
+    /// Number of direct successors registered for this manifest.
+    pub direct_successor_count: u32,
+}
+
+impl PinLineageSummaryV1 {
+    /// Construct a root summary with no predecessor or successor edges.
+    #[must_use]
+    pub const fn root() -> Self {
+        Self {
+            depth: 0,
+            direct_successor_count: 0,
+        }
+    }
+
+    /// Construct a child summary from its parent, or `None` if depth overflows.
+    #[must_use]
+    pub const fn checked_child(self) -> Option<Self> {
+        let Some(depth) = self.depth.checked_add(1) else {
+            return None;
+        };
+        Some(Self {
+            depth,
+            direct_successor_count: 0,
+        })
+    }
+
+    /// Return the parent summary after charging one direct successor.
+    #[must_use]
+    pub const fn checked_add_successor(self) -> Option<Self> {
+        let Some(direct_successor_count) = self.direct_successor_count.checked_add(1) else {
+            return None;
+        };
+        Some(Self {
+            depth: self.depth,
+            direct_successor_count,
+        })
+    }
+
+    /// Return the parent summary after releasing one direct successor.
+    #[must_use]
+    pub const fn checked_remove_successor(self) -> Option<Self> {
+        let Some(direct_successor_count) = self.direct_successor_count.checked_sub(1) else {
+            return None;
+        };
+        Some(Self {
+            depth: self.depth,
+            direct_successor_count,
+        })
+    }
+}
+
 /// XOR fee payment recorded when a public pin manifest is admitted.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -510,6 +645,60 @@ pub struct PinManifestFinalizedRecordV1 {
     pub finalized_cursor: PinManifestFinalizedCursorV1,
     /// Chain-authoritative pin-manifest lifecycle record.
     pub manifest: PinManifestRecord,
+}
+
+/// Bounded pin-manifest summary suitable for list pages.
+///
+/// Alias proofs, metadata, council envelopes, and fee-payment details are
+/// intentionally excluded. Callers resolve one exact record through
+/// `FindSorafsPinManifest` when those bounded-detail fields are needed.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct PinManifestSummaryV1 {
+    /// Canonical manifest digest and page key.
+    pub digest: ManifestDigest,
+    /// Authenticated account charged for the manifest.
+    pub submitted_by: AccountId,
+    /// Consensus-time submission epoch.
+    pub submitted_epoch: u64,
+    /// Declared content length charged to resource accounting.
+    pub content_length: u64,
+    /// Consensus-time retention expiry.
+    pub retention_epoch: u64,
+    /// Current lifecycle state.
+    pub status: PinStatus,
+    /// Optional predecessor digest.
+    pub successor_of: Option<ManifestDigest>,
+}
+
+impl From<&PinManifestRecord> for PinManifestSummaryV1 {
+    fn from(record: &PinManifestRecord) -> Self {
+        Self {
+            digest: record.digest,
+            submitted_by: record.submitted_by.clone(),
+            submitted_epoch: record.submitted_epoch,
+            content_length: record.content_length,
+            retention_epoch: record.policy.retention_epoch,
+            status: record.status,
+            successor_of: record.successor_of,
+        }
+    }
+}
+
+/// Finalized, exclusive-keyset page of bounded pin-manifest summaries.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct PinManifestPageV1 {
+    /// Finalized state anchor shared by every entry and the next cursor.
+    pub finalized_cursor: PinManifestFinalizedCursorV1,
+    /// O(1) consensus-maintained live count and byte totals at the anchor.
+    pub charged_usage: PinResourceUsage,
+    /// Canonical summaries in ascending digest order.
+    pub manifests: Vec<PinManifestSummaryV1>,
+    /// Whether at least one further matching record exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive digest cursor for the next page when `has_more` is true.
+    pub next_after_digest: Option<ManifestDigest>,
 }
 
 impl PinManifestRecord {
@@ -915,6 +1104,74 @@ mod tests {
         let mut slice = &encoded[..];
         let decoded = ManifestDigest::decode(&mut slice).expect("decode manifest digest");
         assert_eq!(digest, decoded);
+    }
+
+    #[test]
+    fn pin_resource_usage_uses_checked_transactional_arithmetic() {
+        let usage = PinResourceUsage::default()
+            .checked_charge(512)
+            .expect("first charge fits")
+            .checked_charge(1_024)
+            .expect("second charge fits");
+        assert_eq!(usage.manifest_count, 2);
+        assert_eq!(usage.content_bytes, 1_536);
+        assert_eq!(
+            usage.checked_release(512),
+            Some(PinResourceUsage {
+                manifest_count: 1,
+                content_bytes: 1_024,
+            })
+        );
+        assert_eq!(PinResourceUsage::default().checked_release(0), None);
+        assert_eq!(
+            PinResourceUsage {
+                manifest_count: u64::MAX,
+                content_bytes: 0,
+            }
+            .checked_charge(0),
+            None
+        );
+        assert_eq!(
+            PinResourceUsage {
+                manifest_count: 0,
+                content_bytes: u64::MAX,
+            }
+            .checked_charge(1),
+            None
+        );
+    }
+
+    #[test]
+    fn pin_lineage_summary_uses_checked_depth_and_fanout_arithmetic() {
+        let root = PinLineageSummaryV1::root();
+        assert_eq!(root.checked_child().map(|child| child.depth), Some(1));
+        assert_eq!(
+            root.checked_add_successor()
+                .map(|parent| parent.direct_successor_count),
+            Some(1)
+        );
+        assert_eq!(
+            root.checked_add_successor()
+                .and_then(PinLineageSummaryV1::checked_remove_successor),
+            Some(root)
+        );
+        assert_eq!(root.checked_remove_successor(), None);
+        assert_eq!(
+            PinLineageSummaryV1 {
+                depth: u32::MAX,
+                direct_successor_count: 0,
+            }
+            .checked_child(),
+            None
+        );
+        assert_eq!(
+            PinLineageSummaryV1 {
+                depth: 0,
+                direct_successor_count: u32::MAX,
+            }
+            .checked_add_successor(),
+            None
+        );
     }
 
     #[test]

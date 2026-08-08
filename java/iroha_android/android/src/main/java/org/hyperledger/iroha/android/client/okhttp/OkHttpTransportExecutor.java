@@ -11,6 +11,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import okhttp3.Authenticator;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.Headers;
@@ -21,6 +23,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.BoundedResponseBodyReader;
+import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -31,6 +34,7 @@ public final class OkHttpTransportExecutor
     implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final OkHttpClient client;
+  private final OkHttpClient oneShotClient;
   private final boolean ownsClient;
   private final long maximumResponseBytes;
   private final Set<Call> trackedCalls = ConcurrentHashMap.newKeySet();
@@ -54,6 +58,30 @@ public final class OkHttpTransportExecutor
       final boolean ownsClient,
       final long maximumResponseBytes) {
     this.client = Objects.requireNonNull(client, "client");
+    this.oneShotClient =
+        client
+            .newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .authenticator(Authenticator.NONE)
+            .proxyAuthenticator(Authenticator.NONE)
+            .addNetworkInterceptor(
+                chain -> {
+                  final OneShotDispatchGuard guard =
+                      chain.request().tag(OneShotDispatchGuard.class);
+                  if (guard != null && !guard.beginDispatch()) {
+                    throw new IOException("ONE_SHOT HTTP request cannot be redispatched");
+                  }
+                  final Response response = chain.proceed(chain.request());
+                  // OkHttp treats Retry-After: 0 on 503 as an immediate follow-up even when
+                  // connection retries are disabled. Remove the hint for one-shot requests so the
+                  // original response is returned without entering that follow-up path.
+                  return guard != null && response.code() == 503
+                      ? response.newBuilder().removeHeader("Retry-After").build()
+                      : response;
+                })
+            .build();
     this.ownsClient = ownsClient;
     BoundedResponseBodyReader.validateMaximum(maximumResponseBytes);
     this.maximumResponseBytes = maximumResponseBytes;
@@ -64,7 +92,7 @@ public final class OkHttpTransportExecutor
     Objects.requireNonNull(request, "request");
     final Request okRequest = buildRequest(request);
     final long responseLimit = responseLimit(request, maximumResponseBytes);
-    final Call call = client.newCall(okRequest);
+    final Call call = clientFor(request).newCall(okRequest);
     trackedCalls.add(call);
     final Duration timeout = request.timeout();
     if (timeout != null && !timeout.isZero() && !timeout.isNegative()) {
@@ -111,7 +139,7 @@ public final class OkHttpTransportExecutor
   public CompletableFuture<TransportStreamResponse> openStream(final TransportRequest request) {
     Objects.requireNonNull(request, "request");
     final Request okRequest = buildRequest(request);
-    final Call call = client.newCall(okRequest);
+    final Call call = clientFor(request).newCall(okRequest);
     trackedCalls.add(call);
     final java.time.Duration timeout = request.timeout();
     if (timeout != null && !timeout.isNegative()) {
@@ -189,12 +217,28 @@ public final class OkHttpTransportExecutor
     return client;
   }
 
+  private OkHttpClient clientFor(final TransportRequest request) {
+    return request.replayPolicy() == RequestReplayPolicy.ONE_SHOT ? oneShotClient : client;
+  }
+
   private Request buildRequest(final TransportRequest request) {
     final Request.Builder builder = new Request.Builder().url(request.uri().toString());
+    if (request.replayPolicy() == RequestReplayPolicy.ONE_SHOT) {
+      builder.tag(OneShotDispatchGuard.class, new OneShotDispatchGuard());
+    }
     applyHeaders(builder, request.headers());
     final RequestBody body = buildRequestBody(request);
     builder.method(request.method(), body);
     return builder.build();
+  }
+
+  /** Per-call guard checked immediately before OkHttp writes a request to the network. */
+  private static final class OneShotDispatchGuard {
+    private final AtomicBoolean dispatched = new AtomicBoolean(false);
+
+    private boolean beginDispatch() {
+      return dispatched.compareAndSet(false, true);
+    }
   }
 
   private static void applyHeaders(

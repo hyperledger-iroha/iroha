@@ -176,9 +176,17 @@ The first-release native metadata surface is
 `isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
 latter returns this binary's canonical Norito
 `PrivacyCompiledProfileCatalogV1` archive. It intentionally contains no
-committed height, consensus policy, activation, or readiness projection; read
-those authoritative values from Torii's live `PrivacyCapabilitySnapshotV1`
-endpoint. The generic
+committed height, consensus policy, activation, or readiness projection and
+cannot authorize a network operation. Import
+`getPrivacyExact12CapabilityManifestV1` from
+`@iroha/iroha-js/privacy-capabilities` to fetch Torii's canonical Norito
+manifest through the Node/N-API client. The authenticated ABI22 binding applies
+the bounded canonical decoder; transaction construction must then call
+`requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
+state and byte-exact equality with the selected local compiled-profile row.
+There is no browser, JSON, or mock authorization fallback. The legacy
+`parsePrivacyCapabilitySnapshotV1` helper remains read-only and its result is
+not an admission object. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
 exist; proving is exposed only by protocol-specific typed APIs.
 
@@ -213,16 +221,24 @@ and finalize a canonical transparent transfer without loading the native Node
 binding. This deliberately narrow surface supports one `Transfer::Asset`
 instruction, single-key Ed25519 I105 authorities, canonical asset identifiers,
 and accounts sharing one Taira-style network prefix/chain discriminant.
+Every ordinary transaction carries a nominal `NetworkId`: the exact marked
+32-byte genesis-header hash, rendered as a canonical checksummed Iroha hash
+literal. Human-readable `chain`, `chainId`, and `chain_id` transaction fields
+are rejected; they are not aliases for this consensus identity.
 
 ```js
+import { NetworkId } from "@iroha/iroha-js";
 import {
   browserTransactionPayloadHashHex,
   buildBrowserTransferPayload,
   finalizeBrowserSignedTransaction,
 } from "@iroha/iroha-js/transaction-codec";
 
+const networkId = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const payloadBytes = buildBrowserTransferPayload({
-  chainId,
+  networkId,
   authority,
   sourceAssetHoldingId: `${assetDefinitionId}#${authority}`,
   quantity: "1.25",
@@ -304,7 +320,7 @@ if (program?.lifecycle.state !== "active") throw new Error("sponsor is not activ
 const signed = await quoteAndSignTransaction(
   torii,
   {
-    chainId: "test-chain",
+    networkId,
     authority,
     instructions: [buildTransferAssetInstruction({
       sourceAssetHoldingId,
@@ -345,7 +361,7 @@ import {
 } from "@iroha/iroha-js";
 
 const mixed = buildExecutableBatchTransaction({
-  chainId,
+  networkId,
   authority,
   entries: [
     {
@@ -370,7 +386,7 @@ For external browser signing, pass the same ordered `entries` shape to
 `validateBrowserExecutableBatchSignable` and
 `finalizeBrowserExecutableBatchTransaction`. Keep using `buildTransaction` or
 `buildBrowserInstructionTransactionPayload` for instruction-only transactions;
-those APIs retain the legacy `Executable::Instructions` wire tag.
+those APIs use the canonical `Executable::Instructions` wire tag.
 
 The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
 it uses the browser codec and strict browser Ed25519 verifier by default and
@@ -508,7 +524,9 @@ await deploySmartContractBrowser({
   manifest: result.output.manifest,
   compilerCodeHash: result.output.codeHashHex,
   compilerAbiHash: result.output.abiHashHex,
-  // chain, local-signing, authenticated-state, and submission callbacks...
+  networkId, // ordinary deployment-transaction domain
+  chainId, // contract-address derivation identity
+  // local-signing, authenticated-state, and submission callbacks...
 });
 ```
 
@@ -518,9 +536,11 @@ or its derived code hash, ABI hash, offsets, entrypoint count, or canonical
 manifest disagrees with the compiler output. JavaScript framing validation is
 retained as an earlier diagnostic boundary, but cannot authorize deployment by
 itself.
-Contract-address derivation requires the exact canonical `chainId` in both
-`deriveContractAddress(...)` and `deploySmartContractBrowser(...)`. The full
-identifier is length-framed into the address digest; `chainDiscriminant`
+Browser deployment requires both identities explicitly: nominal `networkId`
+binds every ordinary deployment transaction, while canonical `chainId` is used
+only by `deriveContractAddress(...)` and address derivation inside
+`deploySmartContractBrowser(...)`. Neither substitutes for the other. The full
+ChainId is length-framed into the address digest; `chainDiscriminant`
 remains required only for strict I105 authority decoding. Every canonical V1
 contract address uses the fixed lowercase `irohac` Bech32m prefix.
 The first release accepts only `provenance: null`; signed provenance remains
@@ -850,7 +870,7 @@ const propose = buildProposeMultisigInstruction({
 
 // Register the multisig controller with an explicit (non-derived) account id
 const register = buildRegisterMultisigTransaction({
-  chainId: "wonderland",
+  networkId,
   feePayment,
   authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   accountId: "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL",
@@ -1041,7 +1061,7 @@ const receipt = await torii.submitTransaction(encoded);
 const sampleHashHex =
   receipt?.payload?.tx_hash ?? "ab".repeat(32); // 32-byte transaction hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
-console.log(status?.content.status.kind); // e.g. "Applied"
+console.log(status?.status.kind); // e.g. "Applied"
 
 // Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
 const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
@@ -1051,7 +1071,7 @@ console.log(typedStatus?.status?.kind); // e.g. "Applied"
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
 await torii.submitTransactionAndWaitTyped(encoded, { hashHex: sampleHashHex });
 // Note: raw `getTransactionStatus` options support only
-// { allowShortHash, signal, scope }, where scope is the explicit diagnostic
+// { allowShortHash, signal, scope }, where scope is the explicit read
 // choice "local" or "global" and defaults to "global". An "auto" mode and
 // cross-endpoint status fallback lists are not part of the API.
 // Polling helper options support only { signal, intervalMs, timeoutMs, maxAttempts,
@@ -1072,7 +1092,7 @@ try {
   });
 } catch (error) {
   if (error && error.name === "TransactionStatusError") {
-    console.error(error.status, error.rejectionReason); // e.g. Rejected build_claim_missing
+    console.error(error.status); // e.g. Rejected
   }
   throw error;
 }
@@ -1131,6 +1151,13 @@ for await (const holding of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶr�
 }
 ```
 
+Public status parsing accepts only the canonical hash, closed status kind, optional committed
+height, scope, and resolution source. Rejection text, diagnostics, trigger completions, and
+batch outcomes are rejected. Authenticated transaction details require a one-shot canonical
+signed `FindTransactions` query bound to the deployment's exact genesis-derived `NetworkId`;
+the JavaScript package does not expose a details helper until that signed-query generator is
+available.
+
 See `recipes/assets_iterators.mjs` and `recipes/nft_account_iteration.mjs` for runnable examples.
 
 ### Auth headers and TLS guardrails
@@ -1179,7 +1206,7 @@ const transfer = buildTransferAssetInstruction({
 });
 
 const transferTx = buildTransaction({
-  chainId: "demo-chain",
+  networkId,
   authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   instructions: [transfer],
   feePayment,
@@ -1250,7 +1277,7 @@ gate without requiring a full publish.
 
 // Build a fresh RegisterDomain transaction using the native builder helper
 const built = buildRegisterDomainTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   domainId: "wonderland",
@@ -1274,7 +1301,7 @@ const transfer = buildTransferAssetInstruction({
 console.log(noritoDecodeInstruction(mint)); // structured JSON
 
 const mintTx = buildMintAssetTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   assetHoldingId: roseAssetHoldingId,
@@ -1283,7 +1310,7 @@ const mintTx = buildMintAssetTransaction({
 });
 
 const burnTx = buildBurnAssetTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   assetHoldingId: roseAssetHoldingId,
@@ -1292,7 +1319,7 @@ const burnTx = buildBurnAssetTransaction({
 });
 
 const transferTx = buildTransferAssetTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   sourceAssetHoldingId: roseAssetHoldingId,
@@ -1302,7 +1329,7 @@ const transferTx = buildTransferAssetTransaction({
 });
 
 const registerRwaTx = buildRegisterRwaTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   rwa: {
@@ -1331,7 +1358,7 @@ const setRwaMetadata = buildSetRwaKeyValueInstruction({
 console.log(noritoDecodeInstruction(setRwaMetadata));
 
 const mintAndTransferTx = buildMintAndTransferTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   mint: { assetHoldingId: roseAssetHoldingId, quantity: "10" },
@@ -1350,7 +1377,7 @@ const mintAndTransferTx = buildMintAndTransferTransaction({
 });
 
 const domainAndMintTx = buildRegisterDomainAndMintTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   domain: { domainId: "garden_of_live_flowers", metadata: { key: "value" } },
@@ -1362,7 +1389,7 @@ const domainAndMintTx = buildRegisterDomainAndMintTransaction({
 });
 
 const accountAndTransferTx = buildRegisterAccountAndTransferTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   account: { accountId: newAccountId, metadata: { nickname: "alice" } },
@@ -1382,7 +1409,7 @@ const accountAndTransferTx = buildRegisterAccountAndTransferTransaction({
 });
 
 const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   assetDefinition: {
@@ -1405,7 +1432,7 @@ const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction(
 });
 
 const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTransferTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   assetDefinition: {
@@ -1438,7 +1465,7 @@ const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTran
 
 // Build an arbitrary transaction from instruction payloads (JSON strings or objects)
 const genericTx = buildTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   instructions: [mint, transfer],
   feePayment,
@@ -1446,7 +1473,7 @@ const genericTx = buildTransaction({
 });
 
 const kaigiCreateTx = buildCreateKaigiTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   call: {
@@ -1469,7 +1496,7 @@ const kaigiCreateTx = buildCreateKaigiTransaction({
 });
 
 const kaigiJoinTx = buildJoinKaigiTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   join: {
@@ -1562,6 +1589,13 @@ Pass a custom `fetchImpl`, per-request headers, alternate HTTP methods, or an
 AbortSignal when integrating with higher-level transports. The helper returns
 `Uint8Array` so you can feed the response straight into the Norito decode
 utilities or persist it for parity fixtures.
+
+Every `NoritoRpcClient.call(...)` dispatch is one-shot because its binary body
+may be a signed query with a consumable nonce. The client passes
+`redirect: "error"` to Fetch and never performs a transport retry. A custom
+`fetchImpl` must honor that redirect mode and must neither follow a 307/308 nor
+retry a body after dispatch. Treat a network error or timeout as an ambiguous
+outcome and reconcile it before creating a newly signed request.
 
 ### Transport security and host validation
 
@@ -2007,24 +2041,26 @@ exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
 transaction locally; neither the raw private key nor any secret-bearing JSON
 request is sent to Torii. The immediate response is only an admission identity,
 not a finality, fee, custody, or pin-status receipt.
+The manifest submission epoch is derived from the block consensus timestamp;
+clients cannot supply or override it.
 
 ```js
 const operatorId = process.env.SORAFS_OPERATOR_ID;
 const operatorKeyHex = process.env.SORAFS_OPERATOR_KEY_HEX;
-const chainId = process.env.IROHA_CHAIN_ID;
-if (!operatorId || !operatorKeyHex || !chainId) {
+const networkIdLiteral = process.env.IROHA_NETWORK_ID;
+if (!operatorId || !operatorKeyHex || !networkIdLiteral) {
   throw new Error(
-    "set SORAFS_OPERATOR_ID, SORAFS_OPERATOR_KEY_HEX, and IROHA_CHAIN_ID",
+    "set SORAFS_OPERATOR_ID, SORAFS_OPERATOR_KEY_HEX, and IROHA_NETWORK_ID",
   );
 }
+const networkId = NetworkId.parse(networkIdLiteral);
 
 const { signedTransaction } = await buildRegisterPinManifestTransaction(torii, {
-  chainId,
+  networkId,
   authority: operatorId,
   privateKey: Buffer.from(operatorKeyHex, "hex"),
   feePayment: { payer: "authority", chargeLimits: [] },
   manifestPayload: fs.readFileSync("./manifest.norito"),
-  submittedEpoch: Number(process.env.SORAFS_SUBMITTED_EPOCH ?? "0"),
   alias: {
     namespace: "docs",
     name: "main",
@@ -2719,7 +2755,7 @@ import {
 import fs from "node:fs";
 
 const manifestTx = buildRegisterSmartContractCodeTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   manifest: {
@@ -2735,7 +2771,7 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
 });
 
 const codeTx = buildRegisterSmartContractBytesTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   codeHash: Buffer.alloc(32, 0xaa),
@@ -2744,7 +2780,7 @@ const codeTx = buildRegisterSmartContractBytesTransaction({
 });
 
 const removeBytesTx = buildRemoveSmartContractBytesTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   codeHash: Buffer.alloc(32, 0xaa),
@@ -2828,8 +2864,22 @@ requested key before signing. The resulting user signature covers the complete
 `IvmProved` executable, including every transfer in its overlay.
 Invalid polling options are rejected before any request. If proof polling later
 times out, aborts, or fails, the convenience path best-effort cancels the remote
-job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId)`
-is also available for explicit lifecycle control.
+job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId,
+{ canonicalAuth })` is also available for explicit lifecycle control. Proof-job POST, GET, and
+DELETE calls require `canonicalAuth`; Torii binds the signed account to the job
+owner, applies per-owner count and byte quotas, and conceals foreign job IDs as
+missing. Each operation is signed independently with a fresh nonce and is never
+redirected or retried after dispatch:
+
+```js
+const canonicalAuth = {
+  accountId: AUTHORITY_ACCOUNT_ID,
+  privateKey: AUTHORITY_PRIVATE_KEY,
+};
+const created = await torii.startIvmProve(proofRequest, { canonicalAuth });
+const job = await torii.getIvmProveJob(created.job_id, { canonicalAuth });
+await torii.cancelIvmProveJob(created.job_id, { canonicalAuth });
+```
 
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
@@ -2970,7 +3020,7 @@ import {
 } from "@iroha/iroha-js";
 
 const proposalTx = buildProposeDeployContractTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   proposal: {
@@ -2987,7 +3037,7 @@ const proposalTx = buildProposeDeployContractTransaction({
 const zkOwner = "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL"; // canonical I105 account id for ZK public inputs
 
 const zkBallotTx = buildCastZkBallotTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   ballot: {
@@ -3004,7 +3054,7 @@ const zkBallotTx = buildCastZkBallotTransaction({
 });
 
 const plainBallotTx = buildCastPlainBallotTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   ballot: {
@@ -3018,7 +3068,7 @@ const plainBallotTx = buildCastPlainBallotTransaction({
 });
 
 const enactTx = buildEnactReferendumTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   enactment: {
@@ -3060,7 +3110,7 @@ underlying confidential proof helpers remain available for those typed flows.
 import { buildRegisterZkAssetTransaction } from "@iroha/iroha-js";
 
 const registerTx = buildRegisterZkAssetTransaction({
-  chainId: "test-chain",
+  networkId,
   authority,
   feePayment,
   registration: {
@@ -3119,11 +3169,13 @@ helpers normalise casing and payload layouts so tests and automation can inspect
 registry state without manual parsing:
 
 ```js
-import { LocalSigningContext, ToriiClient } from "@iroha/iroha-js";
+import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
+
+const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
 
 const torii = new ToriiClient("http://localhost:8080", {
   // Immutable local-signing context. Read-only clients may omit this.
-  localSigningContext: new LocalSigningContext("production-chain"),
+  localSigningContext: new LocalSigningContext(networkId),
 });
 const list = await torii.listVerifyingKeysTyped({ backend: "halo2/ipa", status: "active" });
 console.log(list[0]?.record?.commitment_hex);
@@ -3156,10 +3208,10 @@ remain entirely in the client wallet. The client rejects drafts whose
 transaction payload exceeds 16 MiB or whose 32-byte signing message is not the
 canonical marker-adjusted Blake2b-256 Iroha hash of that payload. Before
 returning a draft, it canonically decodes the Norito transaction and requires
-the configured chain ID, requested authority, exactly one requested
+the configured `NetworkId`, requested authority, exactly one requested
 register/update instruction, and byte-exact equality of every verifying-key
 record field. Register/update fail before the request when
-`localSigningContext` was not configured; there is no raw-chain, per-call, or
+`localSigningContext` was not configured; there is no raw-network, per-call, or
 server-derived fallback.
 
 ## Connect Session Utilities
@@ -3635,7 +3687,8 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
 - `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
-- `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
+- `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional Connect/governance protocol chain label override (`00000000-0000-0000-0000-000000000000` by default); ordinary transactions never consume it.
+- `IROHA_TORII_INTEGRATION_NETWORK_ID` — optional canonical checksummed 32-byte `NetworkId` literal used by ordinary mutation transactions.
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
 - `IROHA_TORII_INTEGRATION_MUTATE` — set to `1` to enable mutation tests (registering disposable domains via the builder helpers). The docker harness described below enables this flag automatically.
 - `IROHA_TORII_INTEGRATION_STREAM_ENABLED` — set to `1` (alongside `IROHA_TORII_INTEGRATION_MUTATE=1`) to exercise the event-stream coverage that waits for a `Pipeline.Block` SSE and asserts the typed payload mirrors Torii’s stream schema. Leave unset when SSE endpoints are disabled or proxied away.
@@ -4374,6 +4427,7 @@ rejected.
   See `specs/sdk/js/publishing.md` for the full workflow.
 
 - `ToriiClient` accepts `timeoutMs`, `maxRetries`, `backoffInitialMs`, `backoffMultiplier`, `maxBackoffMs`, `retryStatuses`, and `retryMethods`, mirroring the retry knobs exposed in `iroha_config`.
+- Retry settings never apply to signed transaction or batch submission, or to a request carrying `canonicalAuth`/`X-Iroha-Nonce`: those final dispatches always use `redirect: "error"` and make exactly one Fetch call. `ToriiBrowserClient` applies the same redirect policy to signed transactions and canonical nonce-bearing requests. Pre-dispatch validation reads, such as the node-capabilities check, retain the normal safe retry policy. A custom `fetchImpl` must preserve this one-shot boundary whenever it receives `redirect: "error"`; it must not follow 307/308 responses or replay the request after a network error, timeout, or retryable status.
 - Attach `retryTelemetryHook` to capture deterministic per-attempt telemetry for dashboards and SLO drills; events include phase (`response`/`network`/`timeout`), attempt numbers, method/URL, status or error metadata, backoffMs, profile name when set, durationMs for the attempt, and timestampMs so logs can be correlated with Torii-side traces.
 - Authentication headers can be supplied via `authToken` (maps to `Authorization: Bearer ...`) or `apiToken` (maps to `X-API-Token`). Requests that carry auth headers, `canonicalAuth`, or raw `private_key*` JSON fields pin to the client's base scheme/host; cross-host overrides are rejected, insecure `http`/`ws` requires `allowInsecure: true` (dev-only), and `insecureTransportTelemetryHook` captures any downgraded transports. Cross-host requests without sensitive material require `allowAbsoluteUrl: true`.
 - Runtime defaults can be pulled from `iroha_config` JSON/TOML by passing a camelCase config object (map `torii.api_tokens` to `torii.apiTokens`) to `new ToriiClient(url, { config })`. The helper `resolveToriiClientConfig({ config })` returns the merged settings if you need to inspect them directly.

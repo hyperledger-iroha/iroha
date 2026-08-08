@@ -1,7 +1,6 @@
 //! PDP manifest structure and reference binding validation tests.
 
 use ed25519_dalek::SigningKey;
-use norito::core::NoritoSerialize;
 use sorafs_manifest::{
     ChunkingProfileV1, ProfileId,
     pdp::{

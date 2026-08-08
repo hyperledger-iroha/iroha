@@ -481,6 +481,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         })
         .unwrap_or(0);
     let chain_id = state_view.chain_id().clone();
+    let network_id = *state_view.network_id();
     drop(state_view);
 
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -548,7 +549,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
     }
 
     let transaction = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -976,6 +977,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+            zk_ivm_prove_job_max_entries_per_owner:
+                defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
+            zk_ivm_prove_job_max_retained_bytes_per_owner:
+                defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER,
             transaction_ingress: A::TransactionIngress::default(),
             da_ingest: A::DaIngest::default(),
             connect: A::Connect {
@@ -1074,6 +1079,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             store_dir: WithOrigin::inline(std::env::temp_dir()),
             merkle_chunk_size_bytes: defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
             max_payload_bytes: defaults::snapshot::MAX_PAYLOAD_BYTES,
+            resources: Default::default(),
             verification_public_key: None,
             signing_private_key: None,
             bootstrap: Default::default(),
@@ -1617,6 +1623,7 @@ mod tests {
             query,
             chain_id.clone(),
         ));
+        let network_id = *state.network_id_ref();
 
         assert_eq!(&state.chain_id, &chain_id);
 
@@ -1627,7 +1634,7 @@ mod tests {
         ));
 
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1664,7 +1671,7 @@ mod tests {
         drop(view);
 
         let second_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

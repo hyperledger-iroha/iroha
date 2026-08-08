@@ -28,7 +28,7 @@ use iroha_data_model::{
     account::AccountAddress,
     isi::sorafs::{
         ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-        RegisterPinManifest, RegisterProviderOwner, SetProviderIngestCompletionAuthority,
+        RegisterPinManifest, SetProviderIngestCompletionAuthority,
     },
     prelude::*,
     sorafs::{
@@ -4362,15 +4362,15 @@ fn capability_label(cap: CapabilityType) -> &'static str {
 }
 
 pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>> {
-    let state = pin_fixture_make_state();
-    pin_fixture_commit_completion_anchor(&state)?;
-    let mut block = state.block(pin_fixture_block_header(2));
-    let mut tx = block.transaction();
     let providers = [
         ProviderId::new([0x51; 32]),
         ProviderId::new([0x52; 32]),
         ProviderId::new([0x53; 32]),
     ];
+    let state = pin_fixture_make_state(&providers);
+    pin_fixture_commit_completion_anchor(&state)?;
+    let mut block = state.block(pin_fixture_block_header(2));
+    let mut tx = block.transaction();
     pin_fixture_bootstrap(&mut tx, &providers)?;
 
     let (digest, manifest_root_cid, manifest_payload) = pin_fixture_default_manifest()?;
@@ -4451,7 +4451,7 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-fn pin_fixture_make_state() -> State {
+fn pin_fixture_make_state(providers: &[ProviderId]) -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
     let alice = pin_fixture_alice();
@@ -4461,7 +4461,13 @@ fn pin_fixture_make_state() -> State {
         [Account::new(alice.clone()).build(&alice)],
         std::iter::empty::<AssetDefinition>(),
     );
-    State::new_for_testing(world, kura, live)
+    let mut state = State::new_for_testing(world, kura, live);
+    let mut governance = state.gov.clone();
+    governance
+        .sorafs_provider_owners
+        .extend(providers.iter().map(|provider| (*provider, alice.clone())));
+    state.set_gov(governance);
+    state
 }
 
 fn pin_fixture_block_header(height: u64) -> iroha_data_model::block::BlockHeader {
@@ -4521,23 +4527,15 @@ fn pin_fixture_bootstrap(
     tx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
     let alice = pin_fixture_alice();
     for name in [
-        "CanRegisterSorafsPin",
-        "CanApproveSorafsPin",
         "CanBindSorafsAlias",
         "CanIssueSorafsReplicationOrder",
         "CanCompleteSorafsReplicationOrder",
-        "CanRegisterSorafsProviderOwner",
     ] {
         tx.world
             .add_account_permission(&alice, Permission::new(name.to_owned(), IrohaJson::new(())));
     }
     pin_fixture_seed_public_pin_fee_assets(tx)?;
     for provider_id in providers {
-        RegisterProviderOwner {
-            provider_id: *provider_id,
-            owner: alice.clone(),
-        }
-        .execute(&alice, tx)?;
         SetProviderIngestCompletionAuthority::new(
             *provider_id,
             None,
@@ -4579,7 +4577,7 @@ fn pin_fixture_register_and_approve(
     manifest_payload: Vec<u8>,
     council_keys: &KeyPair,
 ) -> Result<(), Box<dyn Error>> {
-    RegisterPinManifest::new(manifest_payload, 5, None, None)
+    RegisterPinManifest::new(manifest_payload, None, None)
         .execute(&pin_fixture_alice(), tx)
         .map_err(|err| format!("failed to register manifest: {err}"))?;
 
@@ -4593,7 +4591,6 @@ fn pin_fixture_register_and_approve(
 
     ApprovePinManifest {
         digest,
-        approved_epoch: 7,
         council_envelope: Some(envelope),
         council_envelope_digest: None,
     }

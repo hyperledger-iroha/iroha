@@ -115,13 +115,18 @@ generic transaction builders.
      so the Android builders can hydrate real manifest data. A dedicated pytest
      (`scripts/tests/android_sorafs_fixture_example_test.py`) loads the fixture,
      chunker profile, and generated example to ensure the digests, policy knobs,
-     and submitted epoch all match the canonical multi-peer scenario.
+     and canonical manifest bytes match the multi-peer scenario. The instruction
+     intentionally omits a submission epoch because Core derives it from the
+     block consensus timestamp.
   3. ✅ Manifest lifecycle coverage now includes approval, retirement, and alias
      binding: the Android SDK exposes typed builders for
      `ApprovePinManifest`, `RetirePinManifest`, and `BindManifestAlias`
      (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ApprovePinManifestInstruction.java`,
      `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RetirePinManifestInstruction.java`,
      `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/BindManifestAliasInstruction.java`).
+     Registration, approval, and retirement builders do not accept lifecycle
+     epochs; argument-map decoders reject those retired keys and Core records
+     the corresponding consensus timestamp.
      Note: transaction encoding now requires wire-framed instruction payloads;
      the argument-map helpers are retained only for parity checks. Round-trip
      tests live under

@@ -83,19 +83,48 @@ only the `local-dev` credential identifier and the `onboarding_signer_file` and
 `onboarding_token_file` paths so local applications can use the bundle without copying its raw
 secrets or digest into generated metadata.
 
+To qualify the transactional wipe path against real binaries, use the bounded one-shot rehearsal
+with a fresh data root:
+
+```sh
+rehearsal_root="$(mktemp -d)"
+cargo run -p mochi-ui --features gui --bin mochi -- \
+  sandbox rehearse-wipe-and-regenerate \
+  --data-root "$rehearsal_root" \
+  --profile four-peer-bft \
+  --build-binaries \
+  --enable-smoke
+```
+
+The command starts four real peers, proves committed genesis, readiness, and the local MCP surface,
+calls `Supervisor::wipe_and_regenerate` while that exact peer set is running, and repeats every
+proof against the new generation. It fails unless the selected generation changes and all four
+aliases return. On success it stops the peers and prints one bounded Norito JSON evidence record;
+the disposable data root remains available for audit.
+
 Generated local validator configs pin the runtime-critical local defaults Mochi depends on:
 `nexus.enabled = false` unless explicitly enabled and `confidential.enabled = true`. Consensus mode
 is carried by the signed genesis/height context, so Mochi does not emit the retired mutable
 `sumeragi.consensus_mode` setting. If you enable Nexus, Mochi fails fast unless the selected profile
 generates an NPoS signed genesis.
 
-Each peer keeps its runtime data under `peers/<alias>/storage`, with independent `kura`, `snapshot`,
-and `torii` children. Kura receives the dedicated `storage/kura` root so it can establish and
-authenticate its configured-catalog baseline without unrelated runtime files in that directory.
-Mochi initializes `storage/snapshot/generations` whenever it creates the explicit snapshot root,
-matching the snapshot reader's authenticated directory contract.
+Mochi publishes configs and genesis as immutable generations under `generations/<generation-id>`.
+The closed `generation.json` inventory binds every artifact and its BLAKE3 digest; the
+`current-generation` record is replaced atomically while `.generation.lock` serializes writers.
+Failed candidates never replace the selected record, and previously published generations remain
+available for audit.
+
+Each peer keeps mutable runtime data under
+`peers/<alias>/storage-generations/<generation-id>`, with independent `kura`, `snapshot`, and
+`torii` children. A config-only generation keeps using the current storage generation, while wipe
+and re-genesis prepares a fresh empty storage generation before committing its config/genesis
+generation. This avoids a partially wiped peer set after the atomic selection point. Kura receives
+the dedicated `storage-generations/<generation-id>/kura` root, and Mochi initializes the matching
+`snapshot/generations` directory whenever it creates a fresh runtime generation.
 Snapshot metadata pins this as `storage_layout = "kura-subdirectory-v1"`; restore rejects older
-unmarked aggregate-layout snapshots because their Kura data cannot be relocated safely by inference.
+unmarked aggregate-layout snapshots and snapshots from another immutable generation. Config and
+genesis copies in a snapshot are audit evidence; restore verifies them and rewrites only mutable
+storage and logs.
 
 ## Repo-Shared Skill
 

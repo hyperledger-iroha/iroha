@@ -15,7 +15,7 @@
  * to submit them to a Torii node (requires the account to hold the relevant permissions).
  */
 import { Buffer } from "node:buffer";
-import { ToriiClient } from "../src/index.js";
+import { NetworkId, ToriiClient } from "../src/index.js";
 import {
   buildProposeDeployContractInstruction,
   buildCastPlainBallotInstruction,
@@ -29,7 +29,10 @@ import {
 const TORII_URL = process.env.TORII_URL ?? "http://localhost:8080";
 const SHOULD_SUBMIT = process.env.GOV_SUBMIT === "1";
 const SHOULD_FETCH = process.env.GOV_FETCH === "1";
-const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
+const NETWORK_ID = NetworkId.parse(
+  process.env.NETWORK_ID ??
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const AUTHORITY =
   process.env.AUTHORITY ??
   "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -158,7 +161,7 @@ async function main() {
     const tx = await quoteAndSignTransaction(
       client,
       {
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY,
         instructions: [entry.buildInstruction()],
         feePayment: REQUESTED_FEE_PAYMENT,

@@ -447,7 +447,7 @@ fn render_alias_setup_plan_text(plan: &AliasTransactionPlanV1, output: Option<&P
     let mut out = String::new();
     let _ = writeln!(out, "alias setup plan verified: {}", plan.plan_hash);
     let _ = writeln!(out, "authority: {}", plan.body.authority);
-    let _ = writeln!(out, "chain: {}", plan.body.chain_id);
+    let _ = writeln!(out, "network_id: {}", plan.body.network_id);
     let _ = writeln!(out, "resources: {}", plan.body.resources.len());
     let _ = writeln!(out, "instructions: {}", plan.body.instructions.len());
     let _ = writeln!(out, "valid_until_ms: {}", plan.body.valid_until_ms);
@@ -465,7 +465,7 @@ fn render_alias_lifecycle_plan_text(
     let mut out = String::new();
     let _ = writeln!(out, "{label} plan verified: {}", plan.plan_hash);
     let _ = writeln!(out, "authority: {}", plan.body.authority);
-    let _ = writeln!(out, "chain: {}", plan.body.chain_id);
+    let _ = writeln!(out, "network_id: {}", plan.body.network_id);
     let _ = writeln!(out, "resource: {}", plan.body.operation.target());
     let disposition = match plan.body.disposition {
         iroha::data_model::alias_setup::AliasLifecyclePlanDispositionV1::NoOp => "no_op",

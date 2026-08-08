@@ -2660,6 +2660,14 @@ mod tests {
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
     const TEST_GAS_LIMIT: u64 = 50_000_000;
 
+    fn test_network_id() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"pipeline-access-test-genesis"),
+        ))
+    }
+
     fn canonical_test_sccp_payload_bytes(payload: &iroha_sccp::SccpPayloadV1) -> Vec<u8> {
         iroha_sccp::canonical_sccp_payload_bytes(payload)
             .expect("valid SCCP access-set fixture payload encodes")
@@ -2977,7 +2985,7 @@ mod tests {
             ("改善", true),
         ] {
             let transaction = TransactionBuilder::new(
-                "chain".parse().unwrap(),
+                test_network_id(),
                 authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -3009,7 +3017,7 @@ mod tests {
         )
         .expect("derive contract address");
         let transaction = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3796,7 +3804,7 @@ seiyaku DynamicAccessCounter {
                 iroha_primitives::json::Json::new(entrypoint_name.to_owned()),
             );
             let transaction = TransactionBuilder::new(
-                "chain".parse().unwrap(),
+                test_network_id(),
                 alice.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(
                     Vec::new(),
@@ -3848,7 +3856,7 @@ seiyaku DynamicAccessCounter {
         ];
         let exec = Executable::from_iter(isis);
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3905,7 +3913,7 @@ seiyaku DynamicAccessCounter {
     fn log_instruction_has_no_access_keys() {
         let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4310,7 +4318,7 @@ seiyaku DynamicAccessCounter {
             Register::asset_definition(asset_def).into(),
         ];
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4462,7 +4470,7 @@ seiyaku DynamicAccessCounter {
         prog.extend_from_slice(&code);
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -4599,7 +4607,7 @@ seiyaku DynamicAccessCounter {
         prog.extend_from_slice(&code);
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4677,7 +4685,7 @@ seiyaku DynamicAccessCounter {
             gas_policy_commitment: IrohaHash::new(b"proved-gas-policy"),
         };
         let transaction = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5065,7 +5073,7 @@ seiyaku DynamicAccessCounter {
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
         md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5130,7 +5138,7 @@ seiyaku DynamicAccessCounter {
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
         md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5199,7 +5207,7 @@ seiyaku DynamicAccessCounter {
         let _ = st_block.commit();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5291,7 +5299,7 @@ seiyaku DynamicAccessCounter {
         let _ = st_block.commit();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5396,7 +5404,7 @@ seiyaku DynamicAccessCounter {
         let _ = st_block.commit();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5486,7 +5494,7 @@ seiyaku DynamicAccessCounter {
         let _ = st_block.commit();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5578,7 +5586,7 @@ seiyaku DynamicAccessCounter {
         let _ = st_block.commit();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5616,7 +5624,7 @@ seiyaku DynamicAccessCounter {
         ];
         let exec = Executable::from_iter(isis);
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5656,7 +5664,7 @@ seiyaku DynamicAccessCounter {
         let isi: InstructionBox = ExecuteTrigger::new(trig.clone()).into();
         let exec = Executable::from_iter([isi]);
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5737,7 +5745,7 @@ seiyaku DynamicAccessCounter {
         st_block.commit().unwrap();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5811,7 +5819,7 @@ seiyaku DynamicAccessCounter {
         st_block.commit().unwrap();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -5901,7 +5909,7 @@ seiyaku DynamicAccessCounter {
         st_block.commit().unwrap();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6025,7 +6033,7 @@ seiyaku DynamicAccessCounter {
         st_block.commit().unwrap();
 
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -6072,7 +6080,7 @@ seiyaku DynamicAccessCounter {
             .expect("trigger action fixture satisfies validation invariants"),
         );
         let tx = TransactionBuilder::new(
-            "chain".parse().unwrap(),
+            test_network_id(),
             alice,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

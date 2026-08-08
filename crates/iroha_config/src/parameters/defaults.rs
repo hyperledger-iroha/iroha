@@ -1085,6 +1085,16 @@ pub mod snapshot {
     /// JSON restoration uses additional transient memory; operators should size this below
     /// available restore headroom for their representative world state.
     pub const MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1_073_741_824_usize);
+    /// Maximum typed-decoder nesting depth for one snapshot payload.
+    pub const MAX_DECODE_DEPTH: NonZeroUsize = nonzero!(128_usize);
+    /// Maximum aggregate collection items decoded from one snapshot payload.
+    pub const MAX_DECODE_ITEMS: NonZeroUsize = nonzero!(10_000_000_usize);
+    /// Maximum UTF-8 bytes accepted for any individual snapshot string.
+    pub const MAX_STRING_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
+    /// Maximum bytes accepted for any individual snapshot blob.
+    pub const MAX_BLOB_BYTES: NonZeroUsize = nonzero!(67_108_864_usize);
+    /// Maximum transient allocation budget during typed snapshot restoration.
+    pub const MAX_TRANSIENT_BYTES: NonZeroUsize = nonzero!(2_147_483_648_usize);
 }
 
 /// Norito streaming control-plane defaults.
@@ -1430,6 +1440,74 @@ pub mod sorafs {
             pub const INGRESS_TIMEOUT_MS: u64 = 30_000;
             /// Time-to-live assigned to one completion transaction.
             pub const COMPLETION_TRANSACTION_TTL_MS: u64 = 5 * 60_000;
+
+            /// Default-off Musubi provider-attestation journal bounds.
+            ///
+            /// The clock-seal, approval-signer, and inventory binding triplets
+            /// intentionally have no defaults and must be supplied together for
+            /// an activation request.
+            pub mod provider_attestation_journal {
+                use iroha_config_base::util::Bytes;
+
+                /// Request capture-child activation; stock `irohad` currently rejects
+                /// this request until a concrete child is qualified.
+                pub const ENABLED: bool = false;
+                /// Maximum retained active and terminal entries, independently of
+                /// the checkpoint byte cap.
+                pub const MAX_ENTRIES: usize = 1_024;
+                /// Hard upper bound on retained entries.
+                pub const MAX_ENTRIES_LIMIT: usize = 4_096;
+                /// Maximum approval or inventory-handoff attempts per stage.
+                pub const MAX_ATTEMPTS: u32 = 8;
+                /// Hard upper bound on attempts per stage.
+                pub const MAX_ATTEMPTS_LIMIT: u32 = 64;
+                /// Lease duration for approval and inventory-handoff claims.
+                pub const LEASE_TTL_MS: u64 = 60_000;
+                /// Hard upper bound on one claim lease.
+                pub const LEASE_TTL_MAX_MS: u64 = 24 * 60 * 60 * 1_000;
+                /// Maximum external approval-signer operation duration.
+                pub const APPROVAL_TIMEOUT_MS: u64 = 30_000;
+                /// Maximum external coordinator-inventory operation duration.
+                pub const HANDOFF_TIMEOUT_MS: u64 = 30_000;
+                /// Hard upper bound on one external stage operation.
+                pub const EXTERNAL_TIMEOUT_MAX_MS: u64 = 5 * 60 * 1_000;
+                /// Delay before retrying a transient stage failure.
+                pub const RETRY_DELAY_MS: u64 = 1_000;
+                /// Hard upper bound on a retry delay.
+                pub const RETRY_DELAY_MAX_MS: u64 = 24 * 60 * 60 * 1_000;
+                /// Canonical checkpoint framing reserved independently of entries.
+                pub const CHECKPOINT_HEADER_FOOTPRINT_BYTES_V1: usize = 64 * 1024;
+                /// Canonical state and framing reserved around one active entry.
+                pub const ACTIVE_ENTRY_WRAPPER_MARGIN_BYTES_V1: usize = 64 * 1024;
+                /// Conservative canonical reserve for one stored approval intent.
+                ///
+                /// This covers the two Musubi account identities bounded at 8 KiB each,
+                /// the 255-byte chain identifier, immutable digests, cursors, signer
+                /// policy, attestation key, sequence, and Norito framing.
+                pub const STORED_APPROVAL_INTENT_CANONICAL_RESERVE_BYTES_V1: usize = 64 * 1024;
+                /// Schema-derived reserve for one active intent through its worst-case
+                /// provider-attestation state transition.
+                pub const SINGLE_ACTIVE_ENTRY_RESERVE_BYTES_V1: usize =
+                    CHECKPOINT_HEADER_FOOTPRINT_BYTES_V1
+                    + STORED_APPROVAL_INTENT_CANONICAL_RESERVE_BYTES_V1
+                    + iroha_data_model::musubi::MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1
+                    + ACTIVE_ENTRY_WRAPPER_MARGIN_BYTES_V1;
+                /// Smallest useful checkpoint policy.
+                ///
+                /// Four times the public complete-attestation ceiling is deliberately
+                /// conservative: it exceeds [`SINGLE_ACTIVE_ENTRY_RESERVE_BYTES_V1`]
+                /// while leaving headroom for canonical framing evolution within V1.
+                pub const CHECKPOINT_MIN_BYTES: usize = 4
+                    * iroha_data_model::musubi::MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1;
+                /// Maximum canonical checkpoint size, independently of the entry cap.
+                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+                /// Physical and decoder ceiling for one canonical checkpoint.
+                pub const CHECKPOINT_MAX_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+                /// Maximum CAS conflicts retried by one journal operation.
+                pub const MAX_CAS_RETRIES: u32 = 16;
+                /// Hard upper bound on CAS conflicts retried by one operation.
+                pub const MAX_CAS_RETRIES_LIMIT: u32 = 64;
+            }
 
             /// Daemon-owned immutable finalized-assignment archive defaults.
             pub mod finalized_archive {
@@ -2238,6 +2316,8 @@ pub mod torii {
     pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(64 * 1024 * 1024); // 64 MiB
     /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
     pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024); // 128 MiB
+    /// Per-account memory budget for retained `/v1/zk/ivm/prove` job state.
+    pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER: Bytes<u64> = Bytes(32 * 1024 * 1024); // 32 MiB
     /// Maximum page size accepted by proof listing endpoints.
     pub const PROOF_MAX_LIST_LIMIT: u32 = 200;
     /// Wall-clock timeout applied to proof list/count handlers (milliseconds).
@@ -2619,6 +2699,8 @@ pub mod torii {
     pub const ZK_IVM_PROVE_JOB_TTL_SECS: u64 = 30 * 60; // 30 minutes
     /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
     pub const ZK_IVM_PROVE_JOB_MAX_ENTRIES: usize = 1_024;
+    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one account.
+    pub const ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER: usize = 32;
     /// Allowlisted backend prefixes for the background prover worker.
     #[must_use]
     pub fn zk_prover_allowed_backends() -> Vec<String> {
@@ -3923,16 +4005,16 @@ pub mod sumeragi {
     pub const QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY: NonZeroUsize = nonzero!(2_usize);
     /// Certified-body and block-sync outer-ingress message capacity.
     ///
-    /// Every admitted validator owns four protected positions (general source,
-    /// non-timeout progress, timeout vote, and transport completion), while
-    /// each configured authenticated non-validator source owns two positions, and
+    /// Every admitted validator owns five protected positions (general source,
+    /// ordinary progress, certified fence escape, timeout vote, and transport completion), while
+    /// each configured authenticated non-validator source owns three positions, and
     /// anonymous traffic owns two further positions.
     /// Deriving the default from the protocol roster ceiling keeps the queue
     /// count allocation representable for every legal height context; byte
     /// quotas remain explicitly roster-scaled by deployment generators.
     pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(
-        4 * MAX_VALIDATORS_PER_HEIGHT
-            + 2 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+        5 * MAX_VALIDATORS_PER_HEIGHT
+            + 3 * QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
             + 2
     );
     /// Aggregate canonical outer-ingress wire bytes retained across all sources.
@@ -3941,8 +4023,8 @@ pub mod sumeragi {
     /// independently authenticated non-validator lanes, and the anonymous lane.
     pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(231_usize * 1024 * 1024);
     /// Per-ingress-source canonical outer-ingress wire-byte partition. The
-    /// default contains disjoint maximum ordinary-envelope, payload-completion,
-    /// and timeout-vote partitions. The ordinary and completion partitions also
+    /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,
+    /// payload-completion, and timeout-vote partitions. The ordinary and completion partitions also
     /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
     /// protocol floors when deployments choose a smaller global block body.
     pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(33_usize * 1024 * 1024);
@@ -3960,6 +4042,11 @@ pub mod sumeragi {
         8 + RECOMMENDED_DA_MAX_CHUNK_COUNT * 33;
     /// Per-validator source bytes isolated from ordinary traffic for a timeout vote.
     pub const TIMEOUT_VOTE_RESERVE_BYTES: usize = 64 * 1024;
+    /// Per-validator source bytes isolated for a TC, CommitQC, or CommitQC response.
+    ///
+    /// The maximum 31-validator certificate forms fit this bound. Height
+    /// activation derives and checks their exact canonical wire requirement.
+    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 64 * 1024;
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
     /// Reconstructed bodies waiting for reducer delivery.
@@ -4430,6 +4517,18 @@ pub mod governance {
         pub const APPROVAL_QUORUM: u16 = 1;
         /// Hard ceiling for governed SoraFS pin-approval signers.
         pub const MAX_APPROVAL_SIGNERS: usize = 64;
+        /// Maximum number of live pin manifests in consensus state.
+        pub const MAX_GLOBAL_MANIFESTS: u64 = 1_000_000;
+        /// Maximum aggregate content bytes represented by live pin manifests.
+        pub const MAX_GLOBAL_BYTES: u64 = 1 << 50;
+        /// Maximum number of live pin manifests owned by one account.
+        pub const MAX_MANIFESTS_PER_AUTHORITY: u64 = 10_000;
+        /// Maximum aggregate content bytes represented by one account's live pins.
+        pub const MAX_BYTES_PER_AUTHORITY: u64 = 1 << 40;
+        /// Maximum predecessor depth admitted for a manifest lineage.
+        pub const MAX_LINEAGE_DEPTH: u32 = 64;
+        /// Maximum number of direct successors admitted for one manifest.
+        pub const MAX_SUCCESSOR_FANOUT: u32 = 32;
     }
 
     /// Default SoraFS public pin fee configuration.

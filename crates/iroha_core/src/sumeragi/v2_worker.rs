@@ -910,9 +910,10 @@ impl CertifiedServeBarrier {
 /// One finite runner episode in which already-selected local producers may
 /// acquire I/O ownership.
 ///
-/// The episode does not hold the queue mutex. Its bit is changed under that
-/// mutex, so exact network admission either reserves first or returns `Busy`
-/// without becoming visible to fair ingress.
+/// The episode does not hold the queue mutex. Its due/active handoff is changed
+/// under that mutex, so exact network admission either reserves before the
+/// final frozen Serve batch retires or returns `Busy` without becoming visible
+/// to fair ingress until this one producer episode finishes.
 #[must_use]
 pub(crate) struct CertifiedServeProducerEpisode {
     queue: Arc<V2IoCommandQueue>,
@@ -1624,6 +1625,12 @@ struct V2IoCommandQueueState {
     /// Monotone durable Decision subject for this frozen height, rehydrated
     /// from the consensus WAL at startup.
     durable_decided_subject: Option<wire::BlockSubject>,
+    /// One-shot handoff owed after the final frozen Serve occurrence retires.
+    ///
+    /// This closes the mutex gap between retirement and the runner acquiring
+    /// `producer_episode_active`: fresh network Serve traffic cannot repeatedly
+    /// replenish the selected barrier and starve an already-due proposal turn.
+    producer_episode_due: bool,
     /// Finite serialized-runner episode which preceded any later exact ticket.
     producer_episode_active: bool,
     sender_open: bool,
@@ -2308,6 +2315,7 @@ fn build_v2_io_command_channel(
             next_serve_admission_ordinal,
             decision_reconciliation_pending: false,
             durable_decided_subject,
+            producer_episode_due: false,
             producer_episode_active: false,
             sender_open: true,
             receiver_open: true,
@@ -3534,7 +3542,21 @@ impl V2IoCommandQueue {
             reservation.id, reservation_id,
             "Serve ingress occurrence cannot retire another durable waiter"
         );
-        Self::promote_next_serve_ingress_waiter(state)
+        let promoted = Self::promote_next_serve_ingress_waiter(state);
+        if !promoted
+            && state.serve_ingress_reservation.is_none()
+            && state.serve_ingress_waiters.is_empty()
+            && state.serve_barrier.is_none()
+            && state.sender_open
+            && state.receiver_open
+        {
+            // Arm the post-Serve producer turn before releasing the queue
+            // mutex. Without this one-shot debt, a fresh network request can
+            // reserve the next Serve ticket in the retirement/runner gap and
+            // an unbounded stream can prevent proposal production forever.
+            state.producer_episode_due = true;
+        }
+        promoted
     }
 
     fn serve_union_accepts(
@@ -3689,11 +3711,12 @@ impl V2IoCommandQueue {
             // sole physical owner was lost.
             return Err(CertifiedServeIngressReserveError::Closed);
         }
-        if state.producer_episode_active {
-            // The runner claimed this finite episode while holding the same
-            // mutex and may still acquire I/O ownership. Do not mint or attach
-            // an exact ticket until it retires, or that later producer could
-            // cross a ticket whose ordinal was already visible.
+        if state.producer_episode_due || state.producer_episode_active {
+            // The final frozen Serve batch atomically owes one producer turn,
+            // or the runner already claimed that finite episode under this
+            // mutex. Do not mint or attach an exact ticket until it retires,
+            // or an unbounded request stream could repeatedly win the handoff
+            // and starve an already-due proposal producer.
             return Err(CertifiedServeIngressReserveError::Busy);
         }
 
@@ -4040,6 +4063,7 @@ impl V2IoCommandQueue {
         if state.producer_episode_active {
             return Err("Sumeragi v2 runner nested an I/O producer episode".to_owned());
         }
+        state.producer_episode_due = false;
         state.producer_episode_active = true;
         Ok(Some(CertifiedServeProducerEpisode {
             queue: Arc::clone(self),
@@ -6293,6 +6317,7 @@ impl V2IoCommandQueue {
             return;
         }
         state.receiver_open = false;
+        state.producer_episode_due = false;
         state.producer_episode_active = false;
         self.rollback_serve_barrier(&mut state)
             .expect("receiver teardown preserves its uncommitted Serve transaction");
@@ -7783,6 +7808,7 @@ enum CompletionDrainPolicy {
     Fair,
     IoOnly,
     ExactServePredecessor { serve_lifecycle_ordinal: u128 },
+    TimeoutRecoveryPrefix { inclusive_lifecycle_cut: u128 },
 }
 
 enum PendingServiceCompletion {
@@ -10411,7 +10437,7 @@ pub(crate) struct DurableExactOutputHandoffReceipt {
     predecessor_context_hash: HashOf<wire::HeightContext>,
     predecessor_context_id: wire::HeightContextId,
     predecessor_height: u64,
-    predecessor_chain_id: iroha_data_model::ChainId,
+    predecessor_network_id: iroha_data_model::NetworkId,
     finality_artifact_hash: HashOf<wire::finality::V2FinalityArtifact>,
     finality_commit_qc: wire::QuorumCertificate,
 }
@@ -10430,7 +10456,7 @@ impl DurableExactOutputHandoffReceipt {
         self.predecessor_context_hash == HashOf::new(context)
             && self.predecessor_context_id == context.id()
             && self.predecessor_height == context.height
-            && self.predecessor_chain_id == context.chain_id
+            && self.predecessor_network_id == context.network_id
     }
 
     /// Match the exact durable finality artifact that authorized the seal.
@@ -10442,14 +10468,14 @@ impl DurableExactOutputHandoffReceipt {
             && self.predecessor_context_hash == HashOf::new(&artifact.height_context)
             && self.predecessor_context_id == artifact.context_id()
             && self.predecessor_height == artifact.height
-            && self.predecessor_chain_id == artifact.height_context.chain_id
+            && self.predecessor_network_id == artifact.height_context.network_id
             && self.finality_commit_qc == artifact.commit_qc
     }
 
     /// Verify the exact parent QC and height relation for one immediate successor.
     pub(crate) fn authorizes_immediate_successor(&self, successor: &wire::HeightContext) -> bool {
         self.predecessor_height.checked_add(1) == Some(successor.height)
-            && self.predecessor_chain_id == successor.chain_id
+            && self.predecessor_network_id == successor.network_id
             && successor.parent_commit_qc.as_ref() == Some(&self.finality_commit_qc)
             && self.finality_commit_qc.round.context_id == self.predecessor_context_id
             && self.finality_commit_qc.round.height == self.predecessor_height
@@ -12960,7 +12986,7 @@ impl PendingExactOutput {
 fn durable_history_source_covers(
     messages: &[NetworkMessage],
     rollover_claim: &ExactOutputRolloverClaim,
-    source_chain_id: &iroha_data_model::ChainId,
+    source_network_id: &iroha_data_model::NetworkId,
     maximum_source_height: wire::Height,
     kura: &Kura,
 ) -> Result<(), String> {
@@ -12998,7 +13024,7 @@ fn durable_history_source_covers(
                 .ok_or_else(|| {
                     "durable CommitQC response lost its Kura finality source".to_owned()
                 })?;
-            if &source.height_context.chain_id != source_chain_id
+            if &source.height_context.network_id != source_network_id
                 || source.context_id() != *source_context_id
                 || response.certificate != source.commit_qc
                 || &response.responder != claimed_responder
@@ -13038,7 +13064,7 @@ fn durable_history_source_covers(
                 .v2_finality_artifact(source_round.height)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "durable body response lost its Kura finality source".to_owned())?;
-            if &source.height_context.chain_id != source_chain_id
+            if &source.height_context.network_id != source_network_id
                 || source.context_id() != source_round.context_id
                 || source.subject != *source_subject
             {
@@ -13163,7 +13189,7 @@ fn durable_history_source_covers(
                         .ok_or_else(|| {
                             "historical canonical-body response lost its finality source".to_owned()
                         })?;
-                    if &source.height_context.chain_id != source_chain_id
+                    if &source.height_context.network_id != source_network_id
                         || source != *finality_artifact
                         || source.validate_for_header(&block.header()).is_err()
                         || source.verify().is_err()
@@ -13300,7 +13326,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         .validate()
         .map_err(|error| error.to_string())?;
     if source_artifact.height != proposal_height
-        || source_artifact.height_context.chain_id != artifact.height_context.chain_id
+        || source_artifact.height_context.network_id != artifact.height_context.network_id
     {
         return Err(
             "autonomous-lane output differs from its exact historical height context".to_owned(),
@@ -13321,8 +13347,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
     {
         return Err("autonomous-lane output differs from its canonical Kura carrier".to_owned());
     }
-    let chain_id = source_artifact.height_context.chain_id.clone().into_inner();
-    let chain_id_hash = Hash::new(chain_id.as_bytes());
+    let network_id_hash = Hash::prehashed(*source_artifact.height_context.network_id.as_bytes());
     let epoch = source_artifact.height_context.epoch;
     let autonomous_envelopes = source_block
         .execution_context()
@@ -13333,7 +13358,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         .map(|envelope| {
             crate::lane_consensus::decode_autonomous_lane_payload_envelope(
                 envelope,
-                chain_id_hash,
+                network_id_hash,
                 epoch,
             )
             .and_then(|payload| {
@@ -13343,7 +13368,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                         proposal_view: source_block.header().view_change_index(),
                         proposal_block_hash: source_artifact.block_hash,
                     },
-                    chain_id_hash,
+                    network_id_hash,
                     epoch,
                 )
             })
@@ -13413,7 +13438,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         match envelope.as_message() {
             BlockMessage::LaneExecutablePayload(payload) => {
                 payload
-                    .validate(chain_id_hash, epoch)
+                    .validate(network_id_hash, epoch)
                     .map_err(|error| error.to_string())?;
                 let descriptor = &payload.origin_proposal.descriptor;
                 if payload.producer != *local_peer
@@ -13429,7 +13454,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .read_autonomous_lane_block_artifact(
                         descriptor.lane_id,
                         descriptor.lane_block_height,
-                        chain_id_hash,
+                        network_id_hash,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13449,7 +13474,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .current_autonomous_lane_payload(
                         body.lane_id,
                         body.lane_block_height,
-                        chain_id_hash,
+                        network_id_hash,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13459,7 +13484,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     || !autonomous_new_view_body_matches_durable_payload(
                         body,
                         &payload,
-                        chain_id_hash,
+                        network_id_hash,
                         epoch,
                     )
                     || body.proposal_height != proposal_height
@@ -13482,7 +13507,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                         &current,
                         &payload,
                         body.target_view,
-                        chain_id_hash,
+                        network_id_hash,
                         epoch,
                     )
                     .map_err(|error| error.to_string())?;
@@ -13500,7 +13525,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     .read_autonomous_lane_block_artifact(
                         body.lane_id,
                         body.lane_block_height,
-                        chain_id_hash,
+                        network_id_hash,
                         epoch,
                     )
                     .ok_or_else(|| {
@@ -13510,7 +13535,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                 if !autonomous_new_view_body_matches_durable_payload(
                     body,
                     payload,
-                    chain_id_hash,
+                    network_id_hash,
                     epoch,
                 ) || body.proposal_height != proposal_height
                     || payload != canonical_payload
@@ -13653,7 +13678,7 @@ fn applied_height_reconstruction_covers(
         return durable_history_source_covers(
             messages,
             rollover_claim,
-            &artifact.height_context.chain_id,
+            &artifact.height_context.network_id,
             artifact.height,
             durable_history.ok_or_else(|| {
                 "Sumeragi v2 durable response lacks an independently readable history source"
@@ -13874,6 +13899,7 @@ pub(crate) struct ProductionV2Services {
     fatal_reason: Option<String>,
     output_guard: Arc<ConsensusOutputGuard>,
     leader_wire_ingress: Arc<FairV2Ingress>,
+    leader_wire_recovery_authority: super::serviced_candidate_store::LeaderWireRecoveryAuthority,
     clean_teardown: bool,
 }
 
@@ -13953,6 +13979,8 @@ impl ProductionV2Services {
         lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
         output_guard: Arc<ConsensusOutputGuard>,
         leader_wire_ingress: Arc<FairV2Ingress>,
+        leader_wire_recovery_authority:
+            super::serviced_candidate_store::LeaderWireRecoveryAuthority,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
         let construction_guard = Arc::clone(&output_guard);
@@ -14016,13 +14044,14 @@ impl ProductionV2Services {
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
+        let business_chain_id = state.chain_id.clone();
         let apply_service = V2ApplyService::new(
             state,
             queue,
             Arc::clone(&kura),
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
-            context.chain_id.clone(),
+            business_chain_id,
             block_cadence,
             genesis_account,
             events_sender,
@@ -14088,6 +14117,7 @@ impl ProductionV2Services {
             fatal_reason: None,
             output_guard,
             leader_wire_ingress,
+            leader_wire_recovery_authority,
             // The enclosing construction operation owns abnormal-exit
             // activation until its permit is released. This avoids a nested
             // activation deadlock if `service` unwinds before construction is
@@ -15504,6 +15534,38 @@ impl ProductionV2Services {
         runtime_capacity_available: bool,
         serve_lifecycle_ordinal: u128,
     ) -> IoCompletionTake {
+        self.take_lifecycle_prefix_completion(
+            runtime_capacity_available,
+            serve_lifecycle_ordinal,
+            false,
+        )
+    }
+
+    fn take_timeout_recovery_prefix_completion(
+        &mut self,
+        runtime_capacity_available: bool,
+        inclusive_lifecycle_cut: u128,
+    ) -> IoCompletionTake {
+        self.take_lifecycle_prefix_completion(
+            runtime_capacity_available,
+            inclusive_lifecycle_cut,
+            true,
+        )
+    }
+
+    fn take_lifecycle_prefix_completion(
+        &mut self,
+        runtime_capacity_available: bool,
+        lifecycle_cut: u128,
+        inclusive: bool,
+    ) -> IoCompletionTake {
+        let within_cut = |ordinal: u128| {
+            if inclusive {
+                ordinal <= lifecycle_cut
+            } else {
+                ordinal < lifecycle_cut
+            }
+        };
         let ownership_position =
             usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
         let io_ownership = self
@@ -15512,16 +15574,14 @@ impl ProductionV2Services {
             .and_then(|io| io.completion_ownership_at(ownership_position))
             .filter(|owned| {
                 owned.runtime_lifecycle_ordinal.is_some_and(|ordinal| {
-                    ordinal < serve_lifecycle_ordinal
+                    within_cut(ordinal)
                         && (runtime_capacity_available || !owned.requires_runtime_capacity)
                 })
             });
         let local = if runtime_capacity_available {
             self.local_completions
                 .iter()
-                .filter(|completion| {
-                    completion.runtime_lifecycle_ordinal() < serve_lifecycle_ordinal
-                })
+                .filter(|completion| within_cut(completion.runtime_lifecycle_ordinal()))
                 .min_by_key(|completion| completion.runtime_lifecycle_ordinal())
                 .cloned()
         } else {
@@ -15621,6 +15681,26 @@ impl ProductionV2Services {
         )
     }
 
+    /// Admit at most one completed causal owner from the inclusive timeout
+    /// recovery prefix.
+    ///
+    /// Unlike an exact Serve predecessor, the timeout signer's completion is
+    /// owned by the cut itself and must therefore use `<=`. Fresh producers
+    /// receive larger ordinals and remain behind the retained response.
+    pub(crate) fn drain_timeout_recovery_prefix_completion<R: EffectRuntime>(
+        &mut self,
+        executor: &mut V2EffectExecutor<R>,
+        inclusive_lifecycle_cut: u128,
+    ) -> Result<usize, EffectExecutorError> {
+        self.drain_completions_inner(
+            executor,
+            1,
+            CompletionDrainPolicy::TimeoutRecoveryPrefix {
+                inclusive_lifecycle_cut,
+            },
+        )
+    }
+
     /// Service at most one I/O result from the producer prefix frozen before an
     /// off-queue exact Serve target.
     ///
@@ -15668,6 +15748,12 @@ impl ProductionV2Services {
                 } => self.take_exact_serve_predecessor_completion(
                     runtime_capacity_available,
                     serve_lifecycle_ordinal,
+                ),
+                CompletionDrainPolicy::TimeoutRecoveryPrefix {
+                    inclusive_lifecycle_cut,
+                } => self.take_timeout_recovery_prefix_completion(
+                    runtime_capacity_available,
+                    inclusive_lifecycle_cut,
                 ),
             };
             let completion = match take.completion {
@@ -16582,7 +16668,7 @@ impl ProductionV2Services {
             predecessor_context_hash: HashOf::new(&self.context),
             predecessor_context_id: self.context.id(),
             predecessor_height: self.context.height,
-            predecessor_chain_id: self.context.chain_id.clone(),
+            predecessor_network_id: self.context.network_id,
             finality_artifact_hash: HashOf::new(artifact),
             finality_commit_qc: artifact.commit_qc.clone(),
         };
@@ -17199,7 +17285,7 @@ impl ProductionV2Services {
         durable_history_source_covers(
             &messages,
             &rollover_claim,
-            &self.context.chain_id,
+            &self.context.network_id,
             self.context.height,
             self.kura.as_ref(),
         )?;
@@ -17338,7 +17424,7 @@ impl ProductionV2Services {
         durable_history_source_covers(
             &messages,
             &rollover_claim,
-            &self.context.chain_id,
+            &self.context.network_id,
             self.context.height,
             self.kura.as_ref(),
         )?;
@@ -17787,6 +17873,12 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
     ) -> Result<(), Self::Error> {
+        if decided_subject.is_some() {
+            let next = self.leader_wire_recovery_authority.with_durable_decision();
+            self.leader_wire_ingress
+                .advance_leader_wire_recovery_cut(next)?;
+            self.leader_wire_recovery_authority = next;
+        }
         self.io()?
             .finish_decision_serve_reconciliation(decided_subject)
     }
@@ -18363,6 +18455,12 @@ impl V2EffectServices for ProductionV2Services {
                 "Sumeragi v2 service rejected non-monotonic certified view ownership".to_owned(),
             );
         }
+        let next_recovery_authority = self
+            .leader_wire_recovery_authority
+            .advance_view(tag.view())?;
+        self.leader_wire_ingress
+            .advance_leader_wire_recovery_cut(next_recovery_authority)?;
+        self.leader_wire_recovery_authority = next_recovery_authority;
         // The old view's active Sign command may still complete after its
         // executor owner is cancelled. Prune first and publish the new owner
         // second; completion handling classifies the old work ID before it is
@@ -18384,9 +18482,9 @@ impl V2EffectServices for ProductionV2Services {
         evidence: wire::SumeragiV2Equivocation,
     ) -> Result<(), Self::Error> {
         let _permit = self.output_permit()?;
-        if self.state.chain_id_ref() != &self.context.chain_id {
+        if self.state.network_id_ref() != &self.context.network_id {
             return Err(
-                "Sumeragi v2 equivocation context is not anchored to the active chain".to_owned(),
+                "Sumeragi v2 equivocation context is not anchored to the active network".to_owned(),
             );
         }
         let inserted = super::evidence::persist_sumeragi_v2_equivocation(
@@ -18529,7 +18627,7 @@ pub(super) mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        ChainId, DataSpaceId, LaneId,
+        DataSpaceId, LaneId,
         block::{
             BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
             consensus::{CertPhase, LaneBlockQcV1, LaneBlockVoteBodyV1},
@@ -18544,10 +18642,10 @@ pub(super) mod tests {
 
     use super::*;
     use crate::sumeragi::{
-        FairV2Ingress, FairV2IngressClass, FairV2IngressPushDisposition, FairV2IngressPushError,
-        FairV2IngressSource, FairV2IngressWireKey, InboundBlockMessage,
-        fair_v2_ingress_admit_with_roster_for_test, fair_v2_ingress_is_certified_body_request,
-        fair_v2_ingress_required_capacity,
+        FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressClass,
+        FairV2IngressPushDisposition, FairV2IngressPushError, FairV2IngressSource,
+        FairV2IngressWireKey, InboundBlockMessage, fair_v2_ingress_admit_with_roster_for_test,
+        fair_v2_ingress_is_certified_body_request, fair_v2_ingress_required_capacity,
         v2::AdapterEffect,
         v2_block_sync::tests::durable_history_fixture,
         v2_body_store::DurableBodyReceipt,
@@ -18612,6 +18710,17 @@ pub(super) mod tests {
             Arc::clone(&admission),
         );
         (sender, receiver, admission)
+    }
+
+    /// Build an empty Serve gate together with its exact actor-global ordinal source.
+    pub(in crate::sumeragi) fn certified_serve_ingress_gate_fixture()
+    -> (CertifiedServeIngressGate, RuntimeLifecycleOrdinalSource) {
+        let (sender, _receiver, _admission) = test_io_command_channel(4);
+        let lifecycle_ordinals = sender.queue.lifecycle_ordinals.clone();
+        let gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&sender.queue),
+        };
+        (gate, lifecycle_ordinals)
     }
 
     fn assert_durable_body_receipt_matches(
@@ -19315,8 +19424,11 @@ pub(super) mod tests {
             &mut self,
             max_pending_work: usize,
         ) -> Result<(), String> {
+            let retained_capacity = MAX_EFFECTS_PER_STEP.checked_mul(2).ok_or_else(|| {
+                "saturated test runtime external-owner capacity overflowed".to_owned()
+            })?;
             let capacity = max_pending_work
-                .checked_add(MAX_EFFECTS_PER_STEP)
+                .checked_add(retained_capacity)
                 .ok_or_else(|| {
                     "saturated test runtime external-owner capacity overflowed".to_owned()
                 })?;
@@ -19406,6 +19518,25 @@ pub(super) mod tests {
             _previous: EventTag,
             _rebound: EventTag,
             _manifest: &wire::PayloadManifest,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        fn rebind_unpublished_body_available(
+            &mut self,
+            _previous: EventTag,
+            _rebound: EventTag,
+            _round: wire::ConsensusRound,
+            _subject: wire::BlockSubject,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        fn retire_unpublished_body_available(
+            &mut self,
+            _tag: EventTag,
+            _round: wire::ConsensusRound,
+            _subject: wire::BlockSubject,
         ) -> Result<bool, String> {
             Ok(false)
         }
@@ -19522,6 +19653,10 @@ pub(super) mod tests {
             self.capacity.saturating_sub(self.queued)
         }
 
+        fn has_certified_fence_escape_credit(&self) -> bool {
+            false
+        }
+
         fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
             let empty = RuntimeQueueLaneSnapshot {
                 depth: 0,
@@ -19615,7 +19750,7 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: ChainId::from("v2-worker-test"),
+            network_id: crate::sumeragi::synthetic_network_id("v2-worker-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -19640,6 +19775,14 @@ pub(super) mod tests {
         };
         context.validate().expect("valid context");
         let active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
+        let leader_wire_recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                context.id(),
+                context.height,
+                [0xF4; 32],
+                active_tag.view(),
+                false,
+            );
         let local_peer = context.roster[0].validator.clone();
         let frozen_semantic_targets = context
             .roster
@@ -19654,11 +19797,12 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(State::new_with_chain_for_testing(
+        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
-            context.chain_id.clone(),
+            iroha_data_model::ChainId::from("sumeragi-v2-worker-display-name"),
+            context.network_id,
         ));
         let service = ProductionV2Services {
             context,
@@ -19702,6 +19846,7 @@ pub(super) mod tests {
             fatal_reason: None,
             output_guard: ConsensusOutputGuard::isolated(),
             leader_wire_ingress: Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0)),
+            leader_wire_recovery_authority,
             clean_teardown: true,
         };
         (service, keys)
@@ -19811,7 +19956,8 @@ pub(super) mod tests {
         );
 
         let (mut foreign_context_service, foreign_keys) = fixture();
-        foreign_context_service.context.chain_id = ChainId::from("foreign-evidence-chain");
+        foreign_context_service.context.network_id =
+            crate::sumeragi::synthetic_network_id("foreign-evidence-chain");
         let foreign_evidence = exact_vote_equivocation(&foreign_context_service, &foreign_keys);
         assert!(
             foreign_context_service
@@ -19829,6 +19975,508 @@ pub(super) mod tests {
                 .count(),
             0
         );
+    }
+
+    /// Production-shaped selected-Serve timeout recovery shared with the runner regression.
+    #[cfg(feature = "bls")]
+    pub(in crate::sumeragi) struct SelectedServeTimeoutRecoveryFixture {
+        _runtime_directory: TempDir,
+        _leader_wire_directory: TempDir,
+        ingress: Arc<FairV2Ingress>,
+        serve_gate: CertifiedServeIngressGate,
+        missing_proposal_request_hash: HashOf<wire::CertifiedBodyRequest>,
+        executor: V2EffectExecutor<SerializedV2Runtime>,
+        services: ProductionV2Services,
+        command_rx: V2IoCommandReceiver,
+        completion_tx: mpsc::SyncSender<V2IoCompletion>,
+        completion_admission: Arc<V2IoAdmission>,
+        local_key: KeyPair,
+        consensus_observations: Arc<Mutex<Vec<ConsensusRouteObservation>>>,
+        remote_timeout_votes_admitted: usize,
+        timeout_prefix_completions: usize,
+        local_timeout_signature_completed: bool,
+    }
+
+    #[cfg(feature = "bls")]
+    impl SelectedServeTimeoutRecoveryFixture {
+        /// Build one missing-body Serve barrier followed by two authenticated timeout votes.
+        #[allow(clippy::too_many_lines)]
+        pub(in crate::sumeragi) fn new() -> Self {
+            let (mut services, keys) = fixture();
+            let context = services.context.clone();
+            assert_eq!(
+                context.roster.len(),
+                4,
+                "selected-Serve timeout recovery requires four representative validators"
+            );
+            let view_zero_leader = context.leader(0);
+            let local_validator = (0..context.roster.len())
+                .map(|index| u32::try_from(index).expect("fixture roster index fits u32"))
+                .find(|index| *index != view_zero_leader)
+                .expect("four-validator fixture has a non-leader timeout signer");
+            let local_index =
+                usize::try_from(local_validator).expect("fixture local validator fits usize");
+            let local_key = keys[local_index].clone();
+            services.local_validator = Some(local_validator);
+            services.local_peer = context.roster[local_index].validator.clone();
+            services.key_pair = local_key.clone();
+
+            let (command_tx, command_rx, admission) = test_io_command_channel(8);
+            let lifecycle_ordinals = command_tx.queue.lifecycle_ordinals.clone();
+            let completion_admission = Arc::clone(&admission);
+            let (completion_tx, completion_rx) = mpsc::sync_channel(8);
+            services.io = Some(V2IoHandle {
+                command_tx,
+                completion_rx,
+                join: None,
+                allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+                admission,
+            });
+            let serve_gate = services
+                .io
+                .as_ref()
+                .expect("install the manual production I/O boundary")
+                .certified_serve_ingress_gate();
+
+            let ingress = Arc::new(
+                FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                    128,
+                    512 * 1024 * 1024,
+                    64 * 1024 * 1024,
+                    super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                    8 * 1024 * 1024,
+                    8 * 1024 * 1024,
+                    usize::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    None,
+                ),
+            );
+            let roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<BTreeSet<_>>();
+            ingress
+                .configure_roster_for_context(
+                    roster.iter().cloned(),
+                    &context.network_id,
+                    context.da_layout,
+                )
+                .expect("configure selected-Serve timeout ingress");
+            ingress.require_certified_serve_gate();
+            ingress.require_leader_wire_lifecycle_gate();
+            ingress
+                .bind_certified_serve_gate(serve_gate.clone())
+                .expect("bind the production Serve gate");
+
+            let leader_wire_directory =
+                TempDir::new().expect("temporary selected-Serve leader-wire directory");
+            let capacity = super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                context.da_layout.max_chunk_count,
+            )
+            .expect("derive selected-Serve leader-wire capacity");
+            let recovery_authority = services.leader_wire_recovery_authority;
+            let (leader_wire_gate, restore) =
+                super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                    &leader_wire_directory
+                        .path()
+                        .join("selected-serve-timeout-recovery.wal"),
+                    context.id(),
+                    context.height,
+                    [0xF4; 32],
+                    roster,
+                    capacity,
+                    context.da_layout.max_chunk_count,
+                    recovery_authority,
+                    &[],
+                    &[],
+                )
+                .expect("open selected-Serve leader-wire gate");
+            ingress
+                .bind_leader_wire_lifecycle_gate(
+                    leader_wire_gate,
+                    restore,
+                    lifecycle_ordinals.clone(),
+                    context.id(),
+                    context.height,
+                )
+                .expect("bind the shared leader-wire lifecycle source");
+            ingress.open().expect("open selected-Serve timeout ingress");
+            services.leader_wire_ingress = Arc::clone(&ingress);
+
+            let proofs = keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("fixture validator proof of possession")
+                })
+                .collect();
+            let verified = VerifiedHeightContext::genesis(context.clone(), proofs)
+                .expect("verify selected-Serve runtime context");
+            let runtime_directory =
+                TempDir::new().expect("temporary selected-Serve runtime directory");
+            let (adapter, startup_effects) = SumeragiV2Adapter::open(
+                runtime_directory.path().join("selected-serve-runtime.wal"),
+                verified,
+                Some(local_validator),
+                Generation::new(context.height),
+                [0xF4; 32],
+                AdapterFingerprints {
+                    node: Hash::new(b"selected Serve timeout node"),
+                    build: Hash::new(b"selected Serve timeout build"),
+                    config: Hash::new(b"selected Serve timeout config"),
+                },
+                DeferredAdmissionOrdinalSource::new(0),
+            )
+            .expect("open selected-Serve runtime adapter");
+            assert!(startup_effects.is_empty());
+            let round_timeout = Duration::from_millis(1);
+            let started_at = Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .expect("fixture clock has a one-second predecessor");
+            let (runtime, startup_effects) = SerializedV2Runtime::new_with_lifecycle_ordinals(
+                adapter,
+                startup_effects,
+                started_at,
+                round_timeout,
+                RuntimeQueueConfig::new(8, 2, 2),
+                lifecycle_ordinals,
+            )
+            .expect("construct selected-Serve serialized runtime");
+            assert!(startup_effects.is_empty());
+            let mut executor = V2EffectExecutor::with_runtime(
+                runtime,
+                BTreeMap::new(),
+                context.clone(),
+                services.local_peer.clone(),
+                Some(local_validator),
+                EffectQueueConfig::default(),
+            )
+            .expect("construct selected-Serve effect executor");
+            executor
+                .arm_live_clocks(started_at)
+                .expect("arm selected-Serve timeout clocks");
+            let timeout_owner = executor
+                .freeze_due_timeout_owner_for_test(Instant::now())
+                .expect("freeze the height-start timeout before later Serve ingress");
+            assert_eq!(
+                timeout_owner.lifecycle_ordinal(),
+                1,
+                "the height-start timeout owns the first actor-global scheduler position"
+            );
+            let consensus_observations = install_consensus_route_observer(&mut services);
+
+            // Height-start clocks acquire their immutable scheduler owner
+            // before later network ingress. This production ordering makes the
+            // already-due timeout a frozen predecessor of the selected Serve;
+            // the test must not authorize a later timeout to jump that ticket.
+            let missing_proposal_round = wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 0,
+            };
+            let missing_proposal_subject = wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"selected Serve missing proposal",
+                )),
+                payload_hash: Hash::new(b"selected Serve missing proposal payload"),
+            };
+            let requester_index = (0..keys.len())
+                .find(|index| *index != local_index)
+                .expect("four-validator fixture has a remote Serve requester");
+            let missing_request = authenticated_serve_request(
+                &context,
+                &keys[requester_index],
+                missing_proposal_round,
+                missing_proposal_subject,
+                wire::GlobalPhase::Prepare,
+            );
+            let missing_proposal_request_hash = missing_request.request_hash();
+            let authenticated_via = missing_request.request().requester.clone();
+            assert!(matches!(
+                ingress.try_push(certified_serve_inbound(
+                    missing_request.request(),
+                    authenticated_via,
+                )),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+
+            let remote_signers = (0..keys.len())
+                .filter(|index| *index != local_index)
+                .take(2)
+                .collect::<Vec<_>>();
+            assert_eq!(remote_signers.len(), 2);
+            for signer_index in remote_signers {
+                let signer = u32::try_from(signer_index).expect("timeout signer fits u32");
+                let mut timeout_vote = wire::TimeoutVote {
+                    round: missing_proposal_round,
+                    highest_prepare_qc: None,
+                    signer,
+                    signature: Vec::new(),
+                };
+                timeout_vote.signature = Signature::new(
+                    keys[signer_index].private_key(),
+                    &timeout_vote.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                let source = context.roster[signer_index].validator.clone();
+                assert!(matches!(
+                    ingress.try_push(InboundBlockMessage::new(
+                        BlockMessage::V2(wire::ConsensusMessageV2::new(
+                            wire::ConsensusMessageV2Payload::TimeoutVote(timeout_vote),
+                        )),
+                        Some(source),
+                    )),
+                    Ok(FairV2IngressPushDisposition::Enqueued)
+                ));
+            }
+
+            let fixture = Self {
+                _runtime_directory: runtime_directory,
+                _leader_wire_directory: leader_wire_directory,
+                ingress,
+                serve_gate,
+                missing_proposal_request_hash,
+                executor,
+                services,
+                command_rx,
+                completion_tx,
+                completion_admission,
+                local_key,
+                consensus_observations,
+                remote_timeout_votes_admitted: 0,
+                timeout_prefix_completions: 0,
+                local_timeout_signature_completed: false,
+            };
+            fixture.assert_missing_proposal_serve_selected();
+            fixture
+        }
+
+        /// Service the production exact-Serve prefix before its liveness suffix.
+        pub(in crate::sumeragi) fn service_exact_serve_runtime_prefix(
+            &mut self,
+        ) -> Result<bool, String> {
+            let barrier = self
+                .services
+                .certified_serve_barrier()?
+                .ok_or_else(|| "selected-Serve fixture lost its exact barrier".to_owned())?;
+            let claimed = self
+                .services
+                .claim_certified_serve_runtime_episode(barrier)?;
+            if !claimed {
+                self.assert_missing_proposal_serve_selected();
+                return Ok(false);
+            }
+            let _ = self
+                .services
+                .drain_exact_serve_runtime_predecessor(
+                    &mut self.executor,
+                    barrier.scheduler_ordinal(),
+                )
+                .map_err(|error| error.to_string())?;
+            if self
+                .executor
+                .older_runtime_lifecycle_predates_exact_serve(
+                    Instant::now(),
+                    barrier.scheduler_ordinal(),
+                )
+                .map_err(|error| error.to_string())?
+                && self
+                    .services
+                    .certified_serve_runtime_predecessor_capacity_available(barrier)?
+            {
+                self.executor
+                    .set_ingress_physical_cut(self.ingress.next_physical_admission_ordinal())
+                    .map_err(|error| error.to_string())?;
+                let _ = self
+                    .executor
+                    .step(Instant::now(), &mut self.services)
+                    .map_err(|error| error.to_string())?;
+            }
+            let older_predecessor_remains = self
+                .executor
+                .older_runtime_lifecycle_predates_exact_serve(
+                    Instant::now(),
+                    barrier.scheduler_ordinal(),
+                )
+                .map_err(|error| error.to_string())?;
+            self.services
+                .finish_certified_serve_runtime_episode_turn(barrier, older_predecessor_remains)?;
+            self.assert_missing_proposal_serve_selected();
+            Ok(true)
+        }
+
+        /// Admit at most one exact timeout-vote owner through the Serve-only bypass.
+        pub(in crate::sumeragi) fn service_timeout_vote_episode(&mut self) -> Result<(), String> {
+            let executor = &self.executor;
+            let Some((mut inbound, disposition)) = self
+                .ingress
+                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
+                    |inbound| {
+                        let BlockMessage::V2(message) = inbound.message() else {
+                            return false;
+                        };
+                        inbound.ingress_ownership().is_some_and(|ownership| {
+                            executor.can_admit_timeout_vote_recovery_episode(message, ownership)
+                        })
+                    },
+                )?
+            else {
+                self.assert_missing_proposal_serve_selected();
+                return Ok(());
+            };
+            if disposition != super::super::FairV2IngressDequeueDisposition::Admit {
+                return Err("timeout episode selected an obsolete leader-wire owner".to_owned());
+            }
+            let mut ownership = inbound
+                .take_ingress_ownership()
+                .ok_or_else(|| "selected TimeoutVote lost fair-ingress ownership".to_owned())?;
+            self.ingress
+                .bind_leader_wire_runtime_ownership(&mut ownership)?;
+            let (message, _, _) = inbound.into_message_sender_and_reply_routes();
+            let BlockMessage::V2(message) = message else {
+                return Err("timeout episode selected a non-v2 message".to_owned());
+            };
+            self.executor
+                .enqueue_network_with_ingress_ownership(message, ownership)
+                .map_err(|error| error.to_string())?;
+            self.remote_timeout_votes_admitted =
+                self.remote_timeout_votes_admitted.saturating_add(1);
+            self.assert_missing_proposal_serve_selected();
+            Ok(())
+        }
+
+        /// Execute and deliver the local timeout signature through the worker completion lane.
+        pub(in crate::sumeragi) fn service_timeout_recovery_prefix(
+            &mut self,
+        ) -> Result<(), String> {
+            match self.command_rx.try_recv() {
+                Ok(V2IoCommand::Sign {
+                    task,
+                    restore_outbound_payload: false,
+                }) if matches!(task.request(), SignRequest::TimeoutVote(_)) => {
+                    let work_id = task.id();
+                    let lifecycle_ordinal = task.lifecycle_ordinal();
+                    let signature = Signature::new(
+                        self.local_key.private_key(),
+                        &task.request().signature_preimage(),
+                    )
+                    .payload()
+                    .to_vec();
+                    self.command_rx.complete_work(work_id);
+                    try_send_tracked_completion_with_lifecycle_ordinal(
+                        &self.completion_tx,
+                        &self.completion_admission,
+                        V2IoCompletion::Signature {
+                            work_id,
+                            signature,
+                            outbound_payload: None,
+                        },
+                        Some(lifecycle_ordinal),
+                    )
+                    .map_err(|_| {
+                        "selected-Serve timeout completion channel is unavailable".to_owned()
+                    })?;
+                    self.local_timeout_signature_completed = true;
+                }
+                Ok(_) => {
+                    return Err(
+                        "selected-Serve timeout fixture received an unexpected I/O command"
+                            .to_owned(),
+                    );
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Err("selected-Serve timeout worker disconnected".to_owned());
+                }
+            }
+            if let Some(cut) = self
+                .executor
+                .timeout_recovery_lifecycle_cut()
+                .map_err(|error| error.to_string())?
+            {
+                self.timeout_prefix_completions = self.timeout_prefix_completions.saturating_add(
+                    self.services
+                        .drain_timeout_recovery_prefix_completion(&mut self.executor, cut)
+                        .map_err(|error| error.to_string())?,
+                );
+            }
+            self.assert_missing_proposal_serve_selected();
+            Ok(())
+        }
+
+        /// Run one typed pacemaker transition while the exact Serve carrier remains selected.
+        pub(in crate::sumeragi) fn service_pacemaker(&mut self) -> Result<(), String> {
+            self.executor
+                .set_ingress_physical_cut(self.ingress.next_physical_admission_ordinal())
+                .map_err(|error| error.to_string())?;
+            let _ = self
+                .executor
+                .step_pacemaker_once(Instant::now(), &mut self.services)
+                .map_err(|error| error.to_string())?;
+            self.assert_missing_proposal_serve_selected();
+            Ok(())
+        }
+
+        /// Return whether the real reducer and production service both installed view one.
+        pub(in crate::sumeragi) fn entered_view_one(&self) -> bool {
+            self.executor.current_tag().view() == 1 && self.services.active_tag.view() == 1
+        }
+
+        /// Check the complete local + dual-remote timeout recovery result.
+        pub(in crate::sumeragi) fn assert_complete(&self) {
+            self.assert_missing_proposal_serve_selected();
+            assert!(self.local_timeout_signature_completed);
+            assert_eq!(self.remote_timeout_votes_admitted, 2);
+            assert_eq!(self.timeout_prefix_completions, 1);
+            assert_eq!(self.ingress.len(), 1, "only the missing-body Serve remains");
+            assert!(self.entered_view_one());
+            let observations = self
+                .consensus_observations
+                .lock()
+                .expect("inspect selected-Serve consensus broadcasts");
+            assert!(observations.iter().any(|(_, message)| matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::TimeoutVote(vote)
+                    if vote.signer
+                        == self.services.local_validator.expect("fixture is a validator")
+            )));
+            assert!(observations.iter().any(|(_, message)| matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate)
+                    if certificate.round.view == 0
+                        && certificate
+                            .groups
+                            .iter()
+                            .map(|group| group.signers.len())
+                            .sum::<usize>()
+                            == 3
+            )));
+        }
+
+        fn assert_missing_proposal_serve_selected(&self) {
+            let barrier = self
+                .serve_gate
+                .selected_barrier()
+                .expect("inspect missing-proposal Serve barrier")
+                .expect("missing-proposal Serve remains selected");
+            assert_eq!(barrier.request_hash(), self.missing_proposal_request_hash);
+        }
+    }
+
+    #[cfg(feature = "bls")]
+    impl Drop for SelectedServeTimeoutRecoveryFixture {
+        fn drop(&mut self) {
+            // This fixture drives the worker endpoints synchronously and has
+            // no background thread to acknowledge a queued Shutdown command.
+            drop(self.services.io.take());
+        }
     }
 
     fn lane_commit_qc(validator: PeerId) -> LaneBlockQcV1 {
@@ -19952,9 +20600,7 @@ pub(super) mod tests {
                     view: 0,
                 },
                 epoch: context.epoch,
-                chain_id_hash: Hash::new(
-                    norito::to_bytes(&context.chain_id).expect("encode worker chain id"),
-                ),
+                chain_id_hash: Hash::prehashed(*context.network_id.as_bytes()),
                 source_id: [0x31; 32],
                 tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
                     b"worker Native AMX entrypoint",
@@ -21723,7 +22369,7 @@ pub(super) mod tests {
             wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                 wire::CommitCertificateRequest {
                     protocol_version: wire::PROTOCOL_VERSION,
-                    chain_id: history.artifact.height_context.chain_id.clone(),
+                    network_id: history.artifact.height_context.network_id,
                     context_id: history.artifact.context_id(),
                     height: history.artifact.height,
                     requester: history.requester.clone(),
@@ -24136,6 +24782,90 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
+        let (mut service, _) = fixture();
+        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        let timeout_ordinal = 50_u128;
+        let timeout_work_id = EffectWorkId::for_test(50);
+        let successor_work_id = EffectWorkId::for_test(51);
+        for (work_id, ordinal) in [
+            (timeout_work_id, timeout_ordinal),
+            (successor_work_id, timeout_ordinal + 1),
+        ] {
+            try_send_tracked_completion_with_lifecycle_ordinal(
+                &completion_tx,
+                &admission,
+                V2IoCompletion::Signature {
+                    work_id,
+                    signature: vec![u8::try_from(ordinal).expect("small ordinal")],
+                    outbound_payload: None,
+                },
+                Some(ordinal),
+            )
+            .expect("retain exact timeout-boundary completion");
+        }
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+
+        assert!(matches!(
+            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
+            IoCompletionTake {
+                completion: Some(PendingServiceCompletion::Io {
+                    completion: V2IoCompletion::Signature { work_id, .. },
+                    ownership_position: 0,
+                }),
+                retained_runtime: false,
+            } if work_id == timeout_work_id
+        ));
+        service
+            .io
+            .as_ref()
+            .expect("attached completion corridor")
+            .admission
+            .acknowledge_completion_at(0);
+        assert!(matches!(
+            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
+            IoCompletionTake {
+                completion: None,
+                retained_runtime: false,
+            }
+        ));
+        assert_eq!(
+            service
+                .io
+                .as_ref()
+                .expect("attached completion corridor")
+                .completion_snapshot(Instant::now())
+                .depth,
+            1,
+            "the T+1 producer stays outside the inclusive T prefix"
+        );
+        assert!(matches!(
+            service.take_timeout_recovery_prefix_completion(true, timeout_ordinal + 1),
+            IoCompletionTake {
+                completion: Some(PendingServiceCompletion::Io {
+                    completion: V2IoCompletion::Signature { work_id, .. },
+                    ownership_position: 0,
+                }),
+                retained_runtime: false,
+            } if work_id == successor_work_id
+        ));
+        service
+            .io
+            .as_ref()
+            .expect("attached completion corridor")
+            .admission
+            .acknowledge_completion_at(0);
+        drop(service.io.take());
+    }
+
+    #[test]
     fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
         let (mut service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -25940,7 +26670,7 @@ pub(super) mod tests {
                     wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                         wire::CommitCertificateRequest {
                             protocol_version: wire::PROTOCOL_VERSION,
-                            chain_id: service.context.chain_id.clone(),
+                            network_id: service.context.network_id,
                             context_id: service.context.id(),
                             height,
                             requester: source.clone(),
@@ -26107,12 +26837,18 @@ pub(super) mod tests {
             ("prepare-qc", qc_message),
         ] {
             let (command_tx, command_rx, _admission) = test_io_command_channel(4);
-            let ingress = FairV2Ingress::new(
+            let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
                 128,
-                128 * 1024 * 1024,
+                512 * 1024 * 1024,
                 64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
                 8 * 1024 * 1024,
                 8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
             );
             let roster = service
                 .context
@@ -26123,7 +26859,7 @@ pub(super) mod tests {
             ingress
                 .configure_roster_for_context(
                     roster.iter().cloned(),
-                    &service.context.chain_id,
+                    &service.context.network_id,
                     service.context.da_layout,
                 )
                 .expect("configure production-shaped combined ingress");
@@ -26267,6 +27003,221 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier() {
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let serve_via = service.context.roster[0].validator.clone();
+        let timeout_messages = [2_u32, 3_u32].map(|signer| {
+            let source = service.context.roster
+                [usize::try_from(signer).expect("small timeout signer index")]
+            .validator
+            .clone();
+            let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                    round: proposal.round,
+                    highest_prepare_qc: None,
+                    signer,
+                    signature: vec![
+                        0x7A_u8
+                            .checked_add(u8::try_from(signer).expect("small signer marker"))
+                            .expect("small signer marker does not overflow");
+                        48
+                    ],
+                }),
+            ));
+            (message, source)
+        });
+
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            128,
+            512 * 1024 * 1024,
+            64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        );
+        let roster = service
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        ingress
+            .configure_roster_for_context(
+                roster.iter().cloned(),
+                &service.context.network_id,
+                service.context.da_layout,
+            )
+            .expect("configure the production-shaped timeout/Serve ingress");
+        ingress.require_certified_serve_gate();
+        ingress.require_leader_wire_lifecycle_gate();
+
+        let directory = TempDir::new().expect("temporary timeout/Serve ingress gate");
+        let owner = [0xAC; 32];
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                service.context.da_layout.max_chunk_count,
+            )
+            .expect("derive finite timeout/Serve lifecycle capacity");
+        let recovery_authority = super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            service.context.id(),
+            service.context.height,
+            owner,
+            0,
+            false,
+        );
+        let (leader_gate, restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &directory.path().join("timeout-vote-serve-bypass.wal"),
+                service.context.id(),
+                service.context.height,
+                owner,
+                roster,
+                capacity,
+                service.context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("open the timeout/Serve leader lifecycle gate");
+        let serve_gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        ingress
+            .bind_certified_serve_gate(serve_gate.clone())
+            .expect("bind the exact Serve ingress gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&leader_gate),
+                restore,
+                command_tx.queue.lifecycle_ordinals.clone(),
+                service.context.id(),
+                service.context.height,
+            )
+            .expect("bind the timeout-vote lifecycle to the shared ordinal source");
+        ingress.open().expect("open the timeout/Serve ingress");
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound(request.request(), serve_via,)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        for (message, source) in timeout_messages {
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(message, Some(source))),
+                Ok(FairV2IngressPushDisposition::Enqueued)
+            ));
+        }
+        let serve_barrier = serve_gate
+            .selected_barrier()
+            .expect("inspect the selected Serve barrier")
+            .expect("the exact request owns one selected Serve turn");
+        assert_eq!(serve_barrier.carrier_ordinal(), 1);
+        assert_eq!(serve_barrier.scheduler_ordinal(), 1);
+        assert_eq!(
+            leader_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("inspect the queued TimeoutVote owner"),
+            Some(2)
+        );
+
+        assert!(
+            ingress
+                .try_recv_if_checked_retiring_obsolete(|inbound| {
+                    matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                            ..
+                        })
+                    )
+                })
+                .expect("ordinary selection preserves the selected Serve barrier")
+                .is_none(),
+            "ordinary ingress cannot move a later TimeoutVote ahead of Serve"
+        );
+        assert!(
+            ingress
+                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
+                    |_| false,
+                )
+                .expect("the bypass pass still executes its downstream predicate")
+                .is_none(),
+            "the internal bypass never admits a TimeoutVote by itself"
+        );
+        let mut selected_slots = BTreeSet::new();
+        for expected_scheduler_ordinal in [2_u128, 3_u128] {
+            let (mut timeout_vote, disposition) = ingress
+                .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
+                    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
+                    |inbound| {
+                        matches!(
+                            inbound.message(),
+                            BlockMessage::V2(wire::ConsensusMessageV2 {
+                                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                                ..
+                            })
+                        )
+                    },
+                )
+                .expect("each timeout episode turn preserves both durable gates")
+                .expect("each exact TimeoutVote reaches the authoritative predicate");
+            assert_eq!(
+                disposition,
+                super::super::FairV2IngressDequeueDisposition::Admit
+            );
+            let ownership = timeout_vote
+                .take_ingress_ownership()
+                .expect("the selected TimeoutVote retains exact ownership");
+            assert!(ownership.validate_exact());
+            let token = ownership
+                .leader_wire_token()
+                .expect("the selected TimeoutVote retains its productive token");
+            assert_eq!(token.scheduler_ordinal(), expected_scheduler_ordinal);
+            assert!(
+                selected_slots.insert(token.slot.clone()),
+                "each roster signer owns a distinct timeout episode slot"
+            );
+            assert!(ownership.leader_wire_runtime_receipt().is_some());
+            assert_eq!(
+                serve_gate
+                    .selected_barrier()
+                    .expect("inspect the retained Serve barrier")
+                    .map(|barrier| barrier.carrier_ordinal()),
+                Some(1),
+                "each timeout turn leaves the older Serve carrier selected"
+            );
+        }
+        assert_eq!(selected_slots.len(), 2);
+        assert_eq!(
+            ingress.len(),
+            1,
+            "both timeout slots drain while the selected Serve carrier remains queued"
+        );
+        assert_eq!(
+            serve_gate
+                .selected_barrier()
+                .expect("inspect the retained Serve barrier")
+                .map(|barrier| barrier.carrier_ordinal()),
+            Some(1)
+        );
+    }
+
+    #[test]
     fn closed_height_atomically_retires_serve_and_leader_ingress() {
         let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -26296,12 +27247,18 @@ pub(super) mod tests {
             }),
         ));
         let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
-        let ingress = FairV2Ingress::new(
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             128,
-            128 * 1024 * 1024,
+            512 * 1024 * 1024,
             64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
         );
         let roster = service
             .context
@@ -26312,7 +27269,7 @@ pub(super) mod tests {
         ingress
             .configure_roster_for_context(
                 roster.iter().cloned(),
-                &service.context.chain_id,
+                &service.context.network_id,
                 service.context.da_layout,
             )
             .expect("configure production-shaped combined ingress");
@@ -26547,12 +27504,18 @@ pub(super) mod tests {
             })
             .last()
             .expect("the shared prefix is non-empty");
-        let ingress = FairV2Ingress::new(
+        let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             128,
-            128 * 1024 * 1024,
+            512 * 1024 * 1024,
             64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
         );
         let roster = service
             .context
@@ -26563,7 +27526,7 @@ pub(super) mod tests {
         ingress
             .configure_roster_for_context(
                 roster.iter().cloned(),
-                &service.context.chain_id,
+                &service.context.network_id,
                 service.context.da_layout,
             )
             .expect("configure the combined Serve/leader ingress");
@@ -26775,13 +27738,27 @@ pub(super) mod tests {
         command_tx
             .acknowledge_serve_completion(
                 admission.lifecycle_id,
-                V2IoServeTerminal::Response(response),
+                V2IoServeTerminal::Response(response.clone()),
             )
             .expect("retain the drained logical request as a terminal tombstone");
-        assert!(
-            command_tx.queue.lock().serves.is_empty(),
-            "acknowledged Serve leaves no recreatable live lifecycle"
-        );
+        {
+            let state = command_tx.queue.lock();
+            assert_eq!(
+                state.serves.len(),
+                1,
+                "acknowledged Serve retains only its exact replay tombstone"
+            );
+            let tracked = state
+                .serves
+                .get(&admission.lifecycle_id)
+                .expect("acknowledged Serve retains its exact replay tombstone");
+            assert_eq!(tracked.state, V2IoServeState::Terminal);
+            assert_eq!(
+                tracked.terminal.as_ref(),
+                Some(&V2IoServeTerminal::Response(response))
+            );
+            assert!(state.commands.is_empty());
+        }
 
         let mut leader = ingress
             .try_recv_if_checked(|inbound| {
@@ -27165,6 +28142,148 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn final_serve_retirement_yields_one_producer_episode_before_replenishment() {
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let first = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let second = authenticated_serve_request(
+            &service.context,
+            &keys[2],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let replenishment = authenticated_serve_request(
+            &service.context,
+            &keys[3],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let first_requester = first.request().requester.clone();
+        let second_requester = second.request().requester.clone();
+        let replenishment_requester = replenishment.request().requester.clone();
+        let via = service.context.roster[0].validator.clone();
+        let mut routes = NetworkReplyRouteTestFixture::new(via.clone());
+        let first_route = routes.mint_via(first_requester.clone(), via.clone());
+        let second_route = routes.mint_via(second_requester.clone(), via.clone());
+        let replenishment_route = routes.mint_via(replenishment_requester.clone(), via.clone());
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(6);
+        let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound_with_route(
+                first.request(),
+                via.clone(),
+                first_route,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound_with_route(
+                second.request(),
+                via.clone(),
+                second_route,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            drain_and_commit_gated_serve(
+                &ingress,
+                &command_tx,
+                CertifiedServeOwnerKey::Roster(first_requester),
+                &first,
+            )
+            .1,
+            CertifiedServeCommit::Queued
+        ));
+        assert!(matches!(
+            drain_and_commit_gated_serve(
+                &ingress,
+                &command_tx,
+                CertifiedServeOwnerKey::Roster(second_requester),
+                &second,
+            )
+            .1,
+            CertifiedServeCommit::Queued
+        ));
+
+        let actor_ordinal_before = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        let lifecycle_ordinal_before = command_tx.queue.lock().next_serve_admission_ordinal;
+        {
+            let state = command_tx.queue.lock();
+            assert!(state.producer_episode_due);
+            assert!(!state.producer_episode_active);
+            assert!(state.serve_ingress_reservation.is_none());
+            assert!(state.serve_ingress_waiters.is_empty());
+        }
+        assert!(matches!(
+            gate.reserve(replenishment.request(), &via, true, 3),
+            Err(CertifiedServeIngressReserveError::Busy)
+        ));
+        assert_eq!(
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            actor_ordinal_before,
+            "post-Serve replenishment cannot mint an actor-global ordinal before the producer turn"
+        );
+        assert_eq!(
+            command_tx.queue.lock().next_serve_admission_ordinal,
+            lifecycle_ordinal_before,
+            "post-Serve replenishment cannot mint a lifecycle before the producer turn"
+        );
+
+        let producer_episode = command_tx
+            .try_begin_producer_episode()
+            .expect("consume the atomic post-Serve handoff")
+            .expect("the final frozen Serve batch owes one producer episode");
+        {
+            let state = command_tx.queue.lock();
+            assert!(!state.producer_episode_due);
+            assert!(state.producer_episode_active);
+        }
+        assert!(matches!(
+            gate.reserve(replenishment.request(), &via, true, 3),
+            Err(CertifiedServeIngressReserveError::Busy)
+        ));
+        drop(producer_episode);
+        {
+            let state = command_tx.queue.lock();
+            assert!(!state.producer_episode_due);
+            assert!(!state.producer_episode_active);
+        }
+
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound_with_route(
+                replenishment.request(),
+                via,
+                replenishment_route,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            drain_and_commit_gated_serve(
+                &ingress,
+                &command_tx,
+                CertifiedServeOwnerKey::Roster(replenishment_requester),
+                &replenishment,
+            )
+            .1,
+            CertifiedServeCommit::Queued
+        ));
+
+        ingress.close();
+        ingress
+            .unbind_certified_serve_gate(&gate)
+            .expect("retire post-Serve producer handoff fixture gate");
+    }
+
+    #[test]
     fn drained_exact_retransmission_gets_fresh_scheduler_ordinal() {
         let (service, keys) = fixture_with_block_payload();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
@@ -27220,6 +28339,22 @@ pub(super) mod tests {
         assert!(matches!(first_commit, CertifiedServeCommit::Queued));
         assert_eq!(first_barrier.lifecycle_id(), first_admission.lifecycle_id);
         assert!(command_tx.queue.lock().serve_ingress_waiters.is_empty());
+
+        let scheduler_before_retry = command_tx.queue.lifecycle_ordinals.next_ordinal_for_test();
+        assert!(matches!(
+            gate.reserve(request.request(), &via, true, 2),
+            Err(CertifiedServeIngressReserveError::Busy)
+        ));
+        assert_eq!(
+            command_tx.queue.lifecycle_ordinals.next_ordinal_for_test(),
+            scheduler_before_retry,
+            "post-drain retry cannot mint a scheduler owner before the owed producer turn"
+        );
+        let post_drain_producer_episode = command_tx
+            .try_begin_producer_episode()
+            .expect("consume the post-drain producer handoff")
+            .expect("final Serve retirement owes one producer episode");
+        drop(post_drain_producer_episode);
 
         assert!(matches!(
             ingress.try_push(certified_serve_inbound_with_route(
@@ -27299,7 +28434,7 @@ pub(super) mod tests {
                     wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                         wire::CommitCertificateRequest {
                             protocol_version: wire::PROTOCOL_VERSION,
-                            chain_id: context.chain_id.clone(),
+                            network_id: context.network_id,
                             context_id: context.id(),
                             height,
                             requester: source.clone(),
@@ -29649,7 +30784,7 @@ pub(super) mod tests {
                 wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                     wire::CommitCertificateRequest {
                         protocol_version: wire::PROTOCOL_VERSION,
-                        chain_id: context.chain_id.clone(),
+                        network_id: context.network_id,
                         context_id: context.id(),
                         height: context.height.saturating_add(1),
                         requester: replay_via.clone(),
@@ -30234,7 +31369,8 @@ pub(super) mod tests {
 
         let (mut foreign_service, foreign_keys) = fixture();
         allow_fixture_block_payload(&mut foreign_service.context);
-        foreign_service.context.chain_id = ChainId::from("v2-worker-foreign-test");
+        foreign_service.context.network_id =
+            crate::sumeragi::synthetic_network_id("v2-worker-foreign-test");
         foreign_service
             .context
             .validate()
@@ -32332,11 +33468,13 @@ pub(super) mod tests {
                     .expect("history-fixture validator PoP")
             })
             .collect();
-        service.state = Arc::new(State::new_with_chain_for_testing(
+        let business_chain_id = service.state.chain_id.clone();
+        service.state = Arc::new(State::new_with_chain_and_network_id_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
-            context.chain_id.clone(),
+            business_chain_id,
+            context.network_id,
         ));
         service.context = context;
         service.local_peer = local_peer;
@@ -33318,17 +34456,25 @@ pub(super) mod tests {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
-        let ingress = Arc::new(FairV2Ingress::new(
-            64,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-        ));
+        let ingress = Arc::new(
+            FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+                64,
+                512 * 1024 * 1024,
+                64 * 1024 * 1024,
+                super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                None,
+            ),
+        );
         ingress
             .configure_roster_for_context(
                 roster.clone(),
-                &service.context.chain_id,
+                &service.context.network_id,
                 service.context.da_layout,
             )
             .expect("configure productive-orphan ingress");
@@ -33372,6 +34518,7 @@ pub(super) mod tests {
             )
             .expect("bind productive-orphan lifecycle gate");
         ingress.open().expect("open productive-orphan ingress");
+        service.leader_wire_recovery_authority = recovery_authority;
         service.leader_wire_ingress = Arc::clone(&ingress);
         ingress
     }
@@ -33436,7 +34583,10 @@ pub(super) mod tests {
         let (canonical_wire, payload) =
             proposal_body_and_payload_at_view(&service.context, keys, view);
         let (manifest, chunks) = payload.into_parts();
-        assert_eq!(chunks.len(), 1, "fixture body must have one exact chunk");
+        assert!(
+            !chunks.is_empty(),
+            "fixture body must have an exact data chunk"
+        );
         let proposer = service.context.leader(view);
         let proposer_index = usize::try_from(proposer).expect("small proposer index");
         let sender = service.context.roster[proposer_index].validator.clone();
@@ -33453,7 +34603,7 @@ pub(super) mod tests {
         let mut chunk = wire::PayloadChunk {
             manifest_hash: HashOf::new(&manifest),
             index: 0,
-            bytes: chunks.into_iter().next().expect("one fixture chunk"),
+            bytes: chunks.into_iter().next().expect("fixture data chunk"),
             sender: proposer,
             signature: Vec::new(),
         };
@@ -34616,6 +35766,75 @@ pub(super) mod tests {
         assert_eq!(service.active_tag, rebound);
         assert!(service.outbound_chunks.is_empty());
         assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn entered_view_advances_live_leader_wire_recovery_cut() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let gate_directory = TempDir::new().expect("temporary live view-cut gate");
+        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+        let initial = service.active_tag;
+        let next = EventTag::new(
+            initial.height(),
+            initial.view() + 1,
+            Generation::new(initial.generation().get() + 1),
+        );
+        service
+            .entered_view(next, timeout_certificate_at_view(&service, initial.view()))
+            .expect("install the certified successor and its live recovery cut");
+
+        let (_, _, stale_proposal, _, stale_sender) =
+            productive_chunk_at_view(&service, &keys, initial.view());
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(stale_proposal),
+                )),
+                Some(stale_sender),
+            )),
+            Err(super::super::FairV2IngressPushError::Rejected(_))
+        ));
+
+        let (_, _, current_proposal, _, current_sender) =
+            productive_chunk_at_view(&service, &keys, next.view());
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                BlockMessage::V2(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(current_proposal),
+                )),
+                Some(current_sender),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+    }
+
+    #[test]
+    fn durable_decision_advances_live_leader_wire_recovery_cut() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let gate_directory = TempDir::new().expect("temporary live Decision-cut gate");
+        let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+        let _command_rx = attach_locked_candidate_io(&mut service, 4);
+        let decided_subject = locked_candidate_subject(b"live leader-wire Decision cut");
+        service
+            .begin_decision_serve_reconciliation()
+            .expect("fence Serve before Decision publication");
+        service
+            .finish_decision_serve_reconciliation(Some(decided_subject))
+            .expect("publish Decision and close live leader-wire admission");
+
+        for view in [service.active_tag.view(), service.active_tag.view() + 1] {
+            let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);
+            assert!(matches!(
+                ingress.try_push(InboundBlockMessage::new(
+                    BlockMessage::V2(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::Proposal(proposal),
+                    )),
+                    Some(sender),
+                )),
+                Err(super::super::FairV2IngressPushError::Rejected(_))
+            ));
+        }
+        detach_locked_candidate_io(&mut service);
     }
 
     #[test]

@@ -5,10 +5,12 @@ ROOT_DIR="${PRIVACY_JS_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
 NODE_OVERRIDE="${PRIVACY_JS_SDK_NODE_BIN:-}"
 PYTHON_BIN="${PRIVACY_JS_SDK_PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+ABI22_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi22_artifact.py"
+NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-js-native.XXXXXX")"
 
-# The JavaScript checks do not invoke Cargo, but they share the privacy SDK
-# guard boundary. Preserve a developer's workspace lock when one exists and,
-# on a clean checkout, fail if any test creates the ignored root Cargo.lock.
+# The JavaScript release gate builds and executes its N-API module from the
+# frozen workspace lock. Preserve the exact lock identity across the full lane.
 # shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
 source "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 WORKSPACE_CARGO_LOCKFILE="${ROOT_DIR}/Cargo.lock"
@@ -29,6 +31,7 @@ cleanup_privacy_js_sdk_lock_state() {
     "${PYTHON_BIN}"; then
     status=1
   fi
+  rm -rf -- "${NATIVE_BUILD_ROOT}"
   exit "${status}"
 }
 trap cleanup_privacy_js_sdk_lock_state EXIT
@@ -84,6 +87,41 @@ resolve_node_20_bin() {
 
 NODE_BIN="$(resolve_node_20_bin)"
 
+sha256_file() {
+  "${PYTHON_BIN}" -I -S - "$1" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+digest = hashlib.sha256()
+with pathlib.Path(sys.argv[1]).open("rb") as source:
+    while chunk := source.read(1024 * 1024):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+[[ -f "${WORKSPACE_CARGO_LOCKFILE}" && ! -L "${WORKSPACE_CARGO_LOCKFILE}" ]] \
+  || { echo "error: privacy JavaScript native execution requires Cargo.lock" >&2; exit 1; }
+[[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
+  || { echo "error: privacy JavaScript Cargo.lock is not the frozen release lock" >&2; exit 1; }
+
+RUSTUP_BIN="${PRIVACY_JS_SDK_RUSTUP_BIN:-$(command -v rustup)}"
+IROHA_JS_CARGO_PATH="$("${RUSTUP_BIN}" which --toolchain 1.93.1 cargo)"
+RUSTC="$("${RUSTUP_BIN}" which --toolchain 1.93.1 rustc)"
+RUSTDOC="$("${RUSTUP_BIN}" which --toolchain 1.93.1 rustdoc)"
+[[ "$("${RUSTC}" --version)" == rustc\ 1.93.1\ * ]] \
+  || { echo "error: privacy JavaScript native execution requires exact rustc 1.93.1" >&2; exit 1; }
+export IROHA_JS_CARGO_PATH RUSTC RUSTDOC
+export CARGO_BUILD_JOBS=1
+export CARGO_INCREMENTAL=0
+export CARGO_NET_OFFLINE=true
+export CARGO_TARGET_DIR="${NATIVE_BUILD_ROOT}/target"
+export IROHA_JS_CARGO_LOCKFILE_PATH="${WORKSPACE_CARGO_LOCKFILE}"
+export IROHA_JS_NATIVE_DIR="${NATIVE_BUILD_ROOT}/native"
+export NORITO_SKIP_BINDINGS_SYNC=1
+export RUSTC_BOOTSTRAP=1
+
 cd "${ROOT_DIR}/javascript/iroha_js"
 NODE_VERSION="$("${NODE_BIN}" --version)"
 printf '%s\n' "${NODE_VERSION}"
@@ -97,7 +135,26 @@ esac
 
 export PYTHONDONTWRITEBYTECODE=1
 
+"${NODE_BIN}" scripts/build-native.mjs
+"${NODE_BIN}" scripts/copy-native.mjs
+NATIVE_ARTIFACT="${IROHA_JS_NATIVE_DIR}/iroha_js_host.node"
+NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/node-native-abi22.json"
+NATIVE_TARGET="$("${NODE_BIN}" --eval 'process.stdout.write(`${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`)')"
+"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" record \
+  --artifact "${NATIVE_ARTIFACT}" \
+  --manifest "${NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --node "${NODE_BIN}" \
+  --sdk node \
+  --target "${NATIVE_TARGET}"
+"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+  --artifact "${NATIVE_ARTIFACT}" \
+  --manifest "${NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --node "${NODE_BIN}"
+
 "${NODE_BIN}" scripts/build-dist.mjs
+"${NODE_BIN}" --test test/privacyNative.integration.test.js
 "${NODE_BIN}" --test \
   test/privacyFfiContractParity.test.js \
   test/privacyCatalogParity.test.js \
@@ -113,3 +170,11 @@ export PYTHONDONTWRITEBYTECODE=1
   test/packageTypes.test.js
 "${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy compiled-profile catalog bridge as a safe stub" \
   test/crypto.browser.test.js
+
+"${PYTHON_BIN}" -I -S "${ABI22_CHECKER}" verify \
+  --artifact "${NATIVE_ARTIFACT}" \
+  --manifest "${NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --node "${NODE_BIN}"
+[[ "$(sha256_file "${WORKSPACE_CARGO_LOCKFILE}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
+  || { echo "error: Cargo.lock changed during privacy JavaScript native execution" >&2; exit 1; }

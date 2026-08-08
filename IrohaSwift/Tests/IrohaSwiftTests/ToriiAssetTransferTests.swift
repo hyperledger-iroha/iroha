@@ -596,7 +596,8 @@ final class ToriiAssetTransferTests: XCTestCase {
             try ToriiAssetTransferDraft.validatePreparedScaffoldBindings(
                 exact,
                 request: request(),
-                response: response
+                response: response,
+                expectedNetworkId: TestNetworkIds.canonical
             )
         )
 
@@ -604,7 +605,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             inspection(payloadSigningHash: Data(repeating: 0x12, count: 32)),
             inspection(entrypointHash: Data(repeating: 0x23, count: 32)),
             inspection(authority: Self.destination),
-            inspection(chain: "other-chain"),
+            inspection(networkId: TestNetworkIds.other),
             inspection(creationTimeMs: 1_700_000_000_001),
             inspection(timeToLiveMs: nil),
             inspection(assetDefinitionId: Self.otherAssetDefinitionId),
@@ -637,7 +638,8 @@ final class ToriiAssetTransferTests: XCTestCase {
                 try ToriiAssetTransferDraft.validatePreparedScaffoldBindings(
                     candidate,
                     request: request(),
-                    response: response
+                    response: response,
+                    expectedNetworkId: TestNetworkIds.canonical
                 ),
                 "scaffold substitution \(index) must fail"
             )
@@ -994,6 +996,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         )
         XCTAssertEqual(
             try ToriiDetachedAssetTransferSubmissionEvidence(
+                networkId: evidence.networkId,
                 chainId: evidence.chainId,
                 submittedRequest: evidence.submittedRequest,
                 signedTransaction: evidence.signedTransaction,
@@ -1791,7 +1794,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         payloadSigningHash: Data? = nil,
         entrypointHash: Data? = nil,
         authority: String = ToriiAssetTransferTests.authority,
-        chain: String = "asset-transfer-test",
+        networkId: NetworkId = TestNetworkIds.canonical,
         creationTimeMs: UInt64 = 1_700_000_000_000,
         timeToLiveMs: UInt64? = 120_000,
         metadata: [String: NativeBridgeJSONValue]? = nil,
@@ -1818,7 +1821,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         return DetachedTransactionScaffoldInspection(
             payloadSigningHash: payloadSigningHash ?? hashBytes(),
             authority: authority,
-            chain: chain,
+            networkId: networkId,
             creationTimeMs: creationTimeMs,
             timeToLiveMs: timeToLiveMs,
             metadata: metadata ?? [
@@ -1858,6 +1861,9 @@ final class ToriiAssetTransferTests: XCTestCase {
         return ToriiClient(
             baseURL: URL(string: "https://torii.example")!,
             session: URLSession(configuration: configuration),
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
             currentTimeMilliseconds: { now }
         )
     }
@@ -1873,6 +1879,9 @@ final class ToriiAssetTransferTests: XCTestCase {
         return ToriiClient(
             baseURL: baseURL,
             session: URLSession(configuration: configuration),
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
             currentTimeMilliseconds: { now },
             currentMonotonicMilliseconds: { monotonicNow }
         )
@@ -1899,7 +1908,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             creationTimeMs: now
         )
         let transfer = TransferRequest(
-            chainId: "asset-transfer-test",
+            networkId: TestNetworkIds.canonical,
             authority: Self.authority,
             assetDefinitionId: "\(Self.assetDefinitionId)#dataspace:10",
             quantity: amount,
@@ -1923,7 +1932,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         let payloadHashHex = hashHex(inspection.payloadSigningHash)
         let placeholderHashHex = hashHex(inspection.entrypointHash)
         let intent: [String: Any] = [
-            "chain_id": inspection.chain,
+            "chain_id": "asset-transfer-test",
             "authority": request.authority,
             "asset_definition_id": request.assetDefinitionId,
             "asset_balance_scope": request.assetBalanceScope,

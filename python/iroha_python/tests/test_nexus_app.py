@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from iroha_python import NetworkId
 from iroha_python.nexus_app import (
     DefaultNexusTransactionCodec,
     NexusAppClient,
@@ -31,6 +32,8 @@ FEE_PAYMENT = {
     "payer": "authority",
     "value": {"charge_limits": [], "gas_limit": None},
 }
+CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
+NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 UNSUPPORTED_SIGNATURE_ALGORITHMS = (
     "secp256k1",
     "",
@@ -121,7 +124,7 @@ class FakeCodec:
         self.built: list[dict[str, object]] = []
 
     def build_transfer_payload(self, payload_input):
-        assert payload_input["chain_id"] == "test-chain"
+        assert payload_input["network_id"] == NETWORK_ID
         assert payload_input["authority"] == self.expected_authority
         assert payload_input["destination_account_id"] == "destination-i105"
         self.built.append(dict(payload_input))
@@ -158,7 +161,7 @@ class PayloadResultCodec(FakeCodec):
         self.result = result
 
     def build_transfer_payload(self, payload_input):
-        assert payload_input["chain_id"] == "test-chain"
+        assert payload_input["network_id"] == NETWORK_ID
         assert payload_input["authority"] == "approved-account-i105"
         assert payload_input["destination_account_id"] == "destination-i105"
         return self.result
@@ -199,6 +202,7 @@ def test_nexus_app_builds_transfer_draft_and_computes_payload_hash():
     payload = b"canonical-transfer-payload"
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="approved-account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -227,6 +231,7 @@ def test_nexus_app_normalizes_lossless_quantity_before_custom_codec():
     )
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="approved-account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -259,6 +264,7 @@ def test_nexus_app_rejects_lossy_or_noncanonical_quantity_before_codec(quantity)
     )
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="approved-account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -285,6 +291,7 @@ def test_nexus_app_accepts_exact_custom_payload_hash(hash_field):
     expected_hash = FIXTURE["expected"]["payload_hash_hex"]
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="approved-account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -330,6 +337,7 @@ def test_nexus_app_accepts_exact_custom_payload_hash(hash_field):
 def test_nexus_app_rejects_noncanonical_custom_payload_hash(hash_hex):
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="approved-account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -355,6 +363,7 @@ def test_nexus_app_rejects_noncanonical_custom_payload_hash(hash_hex):
 def test_nexus_app_rejects_mismatched_custom_payload_hash():
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="approved-account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -381,6 +390,7 @@ def test_nexus_app_rejects_conflicting_custom_payload_hash_aliases():
     expected_hash = FIXTURE["expected"]["payload_hash_hex"]
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="approved-account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -413,6 +423,7 @@ def test_nexus_app_default_codec_matches_shared_fixture():
     approval = FIXTURE["connect"]["approval_frame"]
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id=transfer["chain_id"],
             authority=transfer["authority"],
             signing_public_key=bytes.fromhex(approval["signing_public_key_hex"]),
@@ -452,6 +463,7 @@ def test_nexus_app_runs_wallet_transfer_flow():
     torii = FakeTorii()
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
@@ -488,6 +500,7 @@ def test_nexus_app_runs_wallet_transfer_flow():
 def test_nexus_app_rejects_unsupported_signature_algorithm(algorithm):
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -522,6 +535,7 @@ def test_nexus_app_rejects_unsupported_signature_algorithm(algorithm):
 def test_nexus_app_rejects_unsupported_signable_signature_algorithm(algorithm):
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=bytes([1]) * 32,
@@ -554,6 +568,7 @@ def test_nexus_app_accepts_exact_zero_signature_algorithm_alias():
     torii = FakeTorii(submit_hash_hex="c" * 64)
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=FIXTURE_PUBLIC_KEY,
@@ -592,6 +607,7 @@ def _client_for_finalized_result(result, *, submit_result=None):
     torii = FakeTorii(submit_result=submit_result)
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=FIXTURE_PUBLIC_KEY,
@@ -767,7 +783,10 @@ def test_nexus_app_rejects_conflicting_custom_finalizer_hash_aliases():
 
 def test_nexus_app_rejects_missing_approval_fields():
     missing_account = NexusAppClient(
-        NexusAppConfig(chain_id="test-chain"),
+        NexusAppConfig(
+            chain_id="test-chain",
+            network_id=NETWORK_ID,
+        ),
         connect_transport=FakeConnect(bytes([7]) * 64, approval={}),
         transaction_codec=FakeCodec(b"payload", b"signed", "a" * 64),
     )
@@ -777,7 +796,10 @@ def test_nexus_app_rejects_missing_approval_fields():
     assert account_exc.value.code == "approval_missing_account"
 
     missing_key = NexusAppClient(
-        NexusAppConfig(chain_id="test-chain"),
+        NexusAppConfig(
+            chain_id="test-chain",
+            network_id=NETWORK_ID,
+        ),
         connect_transport=FakeConnect(bytes([7]) * 64, approval={"account_id": "not-an-i105-account"}),
         transaction_codec=FakeCodec(b"payload", b"signed", "a" * 64),
     )
@@ -790,7 +812,11 @@ def test_nexus_app_rejects_missing_approval_fields():
 def test_nexus_app_rejects_authority_mismatch_before_wallet_signature():
     connect = FakeConnect(bytes([7]) * 64)
     client = NexusAppClient(
-        NexusAppConfig(chain_id="test-chain", signing_public_key=bytes([1]) * 32),
+        NexusAppConfig(
+            chain_id="test-chain",
+            network_id=NETWORK_ID,
+            signing_public_key=bytes([1]) * 32,
+        ),
         connect_transport=connect,
         transaction_codec=FakeCodec(b"payload", b"signed", "a" * 64),
         torii_client=FakeTorii(),
@@ -821,6 +847,7 @@ def test_nexus_app_rejects_authority_mismatch_before_wallet_signature():
 def test_nexus_app_rejects_invalid_signature_length():
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=FIXTURE_PUBLIC_KEY,
@@ -859,6 +886,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
     hash_hex = "d" * 64
     client = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=FIXTURE_PUBLIC_KEY,
@@ -888,6 +916,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
 
     submit_failure = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=FIXTURE_PUBLIC_KEY,
@@ -916,6 +945,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
 
     status_failure = NexusAppClient(
         NexusAppConfig(
+            network_id=NETWORK_ID,
             chain_id="test-chain",
             authority="account-i105",
             signing_public_key=FIXTURE_PUBLIC_KEY,

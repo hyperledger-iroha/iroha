@@ -25,6 +25,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class TransactionFixtureParityTest {
     private val adapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -34,7 +35,11 @@ class TransactionFixtureParityTest {
         for (fixture in AndroidFixtureSupport.loadPayloadFixtures()) {
             val payload = fixture.materializePayload()
 
-            assertEquals(fixture.chain, payload.chainId, "${fixture.name}: chain mismatch")
+            assertEquals(
+                fixture.networkId,
+                payload.networkId.literal,
+                "${fixture.name}: network_id mismatch",
+            )
             assertEquals(fixture.authority, payload.authority, "${fixture.name}: authority mismatch")
             assertEquals(
                 fixture.creationTimeMs,
@@ -142,7 +147,11 @@ class TransactionFixtureParityTest {
             )
 
             val payload = adapter.decodeTransaction(payloadBytes)
-            assertEquals(fixture.chain, payload.chainId, "${fixture.name}: chain mismatch")
+            assertEquals(
+                fixture.networkId,
+                payload.networkId.literal,
+                "${fixture.name}: network_id mismatch",
+            )
             assertEquals(
                 normalizeAuthority(fixture.authority),
                 normalizeAuthority(payload.authority),
@@ -172,6 +181,11 @@ class TransactionFixtureParityTest {
             val sourceFixture = checkNotNull(payloadFixturesByName[fixture.name]) {
                 "${fixture.name}: manifest fixture missing payload source"
             }
+            assertEquals(
+                sourceFixture.networkId,
+                fixture.networkId,
+                "${fixture.name}: manifest network_id mismatch",
+            )
             assertEquals(
                 sourceFixture.payloadBase64,
                 fixture.payloadBase64,
@@ -253,7 +267,7 @@ class TransactionFixtureParityTest {
     fun `fixture support rejects renamed clones and noncanonical base64`() {
         val first = TransactionManifestFixture(
             name = "first",
-            chain = "00000001",
+            networkId = TEST_NETWORK_ID,
             authority = "authority",
             creationTimeMs = 1,
             timeToLiveMs = 100_000L,
@@ -301,7 +315,58 @@ class TransactionFixtureParityTest {
     }
 
     @Test
+    fun transactionFixtureSchemasRejectChainChainIdAndChainIdSnakeCase() {
+        for (field in listOf("chain", "chainId", "chain_id")) {
+            val topLevel = payloadSourceDescriptor().apply { this[field] = "legacy" }
+            val topLevelError = assertFailsWith<IllegalArgumentException> {
+                AndroidFixtureSupport.payloadFixtureFromValue(topLevel)
+            }
+            assertTrue(
+                topLevelError.message.orEmpty().contains("unknown fields: [$field]"),
+                topLevelError.message,
+            )
+
+            val payload = payloadSourceDescriptor()
+            payloadObject(payload)[field] = "legacy"
+            val payloadError = assertFailsWith<IllegalArgumentException> {
+                AndroidFixtureSupport.payloadFixtureFromValue(payload)
+            }
+            assertTrue(
+                payloadError.message.orEmpty().contains("unknown fields: [$field]"),
+                payloadError.message,
+            )
+
+            val manifest = manifestDescriptor().apply { this[field] = "legacy" }
+            val manifestError = assertFailsWith<IllegalArgumentException> {
+                AndroidFixtureSupport.manifestFixtureFromValue(manifest)
+            }
+            assertTrue(
+                manifestError.message.orEmpty().contains("unknown fields: [$field]"),
+                manifestError.message,
+            )
+        }
+    }
+
+    @Test
     fun `fixture loaders reject unknown and ambiguous schema fields`() {
+
+        for (field in listOf("network_id", "payload.network_id")) {
+            val descriptor = payloadSourceDescriptor()
+            if (field == "network_id") {
+                descriptor[field] = TEST_NETWORK_ID.lowercase()
+            } else {
+                payloadObject(descriptor)["network_id"] = TEST_NETWORK_ID.lowercase()
+            }
+            val error = assertFailsWith<IllegalArgumentException> {
+                AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
+            }
+            assertEquals(
+                true,
+                error.message?.contains("exact canonical hash encoding"),
+                error.message,
+            )
+        }
+
         val extraTopLevelError = assertFailsWith<IllegalArgumentException> {
             AndroidFixtureSupport.payloadFixtureFromValue(
                 payloadSourceDescriptor().apply { this["unexpected"] = true },
@@ -532,7 +597,7 @@ class TransactionFixtureParityTest {
         val fixture = AndroidFixtureSupport.payloadFixtureFromValue(
             mapOf(
                 "name" to "wire-instruction-fixture",
-                "chain" to "00000001",
+                "network_id" to TEST_NETWORK_ID,
                 "authority" to sampleAuthority(0x51),
                 "creation_time_ms" to 0L,
                 "time_to_live_ms" to 100_000L,
@@ -542,7 +607,7 @@ class TransactionFixtureParityTest {
                 "signed_base64" to "AQ==",
                 "signed_hash" to "signed-hash",
                 "payload" to mapOf(
-                    "chain" to "00000001",
+                    "network_id" to TEST_NETWORK_ID,
                     "authority" to sampleAuthority(0x51),
                     "creation_time_ms" to 0L,
                     "time_to_live_ms" to 100_000L,
@@ -584,7 +649,7 @@ class TransactionFixtureParityTest {
         val fixture = AndroidFixtureSupport.payloadFixtureFromValue(
             mapOf(
                 "name" to "wire-instruction-arguments-fixture",
-                "chain" to "00000001",
+                "network_id" to TEST_NETWORK_ID,
                 "authority" to sampleAuthority(0x52),
                 "creation_time_ms" to 0L,
                 "time_to_live_ms" to 100_000L,
@@ -594,7 +659,7 @@ class TransactionFixtureParityTest {
                 "signed_base64" to "AQ==",
                 "signed_hash" to "signed-hash",
                 "payload" to mapOf(
-                    "chain" to "00000001",
+                    "network_id" to TEST_NETWORK_ID,
                     "authority" to sampleAuthority(0x52),
                     "creation_time_ms" to 0L,
                     "time_to_live_ms" to 100_000L,
@@ -630,7 +695,7 @@ class TransactionFixtureParityTest {
         val fixture = AndroidFixtureSupport.payloadFixtureFromValue(
             mapOf(
                 "name" to "missing-wire-fields",
-                "chain" to "00000002",
+                "network_id" to TEST_NETWORK_ID,
                 "authority" to sampleAuthority(0x53),
                 "creation_time_ms" to 1_735_000_000_000L,
                 "time_to_live_ms" to 100_000L,
@@ -640,7 +705,7 @@ class TransactionFixtureParityTest {
                 "signed_base64" to "AQ==",
                 "signed_hash" to "signed-hash",
                 "payload" to mapOf(
-                    "chain" to "00000002",
+                    "network_id" to TEST_NETWORK_ID,
                     "authority" to sampleAuthority(0x53),
                     "creation_time_ms" to 1_735_000_000_000L,
                     "time_to_live_ms" to 100_000L,
@@ -668,7 +733,7 @@ class TransactionFixtureParityTest {
 
     private fun payloadSourceDescriptor(): MutableMap<String, Any?> = mutableMapOf(
         "name" to "ttl-payload",
-        "chain" to "00000001",
+        "network_id" to TEST_NETWORK_ID,
         "authority" to CANONICAL_AUTHORITY,
         "creation_time_ms" to 1L,
         "time_to_live_ms" to 100_000L,
@@ -678,7 +743,7 @@ class TransactionFixtureParityTest {
         "signed_base64" to "AQ==",
         "signed_hash" to "signed-hash",
         "payload" to mutableMapOf(
-            "chain" to "00000001",
+            "network_id" to TEST_NETWORK_ID,
             "authority" to CANONICAL_AUTHORITY,
             "creation_time_ms" to 1L,
             "time_to_live_ms" to 100_000L,
@@ -697,7 +762,7 @@ class TransactionFixtureParityTest {
 
     private fun manifestDescriptor(): MutableMap<String, Any?> = mutableMapOf(
         "name" to "ttl-manifest",
-        "chain" to "00000001",
+        "network_id" to TEST_NETWORK_ID,
         "authority" to CANONICAL_AUTHORITY,
         "creation_time_ms" to 1L,
         "time_to_live_ms" to 100_000L,
@@ -792,6 +857,8 @@ class TransactionFixtureParityTest {
     companion object {
         private const val CANONICAL_AUTHORITY =
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        private const val TEST_NETWORK_ID =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
         private const val SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1"
         private const val VERSION_BYTE: Byte = 0x01
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()

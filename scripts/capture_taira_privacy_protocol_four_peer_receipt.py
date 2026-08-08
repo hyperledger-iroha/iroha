@@ -1,52 +1,66 @@
 #!/usr/bin/env python3
-"""Run the canonical Exact12 production-network gates and emit one receipt.
+"""Capture bounded Exact12 evidence on the secret-free qualification host.
 
-The receipt is deliberately separate from native proof-fixture evidence and
-from the generic validator restart receipt.  It is created only after the
-fixed four-peer integration targets have run against the exact prebuilt
-candidate ``irohad``.  The resulting body binds that binary, the signed Linux
-release archive, the canonical Exact12 matrix, and the complete source
-identity.  A later signed candidate archive makes the domain-separated receipt
-ID cryptographically authoritative.
+This controller never invokes Cargo and never accepts an existing protocol
+receipt.  It executes only the two prebuilt native test drivers from the
+root-frozen macOS build handoff, records their complete bounded output, and
+can preserve those bytes for diagnosis.  Whole-test execution is not release
+authority: v2 issuance remains deliberately closed until this controller uses
+the narrow action-driver IPC to own submission, direct peer queries, restarts,
+and outcome validation for all seven cases.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import os
-import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import NoReturn, Sequence
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 try:
+    from . import taira_privacy_protocol_receipt as evidence
+    from . import taira_privacy_sealed_controller as sealed_controller
+    from . import taira_rollout_admission as admission
     from .release_artifact_contract import (
         ReleaseArtifactError,
         canonical_json_bytes,
+        create_fresh_directory,
+        exclusive_output_fd,
         exclusive_write_bytes,
         stable_hash_path,
+        stable_open_relative,
         stable_read_path,
     )
-    from . import taira_rollout_admission as admission
 except ImportError:
+    import taira_privacy_protocol_receipt as evidence
+    import taira_privacy_sealed_controller as sealed_controller
+    import taira_rollout_admission as admission
     from release_artifact_contract import (
         ReleaseArtifactError,
         canonical_json_bytes,
+        create_fresh_directory,
+        exclusive_output_fd,
         exclusive_write_bytes,
         stable_hash_path,
+        stable_open_relative,
         stable_read_path,
     )
-    import taira_rollout_admission as admission
 
 
-NETWORK_FEATURES = "zk-stark privacy-release-evidence"
 DAEMON_FEATURES = "embedded-soracloud-runtime,zk-stark"
-JINDO_SECURITY_FILTER = "privacy_engines::jindo::security::tests"
+DEFAULT_CASE_TIMEOUT_SECONDS = 90 * 60
 
 
 class PrivacyProtocolReceiptError(RuntimeError):
@@ -96,61 +110,67 @@ def _source_identity(path: Path) -> admission.SourceIdentity:
     return admission._source_identity(value["source"], "Taira source identity")
 
 
-def _case_commands(case: str) -> tuple[tuple[str, ...], ...]:
-    network = (
-        "cargo",
-        "test",
-        "--locked",
-        "--release",
-        "-p",
-        "integration_tests",
-        "--test",
-        "network_functional",
-        "--features",
-        NETWORK_FEATURES,
-        case,
-        "--",
-        "--exact",
-        "--nocapture",
-        "--test-threads=1",
-    )
-    if case != PRIVACY_CASES["iroha-jindo-polynomial-commitment-v0"]:
-        return (network,)
-    jindo_certificate = (
-        "cargo",
-        "test",
-        "--locked",
-        "--release",
-        "-p",
-        "iroha_core",
-        "--lib",
-        JINDO_SECURITY_FILTER,
-        "--",
-        "--nocapture",
-        "--test-threads=1",
-    )
-    return (network, jindo_certificate)
-
-
-PRIVACY_CASES = {
-    row[0]: row[1]
-    for row in admission.PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1
-}
-
-
-def _run_case(
-    case: str,
+def _copy_frozen_file(
+    source: Path,
+    destination: Path,
+    expected_sha256: str,
     *,
-    repository: Path,
-    target_dir: Path,
-    validator_binary: Path,
-    log_path: Path,
-) -> str:
-    environment = os.environ.copy()
+    mode: int,
+    label: str,
+    executable: bool,
+) -> Path:
+    """Copy one root-frozen handoff file without a pathname or read gap."""
+
+    source_info = stable_hash_path(source)
+    if source_info.sha256 != expected_sha256:
+        _fail(f"{label} changed before installation")
+    creation_mode = 0o755 if executable else 0o600
+    try:
+        with (
+            stable_open_relative(
+                source.parent, source.name, expected=source_info
+            ) as source_descriptor,
+            exclusive_output_fd(destination, mode=creation_mode) as target_descriptor,
+        ):
+            while chunk := os.read(source_descriptor, 1024 * 1024):
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(target_descriptor, view)
+                    if written <= 0:
+                        _fail(f"short write installing {label}")
+                    view = view[written:]
+    except ReleaseArtifactError as exc:
+        raise PrivacyProtocolReceiptError(str(exc)) from exc
+    destination.chmod(mode)
+    installed = _canonical_file(destination, f"installed {label}", executable=executable)
+    if stable_hash_path(installed).sha256 != expected_sha256:
+        _fail(f"installed {label} digest differs")
+    return installed
+
+
+def _install_runtime_executable(
+    source: Path, destination: Path, expected_sha256: str
+) -> Path:
+    """Copy one frozen handoff file into the runtime-only executable directory."""
+
+    return _copy_frozen_file(
+        source,
+        destination,
+        expected_sha256,
+        mode=0o500,
+        label="native qualification executable",
+        executable=True,
+    )
+
+
+def _child_environment(validator_binary: Path, work_directory: Path) -> dict[str, str]:
+    environment = {
+        name: os.environ[name]
+        for name in ("HOME", "LANG", "LC_ALL", "PATH", "TMPDIR")
+        if name in os.environ
+    }
     environment.update(
         {
-            "CARGO_BUILD_JOBS": "1",
-            "CARGO_TARGET_DIR": str(target_dir),
             "IROHA_TEST_ALLOW_REENTRANT_BUILD": "0",
             "IROHA_TEST_BUILD_PROFILE": "release",
             "IROHA_TEST_REQUIRE_NETWORK": "1",
@@ -159,218 +179,397 @@ def _run_case(
             "PROFILE": "release",
             "TEST_NETWORK_BIN_IROHAD": str(validator_binary),
             "TEST_NETWORK_IROHAD_FEATURES": DAEMON_FEATURES,
+            "TMPDIR": str(work_directory),
         }
     )
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
-    descriptor = os.open(log_path, flags, 0o600)
-    validator_sha256 = stable_hash_path(validator_binary).sha256
+    return environment
+
+
+def _run_bounded(
+    executable: Path,
+    arguments: tuple[str, ...],
+    *,
+    environment: dict[str, str],
+    work_directory: Path,
+    timeout_seconds: int,
+) -> tuple[bytes, int]:
+    process = subprocess.Popen(
+        [str(executable), *arguments],
+        cwd=work_directory,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        close_fds=True,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    deadline = time.monotonic() + timeout_seconds
+    output = bytearray()
+    reached_eof = False
+
+    def kill_group() -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (PermissionError, ProcessLookupError):
+            if process.poll() is None:
+                process.kill()
+        process.wait()
+
     try:
-        for command in _case_commands(case):
-            header = (
-                f"TEST_NETWORK_BIN_IROHAD_SHA256={validator_sha256}\n"
-                + "$ "
-                + " ".join(command)
-                + "\n"
-            ).encode("utf-8")
-            os.write(descriptor, header)
-            sys.stdout.buffer.write(header)
-            sys.stdout.buffer.flush()
-            process = subprocess.Popen(
-                command,
-                cwd=repository,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-            assert process.stdout is not None
-            output_tail = b""
-            while chunk := process.stdout.read(64 * 1024):
-                os.write(descriptor, chunk)
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.buffer.flush()
-                output_tail = (output_tail + chunk)[-(4 * 1024 * 1024) :]
-            status = process.wait()
-            if status != 0:
-                _fail(f"privacy four-peer case {case!r} exited with status {status}")
-            lowered = output_tail.lower()
-            if b"running 0 tests" in lowered:
-                _fail(f"privacy four-peer case {case!r} executed zero tests")
-            if b"fixture-only" in lowered or b"fixture_only" in lowered:
-                _fail(f"privacy four-peer case {case!r} reported fixture-only evidence")
-            passed = re.findall(
-                rb"test result: ok\. ([1-9][0-9]*) passed; 0 failed; 0 ignored;",
-                output_tail,
-            )
-            if not passed:
-                _fail(
-                    f"privacy four-peer case {case!r} lacks an unskipped passing test result"
-                )
-            is_network_case = "integration_tests" in command
-            if is_network_case:
-                marker = (
-                    "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:"
-                    f"{case}:passed"
-                ).encode("ascii")
-                if marker not in output_tail:
+        while not reached_eof:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                kill_group()
+                _fail(f"native privacy driver exceeded {timeout_seconds} seconds")
+            events = selector.select(min(remaining, 1.0))
+            if not events:
+                if process.poll() is not None:
+                    # A closed child can still leave readable bytes in the pipe.
+                    events = selector.select(0)
+                    if not events:
+                        reached_eof = True
+                continue
+            for key, _mask in events:
+                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                if not chunk:
+                    reached_eof = True
+                    break
+                output.extend(chunk)
+                if len(output) > evidence.MAX_COMMAND_OUTPUT_BYTES:
+                    kill_group()
                     _fail(
-                        f"privacy four-peer case {case!r} lacks its post-query/restart marker"
+                        "native privacy driver output exceeds the canonical transcript bound"
                     )
-                if b"running 1 test" not in lowered or passed[-1] != b"1":
-                    _fail(
-                        f"privacy four-peer case {case!r} did not execute exactly one named test"
-                    )
-        os.fsync(descriptor)
+        status = process.wait(timeout=max(1.0, deadline - time.monotonic()))
+    except BaseException:
+        if process.poll() is None:
+            kill_group()
+        raise
     finally:
-        os.close(descriptor)
-    return stable_hash_path(log_path).sha256
+        selector.close()
+        process.stdout.close()
+    if not output:
+        _fail("native privacy driver produced an empty transcript")
+    sys.stdout.buffer.write(output)
+    sys.stdout.buffer.flush()
+    return bytes(output), status
+
+
+def _write_case_evidence(
+    output: Path,
+    *,
+    index: int,
+    candidate_binding_sha256: str,
+    drivers: dict[str, Path],
+    driver_digests: dict[str, str],
+    environment: dict[str, str],
+    work_root: Path,
+    timeout_seconds: int,
+) -> dict[str, object]:
+    case, kind = evidence.CASE_DEFINITIONS[index]
+    command_rows: list[dict[str, object]] = []
+    for command_index, (driver_name, arguments) in enumerate(
+        evidence.command_plan(index)
+    ):
+        command_work = work_root / f"case-{index:02d}-command-{command_index:02d}"
+        command_work.mkdir(mode=0o700)
+        command_environment = dict(environment)
+        command_environment["TMPDIR"] = str(command_work)
+        output_bytes, status = _run_bounded(
+            drivers[driver_name],
+            arguments,
+            environment=command_environment,
+            work_directory=command_work,
+            timeout_seconds=timeout_seconds,
+        )
+        if status != 0:
+            _fail(f"privacy case {case!r} exited with status {status}")
+        command_rows.append(
+            {
+                "args": list(arguments),
+                "driver": driver_name,
+                "driver_sha256": driver_digests[driver_name],
+                "exit_code": status,
+                "index": command_index,
+                "output_base64": base64.b64encode(output_bytes).decode("ascii"),
+                "output_sha256": hashlib.sha256(output_bytes).hexdigest(),
+                "output_size": len(output_bytes),
+            }
+        )
+
+    transcript_body: dict[str, object] = {
+        "candidate_binding_sha256": candidate_binding_sha256,
+        "case": case,
+        "commands": command_rows,
+        "index": index,
+        "kind": kind,
+        "schema": evidence.TRANSCRIPT_SCHEMA,
+        "schema_version": evidence.TRANSCRIPT_SCHEMA_VERSION,
+    }
+    transcript_id = evidence.compute_transcript_id(transcript_body)
+    transcript_payload = canonical_json_bytes(
+        {**transcript_body, "transcript_id": transcript_id}
+    )
+    transcript_path = output / evidence.transcript_name(index)
+    exclusive_write_bytes(transcript_path, transcript_payload, mode=0o600)
+    transcript_sha256 = hashlib.sha256(transcript_payload).hexdigest()
+
+    result_body: dict[str, object] = {
+        "candidate_binding_sha256": candidate_binding_sha256,
+        "case": case,
+        "index": index,
+        "kind": kind,
+        "schema": evidence.RESULT_SCHEMA,
+        "schema_version": evidence.RESULT_SCHEMA_VERSION,
+        "status": "passed",
+        "transcript_id": transcript_id,
+        "transcript_path": evidence.transcript_name(index),
+        "transcript_sha256": transcript_sha256,
+        "transcript_size": len(transcript_payload),
+    }
+    result_id = evidence.compute_result_id(result_body)
+    result_payload = canonical_json_bytes({**result_body, "result_id": result_id})
+    result_path = output / evidence.result_name(index)
+    exclusive_write_bytes(result_path, result_payload, mode=0o600)
+    return {
+        "case": case,
+        "index": index,
+        "kind": kind,
+        "result_id": result_id,
+        "result_path": evidence.result_name(index),
+        "result_sha256": hashlib.sha256(result_payload).hexdigest(),
+        "result_size": len(result_payload),
+        "transcript_id": transcript_id,
+        "transcript_path": evidence.transcript_name(index),
+        "transcript_sha256": transcript_sha256,
+        "transcript_size": len(transcript_payload),
+    }
 
 
 def capture(args: argparse.Namespace) -> dict[str, object]:
-    repository = _canonical_directory(args.repository, "repository")
     validator = _canonical_file(
-        args.validator_binary, "candidate validator binary", executable=True
+        args.validator_binary, "candidate validator binary"
+    )
+    network_driver = _canonical_file(
+        args.network_driver, "network functional driver"
+    )
+    jindo_driver = _canonical_file(
+        args.jindo_driver, "Jindo security driver"
+    )
+    action_driver = _canonical_file(
+        args.action_driver, "privacy action-construction driver"
     )
     linux_archive = _canonical_file(args.linux_archive, "Linux release archive")
     exact12 = _canonical_file(args.exact12_matrix, "Exact12 matrix")
     source_identity_path = _canonical_file(args.source_identity, "source identity")
     source = _source_identity(source_identity_path)
-    target_dir = _canonical_directory(args.cargo_target_dir, "Cargo target directory")
-    if args.output.exists() or args.output.is_symlink() or not args.output.is_absolute():
-        _fail("receipt output must be one new absolute path")
-    if args.output.parent.resolve(strict=True) != args.output.parent:
-        _fail("receipt output parent must be canonical")
-
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repository,
-        check=False,
-        capture_output=True,
-        text=True,
+    # This compiled operation registry, not a caller flag or libtest marker, is
+    # the issuance barrier.  It currently names only the genuine VeRange action
+    # operation, so the legacy whole-test capture below is unreachable and can
+    # never attest semantic success.
+    try:
+        sealed_controller.require_complete_release_operation_surface()
+    except sealed_controller.SealedPrivacyControllerError as exc:
+        raise PrivacyProtocolReceiptError(
+            "sealed controller does not yet own every retained action operation: "
+            f"{exc}"
+        ) from exc
+    _fail(
+        "privacy protocol v2 issuance is closed: no receipt emitter is connected "
+        "to the complete sealed-controller case records"
     )
-    if head.returncode != 0 or head.stdout.strip() != source.commit:
-        _fail("receipt repository HEAD differs from the candidate source identity")
-    cargo_lock = _canonical_file(repository / "Cargo.lock", "Cargo.lock")
-    if stable_hash_path(cargo_lock).sha256 != source.cargo_lock_sha256:
-        _fail("receipt Cargo.lock differs from the candidate source identity")
+    output_parent = _canonical_directory(args.output_directory.parent, "output parent")
+    work_parent = _canonical_directory(args.work_directory.parent, "work parent")
+    if args.output_directory.parent != output_parent:
+        _fail("privacy evidence output escaped its canonical parent")
+    if args.work_directory.parent != work_parent:
+        _fail("privacy evidence work directory escaped its canonical parent")
+    if args.output_directory == args.work_directory:
+        _fail("privacy evidence output and work directories must be distinct")
+    try:
+        output = create_fresh_directory(args.output_directory, mode=0o700)
+        work_root = create_fresh_directory(args.work_directory, mode=0o700)
+    except ReleaseArtifactError as exc:
+        raise PrivacyProtocolReceiptError(str(exc)) from exc
 
-    candidate_files = {
-        "validator": stable_hash_path(validator),
-        "linux_archive": stable_hash_path(linux_archive),
-        "exact12": stable_hash_path(exact12),
-        "source_identity": stable_hash_path(source_identity_path),
+    paths = {
+        "action_driver": action_driver,
+        "exact12": exact12,
+        "jindo_driver": jindo_driver,
+        "linux_archive": linux_archive,
+        "network_driver": network_driver,
+        "source_identity": source_identity_path,
+        "validator": validator,
     }
-    unique_cases = tuple(dict.fromkeys(PRIVACY_CASES.values()))
-    with tempfile.TemporaryDirectory(
-        prefix="taira-privacy-protocol-four-peer-"
-    ) as raw_logs:
-        log_root = Path(raw_logs).resolve(strict=True)
-        case_digests: dict[str, str] = {}
-        for ordinal, case in enumerate(unique_cases, start=1):
-            case_digests[case] = _run_case(
-                case,
-                repository=repository,
-                target_dir=target_dir,
-                validator_binary=validator,
-                log_path=log_root / f"case-{ordinal:02d}.log",
-            )
+    before = {
+        name: stable_hash_path(
+            path,
+            max_size=(
+                evidence.MAX_DRIVER_BYTES if name.endswith("_driver") else None
+            ),
+        )
+        for name, path in paths.items()
+    }
+    driver_digests = {
+        evidence.ACTION_DRIVER: before["action_driver"].sha256,
+        evidence.JINDO_DRIVER: before["jindo_driver"].sha256,
+        evidence.NETWORK_DRIVER: before["network_driver"].sha256,
+    }
+    driver_sources = {
+        evidence.ACTION_DRIVER: action_driver,
+        evidence.JINDO_DRIVER: jindo_driver,
+        evidence.NETWORK_DRIVER: network_driver,
+    }
+    for driver_name, evidence_name in sorted(
+        evidence.DRIVER_EVIDENCE_NAMES.items()
+    ):
+        _copy_frozen_file(
+            driver_sources[driver_name],
+            output / evidence_name,
+            driver_digests[driver_name],
+            mode=0o600,
+            label=f"preserved {driver_name} bytes",
+            executable=False,
+        )
+    executable_root = work_root / "executables"
+    executable_root.mkdir(mode=0o700)
+    installed_validator = _install_runtime_executable(
+        validator,
+        executable_root / "irohad",
+        before["validator"].sha256,
+    )
+    driver_paths = {
+        evidence.JINDO_DRIVER: _install_runtime_executable(
+            jindo_driver,
+            executable_root / evidence.JINDO_DRIVER,
+            driver_digests[evidence.JINDO_DRIVER],
+        ),
+        evidence.NETWORK_DRIVER: _install_runtime_executable(
+            network_driver,
+            executable_root / evidence.NETWORK_DRIVER,
+            driver_digests[evidence.NETWORK_DRIVER],
+        ),
+    }
+    candidate: dict[str, object] = {
+        "artifact_handoff_sha256": args.artifact_handoff_sha256,
+        "drivers": driver_digests,
+        "exact12_matrix_sha256": before["exact12"].sha256,
+        "linux_release_archive_sha256": before["linux_archive"].sha256,
+        "source": source.as_dict(),
+        "validator_binary_sha256": before["validator"].sha256,
+    }
+    candidate_binding_sha256 = evidence.compute_candidate_binding_sha256(candidate)
+    environment = _child_environment(installed_validator, work_root)
+    case_rows = [
+        _write_case_evidence(
+            output,
+            index=index,
+            candidate_binding_sha256=candidate_binding_sha256,
+            drivers=driver_paths,
+            driver_digests=driver_digests,
+            environment=environment,
+            work_root=work_root,
+            timeout_seconds=args.case_timeout_seconds,
+        )
+        for index in range(len(evidence.CASE_DEFINITIONS))
+    ]
 
-    for label, before in candidate_files.items():
-        path = {
-            "validator": validator,
-            "linux_archive": linux_archive,
-            "exact12": exact12,
-            "source_identity": source_identity_path,
-        }[label]
-        if stable_hash_path(path) != before:
-            _fail(f"{label} changed while the privacy four-peer cases ran")
+    for name, path in paths.items():
+        if stable_hash_path(path) != before[name]:
+            _fail(f"{name} changed while the privacy qualification ran")
 
     issued_at = int(time.time())
-    body: dict[str, object] = {
-        "candidate": {
-            "exact12_matrix_sha256": candidate_files["exact12"].sha256,
-            "linux_release_archive_sha256": candidate_files[
-                "linux_archive"
-            ].sha256,
-            "source": source.as_dict(),
-            "validator_binary_sha256": candidate_files["validator"].sha256,
-        },
-        "expires_at_unix": (
-            issued_at + admission.MAX_PRIVACY_PROTOCOL_RECEIPT_LIFETIME_SECONDS
-        ),
+    receipt_body: dict[str, object] = {
+        "candidate": candidate,
+        "cases": case_rows,
+        "expires_at_unix": issued_at + evidence.MAX_RECEIPT_LIFETIME_SECONDS,
         "issued_at_unix": issued_at,
         "outcomes": [
             {
-                "case": case,
-                "case_output_sha256": case_digests[case],
+                "case_index": case_index,
                 "closed_reason": closed_reason,
                 "index": index,
                 "production_outcome": production_outcome,
                 "profile": profile,
                 "protocol": protocol,
                 "security_boundary": security_boundary,
-                "validator_binary_sha256": candidate_files["validator"].sha256,
             }
             for index, (
                 protocol,
-                case,
+                case_index,
                 profile,
                 production_outcome,
                 closed_reason,
                 security_boundary,
-            ) in enumerate(admission.PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1)
+            ) in enumerate(evidence.OUTCOMES)
         ],
         "platform": {"arch": "arm64", "os": "macos", "peer_count": 4},
-        "schema": admission.PRIVACY_PROTOCOL_RECEIPT_SCHEMA,
-        "schema_version": admission.PRIVACY_PROTOCOL_RECEIPT_SCHEMA_VERSION,
+        "schema": evidence.RECEIPT_SCHEMA,
+        "schema_version": evidence.RECEIPT_SCHEMA_VERSION,
     }
-    receipt_id = admission.compute_privacy_protocol_receipt_id(body)
-    receipt = {**body, "receipt_id": receipt_id}
-    payload = canonical_json_bytes(receipt)
-    admission._validate_privacy_protocol_receipt(
-        payload,
-        expected_source=source,
-        expected_validator_binary_sha256=candidate_files["validator"].sha256,
-        expected_linux_release_archive_sha256=candidate_files[
-            "linux_archive"
-        ].sha256,
-        expected_exact12_matrix_sha256=candidate_files["exact12"].sha256,
+    receipt_id = evidence.compute_receipt_id(receipt_body)
+    exclusive_write_bytes(
+        output / evidence.RECEIPT_NAME,
+        canonical_json_bytes({**receipt_body, "receipt_id": receipt_id}),
+        mode=0o600,
+    )
+    evidence.validate_evidence_directory(
+        output,
+        expected_source=source.as_dict(),
+        expected_validator_binary_sha256=before["validator"].sha256,
+        expected_linux_release_archive_sha256=before["linux_archive"].sha256,
+        expected_exact12_matrix_sha256=before["exact12"].sha256,
+        expected_artifact_handoff_sha256=args.artifact_handoff_sha256,
         expected_receipt_id=receipt_id,
         now_unix=issued_at,
     )
-    exclusive_write_bytes(args.output, payload, mode=0o600)
     return {
-        "linux_release_archive_sha256": candidate_files["linux_archive"].sha256,
-        "outcome_count": len(admission.PRIVACY_PROTOCOL_FOUR_PEER_OUTCOMES_V1),
-        "output": str(args.output),
+        "case_count": len(case_rows),
+        "evidence_directory": str(output),
+        "outcome_count": len(evidence.OUTCOMES),
         "receipt_id": receipt_id,
-        "validator_binary_sha256": candidate_files["validator"].sha256,
+        "validator_binary_sha256": before["validator"].sha256,
     }
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--repository", type=Path, required=True)
     parser.add_argument("--validator-binary", type=Path, required=True)
+    parser.add_argument("--action-driver", type=Path, required=True)
+    parser.add_argument("--network-driver", type=Path, required=True)
+    parser.add_argument("--jindo-driver", type=Path, required=True)
     parser.add_argument("--linux-archive", type=Path, required=True)
     parser.add_argument("--exact12-matrix", type=Path, required=True)
     parser.add_argument("--source-identity", type=Path, required=True)
-    parser.add_argument("--cargo-target-dir", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--artifact-handoff-sha256", required=True)
+    parser.add_argument("--output-directory", type=Path, required=True)
+    parser.add_argument("--work-directory", type=Path, required=True)
+    parser.add_argument(
+        "--case-timeout-seconds",
+        type=int,
+        default=DEFAULT_CASE_TIMEOUT_SECONDS,
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.case_timeout_seconds <= 0:
+            _fail("case timeout must be positive")
         result = capture(args)
     except (
         OSError,
         ReleaseArtifactError,
         PrivacyProtocolReceiptError,
+        evidence.PrivacyProtocolEvidenceError,
+        sealed_controller.SealedPrivacyControllerError,
         admission.TairaRolloutAdmissionError,
     ) as exc:
-        print(f"Taira privacy protocol receipt refused: {exc}", file=sys.stderr)
+        print(f"Taira privacy protocol evidence refused: {exc}", file=sys.stderr)
         return 1
     sys.stdout.buffer.write(canonical_json_bytes(result))
     return 0

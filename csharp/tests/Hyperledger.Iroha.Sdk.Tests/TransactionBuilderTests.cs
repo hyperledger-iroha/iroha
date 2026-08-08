@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Numeric;
@@ -13,20 +14,22 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class TransactionBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
-    private const string FixtureChainId = "00000042";
+    private const string FixtureNetworkIdLiteral = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private static NetworkId FixtureNetworkId => NetworkId.Parse(FixtureNetworkIdLiteral);
     private static FeePaymentIntent EmptyAuthorityFeePayment =>
         FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>());
 
     [Fact]
     public void TransactionBuilderRejectsPaddedTopLevelFields()
     {
+        Assert.Throws<FormatException>(() => NetworkId.Parse($" {FixtureNetworkIdLiteral}"));
+        Assert.Throws<ArgumentNullException>(() =>
+            new TransactionBuilder(null!, FixtureAccountId, EmptyAuthorityFeePayment));
         Assert.Throws<ArgumentException>(() =>
-            new TransactionBuilder(" 00000042", FixtureAccountId, EmptyAuthorityFeePayment));
-        Assert.Throws<ArgumentException>(() =>
-            new TransactionBuilder("00000042", $" {FixtureAccountId}", EmptyAuthorityFeePayment));
+            new TransactionBuilder(FixtureNetworkId, $" {FixtureAccountId}", EmptyAuthorityFeePayment));
 
-        var builder = new TransactionBuilder("00000042", FixtureAccountId, EmptyAuthorityFeePayment);
+        var builder = new TransactionBuilder(FixtureNetworkId, FixtureAccountId, EmptyAuthorityFeePayment);
         Assert.Throws<ArgumentException>(() => builder.SetMetadata(" trace ", JsonValue.Create("abc")));
         Assert.Throws<ArgumentException>(
             () => builder.ReplaceMetadata(
@@ -42,7 +45,7 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => new TransactionEncodingContext($" {FixtureAccountId}"));
 
         var context = new TransactionEncodingContext(FixtureAccountId);
-        Assert.Throws<ArgumentException>(() => context.EncodeChainId(" 00000042"));
+        Assert.Throws<ArgumentNullException>(() => context.EncodeNetworkDomain(null!));
         Assert.Throws<ArgumentException>(() => context.EncodeAccountId($" {FixtureAccountId}"));
         Assert.Throws<ArgumentException>(() => context.EncodeName(" display_name"));
         Assert.Throws<ArgumentException>(() => context.EncodeOptionalString(" memo "));
@@ -74,19 +77,19 @@ public sealed class TransactionBuilderTests
         ]);
 
         Assert.Equal(4U, BinaryPrimitives.ReadUInt32LittleEndian(encoded));
-        var sequenceOffset = 12;
-        Assert.Equal(3UL, BinaryPrimitives.ReadUInt64LittleEndian(encoded.AsSpan(sequenceOffset)));
-        var cursor = sequenceOffset + 8;
+        var sequence = ReadField(encoded.AsSpan(sizeof(uint)), out var sequenceConsumed);
+        Assert.Equal(encoded.Length - sizeof(uint), sequenceConsumed);
+        Assert.Equal(3UL, BinaryPrimitives.ReadUInt64LittleEndian(sequence));
+        var cursor = sizeof(ulong);
         var tags = new List<uint>();
         for (var index = 0; index < 3; index++)
         {
-            var itemLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(encoded.AsSpan(cursor)));
-            cursor += 8;
-            tags.Add(BinaryPrimitives.ReadUInt32LittleEndian(encoded.AsSpan(cursor)));
-            cursor += itemLength;
+            var item = ReadField(sequence.AsSpan(cursor), out var consumed);
+            tags.Add(BinaryPrimitives.ReadUInt32LittleEndian(item));
+            cursor += consumed;
         }
         Assert.Equal([0U, 1U, 0U], tags);
-        Assert.Equal(encoded.Length, cursor);
+        Assert.Equal(sequence.Length, cursor);
 
         hash[0] = 0;
         Assert.Equal(0xA5, invocation.ExpectedCodeHash[0]);
@@ -108,7 +111,7 @@ public sealed class TransactionBuilderTests
             Enumerable.Repeat((byte)0x11, 32).ToArray(),
             "run");
         var missingGas = new TransactionBuilder(
-            FixtureChainId,
+            FixtureNetworkId,
             FixtureAccountId,
             EmptyAuthorityFeePayment)
             .AddContractCall(invocation);
@@ -119,7 +122,7 @@ public sealed class TransactionBuilderTests
             "1",
             FixtureAccountId);
         var payload = new TransactionBuilder(
-            FixtureChainId,
+            FixtureNetworkId,
             FixtureAccountId,
             FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), gasLimit: 100_000))
             .WithExecutableBatch([
@@ -141,6 +144,12 @@ public sealed class TransactionBuilderTests
         var json = JsonSerializer.Serialize(payload);
         Assert.Contains("\"instructions\":{\"Batch\"", json);
         Assert.DoesNotContain("\"Executable\"", json);
+        using var document = JsonDocument.Parse(json);
+        var domain = document.RootElement.GetProperty("domain");
+        Assert.Equal("network", domain.GetProperty("kind").GetString());
+        Assert.Equal(FixtureNetworkIdLiteral, domain.GetProperty("value").GetString());
+        Assert.False(document.RootElement.TryGetProperty("chain", out _));
+        Assert.False(document.RootElement.TryGetProperty("network_id", out _));
     }
 
     [Fact]
@@ -178,14 +187,11 @@ public sealed class TransactionBuilderTests
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
-    [InlineData("swift_transfer_asset_basic", 805, 1423, "aaf57e9f247a5d92ba3c4c7d5076bd4aacf9b24b7de3b11e511b026784dec38b")]
-    [InlineData("swift_mint_asset_basic", 695, 1313, "e38b26f35c901bf2099facd691511ea1ad1d1ebc7c43d98a9f473731fdeecd09")]
-    [InlineData("swift_burn_asset_basic", 695, 1313, "8e2d28a9da78b1db4800d1e2e86be623a7d566235616c08daf813d9dcdd9a907")]
-    public void BuildSignedProducesDeterministicGoldenOutputs(
-        string fixtureName,
-        int expectedPayloadLength,
-        int expectedSignedLength,
-        string expectedHashHex)
+    [InlineData("swift_transfer_asset_basic")]
+    [InlineData("swift_mint_asset_basic")]
+    [InlineData("swift_burn_asset_basic")]
+    public void SwiftParityDescriptorsRequireCanonicalNetworkIdAndPositiveTtl(
+        string fixtureName)
     {
         using var payloadsDocument = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "swift_parity_payloads.json")));
@@ -193,10 +199,36 @@ public sealed class TransactionBuilderTests
         var payload = payloadsDocument.RootElement.EnumerateArray()
             .First(candidate => candidate.GetProperty("name").GetString() == fixtureName)
             .GetProperty("payload");
+        var networkId = payload.GetProperty("network_id").GetString();
+
+        Assert.Equal(FixtureNetworkIdLiteral, networkId);
+        Assert.Equal(FixtureNetworkId, NetworkId.Parse(networkId!));
+        Assert.True(payload.GetProperty("time_to_live_ms").GetUInt64() > 0);
+        Assert.False(payload.TryGetProperty("chain", out _));
+        Assert.False(payload.TryGetProperty("chain_id", out _));
+    }
+
+    [Theory]
+    [InlineData("swift_transfer_asset_basic")]
+    [InlineData("swift_mint_asset_basic")]
+    [InlineData("swift_burn_asset_basic")]
+    public void BuildSignedMatchesRustOwnedSwiftParityFixtures(string fixtureName)
+    {
+        var fixturesRoot = Path.Combine(AppContext.BaseDirectory, "Fixtures");
+        using var payloadsDocument = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(fixturesRoot, "swift_parity_payloads.json")));
+        using var manifestDocument = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(fixturesRoot, "swift_parity_manifest.json")));
+
+        var payload = payloadsDocument.RootElement.EnumerateArray()
+            .First(candidate => candidate.GetProperty("name").GetString() == fixtureName)
+            .GetProperty("payload");
+        var manifest = manifestDocument.RootElement.GetProperty("fixtures").EnumerateArray()
+            .First(candidate => candidate.GetProperty("name").GetString() == fixtureName);
 
         var builder = new TransactionBuilder(
-            payload.GetProperty("chain").GetString()!,
-            FixtureAccountId,
+            NetworkId.Parse(payload.GetProperty("network_id").GetString()!),
+            payload.GetProperty("authority").GetString()!,
             EmptyAuthorityFeePayment)
             .SetCreationTimeMilliseconds((ulong)payload.GetProperty("creation_time_ms").GetInt64())
             .SetTimeToLiveMilliseconds((ulong)payload.GetProperty("time_to_live_ms").GetInt64())
@@ -207,7 +239,7 @@ public sealed class TransactionBuilderTests
         var action = arguments.GetProperty("action").GetString();
         var assetDefinitionId = arguments.GetProperty("asset_definition_id").GetString()!;
         var quantity = arguments.GetProperty("quantity").GetString()!;
-        var destination = FixtureAccountId;
+        var destination = arguments.GetProperty("destination").GetString()!;
 
         _ = action switch
         {
@@ -218,9 +250,23 @@ public sealed class TransactionBuilderTests
         };
 
         var envelope = builder.BuildSigned(Convert.FromHexString(FixtureSeedHex));
-        Assert.Equal(expectedPayloadLength, envelope.PayloadBytes.Length);
-        Assert.Equal(expectedSignedLength, envelope.SignedTransactionBytes.Length);
-        Assert.Equal(expectedHashHex, envelope.TransactionHashHex);
+        var expectedPayload = Convert.FromBase64String(
+            manifest.GetProperty("payload_base64").GetString()!);
+        var expectedSigned = Convert.FromBase64String(
+            manifest.GetProperty("signed_base64").GetString()!);
+        Assert.True(
+            envelope.PayloadBytes.SequenceEqual(expectedPayload),
+            $"Rust-owned Swift fixture `{fixtureName}` must be regenerated; managed bytes were not blessed.");
+        Assert.Equal(
+            expectedPayload,
+            File.ReadAllBytes(Path.Combine(fixturesRoot, $"{fixtureName}.norito")));
+        Assert.Equal(expectedSigned, envelope.SignedTransactionBytes);
+        Assert.Equal(
+            manifest.GetProperty("payload_hash").GetString(),
+            Convert.ToHexString(IrohaHash.Hash(envelope.PayloadBytes)).ToLowerInvariant());
+        Assert.Equal(
+            manifest.GetProperty("signed_hash").GetString(),
+            envelope.TransactionHashHex);
 
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
     }
@@ -292,6 +338,39 @@ public sealed class TransactionBuilderTests
             Assert.NotEmpty(value);
             value[0] ^= 0xff;
         }
+    }
+
+    [Fact]
+    public void SignedTransactionUsesNestedCanonicalSignatureFieldsAndRejectsFixedOuterAlias()
+    {
+        var envelope = NewTransactionBuilder()
+            .TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId)
+            .SetCreationTimeMilliseconds(1_736_000_000_000)
+            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
+
+        Assert.Equal(
+            new byte[] { 0x8a, 0x01, 0x88, 0x01 },
+            envelope.SignedTransactionBytes[..4]);
+        var transactionSignature = ReadField(
+            envelope.SignedTransactionBytes,
+            out _);
+        Assert.Equal(138, transactionSignature.Length);
+        var signatureOf = ReadField(transactionSignature, out var signatureConsumed);
+        Assert.Equal(transactionSignature.Length, signatureConsumed);
+        Assert.Equal(136, signatureOf.Length);
+
+        var fixedFields = new OfflineNoritoWriter();
+        fixedFields.WriteField(transactionSignature);
+        fixedFields.WriteField(envelope.PayloadBytes);
+        fixedFields.WriteField([0]);
+        var obsolete = fixedFields.ToArray();
+        AssertArgumentException(
+            "signedTransactionBytes",
+            () => new SignedTransactionEnvelope(
+                obsolete,
+                obsolete,
+                envelope.PayloadBytes,
+                envelope.TransactionHash));
     }
 
     [Fact]
@@ -387,24 +466,19 @@ public sealed class TransactionBuilderTests
     }
 
     [Theory]
-    [InlineData("", FixtureAccountId)]
-    [InlineData(" 00000042", FixtureAccountId)]
-    [InlineData("00000042 ", FixtureAccountId)]
-    [InlineData("0000 0042", FixtureAccountId)]
-    [InlineData("0000\u000042", FixtureAccountId)]
-    [InlineData(FixtureChainId, "")]
-    [InlineData(FixtureChainId, " ")]
-    [InlineData(FixtureChainId, " sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
-    [InlineData(FixtureChainId, "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
-    [InlineData(FixtureChainId, "sorauﾛ1N ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
-    [InlineData(FixtureChainId, "sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
-    [InlineData(FixtureChainId, "merchant@sora")]
-    [InlineData(FixtureChainId, "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
-    [InlineData(FixtureChainId, "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
-    public void ConstructorRejectsNonExactRequiredFields(string chainId, string authorityAccountId)
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData("sorauﾛ1N ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("merchant@sora")]
+    [InlineData("0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
+    [InlineData("n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
+    public void ConstructorRejectsNonExactRequiredFields(string authorityAccountId)
     {
         Assert.Throws<ArgumentException>(() =>
-            new TransactionBuilder(chainId, authorityAccountId, EmptyAuthorityFeePayment));
+            new TransactionBuilder(FixtureNetworkId, authorityAccountId, EmptyAuthorityFeePayment));
     }
 
     [Fact]
@@ -661,15 +735,54 @@ public sealed class TransactionBuilderTests
 
     [Theory]
     [InlineData("")]
-    [InlineData(" 00000042")]
-    [InlineData("00000042 ")]
-    [InlineData("0000 0042")]
-    [InlineData("0000\u000042")]
-    public void TransactionEncodingContextRejectsNonExactChainIds(string chainId)
+    [InlineData("00000042")]
+    [InlineData("hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#a2f0")]
+    [InlineData("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#0000")]
+    [InlineData("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91148#B2D1")]
+    [InlineData("genesis")]
+    public void NetworkIdRejectsNonCanonicalTransactionDomains(string networkId)
+    {
+        Assert.Throws<FormatException>(() => NetworkId.Parse(networkId));
+    }
+
+    [Fact]
+    public void TransactionEncodingContextEncodesExactNetworkDomain()
     {
         var context = new TransactionEncodingContext(FixtureAccountId);
+        var encoded = context.EncodeNetworkDomain(FixtureNetworkId);
+        var expected = new byte[sizeof(uint) + 1 + NetworkId.ByteLength];
+        expected[sizeof(uint)] = NetworkId.ByteLength;
+        FixtureNetworkId.ToBytes().CopyTo(expected, sizeof(uint) + 1);
 
-        Assert.Throws<ArgumentException>(() => context.EncodeChainId(chainId));
+        Assert.Equal(expected, encoded);
+        AssertNetworkDomain(encoded);
+    }
+
+    [Fact]
+    public void TransactionBuilderAcceptsCanonicalEmbeddedI105DiscriminantAndVerifiesKeyBytes()
+    {
+        const ushort embeddedDiscriminant = 369;
+        var privateKeySeed = Convert.FromHexString(FixtureSeedHex);
+        var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
+        var authority = AccountAddress.FromPublicKey(publicKey, "ed25519")
+            .ToI105(embeddedDiscriminant);
+        var context = new TransactionEncodingContext(authority);
+
+        Assert.NotEqual(FixtureAccountId, authority);
+        Assert.Equal(
+            authority,
+            AccountAddress.Parse(authority, embeddedDiscriminant).ToI105(embeddedDiscriminant));
+        Assert.Equal(
+            new TransactionEncodingContext(FixtureAccountId).EncodeAccountController(FixtureAccountId),
+            context.EncodeAccountController(authority));
+        context.EnsureAuthorityMatchesPrivateKey(privateKeySeed);
+
+        var envelope = new TransactionBuilder(FixtureNetworkId, authority, EmptyAuthorityFeePayment)
+            .TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId)
+            .SetCreationTimeMilliseconds(1_736_000_000_000)
+            .BuildSigned(privateKeySeed);
+
+        AssertSignedEnvelopeStructure(envelope, privateKeySeed);
     }
 
     [Theory]
@@ -860,7 +973,7 @@ public sealed class TransactionBuilderTests
     public async Task LedgerClientSubmitAndWaitPollsUntilTerminalState()
     {
         var transaction = new TransactionBuilder(
-            "00000042",
+            FixtureNetworkId,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
@@ -942,7 +1055,7 @@ public sealed class TransactionBuilderTests
     public void BuildSignedEncodesAssetMetadataInstructions()
     {
         var envelope = new TransactionBuilder(
-                "00000042",
+                FixtureNetworkId,
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetAssetKeyValue(
@@ -983,7 +1096,7 @@ public sealed class TransactionBuilderTests
     public void AddInstructionAcceptsAccountAndAssetDefinitionMetadataFactories()
     {
         var builder = new TransactionBuilder(
-            "00000042",
+            FixtureNetworkId,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetDomainKeyValue(
@@ -1022,7 +1135,7 @@ public sealed class TransactionBuilderTests
     public void BuildSignedEncodesAccountAndAssetDefinitionMetadataInstructions()
     {
         var envelope = new TransactionBuilder(
-                "00000042",
+                FixtureNetworkId,
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetDomainKeyValue(
@@ -1109,7 +1222,7 @@ public sealed class TransactionBuilderTests
     public void AddInstructionAcceptsNftAndTriggerFactories()
     {
         var builder = new TransactionBuilder(
-            "00000042",
+            FixtureNetworkId,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetNftKeyValue(
@@ -1147,7 +1260,7 @@ public sealed class TransactionBuilderTests
     public void BuildSignedEncodesNftAndTriggerInstructions()
     {
         var envelope = new TransactionBuilder(
-                "00000042",
+                FixtureNetworkId,
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
                 EmptyAuthorityFeePayment)
             .SetNftKeyValue(
@@ -1450,7 +1563,9 @@ public sealed class TransactionBuilderTests
         Assert.Equal(new byte[] { 0 }, proofAttachments);
         Assert.Equal(envelope.PayloadBytes.Length, payloadOffset + attachmentsConsumed);
 
-        var signature = DecodeConstVec(signatureField);
+        var signatureVector = ReadField(signatureField, out var signatureVectorConsumed);
+        Assert.Equal(signatureField.Length, signatureVectorConsumed);
+        var signature = DecodeConstVec(signatureVector);
         var payloadHash = IrohaHash.Hash(envelope.PayloadBytes);
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
         Assert.True(Ed25519Signer.Verify(payloadHash, signature, publicKey));
@@ -1464,7 +1579,7 @@ public sealed class TransactionBuilderTests
 
     private static byte[] ComputeTransactionHash(ReadOnlySpan<byte> payloadBytes)
     {
-        var entrypoint = new OfflineNoritoWriter();
+        var entrypoint = new CanonicalNoritoWriter();
         entrypoint.WriteUInt32LittleEndian(0);
         entrypoint.WriteField(payloadBytes);
         return IrohaHash.Hash(entrypoint.ToArray());
@@ -1475,8 +1590,11 @@ public sealed class TransactionBuilderTests
         byte[] payloadBytes,
         byte[]? multisig = null)
     {
-        var signedTransaction = new OfflineNoritoWriter();
-        signedTransaction.WriteField(EncodeConstVec(signatureBytes));
+        var transactionSignature = new CanonicalNoritoWriter();
+        transactionSignature.WriteField(EncodeConstVec(signatureBytes));
+
+        var signedTransaction = new CanonicalNoritoWriter();
+        signedTransaction.WriteField(transactionSignature.ToArray());
         signedTransaction.WriteField(payloadBytes);
         signedTransaction.WriteField(multisig ?? [0]);
         return signedTransaction.ToArray();
@@ -1486,8 +1604,11 @@ public sealed class TransactionBuilderTests
         byte[] signatureBytes,
         byte[] payloadBytes)
     {
-        var signedTransaction = new OfflineNoritoWriter();
-        signedTransaction.WriteField(EncodeConstVec(signatureBytes));
+        var transactionSignature = new CanonicalNoritoWriter();
+        transactionSignature.WriteField(EncodeConstVec(signatureBytes));
+
+        var signedTransaction = new CanonicalNoritoWriter();
+        signedTransaction.WriteField(transactionSignature.ToArray());
         signedTransaction.WriteField(payloadBytes);
         signedTransaction.WriteField([0]);
         signedTransaction.WriteField([0]);
@@ -1496,8 +1617,8 @@ public sealed class TransactionBuilderTests
 
     private static byte[] EncodeConstVec(byte[] value)
     {
-        var writer = new OfflineNoritoWriter();
-        writer.WriteUInt64LittleEndian((ulong)value.Length);
+        var writer = new CanonicalNoritoWriter();
+        writer.WriteSequenceLength((ulong)value.Length);
         foreach (var item in value)
         {
             writer.WriteField([item]);
@@ -1508,7 +1629,7 @@ public sealed class TransactionBuilderTests
 
     private static TransactionBuilder NewTransactionBuilder()
     {
-        return new TransactionBuilder(FixtureChainId, FixtureAccountId, EmptyAuthorityFeePayment);
+        return new TransactionBuilder(FixtureNetworkId, FixtureAccountId, EmptyAuthorityFeePayment);
     }
 
     private static void AssertArgumentDiagnostic(
@@ -1892,7 +2013,7 @@ public sealed class TransactionBuilderTests
     public void AddInstructionAcceptsTransferFactories()
     {
         var builder = new TransactionBuilder(
-            "00000042",
+            FixtureNetworkId,
             "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
             EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.TransferDomain(
@@ -1918,7 +2039,7 @@ public sealed class TransactionBuilderTests
         var authority = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
         var destination = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
 
-        var envelope = new TransactionBuilder("00000042", authority, EmptyAuthorityFeePayment)
+        var envelope = new TransactionBuilder(FixtureNetworkId, authority, EmptyAuthorityFeePayment)
             .TransferDomain("wonderland", destination)
             .TransferAssetDefinition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", destination)
             .TransferNft("dragon$wonderland", destination)
@@ -1945,7 +2066,7 @@ public sealed class TransactionBuilderTests
         _ = ReadField(assetDefinitionTransferPayload[4..], out var assetDefinitionTransferOffsetAfterSource);
         var transferredAssetDefinition = ReadField(assetDefinitionTransferPayload[(4 + assetDefinitionTransferOffsetAfterSource)..], out var assetDefinitionTransferOffsetAfterObject);
         var assetDefinitionTransferDestination = ReadField(assetDefinitionTransferPayload[(4 + assetDefinitionTransferOffsetAfterSource + assetDefinitionTransferOffsetAfterObject)..], out _);
-        Assert.Equal(144, transferredAssetDefinition.Length);
+        Assert.Equal(32, transferredAssetDefinition.Length);
         Assert.NotEmpty(assetDefinitionTransferDestination);
 
         Assert.Equal("iroha.transfer", instructions[2].WireId);
@@ -1965,9 +2086,24 @@ public sealed class TransactionBuilderTests
 
     private static byte[] ReadField(ReadOnlySpan<byte> bytes, out int consumed)
     {
-        var length = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
-        consumed = 8 + length;
-        return bytes.Slice(8, length).ToArray();
+        var reader = new CanonicalNoritoReader(
+            bytes,
+            "transaction-builder test payload",
+            nameof(bytes));
+        var field = reader.ReadField("field").ToArray();
+        consumed = bytes.Length - reader.Remaining;
+        return field;
+    }
+
+    private static void AssertNetworkDomain(ReadOnlySpan<byte> encoded)
+    {
+        Assert.True(encoded.Length >= sizeof(uint), "transaction domain must include its enum tag");
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(encoded[..sizeof(uint)]));
+        var networkId = ReadField(encoded[sizeof(uint)..], out var consumed);
+        Assert.Equal(encoded.Length - sizeof(uint), consumed);
+        Assert.Equal(
+            FixtureNetworkId.ToBytes(),
+            networkId);
     }
 
     private static byte[] DecodeConstVec(ReadOnlySpan<byte> bytes)
@@ -1977,10 +2113,10 @@ public sealed class TransactionBuilderTests
         var offset = 8;
         for (var index = 0; index < count; index++)
         {
-            var fieldLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, 8)));
-            Assert.Equal(1, fieldLength);
-            output[index] = bytes[offset + 8];
-            offset += 9;
+            var item = ReadField(bytes[offset..], out var consumed);
+            Assert.Single(item);
+            output[index] = item[0];
+            offset += consumed;
         }
 
         Assert.Equal(bytes.Length, offset);
@@ -1989,10 +2125,11 @@ public sealed class TransactionBuilderTests
 
     private static List<EncodedInstruction> ReadEncodedInstructions(ReadOnlySpan<byte> payloadBytes)
     {
-        _ = ReadField(payloadBytes, out var offsetAfterChainId);
-        _ = ReadField(payloadBytes[offsetAfterChainId..], out var offsetAfterAuthority);
-        _ = ReadField(payloadBytes[(offsetAfterChainId + offsetAfterAuthority)..], out var offsetAfterCreationTime);
-        var executable = ReadField(payloadBytes[(offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime)..], out _);
+        var networkDomain = ReadField(payloadBytes, out var offsetAfterNetworkDomain);
+        AssertNetworkDomain(networkDomain);
+        _ = ReadField(payloadBytes[offsetAfterNetworkDomain..], out var offsetAfterAuthority);
+        _ = ReadField(payloadBytes[(offsetAfterNetworkDomain + offsetAfterAuthority)..], out var offsetAfterCreationTime);
+        var executable = ReadField(payloadBytes[(offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime)..], out _);
 
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(executable[..4]));
         var instructionsBytes = ReadField(executable[4..], out _);
@@ -2016,26 +2153,27 @@ public sealed class TransactionBuilderTests
 
     private static List<(string Key, string Value)> ReadEncodedMetadata(ReadOnlySpan<byte> payloadBytes)
     {
-        _ = ReadField(payloadBytes, out var offsetAfterChainId);
-        _ = ReadField(payloadBytes[offsetAfterChainId..], out var offsetAfterAuthority);
-        _ = ReadField(payloadBytes[(offsetAfterChainId + offsetAfterAuthority)..], out var offsetAfterCreationTime);
-        _ = ReadField(payloadBytes[(offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime)..], out var offsetAfterExecutable);
+        var networkDomain = ReadField(payloadBytes, out var offsetAfterNetworkDomain);
+        AssertNetworkDomain(networkDomain);
+        _ = ReadField(payloadBytes[offsetAfterNetworkDomain..], out var offsetAfterAuthority);
+        _ = ReadField(payloadBytes[(offsetAfterNetworkDomain + offsetAfterAuthority)..], out var offsetAfterCreationTime);
+        _ = ReadField(payloadBytes[(offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime)..], out var offsetAfterExecutable);
         _ = ReadField(
-            payloadBytes[(offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable)..],
+            payloadBytes[(offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable)..],
             out var offsetAfterTimeToLive);
         _ = ReadField(
             payloadBytes[
-                (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
+                (offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
                     + offsetAfterTimeToLive)..],
             out var offsetAfterNonce);
         _ = ReadField(
             payloadBytes[
-                (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
+                (offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
                     + offsetAfterTimeToLive + offsetAfterNonce)..],
             out var offsetAfterFeePayment);
         var metadataBytes = ReadField(
             payloadBytes[
-                (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
+                (offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
                     + offsetAfterTimeToLive + offsetAfterNonce + offsetAfterFeePayment)..],
             out _);
 
@@ -2059,8 +2197,9 @@ public sealed class TransactionBuilderTests
 
     private static string ReadNoritoString(ReadOnlySpan<byte> bytes)
     {
-        var length = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(bytes[..8]));
-        return Encoding.UTF8.GetString(bytes.Slice(8, length));
+        var encoded = ReadField(bytes, out var consumed);
+        Assert.Equal(bytes.Length, consumed);
+        return Encoding.UTF8.GetString(encoded);
     }
 
     private static byte[] ReadNoritoBytes(ReadOnlySpan<byte> bytes)

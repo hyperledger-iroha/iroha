@@ -7,18 +7,18 @@ import java.util.List;
 /**
  * Canonical first-release local privacy build-metadata bridge.
  *
- * <p>The native bridge exposes this binary's typed Norito compiled-profile catalog and the
- * Rust-derived byte-complete exact-12 fixture bundle. The catalog never establishes network
- * activation or readiness; callers must fetch a fresh authoritative PrivacyCapabilitySnapshotV1
- * from live Torii before submitting a privacy proof.
+ * <p>The native bridge exposes this binary's typed Norito compiled-profile catalog, validates
+ * Torii's canonical Exact12 capability manifest, and exposes the Rust-derived byte-complete
+ * fixture bundle. The local catalog never establishes network activation or readiness.
  */
 public final class PrivacyNativeBridge {
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 22;
+  public static final int EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
   public static final int COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
   public static final int EXACT12_FIXTURE_BUNDLE_MAX_BYTES = 2 * 1024 * 1024;
   private static final String LIBRARY_NAME = "connect_norito_bridge";
 
-  /** Stable ABI-21 result of validating one typed local compiled-profile catalog. */
+  /** Stable ABI-22 result of validating one typed local compiled-profile catalog. */
   public enum CompiledProfileCatalogValidationStatusV1 {
     VALID(0),
     NULL_POINTER(1),
@@ -41,7 +41,7 @@ public final class PrivacyNativeBridge {
     }
   }
 
-  /** Stable ABI-21 result of validating the Rust-derived exact-12 fixture bundle. */
+  /** Stable ABI-22 result of validating the Rust-derived exact-12 fixture bundle. */
   public enum Exact12FixtureValidationStatusV1 {
     VALID(0),
     NULL_POINTER(1),
@@ -71,6 +71,39 @@ public final class PrivacyNativeBridge {
       }
       throw new IllegalStateException(
           "native exact-12 privacy fixture validation returned an unknown status");
+    }
+  }
+
+  /** Stable native result of validating one canonical committed Exact12 manifest. */
+  public enum Exact12CapabilityManifestValidationStatusV1 {
+    VALID(0),
+    NULL_POINTER(1),
+    EMPTY(2),
+    ARCHIVE_TOO_LARGE(3),
+    DECODE_RESOURCE_LIMIT(4),
+    SCHEMA_MISMATCH(5),
+    NON_CANONICAL(6),
+    MALFORMED_ARCHIVE(7),
+    INVALID_MANIFEST(8);
+
+    private final int code;
+
+    Exact12CapabilityManifestValidationStatusV1(final int code) {
+      this.code = code;
+    }
+
+    public int code() {
+      return code;
+    }
+
+    private static Exact12CapabilityManifestValidationStatusV1 fromCode(final int code) {
+      for (final Exact12CapabilityManifestValidationStatusV1 value : values()) {
+        if (value.code == code) {
+          return value;
+        }
+      }
+      throw new IllegalStateException(
+          "native Exact12 capability validation returned an unknown status");
     }
   }
 
@@ -114,6 +147,46 @@ public final class PrivacyNativeBridge {
       compiledProfileCatalogTypedV1() {
     return org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(
         compiledProfileCatalogV1());
+  }
+
+  /** Validate one canonical committed Exact12 manifest through the native Rust decoder. */
+  public static Exact12CapabilityManifestValidationStatusV1
+      validateExact12CapabilityManifestV1(final byte[] archive) {
+    if (archive == null) {
+      return Exact12CapabilityManifestValidationStatusV1.NULL_POINTER;
+    }
+    if (archive.length == 0) {
+      return Exact12CapabilityManifestValidationStatusV1.EMPTY;
+    }
+    if (archive.length > EXACT12_CAPABILITY_MANIFEST_MAX_BYTES) {
+      return Exact12CapabilityManifestValidationStatusV1.ARCHIVE_TOO_LARGE;
+    }
+    if (!NATIVE_AVAILABLE) {
+      throw new IllegalStateException("native Exact12 capability validation is unavailable");
+    }
+    final int code;
+    try {
+      code = nativeValidateExact12CapabilityManifest(archive);
+    } catch (final RuntimeException | LinkageError error) {
+      throw new IllegalStateException("native Exact12 capability validation failed", error);
+    }
+    return Exact12CapabilityManifestValidationStatusV1.fromCode(code);
+  }
+
+  /**
+   * Decode native-validated canonical Torii bytes into the shared JVM model.
+   *
+   * <p>The Kotlin bridge repeats native validation and obtains the Rust-owned complete local tuple
+   * comparison. No Java or Kotlin fallback can authorize a missing native artifact.
+   */
+  public static org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1
+      decodeExact12CapabilityManifestV1(final byte[] archive) {
+    if (validateExact12CapabilityManifestV1(archive)
+        != Exact12CapabilityManifestValidationStatusV1.VALID) {
+      throw new IllegalStateException("invalid canonical Exact12 capability manifest");
+    }
+    return org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
+        .decodeExact12CapabilityManifestV1(Arrays.copyOf(archive, archive.length));
   }
 
   /** Validates bytes as the exact compiled-profile catalog of the loaded binary. */
@@ -223,6 +296,11 @@ public final class PrivacyNativeBridge {
     try {
       System.loadLibrary(LIBRARY_NAME);
       return nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION
+          && nativeValidateExact12CapabilityManifest(null)
+              == Exact12CapabilityManifestValidationStatusV1.NULL_POINTER.code()
+          && nativeInspectExact12CapabilityManifest(null) == null
+          && !nativeRequireExact12CapabilityTuple(null, -1)
+          && !nativeValidateExact12SubmitProofConstruction(null, -1, null)
           && requireCompiledProfileCatalog(nativeCompiledProfileCatalog()).length > 0
           && requireExact12FixtureBundle(nativeExact12FixtureBundle()).length > 0;
     } catch (final RuntimeException | LinkageError error) {
@@ -235,6 +313,16 @@ public final class PrivacyNativeBridge {
   private static native byte[] nativeCompiledProfileCatalog();
 
   private static native int nativeValidateCompiledProfileCatalog(byte[] archive);
+
+  private static native int nativeValidateExact12CapabilityManifest(byte[] archive);
+
+  private static native byte[] nativeInspectExact12CapabilityManifest(byte[] archive);
+
+  private static native boolean nativeRequireExact12CapabilityTuple(
+      byte[] archive, int protocolIndex);
+
+  private static native boolean nativeValidateExact12SubmitProofConstruction(
+      byte[] manifestArchive, int protocolIndex, byte[] instructionArchive);
 
   private static native byte[] nativeExact12FixtureBundle();
 

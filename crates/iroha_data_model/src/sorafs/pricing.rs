@@ -775,7 +775,11 @@ pub struct ProviderCreditRecord {
     pub provider_id: ProviderId,
     /// Available nominal credit after accounting for pending charges.
     pub available_credit: Quantity,
-    /// Collateral currently bonded for the provider.
+    /// Unslashed collateral currently locked in the authoritative native reserve.
+    ///
+    /// This field is not a funding source. Core accepts it only when it exactly
+    /// matches the owner-funded reserve partition net of treasury-funded
+    /// principal and the custody-backed `slashed` lien.
     pub bonded: Quantity,
     /// Required collateral computed during the last telemetry window.
     pub required_bond: Quantity,
@@ -787,7 +791,7 @@ pub struct ProviderCreditRecord {
     pub last_settlement_epoch: u64,
     /// Epoch when the credit balance last fell below the alert threshold (if any).
     pub low_balance_since_epoch: Option<u64>,
-    /// Total nominal collateral slashed because of under-delivery.
+    /// Total collateral held under a custody-backed slash lien for under-delivery.
     #[cfg_attr(feature = "json", norito(default))]
     pub slashed: Quantity,
     /// Consecutive under-delivery strike counter.
@@ -889,7 +893,7 @@ impl ProviderCreditRecord {
         self.under_delivery_strikes = 0;
     }
 
-    /// Apply a penalty to the bonded collateral and track totals.
+    /// Move a penalty from the usable bond into its custody-backed slash lien.
     ///
     /// # Errors
     ///

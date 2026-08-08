@@ -21,7 +21,7 @@ use iroha_core::{
     smartcontracts::ivm::host::CoreHost,
     state::{State, StateReadOnly, World, WorldReadOnly},
 };
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::da::commitment::DaProofScheme;
 #[cfg(feature = "app_api")]
 #[allow(unused_imports)]
@@ -87,18 +87,41 @@ fn axt_test_issuer() -> KeyPair {
     KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519)
 }
 
+fn axt_test_network_id() -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"iroha-corehost-axt-test-network"),
+    ))
+}
+
+fn axt_test_issuer_id() -> iroha_data_model::nexus::UniversalAccountId {
+    iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(
+        b"iroha-corehost-axt-test-issuer",
+    ))
+}
+
+fn axt_test_issuer_context(
+    dataspace: DataSpaceId,
+    manifest_root: [u8; 32],
+) -> iroha_data_model::nexus::AxtHandleIssuerContextV1 {
+    iroha_data_model::nexus::AxtHandleIssuerContextV1 {
+        network_id: axt_test_network_id(),
+        asset_dsid: dataspace,
+        issuer: axt_test_issuer_id(),
+        issuer_manifest_root: manifest_root,
+        code_root: [0; 32],
+        abi_version: 1,
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+    }
+}
+
 fn signed_model_handle(
-    mut handle: iroha_data_model::nexus::AssetHandle,
+    handle: iroha_data_model::nexus::AssetHandleDraft,
     dataspace: DataSpaceId,
 ) -> iroha_data_model::nexus::AssetHandle {
+    let context = axt_test_issuer_context(dataspace, handle.manifest_view_root);
     handle
-        .sign_by_issuer_v1(
-            AXT_TEST_CHAIN_ID,
-            dataspace,
-            axt_test_issuer().private_key(),
-        )
-        .expect("sign AXT issuer fixture");
-    handle
+        .sign_by_issuer_v1(context, axt_test_issuer().private_key())
+        .expect("sign AXT issuer fixture")
 }
 
 fn signed_abi_handle(handle: AssetHandle, dataspace: DataSpaceId) -> AssetHandle {
@@ -111,7 +134,7 @@ fn signed_abi_handle(handle: AssetHandle, dataspace: DataSpaceId) -> AssetHandle
         .try_into()
         .expect("fixture manifest root must be 32 bytes");
     let model = signed_model_handle(
-        iroha_data_model::nexus::AssetHandle {
+        iroha_data_model::nexus::AssetHandleDraft {
             scope: handle.scope,
             subject: iroha_data_model::nexus::HandleSubject {
                 account: handle.subject.account,
@@ -132,7 +155,6 @@ fn signed_abi_handle(handle: AssetHandle, dataspace: DataSpaceId) -> AssetHandle
             manifest_view_root: manifest_root,
             expiry_slot: handle.expiry_slot,
             max_clock_skew_ms: handle.max_clock_skew_ms,
-            issuer_signature: None,
         },
         dataspace,
     );
@@ -161,6 +183,7 @@ fn abi_asset_handle_from_signed_model(handle: iroha_data_model::nexus::AssetHand
         manifest_view_root: handle.manifest_view_root.to_vec(),
         expiry_slot: handle.expiry_slot,
         max_clock_skew_ms: handle.max_clock_skew_ms,
+        issuer_context: handle.issuer_context,
         issuer_signature: handle.issuer_signature,
     }
 }
@@ -170,9 +193,15 @@ fn configure_axt_test_host(
     policies: impl IntoIterator<Item = (DataSpaceId, [u8; 32])>,
 ) {
     host.set_chain_id_bytes(AXT_TEST_CHAIN_ID.to_vec());
+    host.set_network_id(axt_test_network_id());
     let public_key = axt_test_issuer().public_key().clone();
     for (dataspace, manifest_root) in policies {
-        host.set_axt_issuer_key_for_tests(dataspace, manifest_root, public_key.clone());
+        host.set_axt_issuer_key_for_tests(
+            dataspace,
+            manifest_root,
+            axt_test_issuer_id(),
+            public_key.clone(),
+        );
     }
 }
 
@@ -212,8 +241,8 @@ fn make_policy_snapshot(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
     target_lane: LaneId,
-    min_handle_era: u64,
-    min_sub_nonce: u64,
+    active_handle_era: u64,
+    next_handle_counter: u64,
     current_slot: u64,
 ) -> AxtPolicySnapshot {
     let entry = AxtPolicyBinding {
@@ -221,8 +250,8 @@ fn make_policy_snapshot(
         policy: AxtPolicyEntry {
             manifest_root,
             target_lane,
-            min_handle_era,
-            min_sub_nonce,
+            active_handle_era,
+            next_handle_counter,
             current_slot,
         },
     };
@@ -383,6 +412,7 @@ fn abi_asset_handle_from_model(handle: &iroha_data_model::nexus::AssetHandle) ->
         manifest_view_root: handle.manifest_view_root.to_vec(),
         expiry_slot: handle.expiry_slot,
         max_clock_skew_ms: handle.max_clock_skew_ms,
+        issuer_context: handle.issuer_context,
         issuer_signature: handle.issuer_signature.clone(),
     }
 }
@@ -474,8 +504,8 @@ fn axt_policy_snapshot_refreshes_current_slot() {
     let entry = AxtPolicyEntry {
         manifest_root: [0x11; 32],
         target_lane,
-        min_handle_era: 2,
-        min_sub_nonce: 5,
+        active_handle_era: 2,
+        next_handle_counter: 5,
         current_slot: 0,
     };
     state.set_axt_policy(dsid, entry);
@@ -550,7 +580,8 @@ fn core_host_handles_axt_flow() {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 10,
             max_clock_skew_ms: Some(0),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         dsid,
     );
@@ -741,7 +772,8 @@ fn axt_policy_reject_exposes_context() {
             manifest_view_root: vec![0xBA; 32],
             expiry_slot: 5,
             max_clock_skew_ms: None,
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         dsid,
     );
@@ -850,7 +882,8 @@ fn axt_handle_allows_configured_clock_skew_window() {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 10,
             max_clock_skew_ms: Some(5),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         dsid,
     );
@@ -937,7 +970,8 @@ fn axt_handle_rejects_clock_skew_above_config() {
             manifest_view_root: manifest_root.to_vec(),
             expiry_slot: 50,
             max_clock_skew_ms: Some(20),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         dsid,
     );
@@ -1024,8 +1058,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -1088,7 +1122,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
                 manifest_view_root: manifest_root,
                 expiry_slot: 10_000,
                 max_clock_skew_ms: Some(0),
-                issuer_signature: None,
+                issuer_context: Default::default(),
+                issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
             },
             intent: ModelRemoteSpendIntent {
                 asset_dsid: dsid,
@@ -1153,8 +1188,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -1176,11 +1211,11 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         .get(&dsid)
         .expect("policy persisted through replay");
     assert_eq!(
-        updated_policy.min_handle_era,
+        updated_policy.active_handle_era,
         envelope.handles[0].handle.handle_era
     );
     assert_eq!(
-        updated_policy.min_sub_nonce,
+        updated_policy.next_handle_counter,
         envelope.handles[0].handle.sub_nonce.saturating_add(1)
     );
     drop(replay_view);
@@ -1239,6 +1274,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         manifest_view_root: envelope.handles[0].handle.manifest_view_root.to_vec(),
         expiry_slot: envelope.handles[0].handle.expiry_slot,
         max_clock_skew_ms: envelope.handles[0].handle.max_clock_skew_ms,
+        issuer_context: Default::default(),
         issuer_signature: envelope.handles[0].handle.issuer_signature.clone(),
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &replay_handle);
@@ -1278,8 +1314,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -1316,7 +1352,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
             manifest_view_root: manifest_root,
             expiry_slot: 50,
             max_clock_skew_ms: Some(0),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let envelope = AxtEnvelopeRecord {
             binding,
@@ -1359,8 +1396,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -1412,7 +1449,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot: 50,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
@@ -1463,8 +1501,8 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -1501,7 +1539,8 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
             manifest_view_root: manifest_root,
             expiry_slot: 2,
             max_clock_skew_ms: Some(0),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let envelope = AxtEnvelopeRecord {
             binding,
@@ -1595,7 +1634,8 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         manifest_view_root: manifest_root,
         expiry_slot: 25,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
 
     let kura = Kura::blank_kura_for_testing();
@@ -1619,8 +1659,8 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         AxtPolicyEntry {
             manifest_root,
             target_lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -1776,6 +1816,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         manifest_view_root: model_handle.manifest_view_root.to_vec(),
         expiry_slot: model_handle.expiry_slot,
         max_clock_skew_ms: model_handle.max_clock_skew_ms,
+        issuer_context: Default::default(),
         issuer_signature: model_handle.issuer_signature.clone(),
     };
 
@@ -1849,8 +1890,8 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 2,
-            min_sub_nonce: 5,
+            active_handle_era: 2,
+            next_handle_counter: 5,
             current_slot: 0,
         },
     );
@@ -1898,7 +1939,8 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
             manifest_view_root: manifest_root,
             expiry_slot: 100,
             max_clock_skew_ms: Some(0),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         intent: ModelRemoteSpendIntent {
             asset_dsid: dsid,
@@ -1949,8 +1991,8 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -2045,8 +2087,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -2094,7 +2136,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             manifest_view_root: manifest_root,
             expiry_slot: 200,
             max_clock_skew_ms: Some(0),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         },
         intent: ModelRemoteSpendIntent {
             asset_dsid: dsid,
@@ -2182,8 +2225,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -2306,8 +2349,8 @@ fn axt_replay_entries_expire_after_retention_window() {
         AxtPolicyEntry {
             manifest_root,
             target_lane: lane,
-            min_handle_era: 1,
-            min_sub_nonce: 0,
+            active_handle_era: 1,
+            next_handle_counter: 0,
             current_slot: 10,
         },
     );
@@ -2335,7 +2378,8 @@ fn axt_replay_entries_expire_after_retention_window() {
             manifest_view_root: manifest_root,
             expiry_slot: 50,
             max_clock_skew_ms: Some(0),
-            issuer_signature: None,
+            issuer_context: Default::default(),
+            issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         }),
         AxtReplayRecord {
             dataspace: dsid,
@@ -2387,7 +2431,8 @@ fn axt_replay_entries_expire_after_retention_window() {
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot: 50,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
@@ -2485,7 +2530,8 @@ fn axt_commit_enforces_amx_budget() {
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot: 20,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
@@ -2525,8 +2571,8 @@ fn core_host_requires_proof_for_all_dataspaces() {
             policy: AxtPolicyEntry {
                 manifest_root: root_a,
                 target_lane: LaneId::new(0),
-                min_handle_era: 1,
-                min_sub_nonce: 1,
+                active_handle_era: 1,
+                next_handle_counter: 1,
                 current_slot: 3,
             },
         },
@@ -2535,8 +2581,8 @@ fn core_host_requires_proof_for_all_dataspaces() {
             policy: AxtPolicyEntry {
                 manifest_root: root_b,
                 target_lane: LaneId::new(0),
-                min_handle_era: 1,
-                min_sub_nonce: 1,
+                active_handle_era: 1,
+                next_handle_counter: 1,
                 current_slot: 3,
             },
         },
@@ -2612,7 +2658,8 @@ fn core_host_requires_proof_for_all_dataspaces() {
         manifest_view_root: root_a.to_vec(),
         expiry_slot: 10,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let handle_b = AssetHandle {
         subject: HandleSubject {
@@ -2898,7 +2945,8 @@ fn core_host_policy_rejects_handle() {
         manifest_view_root: vec![0; 32],
         expiry_slot: 10,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
@@ -2977,8 +3025,8 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
         policy: AxtPolicyEntry {
             manifest_root,
             target_lane: LaneId::new(2),
-            min_handle_era: 3,
-            min_sub_nonce: 2,
+            active_handle_era: 3,
+            next_handle_counter: 2,
             current_slot: 50,
         },
     }];
@@ -3008,7 +3056,8 @@ fn axt_snapshot_policy_enforces_lanes_and_counters() {
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot: 60,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
 
     let mut wrong_lane = base_handle.clone();
@@ -3270,7 +3319,8 @@ fn core_host_from_state_enforces_space_directory_policy() {
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot: 5,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
 
     assert_ok_gas!(use_handle_with_state_policy(
@@ -3403,7 +3453,8 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
         manifest_view_root: vec![0xCD; 32],
         expiry_slot: 5,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
 
     let result = use_handle_with_state_policy(&state, &authority, dsid, &descriptor, handle);
@@ -3421,8 +3472,8 @@ fn core_host_binds_proof_to_manifest_root() {
         policy: AxtPolicyEntry {
             manifest_root,
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 5,
         },
     }];
@@ -3560,7 +3611,8 @@ fn core_host_exports_axt_envelopes_to_state_block() {
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot: 10,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent = RemoteSpendIntent {
@@ -3624,8 +3676,8 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         policy: AxtPolicyEntry {
             manifest_root: [0x11; 32],
             target_lane: LaneId::new(1),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 7,
         },
     }];
@@ -3674,8 +3726,8 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         policy: AxtPolicyEntry {
             manifest_root: [0x22; 32],
             target_lane: LaneId::new(1),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 7,
         },
     }];
@@ -3835,8 +3887,8 @@ fn core_host_records_multi_dataspace_envelope() {
             policy: AxtPolicyEntry {
                 manifest_root: [0xA1; 32],
                 target_lane: LaneId::new(1),
-                min_handle_era: 1,
-                min_sub_nonce: 1,
+                active_handle_era: 1,
+                next_handle_counter: 1,
                 current_slot: 0,
             },
         },
@@ -3845,8 +3897,8 @@ fn core_host_records_multi_dataspace_envelope() {
             policy: AxtPolicyEntry {
                 manifest_root: [0xB2; 32],
                 target_lane: LaneId::new(2),
-                min_handle_era: 1,
-                min_sub_nonce: 1,
+                active_handle_era: 1,
+                next_handle_counter: 1,
                 current_slot: 0,
             },
         },
@@ -3936,7 +3988,8 @@ fn core_host_records_multi_dataspace_envelope() {
         manifest_view_root: vec![0xA1; 32],
         expiry_slot: 50,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
     let handle_b = AssetHandle {
         scope: vec!["transfer".into()],
@@ -3959,7 +4012,8 @@ fn core_host_records_multi_dataspace_envelope() {
         manifest_view_root: vec![0xB2; 32],
         expiry_slot: 50,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
 
     let intent_a = RemoteSpendIntent {
@@ -4063,8 +4117,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         AxtPolicyEntry {
             manifest_root: [0x44; 32],
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -4076,8 +4130,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         AxtPolicyEntry {
             manifest_root: [0x44; 32],
             target_lane: LaneId::new(0),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -4141,7 +4195,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
                 manifest_view_root: manifest_root,
                 expiry_slot: 50,
                 max_clock_skew_ms: Some(0),
-                issuer_signature: None,
+                issuer_context: Default::default(),
+                issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
             },
             intent: ModelRemoteSpendIntent {
                 asset_dsid: dsid,
@@ -4176,8 +4231,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         .axt_policies()
         .get(&dsid)
         .expect("policy cached");
-    assert_eq!(cached_policy.min_sub_nonce, 6);
-    assert_eq!(cached_policy.min_handle_era, 2);
+    assert_eq!(cached_policy.next_handle_counter, 6);
+    assert_eq!(cached_policy.active_handle_era, 2);
 
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)
@@ -4220,7 +4275,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot: 100,
         max_clock_skew_ms: Some(0),
-        issuer_signature: None,
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     };
 
     let intent = RemoteSpendIntent {

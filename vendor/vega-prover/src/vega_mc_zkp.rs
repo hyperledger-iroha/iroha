@@ -2818,26 +2818,28 @@ mod tests {
 
     #[test]
     fn test_neutron_sha256() {
-        let _ = tracing_subscriber::fmt()
-            .with_target(false)
-            .with_ansi(true)
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .try_init();
+        crate::iroha_rng::with_deterministic_test_seed(0x70, || {
+            let _ = tracing_subscriber::fmt()
+                .with_target(false)
+                .with_ansi(true)
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .try_init();
 
-        type E = T256HyraxEngine;
+            type E = T256HyraxEngine;
 
-        for num_circuits in [2, 7, 32, 64] {
-            for len in [32, 64].iter() {
-                let (pk, vk, circuits) = generate_sha_r1cs::<E>(num_circuits, *len);
-                test_neutron_inner(
-                    &format!("sha256_num_circuits={num_circuits}_len={len}"),
-                    &pk,
-                    &vk,
-                    &circuits,
-                    &circuits[0], // core circuit is the first one, for test purposes
-                );
+            for num_circuits in [2, 7, 32, 64] {
+                for len in [32, 64].iter() {
+                    let (pk, vk, circuits) = generate_sha_r1cs::<E>(num_circuits, *len);
+                    test_neutron_inner(
+                        &format!("sha256_num_circuits={num_circuits}_len={len}"),
+                        &pk,
+                        &vk,
+                        &circuits,
+                        &circuits[0], // core circuit is the first one, for test purposes
+                    );
+                }
             }
-        }
+        });
     }
 
     #[test]
@@ -2852,18 +2854,21 @@ mod tests {
 
     #[test]
     fn test_mc_zk_rejects_step_count_different_from_setup_count() {
-        type E = T256HyraxEngine;
-        // A valid 5-step proof under a key set up for exactly 5 steps.
-        let (pk5, vk5, circuits5) = generate_sha_r1cs::<E>(5, 32);
-        let ps = VegaMcZkSNARK::<E>::prep_prove(&pk5, &circuits5, &circuits5[0], true).unwrap();
-        let (snark, _) = VegaMcZkSNARK::prove(&pk5, &circuits5, &circuits5[0], ps, true).unwrap();
+        crate::iroha_rng::with_deterministic_test_seed(0x71, || {
+            type E = T256HyraxEngine;
+            // A valid 5-step proof under a key set up for exactly 5 steps.
+            let (pk5, vk5, circuits5) = generate_sha_r1cs::<E>(5, 32);
+            let ps = VegaMcZkSNARK::<E>::prep_prove(&pk5, &circuits5, &circuits5[0], true).unwrap();
+            let (snark, _) =
+                VegaMcZkSNARK::prove(&pk5, &circuits5, &circuits5[0], ps, true).unwrap();
 
-        // It verifies under its own 5-step key.
-        assert!(snark.verify(&vk5, 5).is_ok());
+            // It verifies under its own 5-step key.
+            assert!(snark.verify(&vk5, 5).is_ok());
 
-        // A key set up for a different number of steps must reject this proof.
-        let (_pk7, vk7, _c7) = generate_sha_r1cs::<E>(7, 32);
-        assert!(snark.verify(&vk7, 5).is_err());
+            // A key set up for a different number of steps must reject this proof.
+            let (_pk7, vk7, _c7) = generate_sha_r1cs::<E>(7, 32);
+            assert!(snark.verify(&vk7, 5).is_err());
+        });
     }
 
     #[test]

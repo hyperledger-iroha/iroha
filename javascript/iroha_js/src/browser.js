@@ -37,6 +37,8 @@ export {
   NumericV1Error,
 } from "./numericV1.js";
 
+export { NetworkId } from "./networkId.js";
+
 export {
   computeIvmArtifactHashes,
   IVM_ARTIFACT_MAX_BYTES,

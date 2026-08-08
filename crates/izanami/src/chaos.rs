@@ -2370,6 +2370,14 @@ fn make_network_builder(
     config: &ChaosConfig,
     genesis: Vec<Vec<InstructionBox>>,
 ) -> Result<NetworkBuilder> {
+    make_network_builder_with_sorafs(config, genesis, BTreeMap::new())
+}
+
+fn make_network_builder_with_sorafs(
+    config: &ChaosConfig,
+    genesis: Vec<Vec<InstructionBox>>,
+    sorafs_provider_owners: BTreeMap<String, String>,
+) -> Result<NetworkBuilder> {
     let mut genesis = genesis;
     let nexus_bootstrap_post_topology = if let Some(profile) = config.nexus.as_ref() {
         let post_topology =
@@ -2386,6 +2394,18 @@ fn make_network_builder(
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
         .with_base_seed(instructions::IZANAMI_BASE_SEED);
+    if !sorafs_provider_owners.is_empty() {
+        let provider_owners = sorafs_provider_owners
+            .into_iter()
+            .map(|(provider, owner)| (provider, TomlValue::String(owner)))
+            .collect::<Table>();
+        builder = builder.with_config_layer(move |layer| {
+            layer.write(
+                ["governance", "sorafs_provider_owners"],
+                TomlValue::Table(provider_owners.clone()),
+            );
+        });
+    }
     builder = if config.nexus.is_some() {
         builder.with_npos_consensus()
     } else {
@@ -3074,6 +3094,7 @@ impl IzanamiRunner {
             state,
             genesis,
             recipes,
+            sorafs_provider_owners,
         } = instructions::prepare_state(
             account_qty,
             Some(config.peer_count),
@@ -3083,7 +3104,7 @@ impl IzanamiRunner {
         )?;
         let base_domain = state.base_domain().clone();
 
-        let builder = make_network_builder(&config, genesis)?;
+        let builder = make_network_builder_with_sorafs(&config, genesis, sorafs_provider_owners)?;
 
         let network = builder.start().await?;
         if config.nexus.is_some() {
@@ -7191,9 +7212,6 @@ fn wait_for_transaction_terminal_status_with_failover(
             ) {
             Ok(Some((endpoint_idx, response))) => {
                 let kind = response.status.kind.as_str();
-                let summary = response.summary.clone();
-                let diagnostics = response.diagnostics.clone();
-                let trigger_completions = response.trigger_completions.clone();
                 return Ok((
                     endpoint_idx,
                     TransactionWaitOutcome {
@@ -7202,12 +7220,8 @@ fn wait_for_transaction_terminal_status_with_failover(
                         attempts,
                         elapsed_ms: elapsed_ms_u64(start.elapsed()),
                         block_height: response.status.block_height,
-                        rejection_reason: response.status.rejection_reason.clone(),
                         scope: response.scope.clone(),
                         resolved_from: response.resolved_from.clone(),
-                        summary,
-                        diagnostics,
-                        trigger_completions,
                         r#final: response,
                     },
                 ));
@@ -8157,6 +8171,7 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
+            ..
         } = instructions::prepare_state(
             account_qty,
             Some(config.peer_count),
@@ -11102,6 +11117,7 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
+            ..
         } = instructions::prepare_state(
             account_qty,
             Some(config.peer_count),
@@ -11193,6 +11209,7 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
+            ..
         } = instructions::prepare_state(
             account_qty,
             Some(config.peer_count),
@@ -11291,6 +11308,7 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
+            ..
         } = instructions::prepare_state(
             account_qty,
             Some(config.peer_count),

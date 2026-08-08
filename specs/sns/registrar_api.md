@@ -72,7 +72,8 @@ The transaction authority is the signed request account and is always the
 lease payer; payer is not part of an intent. Resource owners and target
 accounts remain explicit.
 
-`AliasTransactionPlanV1` binds the authority, chain, block anchor, ordered
+`AliasTransactionPlanV1` binds the authority, exact genesis-derived
+`NetworkId`, block anchor, ordered
 resolved resources, dispositions, exact quotes, framed Norito instructions,
 totals by payment asset, diagnostics, deadline, and a domain-separated hash of
 the canonical plan body. The planner returns a structured `409` and no partial

@@ -15,7 +15,7 @@ use norito::codec::{Decode, Encode};
 
 use super::Header as BlockHeader;
 use crate::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     block::consensus::LaneBlockCommitment,
     nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
@@ -478,8 +478,8 @@ impl SnapshotV2BootstrapRecord {
 )]
 #[norito(deny_unknown_fields)]
 pub struct HeightContext {
-    /// Chain identifier used for replay protection.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network identity used for replay protection.
+    pub network_id: NetworkId,
     /// Wire protocol version; must equal [`PROTOCOL_VERSION`].
     pub protocol_version: u16,
     /// Height governed by this context.
@@ -533,7 +533,7 @@ impl HeightContext {
     pub fn id(&self) -> HeightContextId {
         let identity = HeightContextIdentity {
             identity_version: HEIGHT_CONTEXT_IDENTITY_VERSION,
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
@@ -674,7 +674,7 @@ impl HeightContext {
 #[derive(Encode)]
 struct HeightContextIdentity {
     identity_version: u16,
-    chain_id: ChainId,
+    network_id: NetworkId,
     protocol_version: u16,
     height: Height,
     epoch: u64,
@@ -965,8 +965,6 @@ pub struct ExecutionCommitment {
     /// Absence is canonical only when the result-bearing block contains no
     /// lane-finality statements. A present commitment is derived from the
     /// executed block by validators; it is never supplied by relay callers.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub lane_finality_manifest: Option<MerkleTreeCommitment<LaneFinalityStatement>>,
     /// Hash of the canonical result-bearing block wire produced by deterministic execution.
     pub executed_block_wire_hash: Hash,
@@ -2379,8 +2377,8 @@ pub struct CertifiedBodyResponseSignaturePayload {
 pub struct CommitCertificateRequest {
     /// Consensus protocol revision included in the signed request.
     pub protocol_version: u16,
-    /// Chain identifier included explicitly for replay rejection at ingress.
-    pub chain_id: ChainId,
+    /// Exact genesis-derived network identity included for replay rejection at ingress.
+    pub network_id: NetworkId,
     /// Exact frozen context whose durable `CommitQC` is requested.
     pub context_id: HeightContextId,
     /// Height repeated for bounded serving and early rejection.
@@ -2421,7 +2419,7 @@ impl CommitCertificateRequest {
                 actual: self.protocol_version,
             });
         }
-        if self.chain_id != context.chain_id
+        if self.network_id != context.network_id
             || self.context_id != context.id()
             || self.height != context.height
         {
@@ -4342,6 +4340,12 @@ mod tests {
 
     use super::*;
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
     #[test]
     fn consensus_modes_project_canonical_protocol_identities() {
         assert_eq!(ConsensusMode::Permissioned.tag(), PERMISSIONED_TAG);
@@ -4485,6 +4489,19 @@ mod tests {
             executed_block_wire_hash: Hash,
         }
 
+        #[derive(Encode)]
+        struct ExecutionCommitmentWithoutLaneFinalityManifest {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+            topup_anchor_root: Option<Hash>,
+            topup_anchor_count: u32,
+            native_amx_application_manifest_version: u16,
+            native_amx_application_manifest_root: Hash,
+            native_amx_application_manifest_count: u32,
+            executed_block_wire_hash: Hash,
+        }
+
         let parent = Hash::new(b"native manifest parent");
         let post = Hash::new(b"native manifest post");
         let ordinary = Hash::new(b"native manifest ordinary");
@@ -4510,6 +4527,23 @@ mod tests {
         assert!(
             ExecutionCommitment::decode_all(&mut legacy_cursor).is_err(),
             "the pre-manifest execution commitment must not decode implicitly"
+        );
+        let omitted_lane_finality = ExecutionCommitmentWithoutLaneFinalityManifest {
+            parent_state_root: parent,
+            post_state_root: post,
+            ordinary_writes_root: ordinary,
+            topup_anchor_root: None,
+            topup_anchor_count: 0,
+            native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
+            native_amx_application_manifest_count: 0,
+            executed_block_wire_hash: executed,
+        }
+        .encode();
+        let mut omitted_lane_finality_cursor = omitted_lane_finality.as_slice();
+        assert!(
+            ExecutionCommitment::decode_all(&mut omitted_lane_finality_cursor).is_err(),
+            "the lane-finality manifest is a required V1 execution-commitment wire field"
         );
         let canonical = ExecutionCommitment::new_with_native_amx_application_manifest(
             parent,
@@ -4683,7 +4717,7 @@ mod tests {
     fn context(powers: &[u64]) -> HeightContext {
         let roster = roster(powers);
         HeightContext {
-            chain_id: ChainId::from("sumeragi-v2-test"),
+            network_id: network_id(0xA1),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 2,
@@ -5510,7 +5544,7 @@ mod tests {
         };
         let commit_request = CommitCertificateRequest {
             protocol_version: PROTOCOL_VERSION,
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             context_id: context.id(),
             height: context.height,
             requester: context.roster[3].validator.clone(),
@@ -6161,7 +6195,7 @@ mod tests {
         let commit = qc(&context, 9, GlobalPhase::Commit, vec![0, 1, 2]);
         let request = CommitCertificateRequest {
             protocol_version: PROTOCOL_VERSION,
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             context_id: context.id(),
             height: context.height,
             requester: peer(99),
@@ -6187,10 +6221,10 @@ mod tests {
                 .starts_with(b"iroha:sumeragi:v2:commit-certificate-response")
         );
 
-        let mut cross_chain = request.clone();
-        cross_chain.chain_id = ChainId::from("other-chain");
+        let mut cross_network = request.clone();
+        cross_network.network_id = network_id(0xA2);
         assert_eq!(
-            cross_chain.validate(&context),
+            cross_network.validate(&context),
             Err(ValidationError::WrongHeightContext)
         );
         let mut wrong_height = request.clone();

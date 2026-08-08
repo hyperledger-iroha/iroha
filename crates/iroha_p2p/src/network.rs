@@ -30,7 +30,7 @@ use iroha_crypto::{
     },
 };
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     prelude::{Peer, PeerId},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -61,6 +61,13 @@ use crate::{
     },
     sampler::LogSampler,
 };
+
+#[cfg(test)]
+fn test_network_id(seed: &str) -> NetworkId {
+    NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+        seed.as_bytes(),
+    )))
+}
 
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
@@ -7888,7 +7895,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     pub async fn start(
         identity_keys: P2pIdentityKeys,
         config: Config,
-        chain_id: ChainId,
+        network_id: NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         shutdown_signal: ShutdownSignal,
@@ -7896,7 +7903,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         Self::start_with_crypto(
             identity_keys,
             config,
-            chain_id,
+            network_id,
             consensus_caps,
             confidential_caps,
             None,
@@ -8014,7 +8021,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     pub async fn start_with_crypto(
         identity_keys: P2pIdentityKeys,
         config: Config,
-        chain_id: ChainId,
+        network_id: NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -8023,7 +8030,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         Self::start_with_crypto_and_initial_trusted_sources(
             identity_keys,
             config,
-            chain_id,
+            network_id,
             consensus_caps,
             confidential_caps,
             crypto_caps,
@@ -8051,7 +8058,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     pub async fn start_with_crypto_and_initial_trusted_sources(
         identity_keys: P2pIdentityKeys,
         config: Config,
-        chain_id: ChainId,
+        network_id: NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -8061,7 +8068,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
         Self::start_with_crypto_and_initial_authorities(
             identity_keys,
             config,
-            chain_id,
+            network_id,
             consensus_caps,
             confidential_caps,
             crypto_caps,
@@ -8170,7 +8177,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             ..
         }: Config,
         // Canonical chain identity bound into every peer handshake signature.
-        chain_id: ChainId,
+        network_id: NetworkId,
         // Optional consensus capabilities for handshake gating (mode/proto/fingerprint)
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -8622,7 +8629,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                 quic_datagram_max_payload_bytes,
                 quic_datagram_receive_buffer_bytes,
                 quic_datagram_send_buffer_bytes,
-                chain_id.clone(),
+                network_id.clone(),
                 consensus_caps.clone(),
                 confidential_caps.clone(),
                 crypto_caps.clone(),
@@ -8668,7 +8675,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
                     public_address.value().clone(),
                     service_message_sender.clone(),
                     idle_timeout,
-                    chain_id.clone(),
+                    network_id.clone(),
                     consensus_caps.clone(),
                     confidential_caps.clone(),
                     crypto_caps.clone(),
@@ -8795,7 +8802,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             reply_writer_flush_timeout,
             dial_timeout,
             connect_startup_delay_until,
-            chain_id,
+            network_id,
             consensus_caps,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps,
@@ -12754,7 +12761,7 @@ mod accept_stream_tests {
         },
     };
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         peer::{Peer, PeerId},
     };
     use iroha_primitives::addr::socket_addr;
@@ -13246,7 +13253,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(test_node_key_pair()),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             iroha_futures::supervisor::ShutdownSignal::new(),
@@ -13264,7 +13271,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(test_node_key_pair()),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             iroha_futures::supervisor::ShutdownSignal::new(),
@@ -13286,7 +13293,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -13336,7 +13343,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown,
@@ -13361,7 +13368,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown,
@@ -13386,7 +13393,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown,
@@ -13411,7 +13418,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown,
@@ -13436,7 +13443,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown,
@@ -13461,7 +13468,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -13493,7 +13500,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown,
@@ -13515,7 +13522,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -13556,7 +13563,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -13612,7 +13619,7 @@ mod accept_stream_tests {
 
         let baseline = snapshot().len();
         let key_pair = test_node_key_pair();
-        let chain_id = ChainId::from("test-chain");
+        let network_id = test_network_id("test-chain");
         let soranet_transport_key_pair = test_transport_key_pair();
         let max_frame_bytes = 59_999usize;
 
@@ -13644,7 +13651,7 @@ mod accept_stream_tests {
             socket_addr!(127.0.0.1:1_337),
             service_tx,
             Duration::from_secs(1),
-            chain_id,
+            network_id,
             None,
             None,
             None,
@@ -13719,7 +13726,7 @@ mod accept_stream_tests {
         let started = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown.clone(),
@@ -13778,7 +13785,7 @@ mod accept_stream_tests {
         let result = super::NetworkBaseHandle::<Dummy, ChaCha20Poly1305>::start(
             test_p2p_identity_keys(key_pair),
             cfg,
-            ChainId::from("test-chain"),
+            test_network_id("test-chain"),
             None,
             None,
             shutdown,
@@ -13926,7 +13933,7 @@ mod accept_stream_tests {
                 Duration::from_millis(50),
             ),
             current_peers_addresses: Vec::new(),
-            chain_id: ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -14081,7 +14088,7 @@ mod accept_stream_tests {
 
         let baseline = snapshot().len();
         let key_pair = test_node_key_pair();
-        let chain_id = ChainId::from("test-chain");
+        let network_id = test_network_id("test-chain");
         let soranet_transport_key_pair = test_transport_key_pair();
         let max_frame_bytes = 61_111usize;
 
@@ -14117,7 +14124,7 @@ mod accept_stream_tests {
             0,
             0,
             0,
-            chain_id,
+            network_id,
             None,
             None,
             None,
@@ -14335,7 +14342,7 @@ mod accept_stream_tests {
             tcp_nodelay: true,
             tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
-            chain_id: ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -14577,7 +14584,7 @@ mod accept_stream_tests {
             tcp_nodelay: true,
             tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
-            chain_id: ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -14839,7 +14846,7 @@ mod accept_stream_tests {
             tcp_nodelay: true,
             tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
-            chain_id: ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
@@ -15143,7 +15150,7 @@ async fn start_quic_listener<T, E>(
     quic_datagram_max_payload_bytes: usize,
     quic_datagram_receive_buffer_bytes: usize,
     quic_datagram_send_buffer_bytes: usize,
-    chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15268,7 +15275,7 @@ where
             let key_pair = key_pair.clone();
             let soranet_transport_key_pair = soranet_transport_key_pair.clone();
             let public_address = public_address.clone();
-            let chain_id = chain_id.clone();
+            let network_id = network_id.clone();
             let consensus_caps = consensus_caps.clone();
             let confidential_caps = confidential_caps.clone();
             let crypto_caps = crypto_caps.clone();
@@ -15381,7 +15388,7 @@ where
                     ),
                     service_message_sender,
                     idle_timeout,
-                    chain_id,
+                    network_id,
                     consensus_caps,
                     confidential_caps,
                     crypto_caps,
@@ -15438,7 +15445,7 @@ mod quic_tests {
             .expect("test BLS-normal node key");
         let transport = KeyPair::try_from_seed(vec![0x74; 32], Algorithm::Ed25519)
             .expect("test Ed25519 transport key");
-        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let network_id = test_network_id("test-chain");
         let (tx, _rx) = tokio::sync::mpsc::channel::<
             crate::peer::message::ServiceMessage<WireMessage<Dummy>>,
         >(1);
@@ -15456,7 +15463,7 @@ mod quic_tests {
             0,
             0,
             0,
-            chain_id,
+            network_id,
             None,
             None,
             None,
@@ -15511,7 +15518,7 @@ async fn start_tls_listener<T, E>(
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
-    chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     crypto_caps: Option<crate::CryptoHandshakeCaps>,
@@ -15587,7 +15594,7 @@ where
             let key_pair = key_pair.clone();
             let soranet_transport_key_pair = soranet_transport_key_pair.clone();
             let public_address = public_address.clone();
-            let chain_id = chain_id.clone();
+            let network_id = network_id.clone();
             let consensus_caps = consensus_caps.clone();
             let confidential_caps = confidential_caps.clone();
             let crypto_caps = crypto_caps.clone();
@@ -15649,7 +15656,7 @@ where
                             ),
                             service_message_sender,
                             idle_timeout,
-                            chain_id,
+                            network_id,
                             consensus_caps,
                             confidential_caps.clone(),
                             crypto_caps.clone(),
@@ -15838,8 +15845,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     ///
     /// Will try to establish connection via both addresses.
     current_peers_addresses: Vec<(PeerId, SocketAddr)>,
-    /// Canonical `ChainId` included in every handshake signature binding.
-    chain_id: ChainId,
+    /// Canonical `NetworkId` included in every handshake signature binding.
+    network_id: NetworkId,
     /// Optional consensus handshake capabilities for gating connections.
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     /// Most recently applied reconnect request generation.
@@ -16081,7 +16088,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                     Connection::from_split(conn_id, read, write),
                     service_message_sender,
                     self.idle_timeout,
-                    self.chain_id.clone(),
+                    self.network_id.clone(),
                     self.consensus_caps.clone(),
                     self.confidential_caps.clone(),
                     self.crypto_caps.clone(),
@@ -16953,7 +16960,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             Connection::new(conn_id, stream),
             service_message_sender,
             self.idle_timeout,
-            self.chain_id.clone(),
+            self.network_id.clone(),
             self.consensus_caps.clone(),
             self.confidential_caps.clone(),
             self.crypto_caps.clone(),
@@ -18462,7 +18469,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             service_message_sender,
             self.idle_timeout,
             self.dial_timeout,
-            self.chain_id.clone(),
+            self.network_id.clone(),
             self.consensus_caps.clone(),
             self.confidential_caps.clone(),
             self.crypto_caps.clone(),
@@ -20023,7 +20030,19 @@ fn reconnect_backoff_jitter_ms(
         base.as_millis(),
         next_base.as_millis()
     );
-    bounded_hash_jitter_ms(&material, upper_ms)
+    // Keep jitter inside the current exponential-backoff window.  Hashing
+    // into `0..=next_base` lets one peer pair deterministically select the
+    // same near-zero delay forever once `base == next_base`, turning an
+    // unavailable validator into a reconnect storm.  The lower bound still
+    // spreads peers throughout `[base, next_base]` while preserving the
+    // configured maximum retry cadence.
+    let lower_ms = u64::try_from(base.as_millis())
+        .unwrap_or(u64::MAX)
+        .min(upper_ms);
+    lower_ms.saturating_add(bounded_hash_jitter_ms(
+        &material,
+        upper_ms.saturating_sub(lower_ms),
+    ))
 }
 
 fn bounded_hash_jitter_ms(material: &str, upper_ms: u64) -> u64 {
@@ -20302,6 +20321,7 @@ mod tests {
                 upper_ms,
             )
         );
+        assert!(jitter >= 100);
         assert!(jitter <= upper_ms);
         assert_eq!(
             reconnect_backoff_jitter_ms(
@@ -20313,6 +20333,20 @@ mod tests {
                 0,
             ),
             0
+        );
+    }
+
+    #[test]
+    fn reconnect_backoff_at_cap_cannot_repeat_a_near_zero_delay() {
+        let self_id = PeerId::from(KeyPair::random().public_key().clone());
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let addr = socket_addr!(127.0.0.1:45679);
+        let capped = Duration::from_secs(5);
+
+        assert_eq!(
+            reconnect_backoff_jitter_ms(&self_id, &peer_id, &addr, capped, capped, 5_000),
+            5_000,
+            "a capped deterministic backoff must retain its configured floor"
         );
     }
 
@@ -22654,7 +22688,7 @@ mod tests {
             .expect("test BLS-normal node key");
         let soranet_transport_key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
             .expect("test Ed25519 transport key");
-        let chain_id = ChainId::from("test-chain");
+        let network_id = test_network_id("test-chain");
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return None,
@@ -22760,7 +22794,7 @@ mod tests {
                 Duration::from_millis(50),
             ),
             current_peers_addresses: Vec::new(),
-            chain_id,
+            network_id,
             consensus_caps: None,
             consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,

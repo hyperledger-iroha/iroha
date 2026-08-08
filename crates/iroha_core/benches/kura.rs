@@ -113,7 +113,11 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
         )
         .expect("eviction-benchmark execution commitment");
         let context = HeightContext {
-            chain_id: ChainId::from("kura-eviction-benchmark"),
+            network_id: NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"kura-eviction-benchmark-genesis",
+                )),
+            ),
             protocol_version: PROTOCOL_VERSION,
             height,
             epoch: 0,
@@ -279,7 +283,6 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         eviction_required_replicas:
             iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default()).unwrap();
     // Use a lightweight, test-friendly handle that doesn't require a running Tokio runtime
     let query_handle = LiveQueryStore::start_test();
@@ -294,6 +297,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         .expect("benchmark State startup must validate"),
     );
     let nexus = state.nexus_snapshot();
+    let network_id = *state.network_id_ref();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
@@ -307,7 +311,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     let alice_xor_id = AssetId::new(xor_id, alice_id.clone());
     let transfer = Transfer::asset_quantity(alice_xor_id, 10_u32, bob_id);
     let tx = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -321,7 +325,7 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     let crypto_cfg = state.crypto();
     let tx = AcceptedTransaction::accept(
         tx,
-        &chain_id,
+        &network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),

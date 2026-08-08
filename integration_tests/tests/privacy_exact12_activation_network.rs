@@ -39,11 +39,10 @@ use iroha_data_model::{
     permission::Permission,
     prelude::QueryBuilderExt,
     privacy::{
-        PrivacyActiveLifecycleV1, PrivacyCapabilitySnapshotV1,
-        PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-        PrivacyCompiledProfileUnavailableReasonV1, PrivacyProofEnvelopeV1,
-        PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
+        PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+        PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
     },
     query::transaction::prelude::FindTransactions,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
@@ -174,7 +173,7 @@ fn expected_states(
 }
 
 fn assert_exact12_snapshot(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
     expected: &[ExpectedProtocolState],
     context: &str,
@@ -229,7 +228,7 @@ async fn wait_for_identical_exact12_snapshots(
     minimum_height: u64,
     expected: &[ExpectedProtocolState],
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     ensure!(
         !clients.is_empty() && clients.len() <= 4,
         "{context}: exact-12 snapshot polling requires between one and four validator clients"
@@ -442,7 +441,7 @@ async fn wait_for_transaction_on_peers(
 }
 
 fn assert_zk_ams_unavailable(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
     context: &str,
 ) -> Result<()> {
@@ -479,7 +478,7 @@ async fn wait_for_identical_zk_ams_unavailable(
     clients: &[Client],
     minimum_height: u64,
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
     let mut last_observed = Vec::new();
     loop {

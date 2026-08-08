@@ -4,13 +4,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 22;
-  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 4;
+  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 5;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -82,7 +83,7 @@ public final class NativeSignerBridge {
 
   public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
       final SigningAlgorithm algorithm,
-      final String chainId,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
@@ -91,7 +92,7 @@ public final class NativeSignerBridge {
       final FeePaymentIntent feePayment) {
     return encodeRegisterZkAssetSignedTransaction(
         algorithm,
-        chainId,
+        networkId,
         chainDiscriminant,
         authority,
         creationTimeMs,
@@ -103,7 +104,7 @@ public final class NativeSignerBridge {
 
   public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
       final SigningAlgorithm algorithm,
-      final String chainId,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
@@ -117,7 +118,8 @@ public final class NativeSignerBridge {
       throw new IllegalArgumentException("instruction must be provided");
     }
     final byte[] key = requirePrivateKey(privateKey);
-    final byte[] chainBytes = textBytes(chainId, "chainId");
+    final byte[] networkIdBytes =
+        Objects.requireNonNull(networkId, "networkId").bytes();
     final byte[] authorityBytes = textBytes(authority, "authority");
     final byte[] assetBytes = textBytes(instruction.asset(), "asset");
     final byte[] unshieldBytes = optionalTextBytes(instruction.unshieldVerifyingKey());
@@ -129,7 +131,7 @@ public final class NativeSignerBridge {
     return requireNativeSignedOutput(
         nativeEncodeRegisterZkAssetSignedTransaction(
             algorithm.bridgeCode(),
-            chainBytes,
+            networkIdBytes,
             validatedChainDiscriminant,
             authorityBytes,
             creationTimeMs,
@@ -245,7 +247,7 @@ public final class NativeSignerBridge {
 
   private static native byte[][] nativeEncodeRegisterZkAssetSignedTransaction(
       int algorithmCode,
-      byte[] chainId,
+      byte[] networkId,
       int chainDiscriminant,
       byte[] authority,
       long creationTimeMs,

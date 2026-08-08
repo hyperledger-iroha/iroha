@@ -21,6 +21,7 @@ default = ["governance", "bridge", "fast_dsl"]
 governance = []
 bridge = []
 fast_dsl = ["iroha_data_model/fast_dsl"]
+test-support = []
 
 [dependencies]
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }

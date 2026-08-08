@@ -12,6 +12,17 @@ from .address import AccountAddress
 
 _crypto = load_crypto_extension()
 
+# Exact genesis-derived transaction domain. Construction is closed in the
+# native boundary so ordinary signing APIs cannot reinterpret labels or bare
+# byte strings as a NetworkId.
+NetworkId = _crypto.NetworkId
+
+
+def _require_network_id(value: Any, context: str = "network_id") -> NetworkId:
+    if not isinstance(value, NetworkId):
+        raise TypeError(f"{context} must be a NetworkId")
+    return value
+
 ED25519_ALGORITHM: Final[str] = "ed25519"
 SECP256K1_ALGORITHM: Final[str] = "secp256k1"
 ML_DSA_ALGORITHM: Final[str] = "ml-dsa"
@@ -25,6 +36,7 @@ BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
 PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22
 PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES: Final[int] = 256 * 1024
+PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1: Final[int] = 256 * 1024
 PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = MappingProxyType(
     {
         "VALID": 0,
@@ -37,6 +49,21 @@ PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1: Final[Mapping[str, int]] 
         "MALFORMED_ARCHIVE": 7,
         "INVALID_CATALOG": 8,
     }
+)
+PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1: Final[Mapping[str, int]] = (
+    MappingProxyType(
+        {
+            "VALID": 0,
+            "NULL_POINTER": 1,
+            "EMPTY": 2,
+            "ARCHIVE_TOO_LARGE": 3,
+            "DECODE_RESOURCE_LIMIT": 4,
+            "SCHEMA_MISMATCH": 5,
+            "NON_CANONICAL": 6,
+            "MALFORMED_ARCHIVE": 7,
+            "INVALID_MANIFEST": 8,
+        }
+    )
 )
 _PRIVACY_MAX_BRIDGE_ABI_VERSION: Final[int] = 0xFFFF_FFFF
 try:
@@ -95,6 +122,8 @@ __all__ = [
     "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION",
     "PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1",
     "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1",
+    "PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1",
     "SUPPORTED_CRYPTO_ALGORITHMS",
     "ED25519_PRIVATE_KEY_LENGTH",
     "ED25519_PUBLIC_KEY_LENGTH",
@@ -109,16 +138,10 @@ __all__ = [
     "Sm2KeyPair",
     "Instruction",
     "ContractCall",
+    "NetworkId",
     "TransactionExecutableEntry",
-    "PrivacyBootleLanternPresentationActionBuildResultV1",
-    "PrivacyJindoActionBuildResultV1",
     "PrivacyNativeActionBuildResultV1",
-    "PrivacyVeRangeActionBuildResultV1",
-    "PrivacyVegaActionPreparationV1",
-    "PrivacyVegaActionBuildResultV1",
-    "PrivacyZkAceTransferActionBuildResultV1",
-    "PrivacyZkAmsBatchAdmissionActionBuildResultV1",
-    "PrivacyZkAmsProvisionAccountActionBuildResultV1",
+    "PrivacyExact12CapabilityManifestV1",
     "SignedTransactionEnvelope",
     "TransactionBuilder",
     "ConfidentialKeyset",
@@ -189,6 +212,8 @@ __all__ = [
     "privacy_bridge_abi_version",
     "is_privacy_native_available",
     "privacy_compiled_profile_catalog_v1",
+    "privacy_exact12_capability_manifest_v1",
+    "privacy_validate_exact12_capability_manifest_v1",
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
     "signed_transaction_envelope_from_versioned_v1",
@@ -374,15 +399,8 @@ if TYPE_CHECKING:
 
         def to_json(self) -> str: ...
 
-    PrivacyBootleLanternPresentationActionBuildResultV1: TypeAlias = Any
-    PrivacyJindoActionBuildResultV1: TypeAlias = Any
     PrivacyNativeActionBuildResultV1: TypeAlias = Any
-    PrivacyVeRangeActionBuildResultV1: TypeAlias = Any
-    PrivacyVegaActionPreparationV1: TypeAlias = Any
-    PrivacyVegaActionBuildResultV1: TypeAlias = Any
-    PrivacyZkAceTransferActionBuildResultV1: TypeAlias = Any
-    PrivacyZkAmsBatchAdmissionActionBuildResultV1: TypeAlias = Any
-    PrivacyZkAmsProvisionAccountActionBuildResultV1: TypeAlias = Any
+    PrivacyExact12CapabilityManifestV1: TypeAlias = Any
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
 else:
@@ -417,6 +435,9 @@ else:
     class _InstructionFacadeMeta(type):
         def __getattr__(cls, name: str) -> Any:
             return getattr(_NativeInstruction, name)
+
+        def __instancecheck__(cls, instance: object) -> bool:
+            return isinstance(instance, _NativeInstruction)
 
     class Instruction(metaclass=_InstructionFacadeMeta):
         @staticmethod
@@ -491,21 +512,8 @@ else:
                 expiration_epoch,
             )
 
-    PrivacyBootleLanternPresentationActionBuildResultV1 = (
-        _crypto.PrivacyBootleLanternPresentationActionBuildResultV1
-    )
-    PrivacyJindoActionBuildResultV1 = _crypto.PrivacyJindoActionBuildResultV1
     PrivacyNativeActionBuildResultV1 = _crypto.PrivacyNativeActionBuildResultV1
-    PrivacyVeRangeActionBuildResultV1 = _crypto.PrivacyVeRangeActionBuildResultV1
-    PrivacyVegaActionPreparationV1 = _crypto.PrivacyVegaActionPreparationV1
-    PrivacyVegaActionBuildResultV1 = _crypto.PrivacyVegaActionBuildResultV1
-    PrivacyZkAceTransferActionBuildResultV1 = _crypto.PrivacyZkAceTransferActionBuildResultV1
-    PrivacyZkAmsBatchAdmissionActionBuildResultV1 = (
-        _crypto.PrivacyZkAmsBatchAdmissionActionBuildResultV1
-    )
-    PrivacyZkAmsProvisionAccountActionBuildResultV1 = (
-        _crypto.PrivacyZkAmsProvisionAccountActionBuildResultV1
-    )
+    PrivacyExact12CapabilityManifestV1 = _crypto.PrivacyExact12CapabilityManifestV1
     SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
     TransactionBuilder = _crypto.TransactionBuilder
 verify_signed_transaction_versioned = _crypto.verify_signed_transaction_versioned
@@ -518,7 +526,7 @@ AssetId = _crypto.AssetId
 def build_find_asset_escrow_query(
     authority: str,
     private_key: bytes,
-    canonical_genesis_hash: bytes,
+    network_id: NetworkId,
     escrow_id: str,
 ) -> bytes:
     """Build a versioned Norito signed query for one native escrow."""
@@ -527,7 +535,7 @@ def build_find_asset_escrow_query(
         _crypto.build_find_asset_escrow_query(
             authority,
             private_key,
-            canonical_genesis_hash,
+            _require_network_id(network_id),
             escrow_id,
         )
     )
@@ -536,7 +544,7 @@ def build_find_asset_escrow_query(
 def build_find_asset_escrows_by_seller_query(
     authority: str,
     private_key: bytes,
-    canonical_genesis_hash: bytes,
+    network_id: NetworkId,
     seller: str,
 ) -> bytes:
     """Build a signed iterable query for escrows funded by ``seller``."""
@@ -545,7 +553,7 @@ def build_find_asset_escrows_by_seller_query(
         _crypto.build_find_asset_escrows_by_seller_query(
             authority,
             private_key,
-            canonical_genesis_hash,
+            _require_network_id(network_id),
             seller,
         )
     )
@@ -554,7 +562,7 @@ def build_find_asset_escrows_by_seller_query(
 def build_find_asset_escrows_by_buyer_query(
     authority: str,
     private_key: bytes,
-    canonical_genesis_hash: bytes,
+    network_id: NetworkId,
     buyer: str,
 ) -> bytes:
     """Build a signed iterable query for escrows benefiting ``buyer``."""
@@ -563,7 +571,7 @@ def build_find_asset_escrows_by_buyer_query(
         _crypto.build_find_asset_escrows_by_buyer_query(
             authority,
             private_key,
-            canonical_genesis_hash,
+            _require_network_id(network_id),
             buyer,
         )
     )
@@ -572,7 +580,7 @@ def build_find_asset_escrows_by_buyer_query(
 def build_find_committed_transaction_query(
     authority: str,
     private_key: bytes,
-    canonical_genesis_hash: bytes,
+    network_id: NetworkId,
     transaction_hash: str,
 ) -> bytes:
     """Build a signed native query for one canonical committed transaction."""
@@ -581,7 +589,7 @@ def build_find_committed_transaction_query(
         _crypto.build_find_committed_transaction_query(
             authority,
             private_key,
-            canonical_genesis_hash,
+            _require_network_id(network_id),
             transaction_hash,
         )
     )
@@ -590,7 +598,7 @@ def build_find_committed_transaction_query(
 def build_find_block_by_hash_query(
     authority: str,
     private_key: bytes,
-    canonical_genesis_hash: bytes,
+    network_id: NetworkId,
     block_hash: str,
 ) -> bytes:
     """Build a signed native query for one exact carrier block."""
@@ -599,7 +607,7 @@ def build_find_block_by_hash_query(
         _crypto.build_find_block_by_hash_query(
             authority,
             private_key,
-            canonical_genesis_hash,
+            _require_network_id(network_id),
             block_hash,
         )
     )
@@ -657,7 +665,7 @@ def decode_transaction_receipt_json(payload: bytes) -> str:
 
 def decode_zk_vk_transaction_payload(
     payload: bytes,
-    expected_chain_id: str,
+    network_id: NetworkId,
     expected_authority: str,
     operation: str,
 ) -> Mapping[str, Any]:
@@ -665,7 +673,7 @@ def decode_zk_vk_transaction_payload(
 
     decoded = _crypto.decode_zk_vk_transaction_payload(
         payload,
-        expected_chain_id,
+        _require_network_id(network_id),
         expected_authority,
         operation,
     )
@@ -1359,7 +1367,7 @@ def sm2_fixture_from_seed(
 
 
 def build_signed_transaction(
-    chain_id: str,
+    network_id: NetworkId,
     authority: str,
     private_key: bytes,
     *,
@@ -1376,8 +1384,9 @@ def build_signed_transaction(
 
     Parameters
     ----------
-    chain_id:
-        Target chain identifier.
+    network_id:
+        Exact typed genesis-derived transaction network. Human-readable chain
+        labels and bare hash bytes are not accepted.
     authority:
         Transaction authority account identifier (domainless encoded account
         literal: canonical I105 only).
@@ -1409,8 +1418,13 @@ def build_signed_transaction(
 
     if not isinstance(fee_payment, Mapping):
         raise TypeError("fee_payment must be a FeePaymentIntent mapping")
+    network_id = _require_network_id(network_id)
     fee_payment_json = json.dumps(dict(fee_payment), separators=(",", ":"))
-    builder = TransactionBuilder(chain_id, authority, fee_payment_json)
+    builder = TransactionBuilder(
+        network_id,
+        authority,
+        fee_payment_json,
+    )
     if creation_time_ms is not None:
         builder.set_creation_time_ms(int(creation_time_ms))
     if ttl_ms is not None:
@@ -1945,6 +1959,12 @@ _PRIVACY_COMPILED_PROFILE_CATALOG_METHOD: Final[str] = "privacy_compiled_profile
 _PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATOR_METHOD: Final[str] = (
     "privacy_validate_compiled_profile_catalog_v1"
 )
+_PRIVACY_EXACT12_CAPABILITY_MANIFEST_METHOD: Final[str] = (
+    "privacy_exact12_capability_manifest_v1"
+)
+_PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATOR_METHOD: Final[str] = (
+    "privacy_validate_exact12_capability_manifest_v1"
+)
 
 
 def _privacy_bridge_abi_version(module: object) -> int | None:
@@ -2067,6 +2087,95 @@ def privacy_compiled_profile_catalog_v1() -> bytes:
     )
 
 
+def _privacy_exact12_capability_manifest_archive(
+    archive: bytes | bytearray | memoryview,
+) -> bytes:
+    if not isinstance(archive, (bytes, bytearray, memoryview)):
+        raise TypeError("Exact12 capability manifest archive must be bytes-like")
+    canonical = bytes(archive)
+    if not canonical:
+        raise ValueError("Exact12 capability manifest archive must be non-empty")
+    if len(canonical) > PRIVACY_EXACT12_CAPABILITY_MANIFEST_ARCHIVE_MAX_BYTES_V1:
+        raise ValueError("Exact12 capability manifest archive exceeds 262144 bytes")
+    return canonical
+
+
+def privacy_validate_exact12_capability_manifest_v1(
+    archive: bytes | bytearray | memoryview,
+) -> int:
+    """Return the native status for one untrusted canonical manifest archive."""
+
+    canonical = _privacy_exact12_capability_manifest_archive(archive)
+    if not _has_privacy_bridge_abi(_crypto):
+        raise RuntimeError(
+            "Exact12 capability manifests require native bridge ABI "
+            f"{PRIVACY_REQUIRED_BRIDGE_ABI_VERSION}"
+        )
+    validator = getattr(
+        _crypto,
+        _PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATOR_METHOD,
+        None,
+    )
+    if not callable(validator):
+        raise RuntimeError(
+            "iroha_python._crypto is missing "
+            "privacy_validate_exact12_capability_manifest_v1; rebuild the extension"
+        )
+    try:
+        status = validator(canonical)
+    except Exception:
+        raise RuntimeError("native Exact12 capability manifest validation failed") from None
+    if (
+        isinstance(status, bool)
+        or not isinstance(status, int)
+        or status
+        not in PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1.values()
+    ):
+        raise RuntimeError(
+            "native Exact12 capability manifest validator returned an invalid status"
+        )
+    return status
+
+
+def privacy_exact12_capability_manifest_v1(
+    archive: bytes | bytearray | memoryview,
+) -> PrivacyExact12CapabilityManifestV1:
+    """Decode one exact Torii manifest without consulting the local catalog.
+
+    The native object retains and re-exposes the byte-identical canonical
+    archive.  Its ``require_network_capability`` method additionally requires
+    an active row whose complete compiled profile matches this binary.
+    """
+
+    canonical = _privacy_exact12_capability_manifest_archive(archive)
+    status = privacy_validate_exact12_capability_manifest_v1(canonical)
+    if status != PRIVACY_EXACT12_CAPABILITY_MANIFEST_VALIDATION_STATUS_V1["VALID"]:
+        raise ValueError(
+            "invalid canonical Exact12 capability manifest archive "
+            f"(native status {status})"
+        )
+    decoder = getattr(_crypto, _PRIVACY_EXACT12_CAPABILITY_MANIFEST_METHOD, None)
+    if not callable(decoder):
+        raise RuntimeError(
+            "iroha_python._crypto is missing privacy_exact12_capability_manifest_v1; "
+            "rebuild the extension"
+        )
+    try:
+        manifest = decoder(canonical)
+    except Exception:
+        raise ValueError("native Exact12 capability manifest decode failed") from None
+    returned = getattr(manifest, "canonical_archive", None)
+    if not isinstance(returned, (bytes, bytearray, memoryview)):
+        raise RuntimeError(
+            "native Exact12 capability manifest omitted its canonical archive"
+        )
+    if bytes(returned) != canonical:
+        raise RuntimeError(
+            "native Exact12 capability manifest changed the Torii archive bytes"
+        )
+    return manifest
+
+
 def canonical_genesis_header_hash_v1(
     framed_signed_genesis: bytes | bytearray | memoryview,
 ) -> bytes:
@@ -2119,17 +2228,20 @@ def canonical_signed_transaction_hash_v1(
 
 def signed_transaction_envelope_from_versioned_v1(
     signed_transaction_versioned: bytes | bytearray | memoryview,
+    network_id: NetworkId,
 ) -> SignedTransactionEnvelope:
-    """Reconstruct the authenticated public envelope from one exact signed wire."""
+    """Reconstruct an authenticated envelope bound to one exact NetworkId."""
 
     if not isinstance(
         signed_transaction_versioned,
         (bytes, bytearray, memoryview),
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
+    network_id = _require_network_id(network_id)
     try:
         result = _crypto.signed_transaction_envelope_from_versioned_v1(
-            bytes(signed_transaction_versioned)
+            bytes(signed_transaction_versioned),
+            network_id,
         )
     except AttributeError as exc:
         raise RuntimeError(
@@ -2162,9 +2274,10 @@ def privacy_vega_device_authentication_digest_v1(
 
     The native derivation fixes the ISO 18013-5 document profile, action index,
     governed Vega artifacts, chain, genesis, date, threshold, reader challenge,
-    session transcript, and canonical nonzero transaction intent. Prefer
-    :meth:`TransactionDraft.prepare_privacy_vega_action_v1`; this low-level
-    helper exists for independently transporting an already prepared intent.
+    session transcript, and canonical nonzero transaction intent. This helper
+    handles public binding data only; generic Vega construction and every
+    credential-bearing operation must use
+    :class:`PrivacyWalletWorkerControllerV1`.
     """
 
     if not isinstance(chain_id, str):

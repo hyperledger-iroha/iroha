@@ -9,14 +9,18 @@
 // TODO: Supply a deployment-qualified runner only after the production boundaries below exist.
 // The stock tree deliberately cannot assemble one from the current SoraFS/Torii primitives:
 //
-// 1. provider ingest durably binds a V4 chain/genesis/archive authorization context, accepts only
+// 1. provider ingest durably binds a V5 chain/genesis/archive authorization context, accepts only
 //    monotonic finalized observations over the retained admission cursor, and keeps generic and
 //    Musubi receipt shapes disjoint. The finalized reader can seal the local provider's exact
 //    opaque completed-row claim, and a fresh verifier result can derive an externally inert
 //    approval request. A runtime driver must still perform that fresh verifier pass and submit the
 //    request only to an approval-only HSM/KMS or threshold provider;
-// 2. the approved provider attestation needs its own bounded crash-safe journal and durable handoff
-//    through the archive-manager/publication runtime rather than direct registry mutation;
+// 2. the approved provider attestation has a bounded journal and an inert, root-fenced local
+//    two-slot CAS adapter with a fixed 128 MiB checkpoint/payload ceiling on Linux/macOS. The
+//    adapter binds the exact chain/genesis/provider and rejects online substitution, torn writes,
+//    and divergent lineage, but it is not daemon-wired, does not resist privileged offline
+//    rollback, and still needs a bounded cross-process initialization-lock path plus a
+//    rollback-resistant clock or external monotonic seal;
 // 3. the authenticated provider-attestation inventory/coordinator handoff needs production SoraFS
 //    pin/replication mutation APIs and an authoritative finalized-chain reader which verifies the
 //    exact committed registration transaction and immutable archive projection before submitting
@@ -27,12 +31,15 @@
 //    resolution, and a private TLS listener constructed by this injected factory around the
 //    daemon-owned finalized-state/SoraFS handles.
 //
-// The publication protocol core, durable clock and publication-service replay journal, and typed
-// supervisor dependency are complete; the separate provider-attestation journal is not. Until
-// every boundary above is implemented and deployment-qualified, stock `irohad` must keep the
-// routes absent. In particular, do not substitute an in-memory backend, treat a public query
-// response or publisher-supplied bytes as finality evidence, or revive the retired public Torii
-// upload path.
+// The publication protocol core, publication-service durable clock and replay journal, typed
+// supervisor dependency, provider-attestation journal, and inert local two-slot store are complete.
+// The finalized-completion capture/reconciliation driver, qualified replay-stable HSM signer,
+// authenticated inventory adapter, rollback-resistant clock or external seal, bounded
+// initialization-lock path, and production fault/platform qualification are not. Until every
+// boundary above is implemented and deployment-qualified, stock `irohad` must keep the routes
+// absent. In particular, do not substitute an in-memory backend, treat the local two-slot store as
+// protection from privileged offline rollback, treat a public query response or publisher-supplied
+// bytes as finality evidence, or revive the retired public Torii upload path.
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 

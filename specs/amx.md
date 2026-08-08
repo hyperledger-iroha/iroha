@@ -18,11 +18,11 @@ Key guarantees:
 - AXT proof envelopes bind proof bytes to a dataspace, its active manifest root,
   and the FastPQ V1 verifier metadata before the host caches the verification
   result for the configured slot window.
-- IVM hosts derive per-dataspace AXT policy and issuer identity from committed Space Directory state. A handle must carry a valid domain-separated V1 signature from the single-key UAID account bound to the active `(dataspace, manifest root)`, target the catalog lane, use the exact active era and exact next sub-nonce, and satisfy expiry. Missing, ambiguous, multisignature, or inconsistent issuer indexes fail closed before FASTPQ verification.
+- IVM hosts derive per-dataspace AXT policy and issuer identity from committed Space Directory state. A handle must carry a valid domain-separated V1 signature from the single-key UAID account bound to the active `(dataspace, manifest root)`, target the catalog lane, use the exact active era and exact next counter, and satisfy expiry. Missing, ambiguous, multisignature, or inconsistent issuer indexes fail closed before FASTPQ verification.
 - Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
 - Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
 - Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later). A block carries the deterministic post-state policy snapshot; Kura replay installs that snapshot and rebuilds the ledger without advancing counters a second time.
-- Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`next_min_handle_era`/`next_min_sub_nonce`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
+- Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`active_handle_era`/`next_handle_counter`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
 
 ## Slot Timing Model
 
@@ -93,7 +93,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 
 ### Lane catalog mapping and manifests
 
-- AXT policy snapshots are built from the Space Directory manifest set and lane catalog. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash, activation epoch (`min_handle_era`), and sub-nonce floor. UAID bindings without an active manifest still emit a policy entry with a zeroed manifest root so lane gating remains active until a real manifest lands.
+- AXT policy snapshots are built from the Space Directory manifest set and lane catalog. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash, exact activation epoch (`active_handle_era`), and exact next counter (`next_handle_counter`). UAID bindings without an active manifest still emit a policy entry with a zeroed manifest root so lane gating remains active until a real manifest lands.
 - `current_slot` in the snapshot is derived from the latest committed block timestamp (`creation_time_ms / slot_length_ms`), falling back to the block height only before a committed header is available.
 - Telemetry surfaces the hydrated snapshot as `iroha_axt_policy_snapshot_version` (lower 64 bits of the Norito-encoded snapshot hash) and cache events via `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}`. Reject counters use the labels `lane`, `manifest`, `era`, `sub_nonce`, and `expiry` so operators can immediately see which field blocked a handle.
 
@@ -101,7 +101,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 
 - Confirm every dataspace listed in the Space Directory has a lane entry and an active manifest; rotation should refresh bindings and manifest roots before issuing new handles. Zeroed roots mean handles will stay denied until manifests are present, and hosts/block validation now reject handles that present zeroed manifest roots.
 - On startup and after Space Directory changes, expect one `cache_miss` followed by steady `cache_hit` events on the policy snapshot metric; a sustained miss rate points to a stale or missing manifest feed.
-- When a handle is rejected, look at `iroha_axt_policy_reject_total{lane,reason}` and the snapshot version to decide whether to request a refreshed handle (`expiry`/`era`/`sub_nonce`) or to repair the lane/manifest binding (`lane`/`manifest`). The Torii debug endpoint `/v1/debug/axt/cache` also returns `reject_hints` with `dataspace`, `target_lane`, `next_min_handle_era`, and `next_min_sub_nonce` so operators can refresh handles deterministically after a policy bump.
+- When a handle is rejected, look at `iroha_axt_policy_reject_total{lane,reason}` and the snapshot version to decide whether to request a refreshed handle (`expiry`/`era`/`sub_nonce`) or to repair the lane/manifest binding (`lane`/`manifest`). The Torii debug endpoint `/v1/debug/axt/cache` also returns `reject_hints` with `dataspace`, `target_lane`, `active_handle_era`, and `next_handle_counter` so operators can refresh handles deterministically after a policy bump.
 
 ### SDK sample: remote spend without token egress
 
@@ -155,7 +155,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 ### AXT rejection signals
 
 - Reason codes are captured as `AxtRejectReason` (`lane`, `manifest`, `era`, `sub_nonce`, `expiry`, `missing_policy`, `policy_denied`, `proof`, `budget`, `replay_cache`, `descriptor`, `duplicate`). Block validation now surfaces `AxtEnvelopeValidationFailed { message, reason, snapshot_version }`, so incidents can pin the rejection to a specific policy snapshot.
-- `/v1/debug/axt/cache` returns `{ policy_snapshot_version, last_reject, cache, hints }`, where `last_reject` carries the lane/reason/version of the most recent host rejection and `hints` provide `next_min_handle_era`/`next_min_sub_nonce` refresh guidance alongside the cached proof state.
+- `/v1/debug/axt/cache` returns `{ policy_snapshot_version, last_reject, cache, hints }`, where `last_reject` carries the lane/reason/version of the most recent host rejection and `hints` provide exact `active_handle_era`/`next_handle_counter` guidance alongside the cached proof state.
 - Alert template: page when `iroha_axt_policy_reject_total{reason="manifest"}` or `{reason="expiry"}` spikes over a 5‑minute window, attach the `last_reject` snapshot + `policy_snapshot_version` from the Torii debug endpoint to the incident, and use the hint payload to request refreshed handles before retrying.
 
 ## AXT Proof Envelopes
@@ -176,12 +176,13 @@ The canonical data-model types live in
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
 | `committed_amount` / `amount_commitment` | Optional clear or hidden amount binding checked against the spend intent. |
 
-`AssetHandle` separately binds the ABI version, chain id, dataspace, descriptor
-digest, scope, subject, budget, group, target lane, active manifest root, exact
-era/sub-nonce, expiry, and skew allowance in its issuer signature. The host
-resolves the verification key only from committed Space Directory/UAID state
-and authenticates the handle before any FASTPQ work. No issuer identity carried
-by the handle participates in key selection.
+Issuers construct an unsigned `AssetHandleDraft`; signing consumes that draft
+and returns an admission-ready `AssetHandle` with a mandatory signature. The
+signature binds the exact genesis-derived `NetworkId`, committed issuer UAID and
+manifest root, executing code root, ABI version/hash, dataspace, descriptor
+digest, scope, subject, budget, group/lane context, exact active era/next
+counter, expiry, and skew allowance. The host reconstructs this context from
+committed state and the executing IVM before any FASTPQ work.
 
 ### Generation and use
 
@@ -218,7 +219,7 @@ captured in the validation evidence bundle.
 
 ## Space Directory policy enforcement
 
-AXT handle verification now defaults to the Space Directory snapshot when the host has access to it (CoreHost in tests, WsvHost in integration flows). Per-dataspace policy entries carry `manifest_root`, `target_lane`, `min_handle_era`, `min_sub_nonce`, and `current_slot`. Hosts enforce:
+AXT handle verification now defaults to the Space Directory snapshot when the host has access to it (CoreHost in tests, WsvHost in integration flows). Per-dataspace policy entries carry `manifest_root`, `target_lane`, `active_handle_era`, `next_handle_counter`, and `current_slot`. Hosts enforce:
 
 - lane binding: handle `target_lane` must match the Space Directory entry;
 - manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
@@ -249,8 +250,8 @@ SDK teams should mirror these codes in integration tests so `iroha_cli`, Android
 
 ### AXT rejection observability
 
-- Torii surfaces policy failures as `ValidationFail::AxtReject` (and block validation as `AxtEnvelopeValidationFailed`) with a stable reason label, the active `snapshot_version`, optional `lane`/`dataspace` identifiers, and hint fields for `next_min_handle_era`/`next_min_sub_nonce`. SDKs should bubble these fields to users so stale handles can be refreshed deterministically.
-- Torii now also stamps HTTP responses with `X-Iroha-Axt-*` headers for quick triage: `Code`/`Reason`, `Snapshot-Version`, `Dataspace`, `Lane`, and optional `Next-Handle-Era`/`Next-Sub-Nonce`. ISO bridge rejections carry matching `PRTRY:AXT_*` reason codes and the same detail strings so dashboards and operators can key alerts off the AXT failure class without decoding the full payload.
+- Torii surfaces policy failures as `ValidationFail::AxtReject` (and block validation as `AxtEnvelopeValidationFailed`) with a stable reason label, the active `snapshot_version`, optional `lane`/`dataspace` identifiers, and exact hint fields for `active_handle_era`/`next_handle_counter`. SDKs should bubble these fields to users so stale handles can be refreshed deterministically.
+- Torii now also stamps HTTP responses with `X-Iroha-Axt-*` headers for quick triage: `Code`/`Reason`, `Snapshot-Version`, `Dataspace`, `Lane`, and optional `Active-Handle-Era`/`Next-Handle-Counter`. ISO bridge rejections carry matching `PRTRY:AXT_*` reason codes and the same detail strings so dashboards and operators can key alerts off the AXT failure class without decoding the full payload.
 - Hosts log `AXT policy rejection recorded` with the same fields and export them via telemetry: `iroha_axt_policy_reject_total{lane,reason}` counts rejects, and `iroha_axt_policy_snapshot_version` tracks the hash of the active snapshot. Proof cache state remains available via `/v1/debug/axt/cache` (dataspace/status/manifest root/slots).
 - Alerting: watch for spikes in `iroha_axt_policy_reject_total` grouped by `reason` and page with the `snapshot_version` from logs/ValidationFail to confirm whether operators need to rotate manifests (lane/manifest rejects) or refresh handles (era/sub_nonce/expiry). Pair alerts with the proof-cache endpoint to confirm whether rejects are cache-related or policy-related.
 

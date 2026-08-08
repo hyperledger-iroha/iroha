@@ -3665,7 +3665,7 @@ pub enum PrivacyCompiledProfileResultV1 {
 /// This row deliberately has no activation, lifecycle, committed height, or
 /// consensus-policy field. It describes only what the current binary was
 /// compiled to execute. Authoritative readiness comes exclusively from a
-/// committed [`PrivacyCapabilitySnapshotV1`] returned by Torii.
+/// committed [`PrivacyExact12CapabilityManifestV1`] returned by Torii.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -4284,7 +4284,7 @@ pub enum PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
 }
 
 impl PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
-    /// Return the stable ABI-21 integer representation.
+    /// Return the stable ABI-22 integer representation.
     #[must_use]
     pub const fn code(self) -> i32 {
         self as i32
@@ -4358,12 +4358,12 @@ pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1: usize = 32;
 
 /// Stable result codes returned by every native privacy capability validator.
 ///
-/// These numeric discriminants are part of ABI 21. SDKs must accept only
+/// These numeric discriminants are part of ABI 22. SDKs must accept only
 /// [`Self::Valid`]; every other value is a fail-closed rejection.
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivacyCapabilityArchiveValidationStatusV1 {
-    /// The archive is the exact canonical typed snapshot and is semantically valid.
+    /// The archive is the exact canonical typed manifest and is semantically valid.
     Valid = 0,
     /// A native ABI caller supplied a null archive pointer.
     NullPointer = 1,
@@ -4373,18 +4373,18 @@ pub enum PrivacyCapabilityArchiveValidationStatusV1 {
     ArchiveTooLarge = 3,
     /// Norito rejected a declared sequence, field, allocation, or nesting budget.
     DecodeResourceLimit = 4,
-    /// The archive schema is not exactly [`PrivacyCapabilitySnapshotV1`].
+    /// The archive schema is not exactly [`PrivacyExact12CapabilityManifestV1`].
     SchemaMismatch = 5,
     /// The bytes are not the one canonical uncompressed V1 encoding.
     NonCanonical = 6,
     /// The archive is malformed, truncated, or fails its checksum.
     MalformedArchive = 7,
-    /// The typed snapshot violates its closed first-release semantic invariants.
-    InvalidSnapshot = 8,
+    /// The typed manifest violates its closed first-release semantic invariants.
+    InvalidManifest = 8,
 }
 
 impl PrivacyCapabilityArchiveValidationStatusV1 {
-    /// Return the stable ABI-21 integer representation.
+    /// Return the stable ABI-22 integer representation.
     #[must_use]
     pub const fn code(self) -> i32 {
         self as i32
@@ -4402,10 +4402,12 @@ impl PrivacyCapabilityArchiveValidationStatusV1 {
 /// Admission first applies the fixed 256 KiB byte ceiling, then decodes with
 /// tight per-sequence, cumulative-element, allocation, and nesting budgets.
 /// The canonical decoder enforces the exact
-/// [`PrivacyCapabilitySnapshotV1`] schema and byte-for-byte canonical
-/// re-encoding. Finally [`PrivacyCapabilitySnapshotV1::validate`] enforces the
-/// exact twelve rows in [`PrivacyProtocolIdV1::ALL`] order and all profile,
-/// activation, and policy bindings.
+/// [`PrivacyExact12CapabilityManifestV1`] schema and byte-for-byte canonical
+/// re-encoding. Finally [`PrivacyExact12CapabilityManifestV1::validate`]
+/// enforces the exact twelve rows in [`PrivacyProtocolIdV1::ALL`] order and
+/// all operation, profile, readiness, activation, policy, limitation, and
+/// self-digest bindings. The legacy snapshot schema is rejected rather than
+/// treated as a compatibility representation.
 #[must_use]
 pub fn validate_privacy_capability_archive_v1(
     archive: &[u8],
@@ -4426,10 +4428,10 @@ pub fn validate_privacy_capability_archive_v1(
         PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1,
         PRIVACY_CAPABILITY_ARCHIVE_MAX_NESTING_DEPTH_V1,
     );
-    let snapshot = match norito::decode_canonical_with_limits::<PrivacyCapabilitySnapshotV1>(
+    let manifest = match norito::decode_canonical_with_limits::<PrivacyExact12CapabilityManifestV1>(
         archive, limits,
     ) {
-        Ok(snapshot) => snapshot,
+        Ok(manifest) => manifest,
         Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
         Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
         Err(
@@ -4439,8 +4441,8 @@ pub fn validate_privacy_capability_archive_v1(
         ) => return Status::NonCanonical,
         Err(_) => return Status::MalformedArchive,
     };
-    if snapshot.validate().is_err() {
-        return Status::InvalidSnapshot;
+    if manifest.validate().is_err() {
+        return Status::InvalidManifest;
     }
     Status::Valid
 }

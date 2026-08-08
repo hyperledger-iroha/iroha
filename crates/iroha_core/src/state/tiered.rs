@@ -2742,7 +2742,7 @@ mod measured_bytes_impls {
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-            RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
+            RuntimeUpgradeProposal, SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         ipfs::IpfsPath,
@@ -3901,8 +3901,15 @@ mod measured_bytes_impls {
     impl MeasuredBytes for SccpRouteGovernanceProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpRouteGovernanceProposal>();
-            total = total.saturating_add(norito::codec::Encode::encode(&self.action).len());
+            total = total.saturating_add(norito::codec::Encode::encode(&self.anchor).len());
             total
+        }
+    }
+
+    impl MeasuredBytes for SorafsProviderGovernanceProposal {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SorafsProviderGovernanceProposal>()
+                .saturating_add(norito::codec::Encode::encode(&self.action).len())
         }
     }
 
@@ -3933,6 +3940,9 @@ mod measured_bytes_impls {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
                 ProposalKind::SccpRouteGovernance(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                ProposalKind::SorafsProviderGovernance(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
                 ProposalKind::ValidationFeePolicy(payload) => {

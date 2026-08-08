@@ -269,7 +269,7 @@ impl PublicationProviderAttestationCheckpointV1 {
             || self.attestation_digest != attestation.digest()
             || self.transaction_hash.iter().all(|byte| *byte == 0)
             || self.transaction_hash != *self.signed_transaction.hash().as_ref()
-            || self.signed_transaction.chain() != &request.chain_id
+            || self.signed_transaction.network_id().copied() != Some(request.network_id())
             || self.signed_transaction.authority() != &request.publisher
             || self.signed_transaction.verify_signature().is_err()
             || !exact_instruction
@@ -2455,10 +2455,13 @@ fn map_registry_error(error: crate::registry::RegistryErrorV1) -> PublicationBac
 mod tests {
     use std::{io::Write as _, net::TcpListener, thread};
 
-    use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair, Signature, SignatureOf};
+    use iroha::crypto::{
+        Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, Signature, SignatureOf,
+    };
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard},
+        block::BlockHeader,
         musubi::{
             MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveCommitmentV1,
@@ -2487,6 +2490,12 @@ mod tests {
     use super::*;
     use crate::publish::PublicationBackendFailureClass;
 
+    fn test_network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([byte; Hash::LENGTH]),
+        ))
+    }
+
     fn write_client_config(
         path: &Path,
         extra: &str,
@@ -2497,11 +2506,13 @@ mod tests {
         let key_pair =
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("derive fixture key");
         let private_key = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+        let network_id = test_network_id(0x7b);
         fs::write(
             path,
             format!(
                 r#"
                     chain = "musubi-publication-runtime-test"
+                    network_id = "{network_id}"
                     torii_url = "https://torii.example/"
                     [account]
                     domain = "packages.universal"
@@ -2909,7 +2920,7 @@ mod tests {
         let publisher_key =
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("publisher key");
         let mut builder = TransactionBuilder::new(
-            fixture.request.chain_id.clone(),
+            fixture.request.network_id(),
             fixture.request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2932,7 +2943,7 @@ mod tests {
         let signer = KeyPair::try_from_seed(vec![signer_seed; 32], Algorithm::Ed25519)
             .expect("provider checkpoint signer");
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )

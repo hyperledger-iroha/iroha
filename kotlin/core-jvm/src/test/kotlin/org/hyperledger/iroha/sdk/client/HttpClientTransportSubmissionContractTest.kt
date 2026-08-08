@@ -6,6 +6,7 @@ import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 
@@ -32,6 +33,24 @@ class HttpClientTransportSubmissionContractTest {
         assertEquals("application/json", request.headers["Content-Type"]?.first())
         assertEquals(WireFormatPreference.JSON_PREFERRED.acceptHeader(), request.headers["Accept"]?.first())
         assertTrue(body.contentEquals(request.body))
+        assertEquals(RequestReplayPolicy.ONE_SHOT, request.replayPolicy)
+    }
+
+    @Test
+    fun replayPolicyIsSafeOnlyForUnsignedBodylessReads() {
+        val unsignedRead = TransportRequest.builder()
+            .setMethod("GET")
+            .setUri(URI.create("https://127.0.0.1:8080/v1/status"))
+            .build()
+        val signedQuery = TransportRequest.builder()
+            .setMethod("GET")
+            .setUri(URI.create("https://127.0.0.1:8080/v1/query"))
+            .addHeader("X-Iroha-Signature", "signature")
+            .addHeader("X-Iroha-Nonce", "nonce")
+            .build()
+
+        assertEquals(RequestReplayPolicy.RETRY_SAFE, unsignedRead.replayPolicy)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, signedQuery.replayPolicy)
     }
 
     private class CapturingExecutor : HttpTransportExecutor {

@@ -5009,8 +5009,7 @@ fn authenticate_archive_anchor_against_kura(
                 reason: "archive height has no authenticated v2 finality artifact",
             },
         )?;
-    if &artifact.height_context.chain_id != &key.chain_id
-        || artifact.height != key.height
+    if artifact.height != key.height
         || *artifact.block_hash.as_ref() != key.block_hash
         || receipt.height() != key.height
         || *receipt.block_hash().as_ref() != key.block_hash
@@ -5115,7 +5114,7 @@ fn authenticate_capture_view(
             },
         )?;
     if !same_kura_receipt(receipt, &recovered_receipt)
-        || &artifact.height_context.chain_id != state_ro.chain_id()
+        || &artifact.height_context.network_id != state_ro.network_id()
         || artifact.height != height
         || *artifact.block_hash.as_ref() != block_hash
     {

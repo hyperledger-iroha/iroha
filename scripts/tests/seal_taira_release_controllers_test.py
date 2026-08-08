@@ -94,6 +94,8 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
         controller.LINUX_FILES + controller.MACOS_FILES
     )
     assert "scripts/snapshot_taira_public_privacy_inputs.py" in controller.LINUX_FILES
+    assert "scripts/build_privacy_v1_boi_handoff.py" in controller.LINUX_FILES
+    assert "scripts/check_native_sdk_abi22_artifact.py" in controller.LINUX_FILES
     for relative in set(controller.LINUX_FILES + controller.MACOS_FILES):
         assert (ROOT / relative).is_file(), relative
         assert controller._validate_relative(relative) == relative
@@ -105,6 +107,15 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     )
     assert "seal" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert "cleanup" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
+    assert controller.ROLE_OPERATIONS["linux-boi-qualification"] == (
+        "linux",
+        {"admit", "assemble-boi"},
+    )
+    assert "--external-signer" not in controller.OPERATION_FLAGS["assemble-boi"]
+    assert "--signing-public-key" not in controller.OPERATION_FLAGS["assemble-boi"]
+    assert controller.REQUIRED_FLAGS[("assemble-boi", None)] == (
+        controller.OPERATION_FLAGS["assemble-boi"]
+    )
 
 
 def test_controller_digest_is_domain_separated() -> None:
@@ -328,6 +339,99 @@ def test_authority_dispatch_has_fixed_cwd_environment_and_descriptor_policy(
         str(controller.CONTROLLER_ROOT / controller.BASH_OPERATIONS["check-public"]),
         "--help",
     ]
+
+
+def test_privacy_rollout_dispatch_injects_only_the_sealed_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_dispatch(relative, args, run_as, external_tool_identity=None):
+        captured.update(
+            relative=relative,
+            args=list(args),
+            run_as=run_as,
+            external_tool_identity=external_tool_identity,
+        )
+        return 0
+
+    monkeypatch.setattr(controller, "_dispatch_installed_python", fake_dispatch)
+    result = "/authority/privacy-rollout-observation.json"
+    assert controller._dispatch(
+        "verify-privacy-rollout", ["--result", result], (501, 20)
+    ) == 0
+    assert captured["relative"] == "scripts/taira_privacy_rollout_contract.py"
+    assert captured["args"] == [
+        "verify-result",
+        "--plan",
+        str(
+            controller.CONTROLLER_ROOT
+            / "configs/soranexus/taira/privacy_rollout_plan_v1.json"
+        ),
+        "--result",
+        result,
+    ]
+
+
+def test_deploy_canary_inputs_are_mandatory_owner_private_and_unskippable(
+    tmp_path: Path,
+) -> None:
+    handoff = tmp_path / "handoff"
+    trusted = tmp_path / "trusted"
+    handoff.mkdir(mode=0o711)
+    trusted.mkdir(mode=0o700)
+    attestation = _attestation(handoff, trusted, "macos-deploy")
+    staging = Path(str(attestation["staging_root"]))
+    authority = Path(str(attestation["authority_root"]))
+    write_config = staging / "dedicated-canary.toml"
+    observation = authority / "privacy-rollout-observation.json"
+    write_config.write_bytes(b"chain = \"taira\"\n")
+    observation.write_bytes(b"{}\n")
+    write_config.chmod(0o400)
+    observation.chmod(0o400)
+    attestation["trusted_inputs"] = [
+        {
+            "flag": "--write-config",
+            "operation": "check-public",
+            "path": str(write_config),
+        },
+        {
+            "flag": "--result",
+            "operation": "verify-privacy-rollout",
+            "path": str(observation),
+        },
+    ]
+    public_args = [
+        "--public-root",
+        "https://taira.example",
+        *[
+            value
+            for index in range(1, 5)
+            for value in (
+                "--validator-root",
+                f"taira-validator-{index}=https://validator-{index}.example",
+            )
+        ],
+        "--require-all-validators",
+        "--expected-git-sha",
+        "a" * 40,
+        "--expected-dpn-validator-release-commit",
+        "b" * 40,
+        "--write-config",
+        str(write_config),
+    ]
+
+    controller._validate_operation_args("check-public", public_args, attestation)
+    controller._validate_operation_args(
+        "verify-privacy-rollout", ["--result", str(observation)], attestation
+    )
+    with pytest.raises(controller.ControllerSealError, match="not allow-listed"):
+        controller._validate_operation_args(
+            "check-public", [*public_args[:-2], "--skip-write-canary"], attestation
+        )
+    write_config.chmod(0o600)
+    with pytest.raises(controller.ControllerSealError, match="mode-0400"):
+        controller._validate_operation_args("check-public", public_args, attestation)
 
 
 def test_privilege_drop_clears_groups_and_uses_exact_attested_ids(
@@ -1564,6 +1668,19 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
     runtime.mkdir(mode=0o700)
     identity = tmp_path / "taira-source-identity-v1.json"
     identity.write_bytes(b"identity")
+    inputs = {
+        name: tmp_path / name
+        for name in (
+            "exact12.tsv",
+            "iroha-core-tests",
+            "irohad",
+            "linux.tar.gz",
+            "network-functional",
+            "privacy-exact12-action-driver",
+        )
+    }
+    for path in inputs.values():
+        path.write_bytes(b"input")
     final_output = handoff / "qualification-receipt-123-1"
     attestation = {
         "controller_gid": os.getegid(),
@@ -1587,9 +1704,19 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
 
     def fake_close(relative: str, args, run_as) -> int:
         values = list(args)
+        if relative == controller.PRIVACY_CAPTURE_HELPER:
+            output = Path(values[values.index("--output-directory") + 1])
+            output.mkdir(mode=0o700)
+            (output / "evidence.json").write_bytes(b"evidence")
+            calls.append((relative, values, run_as))
+            return 0
         output = Path(values[values.index("--output") + 1])
         receipt = Path(values[values.index("--receipt") + 1])
         assert receipt.parent.name == "runtime-work"
+        privacy = Path(
+            values[values.index("--privacy-protocol-evidence-dir") + 1]
+        )
+        assert privacy.parent == receipt.parent
         output.mkdir(mode=0o700)
         (output / "handoff-inventory-v1.json").write_bytes(b"closed")
         calls.append((relative, values, run_as))
@@ -1601,6 +1728,20 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
         [
             "--source-identity",
             str(identity),
+            "--validator-binary",
+            str(inputs["irohad"]),
+            "--privacy-action-driver",
+            str(inputs["privacy-exact12-action-driver"]),
+            "--privacy-network-driver",
+            str(inputs["network-functional"]),
+            "--privacy-jindo-driver",
+            str(inputs["iroha-core-tests"]),
+            "--linux-archive",
+            str(inputs["linux.tar.gz"]),
+            "--exact12-matrix",
+            str(inputs["exact12.tsv"]),
+            "--artifact-handoff-sha256",
+            "a" * 64,
             "--output",
             str(final_output),
         ],
@@ -1608,10 +1749,12 @@ def test_capture_composite_replaces_output_and_never_accepts_receipt_bytes(
     )
     assert result == 0
     assert final_output.is_dir()
-    assert calls[0][0] == "capture-four-peer"
+    assert calls[0][0] == controller.PRIVACY_CAPTURE_HELPER
     assert calls[0][2] == (os.geteuid(), os.getegid())
-    assert calls[1][0] == controller.QUALIFICATION_CLOSE_HELPER
-    assert calls[1][2] is None
+    assert calls[1][0] == "capture-four-peer"
+    assert calls[1][2] == (os.geteuid(), os.getegid())
+    assert calls[2][0] == controller.QUALIFICATION_CLOSE_HELPER
+    assert calls[2][2] is None
     assert not any(path.name.startswith(".qualification-capture-") for path in handoff.iterdir())
 
 

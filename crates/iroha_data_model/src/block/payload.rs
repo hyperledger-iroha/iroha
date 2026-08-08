@@ -114,7 +114,6 @@ mod model {
         #[norito(default)]
         pub axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         /// Canonically ordered post-execution lane effects authenticated by the global CommitQC.
-        #[norito(default)]
         pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         /// Trigger completion events recorded while executing the block.
         #[norito(default)]
@@ -488,7 +487,7 @@ impl SignedBlock {
             .payload
             .execution_context
             .as_ref()
-            .is_some_and(|context| context.merge_entry.is_some())
+            .is_some_and(|context| !context.is_empty())
         {
             return false;
         }

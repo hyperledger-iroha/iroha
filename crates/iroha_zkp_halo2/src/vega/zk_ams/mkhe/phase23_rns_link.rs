@@ -13,6 +13,9 @@
 //!   canonical order before Fiat--Shamir evaluation points can be derived;
 //! * a transcript-bound cubic bitness sumcheck and logarithmic T256 IPA share
 //!   one commitment and reject proof splicing;
+//! * a sibling-private native receipt can bind one canonical packed chunk to
+//!   the exact 38-limb plaintext lift and both state-owned RLWE equations; it
+//!   deliberately does not authenticate any whole-proof wire response;
 //! * the exact integer and arbitrary-point form of
 //!   `A*R + p*E + M - C = (X^N + 1)*H (mod q)` is exercised by a tiny oracle,
 //!   including the radix carry equation that prevents modular wraparound from
@@ -41,7 +44,15 @@ use crate::vega::{
 
 use super::{
     ZkAmsMkheErrorV1,
+    collective::{
+        ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveEncryptionOpeningV1,
+        ZkAmsMkheCollectivePublicKeyV1,
+    },
     manifest::{ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1},
+    packing::{
+        ZkAmsT256PackedPlaintextV1, ZkAmsT256PackingLayoutV1,
+        decode_zk_ams_t256_packed_plaintext_v1, packed_plaintext_rns_binding_digest_v1,
+    },
     phase23_encrypted::{
         ZK_AMS_PHASE23_RELEASE_ERROR_COMMITMENT_ROWS_V1,
         ZK_AMS_PHASE23_RELEASE_WITNESS_COMMITMENT_ROWS_V1,
@@ -52,6 +63,7 @@ use super::{
 
 const RNS_LINK_VERSION_V1: u8 = 1;
 const RNS_LINK_EVALUATIONS_PER_LIMB_V1: usize = 5;
+pub(super) const ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1: usize = 38;
 const RNS_LINK_REJECTION_ATTEMPTS_V1: usize = 128;
 const RNS_LINK_FAMILY_COUNT_V1: usize = 6;
 const RNS_LINK_MAX_CHUNKS_PER_FAMILY_V1: usize = 16;
@@ -115,6 +127,8 @@ const EVALUATION_POINT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.eva
 const CHALLENGE_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.challenge-set";
 const IPA_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.ipa";
 const BITNESS_SUMCHECK_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.bitness-sumcheck";
+const NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.phase23.rns-link.native-bgv-opening-receipt";
 const IPA_GENERATOR_LABEL_V1: &[u8] = b"iroha.zk-ams.v1.phase23.rns-link.ipa-generators";
 const BITNESS_ALGORITHM_LABEL_V1: &[u8] = b"rns-link-algorithm";
 const BITNESS_CONTEXT_LABEL_V1: &[u8] = b"rns-link-context";
@@ -448,6 +462,31 @@ pub(super) struct ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
 }
 
 impl ZkAmsPhase23RnsLinkCommitmentDigestsV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        layout_digest: [u8; 32],
+        ciphertext_digest: [u8; 32],
+        bit_planes_digest: [u8; 32],
+        small_openings_digest: [u8; 32],
+        packing_trace_digest: [u8; 32],
+        radix_carry_digest: [u8; 32],
+        negacyclic_quotient_digest: [u8; 32],
+        padding_digest: [u8; 32],
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        let value = Self {
+            layout_digest,
+            ciphertext_digest,
+            bit_planes_digest,
+            small_openings_digest,
+            packing_trace_digest,
+            radix_carry_digest,
+            negacyclic_quotient_digest,
+            padding_digest,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     fn validate(self) -> Result<(), ZkAmsMkheErrorV1> {
         let digests = [
             self.layout_digest,
@@ -715,6 +754,214 @@ fn derive_release_evaluation_points_v1(
     prechallenge: &ZkAmsPhase23RnsLinkPrechallengeV1,
 ) -> Result<ZkAmsPhase23RnsLinkChallengeSetV1, ZkAmsMkheErrorV1> {
     derive_evaluation_points_for_moduli_v1(prechallenge, release_profile_v1().moduli)
+}
+
+/// Verifier-owned binding between the canonical whole-proof transport and the
+/// real release relation inputs.
+///
+/// `statement_digest` is the digest of the complete challenge set derived from
+/// the context and all ordered commitments. It is never accepted from the
+/// proof producer. The wire decoder may use this value to reject a digest shell
+/// or a structurally valid envelope carrying commitments from another proof.
+/// This binding deliberately makes no claim that the relation responses verify.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ZkAmsPhase23RnsLinkWholeProofBindingV1 {
+    pub(super) profile_digest: [u8; 32],
+    pub(super) algorithm_manifest_digest: [u8; 32],
+    pub(super) context_digest: [u8; 32],
+    pub(super) statement_digest: [u8; 32],
+    pub(super) ordered_commitment_root: [u8; 32],
+    pub(super) hyrax_commitments: [VegaT256PointV1; RNS_LINK_RELEASE_COMMITMENTS_V1],
+}
+
+impl ZkAmsPhase23RnsLinkWholeProofBindingV1 {
+    /// Recompute every transport-binding field from verifier-owned native
+    /// relation types. No digest supplied by a proof producer is an input.
+    pub(super) fn derive(
+        context: ZkAmsPhase23RnsLinkContextV1,
+        commitments: &[ZkAmsPhase23RnsLinkChunkCommitmentV1],
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        if context.profile_digest != release_profile_v1().digest()?
+            || context.algorithm_manifest_digest != immutable_algorithm_manifest_digest_v1()?
+            || release_profile_v1().moduli.len()
+                != ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        let prechallenge =
+            ZkAmsPhase23RnsLinkPrechallengeV1::from_ordered_commitments(context, commitments)?;
+        let challenge_set = derive_release_evaluation_points_v1(&prechallenge)?;
+        challenge_set.validate_for_release(&prechallenge)?;
+        if challenge_set.points.len()
+            != release_profile_v1()
+                .moduli
+                .len()
+                .checked_mul(RNS_LINK_EVALUATIONS_PER_LIMB_V1)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+
+        let mut hyrax_commitments = Vec::new();
+        hyrax_commitments
+            .try_reserve_exact(RNS_LINK_RELEASE_COMMITMENTS_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        for commitment in commitments {
+            commitment.validate()?;
+            hyrax_commitments.push(
+                VegaT256PointV1::from_non_identity_wire_bytes_exact(&commitment.hyrax_commitment)
+                    .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
+            );
+        }
+
+        Ok(Self {
+            profile_digest: context.profile_digest,
+            algorithm_manifest_digest: context.algorithm_manifest_digest,
+            context_digest: context.digest(),
+            statement_digest: challenge_set.digest,
+            ordered_commitment_root: prechallenge.ordered_commitment_root,
+            hyrax_commitments: hyrax_commitments
+                .try_into()
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,
+        })
+    }
+}
+
+/// Opaque capability for one native, in-process packed BGV opening.
+///
+/// This is intentionally narrower than an RNS-Link proof receipt. It is minted
+/// only while the state-owned encryption opening is available and after the
+/// canonical T256 packing (including zero padding), its exact 38-limb RNS
+/// image, and both native RLWE equations have been recomputed. It neither
+/// authenticates the carry/quotient records in the whole-proof wire envelope
+/// nor proves equality to a Hyrax commitment.
+pub(super) struct VerifiedZkAmsPhase23NativeBgvOpeningV1 {
+    key_digest: [u8; 32],
+    layout_digest: [u8; 32],
+    plaintext_digest: [u8; 32],
+    ciphertext_digest: [u8; 32],
+    rns_binding_digest: [u8; 32],
+    digest: [u8; 32],
+}
+
+impl fmt::Debug for VerifiedZkAmsPhase23NativeBgvOpeningV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedZkAmsPhase23NativeBgvOpeningV1")
+            .field("key_digest", &hex::encode(self.key_digest))
+            .field("layout_digest", &hex::encode(self.layout_digest))
+            .field("plaintext_digest", &hex::encode(self.plaintext_digest))
+            .field("ciphertext_digest", &hex::encode(self.ciphertext_digest))
+            .field("rns_binding_digest", &hex::encode(self.rns_binding_digest))
+            .field("digest", &hex::encode(self.digest))
+            .finish()
+    }
+}
+
+impl VerifiedZkAmsPhase23NativeBgvOpeningV1 {
+    /// Recheck that this opaque capability names the exact public artifacts a
+    /// sibling consumer intends to use. The secret opening is not retained.
+    pub(super) fn validate_for(
+        &self,
+        key: &ZkAmsMkheCollectivePublicKeyV1,
+        layout: ZkAmsT256PackingLayoutV1,
+        plaintext: &ZkAmsT256PackedPlaintextV1,
+        ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        if self.key_digest != key.digest()
+            || self.layout_digest != layout.digest
+            || self.plaintext_digest != plaintext.digest
+            || self.ciphertext_digest != ciphertext.digest()
+            || self.rns_binding_digest == [0; 32]
+            || self.digest == [0; 32]
+            || self.digest != native_bgv_opening_receipt_digest_v1(self)
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        Ok(())
+    }
+}
+
+/// Verify one real release-profile encryption opening and mint a capability
+/// that contains no witness material.
+pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1(
+    key: &ZkAmsMkheCollectivePublicKeyV1,
+    layout: ZkAmsT256PackingLayoutV1,
+    plaintext: &ZkAmsT256PackedPlaintextV1,
+    ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+    opening: &ZkAmsMkheCollectiveEncryptionOpeningV1,
+) -> Result<VerifiedZkAmsPhase23NativeBgvOpeningV1, ZkAmsMkheErrorV1> {
+    let profile = release_profile_v1();
+    if profile.moduli.len() != ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1 {
+        return Err(ZkAmsMkheErrorV1::InvalidProfile);
+    }
+
+    // Decoding independently rechecks the exact layout, canonical packed
+    // digest, chunk metadata, and every unused slot before any receipt exists.
+    let decoded = decode_zk_ams_t256_packed_plaintext_v1(layout, plaintext)?;
+    let used_slots = usize::try_from(plaintext.used_slots)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    if decoded.len() != ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1
+        || used_slots > decoded.len()
+        || decoded[used_slots..].iter().any(|value| *value != [0; 32])
+    {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+    let rns_binding_digest = packed_plaintext_rns_binding_digest_v1(layout, plaintext)?;
+    if rns_binding_digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+    }
+
+    // This adapter validates the complete public context, the state-owned
+    // canonical/RNS plaintext identity, witness bounds, and both release-RNS
+    // RLWE equations before invoking the closure.
+    opening.with_validated_proof_witness_v1(
+        key,
+        layout,
+        plaintext,
+        ciphertext,
+        |canonical_plaintext, plaintext_lift, ephemeral, error_zero, error_one| {
+            if canonical_plaintext.len() != profile.ring_degree
+                || plaintext_lift.coefficients.len()
+                    != profile
+                        .ring_degree
+                        .checked_mul(profile.moduli.len())
+                        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+                || ephemeral.coefficients.len() != profile.ring_degree
+                || error_zero.coefficients.len() != profile.ring_degree
+                || error_one.coefficients.len() != profile.ring_degree
+            {
+                return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+            }
+            Ok(())
+        },
+    )?;
+
+    let mut receipt = VerifiedZkAmsPhase23NativeBgvOpeningV1 {
+        key_digest: key.digest(),
+        layout_digest: layout.digest,
+        plaintext_digest: plaintext.digest,
+        ciphertext_digest: ciphertext.digest(),
+        rns_binding_digest,
+        digest: [0; 32],
+    };
+    receipt.digest = native_bgv_opening_receipt_digest_v1(&receipt);
+    receipt.validate_for(key, layout, plaintext, ciphertext)?;
+    Ok(receipt)
+}
+
+fn native_bgv_opening_receipt_digest_v1(
+    receipt: &VerifiedZkAmsPhase23NativeBgvOpeningV1,
+) -> [u8; 32] {
+    let mut frame = Vec::with_capacity(NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1.len() + 1 + 5 * 32);
+    frame.extend_from_slice(NATIVE_BGV_OPENING_RECEIPT_DOMAIN_V1);
+    frame.push(RNS_LINK_VERSION_V1);
+    frame.extend_from_slice(&receipt.key_digest);
+    frame.extend_from_slice(&receipt.layout_digest);
+    frame.extend_from_slice(&receipt.plaintext_digest);
+    frame.extend_from_slice(&receipt.ciphertext_digest);
+    frame.extend_from_slice(&receipt.rns_binding_digest);
+    keccak256(&frame)
 }
 
 // Compile-time API guards: mutable readiness and KAT evidence have no place in

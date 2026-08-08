@@ -10,13 +10,15 @@ import pytest
 import requests
 from iroha_torii_client.client import canonical_request_signature_message
 
-from iroha_python import DataspaceSpec, ToriiClient, plan_dataspace, write_dataspace_plan
+from iroha_python import DataspaceSpec, NetworkId, ToriiClient, plan_dataspace, write_dataspace_plan
 from iroha_python.crypto import Ed25519KeyPair
 
 FEE_PAYMENT = {
     "payer": "authority",
     "value": {"charge_limits": [], "gas_limit": None},
 }
+CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
+NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 
 
 class FakeSession:
@@ -530,12 +532,12 @@ def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: p
         Instruction = FakeInstruction
 
     def fake_submit(
-        chain_id: str,
+        network_id: NetworkId,
         authority: str,
         private_key: bytes,
         **kwargs: object,
     ) -> tuple[str, dict[str, object]]:
-        captured["chain_id"] = chain_id
+        captured["network_id"] = network_id
         captured["authority"] = authority
         captured["private_key"] = private_key
         captured.update(kwargs)
@@ -546,7 +548,7 @@ def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: p
     result = client.nexus_lane_lifecycle(
         additions,
         retire=[1],
-        chain_id="test-chain",
+        network_id=NETWORK_ID,
         authority="alice@wonderland",
         private_key=bytes([9] * 32),
         fee_payment=FEE_PAYMENT,
@@ -557,7 +559,7 @@ def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: p
     assert session.calls[0]["method"] == "GET"
     assert captured["status"] == status
     assert captured["plan"] == {"additions": additions, "retire": [1]}
-    assert captured["chain_id"] == "test-chain"
+    assert captured["network_id"] == NETWORK_ID
     assert captured["authority"] == "alice@wonderland"
     assert captured["private_key"] == bytes([9] * 32)
     assert captured["instructions"] == ["set-parameter-instruction"]
@@ -568,7 +570,7 @@ def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: p
 def test_nexus_lane_lifecycle_rejects_malformed_inputs() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     auth = {
-        "chain_id": "test-chain",
+        "network_id": NETWORK_ID,
         "authority": "alice@wonderland",
         "private_key": bytes([10] * 32),
         "fee_payment": FEE_PAYMENT,
@@ -618,20 +620,41 @@ def test_nexus_lane_lifecycle_rejects_retired_operator_only_shape() -> None:
     key_pair = Ed25519KeyPair.from_private_key(bytes([11] * 32))
 
     with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle([], key_pair=key_pair, fee_payment=FEE_PAYMENT)
-    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
         client.nexus_lane_lifecycle(
-            [], private_key_hex="11" * 32, fee_payment=FEE_PAYMENT
+            [],
+            key_pair=key_pair,
+            network_id=NETWORK_ID,
+            fee_payment=FEE_PAYMENT,
         )
     with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle([], private_key="11" * 32, fee_payment=FEE_PAYMENT)
+        client.nexus_lane_lifecycle(
+            [],
+            private_key_hex="11" * 32,
+            network_id=NETWORK_ID,
+            fee_payment=FEE_PAYMENT,
+        )
+    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
+        client.nexus_lane_lifecycle(
+            [],
+            private_key="11" * 32,
+            network_id=NETWORK_ID,
+            fee_payment=FEE_PAYMENT,
+        )
 
 
 def test_nexus_lane_lifecycle_requires_full_transaction_signing_context() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
-    with pytest.raises(ValueError, match="chain_id is required"):
+    with pytest.raises(TypeError, match="network_id"):
         client.nexus_lane_lifecycle(
             [],
+            authority="alice@wonderland",
+            private_key=bytes([1] * 32),
+            fee_payment=FEE_PAYMENT,
+        )
+    with pytest.raises(TypeError, match="network_id must be a NetworkId"):
+        client.nexus_lane_lifecycle(
+            [],
+            network_id=CANONICAL_GENESIS_HASH,  # type: ignore[arg-type]
             authority="alice@wonderland",
             private_key=bytes([1] * 32),
             fee_payment=FEE_PAYMENT,
@@ -639,14 +662,14 @@ def test_nexus_lane_lifecycle_requires_full_transaction_signing_context() -> Non
     with pytest.raises(ValueError, match="authority is required"):
         client.nexus_lane_lifecycle(
             [],
-            chain_id="chain",
+            network_id=NETWORK_ID,
             private_key=bytes([1] * 32),
             fee_payment=FEE_PAYMENT,
         )
     with pytest.raises(ValueError, match="private_key bytes are required"):
         client.nexus_lane_lifecycle(
             [],
-            chain_id="chain",
+            network_id=NETWORK_ID,
             authority="alice@wonderland",
             fee_payment=FEE_PAYMENT,
         )
@@ -713,7 +736,7 @@ def test_nexus_lane_lifecycle_surfaces_stale_transaction_without_refetch(
         client.nexus_lane_lifecycle(
             [],
             retire=[0],
-            chain_id="test-chain",
+            network_id=NETWORK_ID,
             authority="alice@wonderland",
             private_key=bytes([12] * 32),
             fee_payment=FEE_PAYMENT,

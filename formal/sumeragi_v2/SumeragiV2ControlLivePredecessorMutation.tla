@@ -31,7 +31,8 @@ ASSUME RequireConsumedPredecessor \in BOOLEAN
 
 OldItem == "source/TimeoutCertificate/view-0"
 NewItem == "source/TimeoutCertificate/view-1"
-NoRecord == "none"
+NoRecord ==
+  [item |-> "none", view |-> 0, ordinal |-> 0, consumed |-> TRUE]
 
 ServiceRecord(item, roundView, ordinal, consumed) ==
   [item |-> item,
