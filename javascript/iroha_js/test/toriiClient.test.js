@@ -6428,74 +6428,49 @@ test("iterateSorafsAliases paginates alias listings", async () => {
   assert.deepEqual(seen, ["sora/docs-0", "sora/docs-1"]);
 });
 
-test("iterateSorafsPinManifests honors maxItems and pagination", async () => {
-  const baseManifest = {
-    digest_hex: "e".repeat(64),
-    chunker: {
-      profile_id: 1,
-      namespace: "sorafs",
-      name: "sf1",
-      semver: "1.0.0",
-      multihash_code: 0,
-    },
-    chunk_digest_sha3_256_hex: "2".repeat(64),
-    pin_policy: { min_replicas: 3 },
+test("iterateSorafsPinManifests locks the first finalized anchor and advances keysets", async () => {
+  const blockHash = Array(32).fill(0x77);
+  const summary = (byte) => ({
+    digest: Array(32).fill(byte),
     submitted_by: FIXTURE_CAROL_ID,
     submitted_epoch: 42,
-    status: { state: "approved", epoch: 45 },
-    metadata: { note: "demo" },
-    alias: { namespace: "docs", name: "main", proof_b64: Buffer.from("pin").toString("base64") },
-    successor_of_hex: null,
-    status_timestamp_unix: 123,
-    governance_refs: [],
-    council_envelope_digest_hex: "1".repeat(64),
-    lineage: {
-      successor_of_hex: null,
-      head_hex: "e".repeat(64),
-      depth_to_head: 0,
-      is_head: true,
-      superseded_by: null,
-      immediate_successor: null,
-      anomalies: [],
-    },
-  };
-  let requestCount = 0;
+    content_length: 100,
+    retention_epoch: 900,
+    status: { status: "Approved", value: 45 },
+    successor_of: null,
+  });
+  const urls = [];
   const fetchImpl = async (url) => {
-    requestCount += 1;
+    urls.push(url);
     const parsed = new URL(url);
-    const offset = Number(parsed.searchParams.get("offset") ?? "0");
-    const limit = Number(parsed.searchParams.get("limit") ?? "0");
-    if (offset >= 2) {
+    const after = parsed.searchParams.get("after_digest_hex");
+    if (after === null) {
       return createResponse({
         status: 200,
         jsonData: {
-          attestation: null,
-          total_count: 2,
-          returned_count: 0,
-          offset,
-          limit,
-          manifests: [],
+          finalized_cursor: { height: 11, block_hash: blockHash },
+          charged_usage: { manifest_count: 2, content_bytes: 200 },
+          manifests: [summary(0x10)],
+          has_more: true,
+          next_after_digest: Array(32).fill(0x10),
         },
         headers: { "content-type": "application/json" },
       });
     }
-    const record = {
-      ...JSON.parse(JSON.stringify(baseManifest)),
-      digest_hex: `${offset}`.repeat(64),
-      lineage: {
-        ...JSON.parse(JSON.stringify(baseManifest.lineage)),
-        head_hex: `${offset}`.repeat(64),
-      },
-    };
+    assert.equal(after, "10".repeat(32));
+    assert.equal(parsed.searchParams.get("expected_finalized_height"), "11");
+    assert.equal(
+      parsed.searchParams.get("expected_finalized_block_hash_hex"),
+      "77".repeat(32),
+    );
     return createResponse({
       status: 200,
       jsonData: {
-        attestation: null,
-        total_count: 2,
-        returned_count: 1,
-        offset,
-        limit,
-        manifests: [record],
+        finalized_cursor: { height: 11, block_hash: blockHash },
+        charged_usage: { manifest_count: 2, content_bytes: 200 },
+        manifests: [summary(0x20)],
+        has_more: false,
+        next_after_digest: null,
       },
       headers: { "content-type": "application/json" },
     });
@@ -6505,12 +6480,13 @@ test("iterateSorafsPinManifests honors maxItems and pagination", async () => {
   for await (const manifest of client.iterateSorafsPinManifests({
     status: "approved",
     pageSize: 1,
-    maxItems: 1,
+    maxItems: 2,
   })) {
-    digests.push(manifest.digest_hex);
+    digests.push(Buffer.from(manifest.digest).toString("hex"));
   }
-  assert.deepEqual(digests, ["0".repeat(64)]);
-  assert.equal(requestCount, 1);
+  assert.deepEqual(digests, ["10".repeat(32), "20".repeat(32)]);
+  assert.equal(urls.length, 2);
+  assert.equal(new URL(urls[0]).searchParams.has("offset"), false);
 });
 
 test("iterateSorafsReplicationOrders paginates results", async () => {

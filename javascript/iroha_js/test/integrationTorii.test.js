@@ -2536,27 +2536,23 @@ test(
     }
     assert.ok(Array.isArray(pinList.manifests), "pin manifest list must include manifests array");
     assert.ok(
-      Number.isInteger(pinList.limit) && pinList.limit > 0,
-      "pin manifest list must include a positive limit",
+      Number.isInteger(pinList.finalized_cursor.height) && pinList.finalized_cursor.height > 0,
+      "pin manifest list must include a positive finalized height",
     );
+    assert.equal(pinList.finalized_cursor.block_hash.length, 32);
+    assert.ok(Number.isInteger(pinList.charged_usage.manifest_count));
+    assert.ok(Number.isInteger(pinList.charged_usage.content_bytes));
 
     if (pinList.manifests.length > 0) {
       const [manifest] = pinList.manifests;
-      assertHexString(manifest.digest_hex, "SoraFS manifest digest");
-      const resolved = await client.getSorafsPinManifestTyped(manifest.digest_hex);
-      assert.equal(
-        resolved.manifest.digest_hex,
-        manifest.digest_hex,
-        "resolved manifest digest must match list entry",
-      );
-      assert.ok(Array.isArray(resolved.aliases), "manifest response must include aliases array");
-      assert.ok(
-        Array.isArray(resolved.replication_orders),
-        "manifest response must include replication orders",
-      );
+      const manifestDigestHex = Buffer.from(manifest.digest).toString("hex");
+      assertHexString(manifestDigestHex, "SoraFS manifest digest");
+      assert.equal("alias" in manifest, false, "list summaries must omit alias proofs");
+      assert.equal("metadata" in manifest, false, "list summaries must omit metadata");
+      assert.equal("lineage" in manifest, false, "list summaries must omit lineage expansion");
       const iteratorHit = await iteratorIncludes(
         client.iterateSorafsPinManifests({ pageSize: 1, maxItems: 10 }),
-        (entry) => entry?.digest_hex === manifest.digest_hex,
+        (entry) => Buffer.from(entry.digest).toString("hex") === manifestDigestHex,
       );
       assert.ok(iteratorHit, "pin manifest iterator should surface the sampled manifest");
     } else {
