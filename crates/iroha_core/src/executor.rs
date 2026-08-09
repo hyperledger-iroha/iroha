@@ -411,9 +411,10 @@ fn native_iterable_query_access(
         }
         return Err(invalid_native_iterable_query());
     }
-    if let Some(payload) =
-        payload_for!(iroha_data_model::nexus::FeeSponsorProgram, FeeSponsorProgram)
-    {
+    if let Some(payload) = payload_for!(
+        iroha_data_model::nexus::FeeSponsorProgram,
+        FeeSponsorProgram
+    ) {
         if any_exact!(payload; data_model_query::nexus::prelude::FindFeeSponsorPrograms) {
             return Ok(NativeQueryAccess::AllLedger);
         }
@@ -453,8 +454,7 @@ fn native_iterable_query_access(
         iroha_data_model::oracle::OracleProviderStatsRecord,
         OracleProviderStatsRecord
     ) {
-        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleProviderStatsByFeedId)
-        {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindOracleProviderStatsByFeedId) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
@@ -491,8 +491,7 @@ fn native_iterable_query_access(
         iroha_data_model::oracle::DefiOracleAttestation,
         DefiOracleAttestation
     ) {
-        if any_exact!(payload; data_model_query::oracle::prelude::FindDefiOracleAttestationsByKey)
-        {
+        if any_exact!(payload; data_model_query::oracle::prelude::FindDefiOracleAttestationsByKey) {
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());
@@ -589,8 +588,10 @@ fn validate_builtin_native_query_permission(
             if account == *authority || has_global()? {
                 return Ok(());
             }
-            let permission: Permission =
-                executor_permission::query::CanReadAccountData { account: account.clone() }.into();
+            let permission: Permission = executor_permission::query::CanReadAccountData {
+                account: account.clone(),
+            }
+            .into();
             authority_has_permission(world, authority, &permission)?
                 .then_some(())
                 .ok_or_else(|| {

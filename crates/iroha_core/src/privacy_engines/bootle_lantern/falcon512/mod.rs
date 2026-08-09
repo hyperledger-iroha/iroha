@@ -75,10 +75,7 @@ pub(super) struct Preimage {
     pub(super) norm_squared: u32,
 }
 
-pub(super) fn generate_from_seed(
-    seed: &[u8; 32],
-    max_candidates: u32,
-) -> Option<Trapdoor> {
+pub(super) fn generate_from_seed(seed: &[u8; 32], max_candidates: u32) -> Option<Trapdoor> {
     kgen::generate_from_seed(seed, max_candidates)
 }
 

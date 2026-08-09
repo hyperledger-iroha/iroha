@@ -2310,19 +2310,22 @@ impl<'tx> AcceptedTransaction<'tx> {
         validate_proof_attachment_shapes(tx)?;
 
         let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
-            attachments.as_slice().iter().fold(0usize, |acc, attachment| {
-                let mut subtotal = attachment.proof.bytes.len();
-                if attachment.vk_commitment.is_some() {
-                    subtotal = subtotal.saturating_add(32);
-                }
-                if attachment.envelope_hash.is_some() {
-                    subtotal = subtotal.saturating_add(32);
-                }
-                if let Some(privacy) = &attachment.lane_privacy {
-                    subtotal = subtotal.saturating_add(privacy.encoded_len());
-                }
-                acc.saturating_add(subtotal)
-            })
+            attachments
+                .as_slice()
+                .iter()
+                .fold(0usize, |acc, attachment| {
+                    let mut subtotal = attachment.proof.bytes.len();
+                    if attachment.vk_commitment.is_some() {
+                        subtotal = subtotal.saturating_add(32);
+                    }
+                    if attachment.envelope_hash.is_some() {
+                        subtotal = subtotal.saturating_add(32);
+                    }
+                    if let Some(privacy) = &attachment.lane_privacy {
+                        subtotal = subtotal.saturating_add(privacy.encoded_len());
+                    }
+                    acc.saturating_add(subtotal)
+                })
         });
         let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
         let max_decompressed_bytes = limits.max_decompressed_bytes().get();
